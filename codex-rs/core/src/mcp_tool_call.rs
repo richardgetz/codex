@@ -722,6 +722,14 @@ async fn maybe_request_mcp_tool_approval(
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
+    if !turn_context
+        .config
+        .features
+        .enabled(Feature::EnableMcpApprovals)
+    {
+        return None;
+    }
+
     if mcp_permission_prompt_is_auto_approved(
         turn_context.approval_policy.value(),
         turn_context.sandbox_policy.get(),
