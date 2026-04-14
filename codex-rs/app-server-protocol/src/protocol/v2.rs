@@ -3053,6 +3053,90 @@ pub struct ThreadMetadataUpdateResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ThreadControlMode {
+    Continuous,
+    Router,
+}
+
+impl ThreadControlMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Continuous => "continuous",
+            Self::Router => "router",
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControl {
+    pub thread_id: String,
+    pub mode: ThreadControlMode,
+    pub reason: String,
+    pub release_channel: Option<String>,
+    #[ts(type = "number | null")]
+    pub watch_interval_seconds: Option<u32>,
+    #[ts(type = "number | null")]
+    pub released_at: Option<i64>,
+    #[ts(type = "number")]
+    pub updated_at: i64,
+    pub target_thread_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControlReadParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControlReadResponse {
+    pub control: Option<ThreadControl>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControlSetParams {
+    pub thread_id: String,
+    pub mode: ThreadControlMode,
+    pub reason: String,
+    #[ts(optional = nullable)]
+    pub release_channel: Option<String>,
+    #[ts(optional = nullable)]
+    pub watch_interval_seconds: Option<u32>,
+    #[ts(optional = nullable)]
+    pub target_thread_ids: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControlSetResponse {
+    pub control: ThreadControl,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControlReleaseParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControlReleaseResponse {
+    pub control: Option<ThreadControl>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(rename_all = "lowercase")]
 pub enum ThreadMemoryMode {

@@ -57,6 +57,7 @@ mod memories;
 mod remote_control;
 #[cfg(test)]
 mod test_support;
+mod thread_control;
 mod threads;
 
 pub use remote_control::RemoteControlEnrollmentRecord;

@@ -59,6 +59,7 @@ pub(crate) struct ThreadState {
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
     pub(crate) turn_summary: TurnSummary,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
+    router_tick_cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
     pub(crate) listener_generation: u64,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
@@ -100,6 +101,17 @@ impl ThreadState {
 
     pub(crate) fn set_experimental_raw_events(&mut self, enabled: bool) {
         self.experimental_raw_events = enabled;
+    }
+
+    pub(crate) fn replace_router_tick(&mut self, cancel_tx: oneshot::Sender<()>) {
+        self.clear_router_tick();
+        self.router_tick_cancel_tx = Some(cancel_tx);
+    }
+
+    pub(crate) fn clear_router_tick(&mut self) {
+        if let Some(cancel_tx) = self.router_tick_cancel_tx.take() {
+            let _ = cancel_tx.send(());
+        }
     }
 
     pub(crate) fn listener_command_tx(

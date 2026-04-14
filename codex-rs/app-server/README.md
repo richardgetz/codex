@@ -139,6 +139,9 @@ Example with notification opt-out:
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
+- `thread/control/read` — read the persisted active control-plane contract for a thread. Returns `null` when no contract is active.
+- `thread/control/set` — set or replace a persisted control-plane contract for a thread. `continuous` mode prevents the thread from stopping until explicitly released. `router` mode allows turns to complete, then re-wakes the same loaded thread on the requested `watchIntervalSeconds` cadence with the stored supervision reason and target thread ids.
+- `thread/control/release` — release a persisted thread control contract so continuous-mode threads may stop and router-mode wake timers are cancelled.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
@@ -403,10 +406,82 @@ Use `thread/metadata/update` to patch sqlite-backed metadata for a thread withou
 } }
 ```
 
+### Example: Manage thread control contracts
+
+Use `thread/control/set` when a client needs an authoritative run contract that survives compaction and side questions. `continuous` mode blocks stop attempts until release, while `router` mode stores supervision metadata and re-wakes the same loaded thread on a timer after each turn finishes.
+
+```json
+{ "method": "thread/control/set", "id": 26, "params": {
+    "threadId": "thr_123",
+    "mode": "continuous",
+    "reason": "Keep going until the operator explicitly releases this deployment loop",
+    "releaseChannel": "imessage"
+} }
+{ "id": 26, "result": {
+    "control": {
+        "threadId": "thr_123",
+        "mode": "continuous",
+        "reason": "Keep going until the operator explicitly releases this deployment loop",
+        "releaseChannel": "imessage",
+        "watchIntervalSeconds": null,
+        "targetThreadIds": [],
+        "releasedAt": null,
+        "updatedAt": 1762456104
+    }
+} }
+```
+
+```json
+{ "method": "thread/control/set", "id": 27, "params": {
+    "threadId": "thr_router",
+    "mode": "router",
+    "reason": "Monitor worker threads and route new operator instructions",
+    "releaseChannel": "imessage",
+    "watchIntervalSeconds": 30,
+    "targetThreadIds": ["thr_worker_a", "thr_worker_b"]
+} }
+```
+
+`thread/control/read` returns the current active contract or `null` when no control state exists. Released contracts remain persisted for auditability, but `read` filters them out:
+
+```json
+{ "method": "thread/control/read", "id": 28, "params": { "threadId": "thr_123" } }
+{ "id": 28, "result": {
+    "control": {
+        "threadId": "thr_123",
+        "mode": "continuous",
+        "reason": "Keep going until the operator explicitly releases this deployment loop",
+        "releaseChannel": "imessage",
+        "watchIntervalSeconds": null,
+        "targetThreadIds": [],
+        "releasedAt": null,
+        "updatedAt": 1762456104
+    }
+} }
+```
+
+`thread/control/release` marks the contract released and cancels any future router wake-up timer:
+
+```json
+{ "method": "thread/control/release", "id": 29, "params": { "threadId": "thr_123" } }
+{ "id": 29, "result": {
+    "control": {
+        "threadId": "thr_123",
+        "mode": "continuous",
+        "reason": "Keep going until the operator explicitly releases this deployment loop",
+        "releaseChannel": "imessage",
+        "watchIntervalSeconds": null,
+        "targetThreadIds": [],
+        "releasedAt": 1762456188,
+        "updatedAt": 1762456188
+    }
+} }
+```
+
 Experimental: use `thread/memoryMode/set` to change whether a thread remains eligible for future memory generation.
 
 ```json
-{ "method": "thread/memoryMode/set", "id": 26, "params": {
+{ "method": "thread/memoryMode/set", "id": 30, "params": {
     "threadId": "thr_123",
     "mode": "disabled"
 } }

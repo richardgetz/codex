@@ -137,6 +137,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
 use codex_shell_command::parse_command::parse_command;
+use codex_state::ThreadControlMode as StateThreadControlMode;
 use codex_terminal_detection::user_agent;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -1946,7 +1947,13 @@ impl Session {
                 ))
                 .await;
         session_configuration.thread_name = thread_name.clone();
-        let state = SessionState::new(session_configuration.clone());
+        let mut state = SessionState::new(session_configuration.clone());
+        if let Some(state_db_ctx) = state_db_ctx.as_ref() {
+            let active_thread_control = state_db_ctx
+                .get_active_thread_control(conversation_id)
+                .await?;
+            state.set_active_thread_control(active_thread_control);
+        }
         let managed_network_requirements_enabled = config.managed_network_requirements_enabled();
         let network_approval = Arc::new(NetworkApprovalService::default());
         // The managed proxy can call back into core for allowlist-miss decisions.
@@ -2256,6 +2263,17 @@ impl Session {
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.services.state_db.clone()
+    }
+
+    pub(crate) async fn active_thread_control(&self) -> Option<codex_state::ThreadControlRecord> {
+        self.state.lock().await.active_thread_control()
+    }
+
+    pub(crate) async fn set_active_thread_control(
+        &self,
+        control: Option<codex_state::ThreadControlRecord>,
+    ) {
+        self.state.lock().await.set_active_thread_control(control);
     }
 
     /// Flush rollout writes and return the final durability-barrier result.
@@ -6496,6 +6514,30 @@ pub(crate) async fn run_turn(
                         | AskForApproval::Granular(_) => "default",
                     }
                     .to_string();
+                    let active_thread_control = sess.active_thread_control().await;
+                    if let Some(control) = active_thread_control
+                        && matches!(control.mode, StateThreadControlMode::Continuous)
+                        && control.released_at.is_none()
+                    {
+                        let message = ResponseItem::Message {
+                            id: None,
+                            role: "user".to_string(),
+                            content: vec![ContentItem::InputText {
+                                text: build_continuous_run_block_message(
+                                    &control.reason,
+                                    control.release_channel.as_deref(),
+                                ),
+                            }],
+                            end_turn: None,
+                            phase: None,
+                        };
+                        sess.record_conversation_items(
+                            &turn_context,
+                            std::slice::from_ref(&message),
+                        )
+                        .await;
+                        continue;
+                    }
                     let stop_request = codex_hooks::StopRequest {
                         session_id: sess.conversation_id,
                         turn_id: turn_context.sub_id.clone(),
@@ -6638,6 +6680,43 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+fn build_continuous_run_block_message(reason: &str, release_channel: Option<&str>) -> String {
+    let mut lines = vec![
+        "Continuous run mode is still active for this thread.".to_string(),
+        format!("Reason: {reason}"),
+        "You are not allowed to stop, finalize, or hand off a completed answer yet.".to_string(),
+    ];
+    if let Some(release_channel) = release_channel {
+        lines.push(format!("Release channel: {release_channel}."));
+    }
+    lines.push(
+        "Continue working toward the objective until the user explicitly releases this thread."
+            .to_string(),
+    );
+    lines.join("\n")
+}
+
+#[cfg(test)]
+mod thread_control_tests {
+    use super::build_continuous_run_block_message;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn continuous_run_block_message_includes_release_channel_when_present() {
+        assert_eq!(
+            build_continuous_run_block_message(
+                "Finish the deployment validation loop",
+                Some("imessage"),
+            ),
+            "Continuous run mode is still active for this thread.\n\
+Reason: Finish the deployment validation loop\n\
+You are not allowed to stop, finalize, or hand off a completed answer yet.\n\
+Release channel: imessage.\n\
+Continue working toward the objective until the user explicitly releases this thread."
+        );
+    }
 }
 
 async fn track_turn_resolved_config_analytics(
