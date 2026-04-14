@@ -1,6 +1,9 @@
 use std::process::Command;
 
 const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
+const DEFAULT_SOURCE_VERSION_SUFFIX: &str = "rick";
+const OPENAI_CODEX_LATEST_RELEASE_URL: &str =
+    "https://api.github.com/repos/openai/codex/releases/latest";
 
 fn main() {
     println!("cargo:rerun-if-env-changed=CODEX_SOURCE_BASE_VERSION");
@@ -18,10 +21,7 @@ fn main() {
         cargo_version.clone()
     };
     let display_version = if is_source_build {
-        format_source_display_version(
-            &base_version,
-            std::env::var("CODEX_SOURCE_VERSION_SUFFIX").ok(),
-        )
+        format_source_display_version(&base_version, source_version_suffix())
     } else {
         cargo_version
     };
@@ -42,7 +42,59 @@ fn source_build_base_version() -> Option<String> {
         return None;
     }
 
+    if let Some(version) = official_release_semver_base() {
+        return Some(version);
+    }
+
     installed_codex_semver_base()
+}
+
+fn official_release_semver_base() -> Option<String> {
+    if let Some(version) = gh_latest_release_semver_base() {
+        return Some(version);
+    }
+
+    curl_latest_release_semver_base()
+}
+
+fn gh_latest_release_semver_base() -> Option<String> {
+    let output = Command::new("gh")
+        .args([
+            "release",
+            "view",
+            "--repo",
+            "openai/codex",
+            "--json",
+            "tagName",
+            "--jq",
+            ".tagName",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    extract_semver_base(&stdout)
+}
+
+fn curl_latest_release_semver_base() -> Option<String> {
+    let output = Command::new("curl")
+        .args([
+            "--fail",
+            "--silent",
+            "--show-error",
+            OPENAI_CODEX_LATEST_RELEASE_URL,
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    extract_semver_base(&stdout)
 }
 
 fn installed_codex_semver_base() -> Option<String> {
@@ -60,6 +112,14 @@ fn installed_codex_semver_base() -> Option<String> {
     }
 
     None
+}
+
+fn source_version_suffix() -> Option<String> {
+    match std::env::var("CODEX_SOURCE_VERSION_SUFFIX") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => Some(DEFAULT_SOURCE_VERSION_SUFFIX.to_string()),
+        Err(std::env::VarError::NotUnicode(_)) => None,
+    }
 }
 
 fn extract_semver_base(text: &str) -> Option<String> {
