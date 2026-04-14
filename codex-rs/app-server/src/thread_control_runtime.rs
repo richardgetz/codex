@@ -107,6 +107,20 @@ async fn arm_router_tick(
             return;
         }
 
+        let latest_control = match state_db.get_active_thread_control(control.thread_id).await {
+            Ok(latest_control) => latest_control,
+            Err(err) => {
+                warn!(
+                    thread_id = %control.thread_id,
+                    "failed to confirm router control immediately before wake-up submit: {err}"
+                );
+                conversation.active_thread_control().await
+            }
+        };
+        if latest_control != Some(control.clone()) {
+            return;
+        }
+
         let message = build_router_tick_message(&control);
         if let Err(err) = conversation
             .submit(Op::UserInput {
