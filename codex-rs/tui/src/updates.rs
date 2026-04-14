@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use crate::version::CODEX_CLI_VERSION;
 
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
-    if !config.check_for_update_on_startup || is_source_build_version(CODEX_CLI_VERSION) {
+    if !config.check_for_update_on_startup || codex_build_info::is_source_build() {
         return None;
     }
 
@@ -137,7 +137,7 @@ fn extract_version_from_latest_tag(latest_tag_name: &str) -> anyhow::Result<Stri
 /// Returns the latest version to show in a popup, if it should be shown.
 /// This respects the user's dismissal choice for the current latest version.
 pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
-    if !config.check_for_update_on_startup || is_source_build_version(CODEX_CLI_VERSION) {
+    if !config.check_for_update_on_startup || codex_build_info::is_source_build() {
         return None;
     }
 
@@ -170,15 +170,15 @@ pub async fn dismiss_version(config: &Config, version: &str) -> anyhow::Result<(
 }
 
 fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
-    let mut iter = v.trim().split('.');
+    let core = v
+        .trim()
+        .split_once(['-', '+'])
+        .map_or(v.trim(), |(core, _)| core);
+    let mut iter = core.split('.');
     let maj = iter.next()?.parse::<u64>().ok()?;
     let min = iter.next()?.parse::<u64>().ok()?;
     let pat = iter.next()?.parse::<u64>().ok()?;
     Some((maj, min, pat))
-}
-
-fn is_source_build_version(version: &str) -> bool {
-    parse_version(version) == Some((0, 0, 0))
 }
 
 #[cfg(test)]
@@ -231,5 +231,11 @@ mod tests {
     fn whitespace_is_ignored() {
         assert_eq!(parse_version(" 1.2.3 \n"), Some((1, 2, 3)));
         assert_eq!(is_newer(" 1.2.3 ", "1.2.2"), Some(true));
+    }
+
+    #[test]
+    fn prerelease_suffixes_are_ignored_for_numeric_parsing() {
+        assert_eq!(parse_version("0.80.0-rick"), Some((0, 80, 0)));
+        assert_eq!(parse_version("0.80.0+local"), Some((0, 80, 0)));
     }
 }
