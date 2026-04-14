@@ -36,6 +36,7 @@ pub(crate) struct SessionState {
     active_thread_control: Option<ThreadControlRecord>,
     granted_permissions: Option<PermissionProfile>,
     next_turn_is_first: bool,
+    active_thread_control: Option<ThreadControlRecord>,
 }
 
 impl SessionState {
@@ -56,6 +57,7 @@ impl SessionState {
             active_thread_control: None,
             granted_permissions: None,
             next_turn_is_first: true,
+            active_thread_control: None,
         }
     }
 
@@ -86,6 +88,14 @@ impl SessionState {
         let is_first_turn = self.next_turn_is_first;
         self.next_turn_is_first = false;
         is_first_turn
+    }
+
+    pub(crate) fn active_thread_control(&self) -> Option<ThreadControlRecord> {
+        self.active_thread_control.clone()
+    }
+
+    pub(crate) fn set_active_thread_control(&mut self, control: Option<ThreadControlRecord>) {
+        self.active_thread_control = control;
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {

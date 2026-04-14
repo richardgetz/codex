@@ -38,6 +38,7 @@ use tokio::sync::Mutex;
 use tokio::sync::watch;
 
 use codex_rollout::state_db::StateDbHandle;
+use codex_state::ThreadControlRecord;
 
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
@@ -97,6 +98,10 @@ impl CodexThread {
 
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
         self.codex.submit(op).await
+    }
+
+    pub fn id(&self) -> codex_protocol::ThreadId {
+        self.codex.session.conversation_id
     }
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
@@ -309,6 +314,14 @@ impl CodexThread {
 
     pub fn state_db(&self) -> Option<StateDbHandle> {
         self.codex.state_db()
+    }
+
+    pub async fn active_thread_control(&self) -> Option<ThreadControlRecord> {
+        self.codex.session.active_thread_control().await
+    }
+
+    pub async fn set_active_thread_control(&self, control: Option<ThreadControlRecord>) {
+        self.codex.session.set_active_thread_control(control).await;
     }
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
