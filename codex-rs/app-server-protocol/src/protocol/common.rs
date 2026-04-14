@@ -284,6 +284,18 @@ client_request_definitions! {
         params: v2::ThreadMetadataUpdateParams,
         response: v2::ThreadMetadataUpdateResponse,
     },
+    ThreadControlRead => "thread/control/read" {
+        params: v2::ThreadControlReadParams,
+        response: v2::ThreadControlReadResponse,
+    },
+    ThreadControlSet => "thread/control/set" {
+        params: v2::ThreadControlSetParams,
+        response: v2::ThreadControlSetResponse,
+    },
+    ThreadControlRelease => "thread/control/release" {
+        params: v2::ThreadControlReleaseParams,
+        response: v2::ThreadControlReleaseResponse,
+    },
     #[experimental("thread/memoryMode/set")]
     ThreadMemoryModeSet => "thread/memoryMode/set" {
         params: v2::ThreadMemoryModeSetParams,

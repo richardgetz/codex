@@ -94,6 +94,7 @@ use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_state::ThreadControlMode as StateThreadControlMode;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -546,6 +547,30 @@ pub(crate) async fn run_turn(
                         | AskForApproval::Granular(_) => "default",
                     }
                     .to_string();
+                    let active_thread_control = sess.active_thread_control().await;
+                    if let Some(control) = active_thread_control
+                        && matches!(control.mode, StateThreadControlMode::Continuous)
+                        && control.released_at.is_none()
+                    {
+                        let message = ResponseItem::Message {
+                            id: None,
+                            role: "user".to_string(),
+                            content: vec![ContentItem::InputText {
+                                text: build_continuous_run_block_message(
+                                    &control.reason,
+                                    control.release_channel.as_deref(),
+                                ),
+                            }],
+                            end_turn: None,
+                            phase: None,
+                        };
+                        sess.record_conversation_items(
+                            &turn_context,
+                            std::slice::from_ref(&message),
+                        )
+                        .await;
+                        continue;
+                    }
                     let stop_request = codex_hooks::StopRequest {
                         session_id: sess.conversation_id,
                         turn_id: turn_context.sub_id.clone(),
@@ -689,6 +714,43 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+fn build_continuous_run_block_message(reason: &str, release_channel: Option<&str>) -> String {
+    let mut lines = vec![
+        "Continuous run mode is still active for this thread.".to_string(),
+        format!("Reason: {reason}"),
+        "You are not allowed to stop, finalize, or hand off a completed answer yet.".to_string(),
+    ];
+    if let Some(release_channel) = release_channel {
+        lines.push(format!("Release channel: {release_channel}."));
+    }
+    lines.push(
+        "Continue working toward the objective until the user explicitly releases this thread."
+            .to_string(),
+    );
+    lines.join("\n")
+}
+
+#[cfg(test)]
+mod thread_control_tests {
+    use super::build_continuous_run_block_message;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn continuous_run_block_message_includes_release_channel_when_present() {
+        assert_eq!(
+            build_continuous_run_block_message(
+                "Finish the deployment validation loop",
+                Some("imessage"),
+            ),
+            "Continuous run mode is still active for this thread.\n\
+Reason: Finish the deployment validation loop\n\
+You are not allowed to stop, finalize, or hand off a completed answer yet.\n\
+Release channel: imessage.\n\
+Continue working toward the objective until the user explicitly releases this thread."
+        );
+    }
 }
 
 async fn track_turn_resolved_config_analytics(

@@ -548,7 +548,13 @@ impl Session {
                 ))
                 .await;
         session_configuration.thread_name = thread_name.clone();
-        let state = SessionState::new(session_configuration.clone());
+        let mut state = SessionState::new(session_configuration.clone());
+        if let Some(state_db_ctx) = state_db_ctx.as_ref() {
+            let active_thread_control = state_db_ctx
+                .get_active_thread_control(conversation_id)
+                .await?;
+            state.set_active_thread_control(active_thread_control);
+        }
         let managed_network_requirements_configured = config
             .config_layer_stack
             .requirements_toml()

@@ -1042,6 +1042,17 @@ impl Session {
         self.services.state_db.clone()
     }
 
+    pub(crate) async fn active_thread_control(&self) -> Option<codex_state::ThreadControlRecord> {
+        self.state.lock().await.active_thread_control()
+    }
+
+    pub(crate) async fn set_active_thread_control(
+        &self,
+        control: Option<codex_state::ThreadControlRecord>,
+    ) {
+        self.state.lock().await.set_active_thread_control(control);
+    }
+
     /// Flush rollout writes and return the final durability-barrier result.
     pub(crate) async fn flush_rollout(&self) -> std::io::Result<()> {
         let recorder = {

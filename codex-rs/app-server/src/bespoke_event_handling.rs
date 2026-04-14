@@ -7,6 +7,8 @@ use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::server_request_error::is_turn_transition_server_request_error;
+use crate::thread_control_runtime::clear_router_tick;
+use crate::thread_control_runtime::refresh_router_tick;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
 use crate::thread_state::resolve_server_request_on_thread_listener;
@@ -188,6 +190,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::TurnStarted(payload) => {
             // While not technically necessary as it was already done on TurnComplete, be extra cautios and abort any pending server requests.
             outgoing.abort_pending_server_requests().await;
+            clear_router_tick(&thread_state).await;
             thread_watch_manager
                 .note_turn_started(&conversation_id.to_string())
                 .await;
@@ -233,6 +236,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &thread_state,
             )
             .await;
+            if let Some(state_db) = conversation.state_db() {
+                refresh_router_tick(
+                    Arc::clone(&conversation),
+                    Arc::clone(&thread_state),
+                    state_db,
+                )
+                .await;
+            }
         }
         EventMsg::SkillsUpdateAvailable => {
             if let ApiVersion::V2 = api_version {
@@ -1848,6 +1859,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &thread_state,
             )
             .await;
+            if let Some(state_db) = conversation.state_db() {
+                refresh_router_tick(
+                    Arc::clone(&conversation),
+                    Arc::clone(&thread_state),
+                    state_db,
+                )
+                .await;
+            }
         }
         EventMsg::ThreadRolledBack(_rollback_event) => {
             let pending = {
