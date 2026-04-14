@@ -374,6 +374,9 @@
             "enable_fanout": {
               "type": "boolean"
             },
+            "enable_mcp_approvals": {
+              "type": "boolean"
+            },
             "enable_request_compression": {
               "type": "boolean"
             },
@@ -2228,6 +2231,9 @@
           "type": "boolean"
         },
         "enable_fanout": {
+          "type": "boolean"
+        },
+        "enable_mcp_approvals": {
           "type": "boolean"
         },
         "enable_request_compression": {

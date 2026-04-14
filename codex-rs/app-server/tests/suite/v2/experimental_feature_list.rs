@@ -167,6 +167,7 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
             ("plugins".to_string(), true),
             ("tool_search".to_string(), true),
             ("tool_suggest".to_string(), true),
+            ("enable_mcp_approvals".to_string(), false),
             ("tool_call_mcp_elicitation".to_string(), false),
         ]),
     )
@@ -179,6 +180,7 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
                 ("plugins".to_string(), true),
                 ("tool_search".to_string(), true),
                 ("tool_suggest".to_string(), true),
+                ("enable_mcp_approvals".to_string(), false),
                 ("tool_call_mcp_elicitation".to_string(), false),
             ]),
         }
@@ -213,6 +215,13 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
             .get("features")
             .and_then(|features| features.get("tool_suggest")),
         Some(&json!(true))
+    );
+    assert_eq!(
+        config
+            .additional
+            .get("features")
+            .and_then(|features| features.get("enable_mcp_approvals")),
+        Some(&json!(false))
     );
     assert_eq!(
         config
@@ -283,7 +292,9 @@ async fn experimental_feature_enablement_set_rejects_non_allowlisted_feature() -
     assert!(
         error
             .message
-            .contains("apps, plugins, tool_search, tool_suggest, tool_call_mcp_elicitation"),
+            .contains(
+                "apps, plugins, tool_search, tool_suggest, enable_mcp_approvals, tool_call_mcp_elicitation"
+            ),
         "{}",
         error.message
     );
