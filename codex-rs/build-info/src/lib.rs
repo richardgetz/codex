@@ -1,9 +1,10 @@
 /// User-facing Codex version string embedded at compile time.
 ///
 /// Release builds use the published package version. Source builds may inherit
-/// a release line from `CODEX_SOURCE_BASE_VERSION` or the currently installed
-/// `codex` / `codex-agent` binary, and may append an optional suffix from
-/// `CODEX_SOURCE_VERSION_SUFFIX`.
+/// a release line from `CODEX_SOURCE_BASE_VERSION` or the latest official
+/// `openai/codex` release metadata (falling back to the installed `codex` /
+/// `codex-agent` binary), and appends the fork's default suffix unless
+/// `CODEX_SOURCE_VERSION_SUFFIX` overrides it.
 pub const CODEX_DISPLAY_VERSION: &str = env!("CODEX_DISPLAY_VERSION");
 
 /// Stable release-line version used as the base for source builds.
