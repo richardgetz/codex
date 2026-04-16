@@ -2014,6 +2014,17 @@
         }
       ]
     },
+    "RouterThreadControlToml": {
+      "additionalProperties": false,
+      "description": "Router-specific thread-control settings loaded from config.toml.",
+      "properties": {
+        "model": {
+          "description": "Model to use for router-mode wake-up turns.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -2154,6 +2165,21 @@
         "include_instructions": {
           "description": "Whether turns receive the automatic skills instructions block.",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ThreadControlToml": {
+      "additionalProperties": false,
+      "description": "Thread-control settings loaded from config.toml.",
+      "properties": {
+        "router": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RouterThreadControlToml"
+            }
+          ],
+          "default": null
         }
       },
       "type": "object"
@@ -3166,6 +3192,15 @@
     "suppress_unstable_features_warning": {
       "description": "Suppress warnings about unstable (under development) features.",
       "type": "boolean"
+    },
+    "thread_control": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ThreadControlToml"
+        }
+      ],
+      "default": null,
+      "description": "Thread-control subsystem settings."
     },
     "tool_output_token_limit": {
       "description": "Token budget applied when storing tool/function outputs in the context manager.",

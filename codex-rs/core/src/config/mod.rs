@@ -44,6 +44,7 @@ use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
 use codex_config::types::ShellEnvironmentPolicy;
+use codex_config::types::ThreadControlConfig;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiNotificationSettings;
@@ -438,6 +439,9 @@ pub struct Config {
 
     /// Memories subsystem settings.
     pub memories: MemoriesConfig,
+
+    /// Thread-control subsystem settings.
+    pub thread_control: ThreadControlConfig,
 
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
@@ -2352,6 +2356,7 @@ impl Config {
             agent_max_depth,
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
+            thread_control: cfg.thread_control.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,
             codex_home,
             sqlite_home,

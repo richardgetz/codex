@@ -450,6 +450,15 @@ reasoning_effort = "low"
 
 When a thread enters orchestrator mode, Codex immediately applies these model and reasoning overrides to the thread's active collaboration mode. Subsequent orchestrator wake-up turns reuse that resolved model/reasoning pair unless a later settings update changes them. Orchestrator-launched agents can still request their own model, reasoning effort, and collaboration mode through the normal agent spawn fields, so the orchestrator can run on a cheaper coordination model while delegating implementation work to a stronger model or a different execution mode.
 
+If you want router wake-up turns to use a faster or cheaper model by default, set it in `config.toml`:
+
+```toml
+[thread_control.router]
+model = "gpt-5.3-codex-spark"
+```
+
+Router mode re-wakes the same thread, preserving its current collaboration mode and reasoning settings while applying this model override to the next router tick turn. Because router ticks submit a normal turn on that same thread, the override becomes the thread's active model until another turn explicitly changes it.
+
 ```json
 { "method": "thread/control/set", "id": 26, "params": {
     "threadId": "thr_123",

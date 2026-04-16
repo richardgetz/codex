@@ -281,6 +281,44 @@ impl From<MemoriesToml> for MemoriesConfig {
     }
 }
 
+/// Router-specific thread-control settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RouterThreadControlToml {
+    /// Model to use for router-mode wake-up turns.
+    pub model: Option<String>,
+}
+
+/// Thread-control settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ThreadControlToml {
+    #[serde(default)]
+    pub router: Option<RouterThreadControlToml>,
+}
+
+/// Effective router-specific thread-control settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RouterThreadControlConfig {
+    pub model: Option<String>,
+}
+
+/// Effective thread-control settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ThreadControlConfig {
+    pub router: RouterThreadControlConfig,
+}
+
+impl From<ThreadControlToml> for ThreadControlConfig {
+    fn from(toml: ThreadControlToml) -> Self {
+        Self {
+            router: RouterThreadControlConfig {
+                model: toml.router.and_then(|router| router.model),
+            },
+        }
+    }
+}
+
 /// Default settings that apply to all apps.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]

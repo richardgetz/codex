@@ -328,6 +328,21 @@ impl CodexThread {
         self.codex.thread_config_snapshot().await
     }
 
+    pub async fn collaboration_mode(&self) -> CollaborationMode {
+        self.codex.session.collaboration_mode().await
+    }
+
+    pub async fn router_model_override(&self) -> Option<String> {
+        self.codex
+            .session
+            .get_config()
+            .await
+            .thread_control
+            .router
+            .model
+            .clone()
+    }
+
     pub async fn read_mcp_resource(
         &self,
         server: &str,
