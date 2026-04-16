@@ -414,6 +414,15 @@ Use `thread/metadata/update` to patch sqlite-backed metadata for a thread withou
 
 Use `thread/control/set` when a client needs an authoritative run contract that survives compaction and side questions. `continuous` mode blocks stop attempts until release, while `router` mode stores supervision metadata and re-wakes the same loaded thread on a timer after each turn finishes.
 
+If you want router wake-up turns to use a faster or cheaper model by default, set it in `config.toml`:
+
+```toml
+[thread_control.router]
+model = "gpt-5.3-codex-spark"
+```
+
+Router mode re-wakes the same thread, preserving its current collaboration mode and reasoning settings while applying this model override to the next router tick turn. Because router ticks submit a normal turn on that same thread, the override becomes the thread's active model until another turn explicitly changes it.
+
 ```json
 { "method": "thread/control/set", "id": 26, "params": {
     "threadId": "thr_123",

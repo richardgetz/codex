@@ -3246,6 +3246,16 @@
             }
           ]
         },
+        "thread_control": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadControlConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "tools": {
           "anyOf": [
             {
@@ -8756,6 +8766,17 @@
         }
       ]
     },
+    "RouterThreadControlConfig": {
+      "properties": {
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -10835,6 +10856,21 @@
         "threadId",
         "updatedAt"
       ],
+      "type": "object"
+    },
+    "ThreadControlConfig": {
+      "properties": {
+        "router": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RouterThreadControlConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
       "type": "object"
     },
     "ThreadControlMode": {
