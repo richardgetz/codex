@@ -118,6 +118,8 @@ use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_state::ThreadControlMode as StateThreadControlMode;
+use codex_state::ThreadControlRecord;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::RolloutConfig;
 use codex_rollout::state_db;
@@ -821,6 +823,9 @@ async fn thread_title_from_state_db(
 }
 
 impl Session {
+    pub(crate) const CONTINUOUS_MODE_CONTROL_REASON: &str =
+        "Continuous collaboration mode is active for this thread.";
+
     pub(crate) async fn app_server_client_metadata(&self) -> AppServerClientMetadata {
         let state = self.state.lock().await;
         AppServerClientMetadata {
@@ -1051,6 +1056,76 @@ impl Session {
         control: Option<codex_state::ThreadControlRecord>,
     ) {
         self.state.lock().await.set_active_thread_control(control);
+    }
+
+    pub(crate) async fn sync_continuous_mode_control(&self, collaboration_mode: &CollaborationMode) {
+        let active_thread_control = self.active_thread_control().await;
+        match collaboration_mode.mode {
+            ModeKind::Continuous => {
+                if active_thread_control.as_ref().is_some_and(|control| {
+                    control.mode == StateThreadControlMode::Continuous
+                        && control.released_at.is_none()
+                }) {
+                    return;
+                }
+
+                let updated_at = Utc::now();
+                let control = active_thread_control
+                    .as_ref()
+                    .filter(|control| control.mode == StateThreadControlMode::Continuous)
+                    .map(|control| {
+                        let mut control = control.clone();
+                        control.released_at = None;
+                        control.updated_at = updated_at;
+                        control
+                    })
+                    .unwrap_or_else(|| ThreadControlRecord {
+                        thread_id: self.conversation_id,
+                        mode: StateThreadControlMode::Continuous,
+                        reason: Self::CONTINUOUS_MODE_CONTROL_REASON.to_string(),
+                        release_channel: None,
+                        watch_interval_seconds: None,
+                        released_at: None,
+                        updated_at,
+                        target_thread_ids: Vec::new(),
+                    });
+
+                if let Some(state_db) = self.state_db()
+                    && let Err(err) = state_db.upsert_thread_control(&control).await
+                {
+                    warn!(
+                        error = %err,
+                        thread_id = %self.conversation_id,
+                        "failed to persist continuous collaboration mode control"
+                    );
+                }
+                self.set_active_thread_control(Some(control)).await;
+            }
+            _ => {
+                let Some(control) = active_thread_control else {
+                    return;
+                };
+                if control.mode != StateThreadControlMode::Continuous {
+                    return;
+                }
+
+                if control.released_at.is_none() {
+                    let released_at = Utc::now();
+                    if let Some(state_db) = self.state_db()
+                        && let Err(err) = state_db
+                            .release_thread_control(self.conversation_id, released_at)
+                            .await
+                    {
+                        warn!(
+                            error = %err,
+                            thread_id = %self.conversation_id,
+                            "failed to release continuous collaboration mode control"
+                        );
+                    }
+                }
+                self.set_active_thread_control(None).await;
+            }
+        }
     }
 
     /// Flush rollout writes and return the final durability-barrier result.
@@ -1332,7 +1407,14 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let (previous_cwd, sandbox_policy_changed, next_cwd, codex_home, session_source) = {
+        let (
+            previous_cwd,
+            sandbox_policy_changed,
+            next_cwd,
+            codex_home,
+            session_source,
+            collaboration_mode,
+        ) = {
             let mut state = self.state.lock().await;
             let updated = match state.session_configuration.apply(&updates) {
                 Ok(updated) => updated,
@@ -1345,6 +1427,7 @@ impl Session {
             let previous_cwd = state.session_configuration.cwd.clone();
             let sandbox_policy_changed =
                 state.session_configuration.sandbox_policy != updated.sandbox_policy;
+            let collaboration_mode = updated.collaboration_mode.clone();
             let next_cwd = updated.cwd.clone();
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
@@ -1355,6 +1438,7 @@ impl Session {
                 next_cwd,
                 codex_home,
                 session_source,
+                collaboration_mode,
             )
         };
 
@@ -1368,6 +1452,7 @@ impl Session {
             self.refresh_managed_network_proxy_for_current_sandbox_policy()
                 .await;
         }
+        self.sync_continuous_mode_control(&collaboration_mode).await;
 
         Ok(())
     }

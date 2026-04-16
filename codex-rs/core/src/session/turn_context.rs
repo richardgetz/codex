@@ -528,6 +528,8 @@ impl Session {
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
     ) -> Arc<TurnContext> {
+        self.sync_continuous_mode_control(&session_configuration.collaboration_mode)
+            .await;
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
         {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
