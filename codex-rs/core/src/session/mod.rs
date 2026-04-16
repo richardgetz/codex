@@ -1086,6 +1086,23 @@ impl Session {
                     return Ok(());
                 }
 
+                if control.released_at.is_none() {
+                    let released_at = Utc::now();
+                    if let Some(state_db) = self.state_db()
+                        && let Err(err) = state_db
+                            .release_thread_control(self.conversation_id, released_at)
+                            .await
+                    {
+                        warn!(
+                            error = %err,
+                            thread_id = %self.conversation_id,
+                            "failed to release collaboration mode control"
+                        );
+                        return Err(ConstraintError::operation_failed(
+                            "failed to release collaboration mode control",
+                        ));
+                    }
+                }
                 self.disable_orchestrator_scoped_memories().await;
                 self.set_active_thread_control(None).await;
                 return Ok(());
@@ -1116,6 +1133,28 @@ impl Session {
             return Ok(());
         }
 
+        if let Some(control) = active_thread_control.as_ref()
+            && automatic_control_active(control)
+            && control.released_at.is_none()
+            && control.mode != mode
+        {
+            let released_at = Utc::now();
+            if let Some(state_db) = self.state_db()
+                && let Err(err) = state_db
+                    .release_thread_control(self.conversation_id, released_at)
+                    .await
+            {
+                warn!(
+                    error = %err,
+                    thread_id = %self.conversation_id,
+                    "failed to release collaboration mode control"
+                );
+                return Err(ConstraintError::operation_failed(
+                    "failed to release collaboration mode control",
+                ));
+            }
+        }
+
         let updated_at = Utc::now();
         let control = ThreadControlRecord {
             thread_id: self.conversation_id,
@@ -1128,6 +1167,18 @@ impl Session {
             target_thread_ids: Vec::new(),
         };
 
+        if let Some(state_db) = self.state_db()
+            && let Err(err) = state_db.upsert_thread_control(&control).await
+        {
+            warn!(
+                error = %err,
+                thread_id = %self.conversation_id,
+                "failed to persist collaboration mode control"
+            );
+            return Err(ConstraintError::operation_failed(
+                "failed to persist collaboration mode control",
+            ));
+        }
         self.set_active_thread_control(Some(control)).await;
         if collaboration_mode.mode == ModeKind::Orchestrator {
             self.enable_orchestrator_scoped_memories().await;
@@ -1214,6 +1265,18 @@ impl Session {
             return;
         }
 
+        if let Some(state_db) = self.state_db()
+            && let Err(err) = state_db
+                .release_thread_control(self.conversation_id, Utc::now())
+                .await
+        {
+            warn!(
+                error = %err,
+                thread_id = %self.conversation_id,
+                "failed to release orchestrator control during interrupt"
+            );
+            return;
+        }
         self.disable_orchestrator_scoped_memories().await;
         self.set_active_thread_control(None).await;
     }
