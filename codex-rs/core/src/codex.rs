@@ -948,26 +948,8 @@ impl TurnContext {
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
         let truncation_policy = model_info.truncation_policy.into();
-        let supported_reasoning_levels = model_info
-            .supported_reasoning_levels
-            .iter()
-            .map(|preset| preset.effort)
-            .collect::<Vec<_>>();
-        let reasoning_effort = if let Some(current_reasoning_effort) = self.reasoning_effort {
-            if supported_reasoning_levels.contains(&current_reasoning_effort) {
-                Some(current_reasoning_effort)
-            } else {
-                supported_reasoning_levels
-                    .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
-                    .copied()
-                    .or(model_info.default_reasoning_level)
-            }
-        } else {
-            supported_reasoning_levels
-                .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
-                .copied()
-                .or(model_info.default_reasoning_level)
-        };
+        let reasoning_effort =
+            compatible_reasoning_effort_for_model(self.reasoning_effort, &model_info);
         config.model_reasoning_effort = reasoning_effort;
 
         let collaboration_mode = self.collaboration_mode.with_updates(
@@ -1118,6 +1100,32 @@ impl TurnContext {
                 .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
                 .unwrap_or_default(),
         })
+    }
+}
+
+pub(crate) fn compatible_reasoning_effort_for_model(
+    current_reasoning_effort: Option<ReasoningEffortConfig>,
+    model_info: &ModelInfo,
+) -> Option<ReasoningEffortConfig> {
+    let supported_reasoning_levels = model_info
+        .supported_reasoning_levels
+        .iter()
+        .map(|preset| preset.effort)
+        .collect::<Vec<_>>();
+    if let Some(current_reasoning_effort) = current_reasoning_effort {
+        if supported_reasoning_levels.contains(&current_reasoning_effort) {
+            Some(current_reasoning_effort)
+        } else {
+            supported_reasoning_levels
+                .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
+                .copied()
+                .or(model_info.default_reasoning_level)
+        }
+    } else {
+        supported_reasoning_levels
+            .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
+            .copied()
+            .or(model_info.default_reasoning_level)
     }
 }
 
