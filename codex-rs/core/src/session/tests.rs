@@ -2743,6 +2743,36 @@ async fn new_turn_rearms_continuous_control_when_mode_stays_active() {
     );
 }
 
+#[tokio::test]
+async fn continuous_mode_preserves_active_router_control() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let router_control = codex_state::ThreadControlRecord {
+        thread_id: session.conversation_id,
+        mode: codex_state::ThreadControlMode::Router,
+        reason: "Router mode is supervising this thread.".to_string(),
+        release_channel: Some("imessage".to_string()),
+        watch_interval_seconds: Some(30),
+        released_at: None,
+        updated_at: Utc::now(),
+        target_thread_ids: vec!["thread-other".to_string()],
+    };
+    session
+        .set_active_thread_control(Some(router_control.clone()))
+        .await;
+
+    let mut continuous_mode = session.collaboration_mode().await;
+    continuous_mode.mode = ModeKind::Continuous;
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(continuous_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("continuous mode update should succeed");
+
+    assert_eq!(session.active_thread_control().await, Some(router_control));
+}
+
 #[test]
 fn falls_back_to_content_when_structured_is_null() {
     let ctr = McpCallToolResult {
