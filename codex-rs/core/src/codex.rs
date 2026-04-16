@@ -191,6 +191,7 @@ use crate::codex_thread::ThreadConfigSnapshot;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
+use crate::config::ConstraintError;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
 use crate::config::StartedNetworkProxy;
@@ -2659,7 +2660,7 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let mut state = self.state.lock().await;
+        let state = self.state.lock().await;
 
         match state.session_configuration.apply(&updates) {
             Ok(updated) => {
@@ -2670,6 +2671,11 @@ impl Session {
                 let next_cwd = updated.cwd.clone();
                 let codex_home = updated.codex_home.clone();
                 let session_source = updated.session_source.clone();
+                drop(state);
+                self.ensure_continuous_mode_control(&collaboration_mode)
+                    .await?;
+
+                let mut state = self.state.lock().await;
                 state.session_configuration = updated;
                 drop(state);
 
@@ -2683,8 +2689,6 @@ impl Session {
                     self.refresh_managed_network_proxy_for_current_sandbox_policy()
                         .await;
                 }
-                self.sync_continuous_mode_control(&collaboration_mode).await;
-
                 Ok(())
             }
             Err(err) => {
@@ -2706,7 +2710,7 @@ impl Session {
             codex_home,
             session_source,
         ) = {
-            let mut state = self.state.lock().await;
+            let state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
                     let previous_cwd = state.session_configuration.cwd.clone();
@@ -2714,6 +2718,22 @@ impl Session {
                         state.session_configuration.sandbox_policy != next.sandbox_policy;
                     let codex_home = next.codex_home.clone();
                     let session_source = next.session_source.clone();
+                    drop(state);
+                    if let Err(err) = self
+                        .ensure_continuous_mode_control(&next.collaboration_mode)
+                        .await
+                    {
+                        self.send_event_raw(Event {
+                            id: sub_id.clone(),
+                            msg: EventMsg::Error(ErrorEvent {
+                                message: err.to_string(),
+                                codex_error_info: Some(CodexErrorInfo::BadRequest),
+                            }),
+                        })
+                        .await;
+                        return Err(err);
+                    }
+                    let mut state = self.state.lock().await;
                     state.session_configuration = next.clone();
                     (
                         next,
@@ -2838,6 +2858,15 @@ impl Session {
     }
 
     async fn sync_continuous_mode_control(&self, collaboration_mode: &CollaborationMode) {
+        let _ = self
+            .ensure_continuous_mode_control(collaboration_mode)
+            .await;
+    }
+
+    async fn ensure_continuous_mode_control(
+        &self,
+        collaboration_mode: &CollaborationMode,
+    ) -> ConstraintResult<()> {
         let active_thread_control = self.active_thread_control().await;
         match collaboration_mode.mode {
             ModeKind::Continuous => {
@@ -2845,13 +2874,13 @@ impl Session {
                     control.mode != StateThreadControlMode::Continuous
                         && control.released_at.is_none()
                 }) {
-                    return;
+                    return Ok(());
                 }
                 if active_thread_control.as_ref().is_some_and(|control| {
                     control.mode == StateThreadControlMode::Continuous
                         && control.released_at.is_none()
                 }) {
-                    return;
+                    return Ok(());
                 }
 
                 let updated_at = Utc::now();
@@ -2882,17 +2911,20 @@ impl Session {
                             thread_id = %self.conversation_id,
                             "failed to persist continuous collaboration mode control"
                         );
-                        return;
+                        return Err(ConstraintError::operation_failed(
+                            "failed to persist continuous collaboration mode control",
+                        ));
                     }
                 }
                 self.set_active_thread_control(Some(control)).await;
+                Ok(())
             }
             _ => {
                 let Some(control) = active_thread_control else {
-                    return;
+                    return Ok(());
                 };
                 if control.mode != StateThreadControlMode::Continuous {
-                    return;
+                    return Ok(());
                 }
 
                 if control.released_at.is_none() {
@@ -2907,11 +2939,14 @@ impl Session {
                                 thread_id = %self.conversation_id,
                                 "failed to release continuous collaboration mode control"
                             );
-                            return;
+                            return Err(ConstraintError::operation_failed(
+                                "failed to release continuous collaboration mode control",
+                            ));
                         }
                     }
                 }
                 self.set_active_thread_control(None).await;
+                Ok(())
             }
         }
     }
