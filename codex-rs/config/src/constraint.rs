@@ -24,12 +24,21 @@ pub enum ConstraintError {
         requirement_source: RequirementSource,
         reason: String,
     },
+
+    #[error("{message}")]
+    OperationFailed { message: String },
 }
 
 impl ConstraintError {
     pub fn empty_field(field_name: impl Into<String>) -> Self {
         Self::EmptyField {
             field_name: field_name.into(),
+        }
+    }
+
+    pub fn operation_failed(message: impl Into<String>) -> Self {
+        Self::OperationFailed {
+            message: message.into(),
         }
     }
 }
