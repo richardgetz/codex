@@ -142,14 +142,16 @@ fn spawn_router_tick_task(
         }
 
         let config_snapshot = conversation.config_snapshot().await;
-        let collaboration_mode = conversation.collaboration_mode().await;
-        let router_model_override = conversation.router_model_override().await;
+        let (model, reasoning_effort, collaboration_mode) = conversation
+            .resolve_router_turn_settings(conversation.router_model_override().await.as_deref())
+            .await;
         if let Err(err) = conversation
             .submit(build_router_tick_turn(
                 &control,
                 &config_snapshot,
+                &model,
+                reasoning_effort,
                 &collaboration_mode,
-                router_model_override.as_deref(),
             ))
             .await
         {
@@ -193,14 +195,10 @@ fn build_router_tick_message(control: &ThreadControlRecord) -> String {
 fn build_router_tick_turn(
     control: &ThreadControlRecord,
     config_snapshot: &ThreadConfigSnapshot,
+    model: &str,
+    reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     collaboration_mode: &CollaborationMode,
-    router_model_override: Option<&str>,
 ) -> Op {
-    let model = router_model_override
-        .unwrap_or(config_snapshot.model.as_str())
-        .to_string();
-    let collaboration_mode = collaboration_mode.with_updates(Some(model.clone()), None, None);
-
     Op::UserTurn {
         items: vec![UserInput::Text {
             text: build_router_tick_message(control),
@@ -210,12 +208,12 @@ fn build_router_tick_turn(
         approval_policy: config_snapshot.approval_policy,
         approvals_reviewer: Some(config_snapshot.approvals_reviewer),
         sandbox_policy: config_snapshot.sandbox_policy.clone(),
-        model,
-        effort: config_snapshot.reasoning_effort,
+        model: model.to_string(),
+        effort: reasoning_effort,
         summary: None,
         service_tier: None,
         final_output_json_schema: None,
-        collaboration_mode: Some(collaboration_mode),
+        collaboration_mode: Some(collaboration_mode.clone()),
         personality: None,
     }
 }
@@ -275,7 +273,7 @@ Check supervised sessions for new progress, blockers, or operator instructions a
     }
 
     #[test]
-    fn router_tick_turn_preserves_mode_and_effort_while_overriding_model() {
+    fn router_tick_turn_uses_resolved_router_settings() {
         let control = ThreadControlRecord {
             thread_id: ThreadId::from_string("00000000-0000-0000-0000-000000000011")
                 .expect("thread id"),
@@ -306,8 +304,8 @@ Check supervised sessions for new progress, blockers, or operator instructions a
         let collaboration_mode = CollaborationMode {
             mode: ModeKind::Plan,
             settings: Settings {
-                model: "gpt-5".to_string(),
-                reasoning_effort: Some(ReasoningEffort::High),
+                model: "gpt-5.3-codex-spark".to_string(),
+                reasoning_effort: Some(ReasoningEffort::Medium),
                 developer_instructions: Some("Stay in routing mode.".to_string()),
             },
         };
@@ -315,8 +313,9 @@ Check supervised sessions for new progress, blockers, or operator instructions a
         let turn = build_router_tick_turn(
             &control,
             &config_snapshot,
+            "gpt-5.3-codex-spark",
+            Some(ReasoningEffort::Medium),
             &collaboration_mode,
-            Some("gpt-5.3-codex-spark"),
         );
 
         let Op::UserTurn {
@@ -332,14 +331,14 @@ Check supervised sessions for new progress, blockers, or operator instructions a
             panic!("expected router tick to submit a user turn");
         };
         assert_eq!(model, "gpt-5.3-codex-spark");
-        assert_eq!(effort, Some(ReasoningEffort::High));
+        assert_eq!(effort, Some(ReasoningEffort::Medium));
         assert_eq!(
             collaboration_mode,
             Some(CollaborationMode {
                 mode: ModeKind::Plan,
                 settings: Settings {
                     model: "gpt-5.3-codex-spark".to_string(),
-                    reasoning_effort: Some(ReasoningEffort::High),
+                    reasoning_effort: Some(ReasoningEffort::Medium),
                     developer_instructions: Some("Stay in routing mode.".to_string()),
                 },
             })

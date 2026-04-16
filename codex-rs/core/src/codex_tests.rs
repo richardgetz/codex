@@ -1,4 +1,5 @@
 use super::*;
+use crate::CodexThread;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
@@ -2468,6 +2469,91 @@ async fn turn_context_with_model_updates_model_fields() {
         &updated.tool_call_gate,
         &turn_context.tool_call_gate
     ));
+}
+
+fn test_codex_thread(session: Session) -> CodexThread {
+    let (tx_sub, _rx_sub) = async_channel::bounded(1);
+    let (_tx_event, rx_event) = async_channel::unbounded();
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let session_loop_handle = tokio::spawn(async {});
+    let codex = Codex {
+        tx_sub,
+        rx_event,
+        agent_status,
+        session: Arc::new(session),
+        session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
+    };
+    let file_watcher = Arc::new(crate::file_watcher::FileWatcher::noop());
+    let (subscriber, _receiver) = file_watcher.add_subscriber();
+    CodexThread::new(codex, None, subscriber.register_paths(Vec::new()))
+}
+
+#[tokio::test]
+async fn resolve_router_turn_settings_remaps_unsupported_explicit_effort() {
+    let (session, _turn_context) = make_session_and_context().await;
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.collaboration_mode = CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: Settings {
+                model: "gpt-5".to_string(),
+                reasoning_effort: Some(ReasoningEffortConfig::Minimal),
+                developer_instructions: Some("Stay in routing mode.".to_string()),
+            },
+        };
+    }
+    let thread = test_codex_thread(session);
+
+    let (model, reasoning_effort, collaboration_mode) =
+        thread.resolve_router_turn_settings(Some("gpt-5.1")).await;
+
+    assert_eq!(model, "gpt-5.1");
+    assert_eq!(reasoning_effort, Some(ReasoningEffortConfig::Medium));
+    assert_eq!(
+        collaboration_mode,
+        CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: Settings {
+                model: "gpt-5.1".to_string(),
+                reasoning_effort: Some(ReasoningEffortConfig::Medium),
+                developer_instructions: Some("Stay in routing mode.".to_string()),
+            },
+        }
+    );
+}
+
+#[tokio::test]
+async fn resolve_router_turn_settings_preserves_absent_effort() {
+    let (session, _turn_context) = make_session_and_context().await;
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.collaboration_mode = CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: Settings {
+                model: "gpt-5".to_string(),
+                reasoning_effort: None,
+                developer_instructions: Some("Stay in routing mode.".to_string()),
+            },
+        };
+    }
+    let thread = test_codex_thread(session);
+
+    let (model, reasoning_effort, collaboration_mode) =
+        thread.resolve_router_turn_settings(Some("gpt-5.1")).await;
+
+    assert_eq!(model, "gpt-5.1");
+    assert_eq!(reasoning_effort, None);
+    assert_eq!(
+        collaboration_mode,
+        CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: Settings {
+                model: "gpt-5.1".to_string(),
+                reasoning_effort: None,
+                developer_instructions: Some("Stay in routing mode.".to_string()),
+            },
+        }
+    );
 }
 
 #[test]
