@@ -18,7 +18,9 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::RouterThreadControlConfig;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::ThreadControlConfig;
 use codex_app_server_protocol::ToolsV2;
 use codex_app_server_protocol::WriteStatus;
 use codex_core::config::set_project_trust_level;
@@ -84,6 +86,45 @@ sandbox_mode = "workspace-write"
     );
     let layers = layers.expect("layers present");
     assert_layers_user_then_optional_system(&layers, user_file)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_thread_control_router_model() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+[thread_control.router]
+model = "gpt-5.3-codex-spark"
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse { config, .. } = to_response(resp)?;
+
+    assert_eq!(
+        config.thread_control,
+        Some(ThreadControlConfig {
+            router: Some(RouterThreadControlConfig {
+                model: Some("gpt-5.3-codex-spark".to_string()),
+            }),
+        })
+    );
 
     Ok(())
 }

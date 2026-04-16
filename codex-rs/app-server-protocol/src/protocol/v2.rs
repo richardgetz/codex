@@ -720,6 +720,20 @@ pub struct AppsConfig {
     pub apps: HashMap<String, AppConfig>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct RouterThreadControlConfig {
+    pub model: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControlConfig {
+    pub router: Option<RouterThreadControlConfig>,
+}
+
 const fn default_enabled() -> bool {
     true
 }
@@ -760,6 +774,7 @@ pub struct Config {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub service_tier: Option<ServiceTier>,
+    pub thread_control: Option<ThreadControlConfig>,
     pub analytics: Option<AnalyticsConfig>,
     #[experimental("config/read.apps")]
     #[serde(default)]
@@ -7566,6 +7581,7 @@ mod tests {
             model_reasoning_summary: None,
             model_verbosity: None,
             service_tier: None,
+            thread_control: None,
             analytics: None,
             apps: None,
             additional: HashMap::new(),
@@ -7599,6 +7615,7 @@ mod tests {
             model_reasoning_summary: None,
             model_verbosity: None,
             service_tier: None,
+            thread_control: None,
             analytics: None,
             apps: None,
             additional: HashMap::new(),
@@ -7654,6 +7671,7 @@ mod tests {
             model_reasoning_summary: None,
             model_verbosity: None,
             service_tier: None,
+            thread_control: None,
             analytics: None,
             apps: None,
             additional: HashMap::new(),
@@ -7703,6 +7721,7 @@ mod tests {
             model_reasoning_summary: None,
             model_verbosity: None,
             service_tier: None,
+            thread_control: None,
             analytics: None,
             apps: None,
             additional: HashMap::new(),

@@ -1,5 +1,7 @@
 use crate::thread_state::ThreadState;
 use codex_core::CodexThread;
+use codex_core::ThreadConfigSnapshot;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -78,6 +80,24 @@ async fn arm_router_tick(
         state.replace_router_tick(cancel_tx);
     }
 
+    spawn_router_tick_task(
+        conversation,
+        thread_state,
+        state_db,
+        control,
+        watch_interval_seconds,
+        cancel_rx,
+    );
+}
+
+fn spawn_router_tick_task(
+    conversation: Arc<CodexThread>,
+    thread_state: Arc<Mutex<ThreadState>>,
+    state_db: Arc<StateRuntime>,
+    control: ThreadControlRecord,
+    watch_interval_seconds: u32,
+    cancel_rx: oneshot::Receiver<()>,
+) {
     tokio::spawn(async move {
         let sleep = tokio::time::sleep(Duration::from_secs(u64::from(watch_interval_seconds)));
         tokio::pin!(sleep);
@@ -121,22 +141,23 @@ async fn arm_router_tick(
             return;
         }
 
-        let message = build_router_tick_message(&control);
+        let config_snapshot = conversation.config_snapshot().await;
+        let collaboration_mode = conversation.collaboration_mode().await;
+        let router_model_override = conversation.router_model_override().await;
         if let Err(err) = conversation
-            .submit(Op::UserInput {
-                items: vec![UserInput::Text {
-                    text: message,
-                    text_elements: Vec::new(),
-                }],
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-            })
+            .submit(build_router_tick_turn(
+                &control,
+                &config_snapshot,
+                &collaboration_mode,
+                router_model_override.as_deref(),
+            ))
             .await
         {
             warn!(
                 thread_id = %control.thread_id,
                 "failed to submit router wake-up turn: {err}"
             );
+            arm_router_tick(conversation, thread_state, state_db, control).await;
         }
     });
 }
@@ -169,12 +190,54 @@ fn build_router_tick_message(control: &ThreadControlRecord) -> String {
     lines.join("\n")
 }
 
+fn build_router_tick_turn(
+    control: &ThreadControlRecord,
+    config_snapshot: &ThreadConfigSnapshot,
+    collaboration_mode: &CollaborationMode,
+    router_model_override: Option<&str>,
+) -> Op {
+    let model = router_model_override
+        .unwrap_or(config_snapshot.model.as_str())
+        .to_string();
+    let collaboration_mode = collaboration_mode.with_updates(Some(model.clone()), None, None);
+
+    Op::UserTurn {
+        items: vec![UserInput::Text {
+            text: build_router_tick_message(control),
+            text_elements: Vec::new(),
+        }],
+        cwd: config_snapshot.cwd.clone(),
+        approval_policy: config_snapshot.approval_policy,
+        approvals_reviewer: Some(config_snapshot.approvals_reviewer),
+        sandbox_policy: config_snapshot.sandbox_policy.clone(),
+        model,
+        effort: config_snapshot.reasoning_effort,
+        summary: None,
+        service_tier: None,
+        final_output_json_schema: None,
+        collaboration_mode: Some(collaboration_mode),
+        personality: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::build_router_tick_message;
+    use super::build_router_tick_turn;
     use chrono::TimeZone;
     use chrono::Utc;
+    use codex_core::ThreadConfigSnapshot;
     use codex_protocol::ThreadId;
+    use codex_protocol::config_types::ApprovalsReviewer;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Personality;
+    use codex_protocol::config_types::Settings;
+    use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::Op;
+    use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::protocol::SessionSource;
     use codex_state::ThreadControlMode;
     use codex_state::ThreadControlRecord;
     use pretty_assertions::assert_eq;
@@ -209,5 +272,80 @@ Release channel: imessage.\n\
 Monitored thread ids: 00000000-0000-0000-0000-000000000012, 00000000-0000-0000-0000-000000000013.\n\
 Check supervised sessions for new progress, blockers, or operator instructions and continue routing work."
         );
+    }
+
+    #[test]
+    fn router_tick_turn_preserves_mode_and_effort_while_overriding_model() {
+        let control = ThreadControlRecord {
+            thread_id: ThreadId::from_string("00000000-0000-0000-0000-000000000011")
+                .expect("thread id"),
+            mode: ThreadControlMode::Router,
+            reason: "Keep supervising the worker pool".to_string(),
+            release_channel: Some("imessage".to_string()),
+            watch_interval_seconds: Some(45),
+            released_at: None,
+            updated_at: Utc
+                .timestamp_opt(1_700_000_123, 0)
+                .single()
+                .expect("updated_at"),
+            target_thread_ids: vec![],
+        };
+        let config_snapshot = ThreadConfigSnapshot {
+            model: "gpt-5".to_string(),
+            model_provider_id: "openai".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            cwd: std::path::PathBuf::from("/tmp/router"),
+            ephemeral: false,
+            reasoning_effort: Some(ReasoningEffort::High),
+            personality: Some(Personality::Friendly),
+            session_source: SessionSource::default(),
+        };
+        let collaboration_mode = CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: Settings {
+                model: "gpt-5".to_string(),
+                reasoning_effort: Some(ReasoningEffort::High),
+                developer_instructions: Some("Stay in routing mode.".to_string()),
+            },
+        };
+
+        let turn = build_router_tick_turn(
+            &control,
+            &config_snapshot,
+            &collaboration_mode,
+            Some("gpt-5.3-codex-spark"),
+        );
+
+        let Op::UserTurn {
+            model,
+            effort,
+            collaboration_mode,
+            approvals_reviewer,
+            sandbox_policy,
+            cwd,
+            ..
+        } = turn
+        else {
+            panic!("expected router tick to submit a user turn");
+        };
+        assert_eq!(model, "gpt-5.3-codex-spark");
+        assert_eq!(effort, Some(ReasoningEffort::High));
+        assert_eq!(
+            collaboration_mode,
+            Some(CollaborationMode {
+                mode: ModeKind::Plan,
+                settings: Settings {
+                    model: "gpt-5.3-codex-spark".to_string(),
+                    reasoning_effort: Some(ReasoningEffort::High),
+                    developer_instructions: Some("Stay in routing mode.".to_string()),
+                },
+            })
+        );
+        assert_eq!(approvals_reviewer, Some(ApprovalsReviewer::User));
+        assert_eq!(sandbox_policy, SandboxPolicy::DangerFullAccess);
+        assert_eq!(cwd, std::path::PathBuf::from("/tmp/router"));
     }
 }
