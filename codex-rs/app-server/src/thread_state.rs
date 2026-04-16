@@ -18,6 +18,7 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 type PendingInterruptQueue = Vec<(
@@ -60,7 +61,7 @@ pub(crate) struct ThreadState {
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
     pub(crate) turn_summary: TurnSummary,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
-    router_tick_cancel_tx: Option<oneshot::Sender<()>>,
+    router_tick: Option<CancellationToken>,
     pub(crate) experimental_raw_events: bool,
     pub(crate) listener_generation: u64,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
@@ -104,14 +105,16 @@ impl ThreadState {
         self.experimental_raw_events = enabled;
     }
 
-    pub(crate) fn replace_router_tick(&mut self, cancel_tx: oneshot::Sender<()>) {
-        self.clear_router_tick();
-        self.router_tick_cancel_tx = Some(cancel_tx);
+    pub(crate) fn replace_router_tick(&mut self) -> CancellationToken {
+        self.cancel_router_tick();
+        let cancel_token = CancellationToken::new();
+        self.router_tick = Some(cancel_token.clone());
+        cancel_token
     }
 
-    pub(crate) fn clear_router_tick(&mut self) {
-        if let Some(cancel_tx) = self.router_tick_cancel_tx.take() {
-            let _ = cancel_tx.send(());
+    pub(crate) fn cancel_router_tick(&mut self) {
+        if let Some(cancel_token) = self.router_tick.take() {
+            cancel_token.cancel();
         }
     }
 
@@ -258,6 +261,7 @@ impl ThreadStateManager {
                 had_active_turn = thread_state.active_turn_snapshot().is_some(),
                 "clearing thread listener during thread-state teardown"
             );
+            thread_state.cancel_router_tick();
             thread_state.clear_listener();
         }
     }
@@ -281,6 +285,7 @@ impl ThreadStateManager {
                 had_active_turn = thread_state.active_turn_snapshot().is_some(),
                 "clearing thread listener during app-server shutdown"
             );
+            thread_state.cancel_router_tick();
             thread_state.clear_listener();
         }
     }
@@ -414,5 +419,30 @@ impl ThreadStateManager {
             .threads
             .get(&thread_id)
             .map(|thread_entry| thread_entry.has_connections_watcher.subscribe())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ThreadState;
+
+    #[test]
+    fn replace_router_tick_cancels_previous_token_but_not_current() {
+        let mut state = ThreadState::default();
+        let first = state.replace_router_tick();
+        let second = state.replace_router_tick();
+
+        assert!(first.is_cancelled());
+        assert!(!second.is_cancelled());
+    }
+
+    #[test]
+    fn cancel_router_tick_cancels_current_token() {
+        let mut state = ThreadState::default();
+        let token = state.replace_router_tick();
+
+        state.cancel_router_tick();
+
+        assert!(token.is_cancelled());
     }
 }

@@ -104,7 +104,7 @@ INSERT INTO thread_control_targets (
         released_at: DateTime<Utc>,
     ) -> anyhow::Result<Option<crate::ThreadControlRecord>> {
         let result = sqlx::query(
-            "UPDATE thread_controls SET released_at = ?, updated_at = ? WHERE thread_id = ?",
+            "UPDATE thread_controls SET released_at = ?, updated_at = ? WHERE thread_id = ? AND released_at IS NULL",
         )
         .bind(datetime_to_epoch_seconds(released_at))
         .bind(datetime_to_epoch_seconds(released_at))
@@ -112,7 +112,7 @@ INSERT INTO thread_control_targets (
         .execute(self.pool.as_ref())
         .await?;
         if result.rows_affected() == 0 {
-            return Ok(None);
+            return self.get_thread_control(thread_id).await;
         }
         self.get_thread_control(thread_id).await
     }

@@ -10,12 +10,12 @@ use codex_state::ThreadControlMode;
 use codex_state::ThreadControlRecord;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::sync::oneshot;
 use tokio::time::Duration;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 pub(crate) async fn clear_router_tick(thread_state: &Arc<Mutex<ThreadState>>) {
-    thread_state.lock().await.clear_router_tick();
+    thread_state.lock().await.cancel_router_tick();
 }
 
 pub(crate) async fn refresh_router_tick(
@@ -74,11 +74,10 @@ async fn arm_router_tick(
         return;
     }
 
-    let (cancel_tx, cancel_rx) = oneshot::channel();
-    {
+    let cancel_token = {
         let mut state = thread_state.lock().await;
-        state.replace_router_tick(cancel_tx);
-    }
+        state.replace_router_tick()
+    };
 
     spawn_router_tick_task(
         conversation,
@@ -86,7 +85,7 @@ async fn arm_router_tick(
         state_db,
         control,
         watch_interval_seconds,
-        cancel_rx,
+        cancel_token,
     );
 }
 
@@ -96,17 +95,15 @@ fn spawn_router_tick_task(
     state_db: Arc<StateRuntime>,
     control: ThreadControlRecord,
     watch_interval_seconds: u32,
-    cancel_rx: oneshot::Receiver<()>,
+    cancel_token: CancellationToken,
 ) {
     tokio::spawn(async move {
         let sleep = tokio::time::sleep(Duration::from_secs(u64::from(watch_interval_seconds)));
         tokio::pin!(sleep);
         tokio::select! {
             _ = &mut sleep => {}
-            _ = cancel_rx => return,
+            _ = cancel_token.cancelled() => return,
         }
-
-        clear_router_tick(&thread_state).await;
         let active_control = match state_db.get_active_thread_control(control.thread_id).await {
             Ok(active_control) => active_control,
             Err(err) => {
@@ -121,6 +118,9 @@ fn spawn_router_tick_task(
             return;
         };
         if active_control != control || !matches!(active_control.mode, ThreadControlMode::Router) {
+            return;
+        }
+        if cancel_token.is_cancelled() {
             return;
         }
         if matches!(conversation.agent_status().await, AgentStatus::Running) {
@@ -140,26 +140,34 @@ fn spawn_router_tick_task(
         if latest_control != Some(control.clone()) {
             return;
         }
+        if cancel_token.is_cancelled() {
+            return;
+        }
 
         let config_snapshot = conversation.config_snapshot().await;
         let (model, reasoning_effort, collaboration_mode) = conversation
             .resolve_router_turn_settings(conversation.router_model_override().await.as_deref())
             .await;
-        if let Err(err) = conversation
-            .submit(build_router_tick_turn(
-                &control,
-                &config_snapshot,
-                &model,
-                reasoning_effort,
-                &collaboration_mode,
-            ))
-            .await
-        {
+        let submit = conversation.submit(build_router_tick_turn(
+            &control,
+            &config_snapshot,
+            &model,
+            reasoning_effort,
+            &collaboration_mode,
+        ));
+        tokio::pin!(submit);
+        let submit_result = tokio::select! {
+            _ = cancel_token.cancelled() => return,
+            result = &mut submit => result,
+        };
+        if let Err(err) = submit_result {
             warn!(
                 thread_id = %control.thread_id,
                 "failed to submit router wake-up turn: {err}"
             );
-            arm_router_tick(conversation, thread_state, state_db, control).await;
+            if !cancel_token.is_cancelled() {
+                arm_router_tick(conversation, thread_state, state_db, control).await;
+            }
         }
     });
 }
