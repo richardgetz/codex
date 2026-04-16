@@ -3,6 +3,7 @@ use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
 use crate::session::Codex;
 use crate::session::SteerInputError;
+use crate::session::turn_context::compatible_reasoning_effort_for_model;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
@@ -274,6 +275,41 @@ impl CodexThread {
             .router
             .model
             .clone()
+    }
+
+    #[doc(hidden)]
+    pub async fn resolve_router_turn_settings(
+        &self,
+        router_model_override: Option<&str>,
+    ) -> (String, Option<ReasoningEffort>, CollaborationMode) {
+        let config_snapshot = self.codex.thread_config_snapshot().await;
+        let collaboration_mode = self.codex.session.collaboration_mode().await;
+        let Some(model) = router_model_override.filter(|model| *model != config_snapshot.model)
+        else {
+            return (
+                config_snapshot.model,
+                config_snapshot.reasoning_effort,
+                collaboration_mode,
+            );
+        };
+
+        let config = self.codex.session.get_config().await;
+        let model_info = self
+            .codex
+            .session
+            .services
+            .models_manager
+            .get_model_info(model, &config.to_models_manager_config())
+            .await;
+        let reasoning_effort = collaboration_mode
+            .reasoning_effort()
+            .and_then(|current| compatible_reasoning_effort_for_model(Some(current), &model_info));
+
+        (
+            model.to_string(),
+            reasoning_effort,
+            collaboration_mode.with_updates(Some(model.to_string()), Some(reasoning_effort), None),
+        )
     }
 
     pub async fn read_mcp_resource(
