@@ -159,6 +159,7 @@ use crate::codex_thread::ThreadConfigSnapshot;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
+use crate::config::ConstraintError;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
 use crate::config::StartedNetworkProxy;
@@ -1059,6 +1060,15 @@ impl Session {
     }
 
     pub(crate) async fn sync_continuous_mode_control(&self, collaboration_mode: &CollaborationMode) {
+        let _ = self
+            .ensure_continuous_mode_control(collaboration_mode)
+            .await;
+    }
+
+    pub(crate) async fn ensure_continuous_mode_control(
+        &self,
+        collaboration_mode: &CollaborationMode,
+    ) -> ConstraintResult<()> {
         let active_thread_control = self.active_thread_control().await;
         match collaboration_mode.mode {
             ModeKind::Continuous => {
@@ -1066,13 +1076,13 @@ impl Session {
                     control.mode != StateThreadControlMode::Continuous
                         && control.released_at.is_none()
                 }) {
-                    return;
+                    return Ok(());
                 }
                 if active_thread_control.as_ref().is_some_and(|control| {
                     control.mode == StateThreadControlMode::Continuous
                         && control.released_at.is_none()
                 }) {
-                    return;
+                    return Ok(());
                 }
 
                 let updated_at = Utc::now();
@@ -1103,17 +1113,20 @@ impl Session {
                             thread_id = %self.conversation_id,
                             "failed to persist continuous collaboration mode control"
                         );
-                        return;
+                        return Err(ConstraintError::operation_failed(
+                            "failed to persist continuous collaboration mode control",
+                        ));
                     }
                 }
                 self.set_active_thread_control(Some(control)).await;
+                Ok(())
             }
             _ => {
                 let Some(control) = active_thread_control else {
-                    return;
+                    return Ok(());
                 };
                 if control.mode != StateThreadControlMode::Continuous {
-                    return;
+                    return Ok(());
                 }
 
                 if control.released_at.is_none() {
@@ -1128,11 +1141,14 @@ impl Session {
                                 thread_id = %self.conversation_id,
                                 "failed to release continuous collaboration mode control"
                             );
-                            return;
+                            return Err(ConstraintError::operation_failed(
+                                "failed to release continuous collaboration mode control",
+                            ));
                         }
                     }
                 }
                 self.set_active_thread_control(None).await;
+                Ok(())
             }
         }
     }
@@ -1424,7 +1440,7 @@ impl Session {
             session_source,
             collaboration_mode,
         ) = {
-            let mut state = self.state.lock().await;
+            let state = self.state.lock().await;
             let updated = match state.session_configuration.apply(&updates) {
                 Ok(updated) => updated,
                 Err(err) => {
@@ -1440,6 +1456,11 @@ impl Session {
             let next_cwd = updated.cwd.clone();
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
+            drop(state);
+            self.ensure_continuous_mode_control(&collaboration_mode)
+                .await?;
+
+            let mut state = self.state.lock().await;
             state.session_configuration = updated;
             (
                 previous_cwd,
@@ -1461,7 +1482,6 @@ impl Session {
             self.refresh_managed_network_proxy_for_current_sandbox_policy()
                 .await;
         }
-        self.sync_continuous_mode_control(&collaboration_mode).await;
 
         Ok(())
     }

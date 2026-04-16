@@ -7,7 +7,7 @@ enum RouterControlLookup<'a> {
 
 fn should_keep_loaded_for_router_lookup(lookup: RouterControlLookup<'_>) -> bool {
     match lookup {
-        RouterControlLookup::Failed => false,
+        RouterControlLookup::Failed => true,
         RouterControlLookup::Loaded(Some(control))
             if matches!(control.mode, codex_state::ThreadControlMode::Router) =>
         {
@@ -454,13 +454,13 @@ mod tests {
     }
 
     #[test]
-    fn router_unload_lookup_keeps_thread_loaded_only_for_active_router_control() {
+    fn router_unload_lookup_keeps_thread_loaded_for_failures_and_active_router_control() {
         let router = thread_control_record(ThreadControlMode::Router);
         let continuous = thread_control_record(ThreadControlMode::Continuous);
 
         assert_eq!(
             should_keep_loaded_for_router_lookup(RouterControlLookup::Failed),
-            false
+            true
         );
         assert_eq!(
             should_keep_loaded_for_router_lookup(RouterControlLookup::Loaded(Some(&router))),

@@ -459,7 +459,7 @@ impl Session {
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<Arc<TurnContext>> {
         let update_result = {
-            let mut state = self.state.lock().await;
+            let state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
                     let previous_cwd = state.session_configuration.cwd.clone();
@@ -467,6 +467,22 @@ impl Session {
                         state.session_configuration.sandbox_policy != next.sandbox_policy;
                     let codex_home = next.codex_home.clone();
                     let session_source = next.session_source.clone();
+                    drop(state);
+                    if let Err(err) = self
+                        .ensure_continuous_mode_control(&next.collaboration_mode)
+                        .await
+                    {
+                        self.send_event_raw(Event {
+                            id: sub_id.clone(),
+                            msg: EventMsg::Error(ErrorEvent {
+                                message: err.to_string(),
+                                codex_error_info: Some(CodexErrorInfo::BadRequest),
+                            }),
+                        })
+                        .await;
+                        return Err(err);
+                    }
+                    let mut state = self.state.lock().await;
                     state.session_configuration = next.clone();
                     Ok((
                         next,
