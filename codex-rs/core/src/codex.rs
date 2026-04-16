@@ -2745,6 +2745,12 @@ impl Session {
         match collaboration_mode.mode {
             ModeKind::Continuous => {
                 if active_thread_control.as_ref().is_some_and(|control| {
+                    control.mode != StateThreadControlMode::Continuous
+                        && control.released_at.is_none()
+                }) {
+                    return;
+                }
+                if active_thread_control.as_ref().is_some_and(|control| {
                     control.mode == StateThreadControlMode::Continuous
                         && control.released_at.is_none()
                 }) {
