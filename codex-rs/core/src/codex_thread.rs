@@ -5,6 +5,7 @@ use crate::session::Codex;
 use crate::session::SteerInputError;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
@@ -258,6 +259,21 @@ impl CodexThread {
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
+    }
+
+    pub async fn collaboration_mode(&self) -> CollaborationMode {
+        self.codex.session.collaboration_mode().await
+    }
+
+    pub async fn router_model_override(&self) -> Option<String> {
+        self.codex
+            .session
+            .get_config()
+            .await
+            .thread_control
+            .router
+            .model
+            .clone()
     }
 
     pub async fn read_mcp_resource(
