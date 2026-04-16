@@ -2325,6 +2325,87 @@ async fn resolve_router_turn_settings_preserves_absent_effort() {
     );
 }
 
+#[tokio::test]
+async fn session_update_settings_syncs_continuous_collaboration_mode_control() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let mut continuous_mode = session.collaboration_mode().await;
+    continuous_mode.mode = ModeKind::Continuous;
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(continuous_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("continuous mode update should succeed");
+
+    let active_control = session
+        .active_thread_control()
+        .await
+        .expect("continuous control should be active");
+    assert_eq!(
+        active_control,
+        codex_state::ThreadControlRecord {
+            thread_id: session.conversation_id,
+            mode: codex_state::ThreadControlMode::Continuous,
+            reason: Session::CONTINUOUS_MODE_CONTROL_REASON.to_string(),
+            release_channel: None,
+            watch_interval_seconds: None,
+            released_at: None,
+            updated_at: active_control.updated_at,
+            target_thread_ids: Vec::new(),
+        }
+    );
+
+    let mut default_mode = session.collaboration_mode().await;
+    default_mode.mode = ModeKind::Default;
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(default_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("default mode update should succeed");
+
+    assert_eq!(session.active_thread_control().await, None);
+}
+
+#[tokio::test]
+async fn new_turn_rearms_continuous_control_when_mode_stays_active() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let mut continuous_mode = session.collaboration_mode().await;
+    continuous_mode.mode = ModeKind::Continuous;
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(continuous_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("continuous mode update should succeed");
+
+    session.set_active_thread_control(None).await;
+
+    let _ = session.new_default_turn().await;
+
+    let active_control = session
+        .active_thread_control()
+        .await
+        .expect("continuous control should be re-armed");
+    assert_eq!(
+        active_control,
+        codex_state::ThreadControlRecord {
+            thread_id: session.conversation_id,
+            mode: codex_state::ThreadControlMode::Continuous,
+            reason: Session::CONTINUOUS_MODE_CONTROL_REASON.to_string(),
+            release_channel: None,
+            watch_interval_seconds: None,
+            released_at: None,
+            updated_at: active_control.updated_at,
+            target_thread_ids: Vec::new(),
+        }
+    );
+}
+
 #[test]
 fn falls_back_to_content_when_structured_is_null() {
     let ctr = McpCallToolResult {
