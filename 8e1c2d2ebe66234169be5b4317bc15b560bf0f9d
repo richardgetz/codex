@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-04-16/continuous-sync-fail-fast-post-review"
+  change_type: "fix"
+  scope: "core/config/app-server"
+  summary: "Prevent continuous-mode setting changes from diverging from hard thread-control enforcement."
+  decision: "Restore keep-loaded-on-failure behavior for router-control unload checks, introduce an explicit operation-failed constraint error, and require continuous-mode control sync to succeed before committing collaboration-mode setting changes."
+  constraints:
+    - "Transient sqlite lookup failures must not silently unload active router supervisor threads."
+    - "Continuous-mode enable/disable requests must not leave collaboration settings committed when the hard control-plane update fails."
+    - "New failure reporting should reuse the existing constraint result path rather than inventing a second settings-update error surface."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server/src/codex_message_processor/thread_control_api.rs"
+    - "codex-rs/config/src/constraint.rs"
+    - "codex-rs/core/src/codex.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
