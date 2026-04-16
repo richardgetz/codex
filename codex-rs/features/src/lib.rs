@@ -134,8 +134,6 @@ pub enum Feature {
     Telepathy,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
-    /// Allow the model to request `detail: "original"` image outputs on supported models.
-    ImageDetailOriginal,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
     /// Enable collab tools.
@@ -148,6 +146,8 @@ pub enum Feature {
     Apps,
     /// Enable the tool_search tool for apps.
     ToolSearch,
+    /// Expose placeholder tools for unavailable historical tool calls.
+    UnavailableDummyTools,
     /// Enable discoverable tool suggestions for apps.
     ToolSuggest,
     /// Enable plugins.
@@ -182,6 +182,9 @@ pub enum Feature {
     RealtimeConversation,
     /// Connect app-server to the ChatGPT remote control service.
     RemoteControl,
+    /// Removed compatibility flag retained as a no-op so old wrappers can
+    /// still pass `--enable image_detail_original`.
+    ImageDetailOriginal,
     /// Removed compatibility flag. The TUI now always uses the app-server implementation.
     TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
@@ -192,6 +195,8 @@ pub enum Feature {
     ResponsesWebsocketsV2,
     /// Use the agent identity registration flow for ChatGPT-authenticated sessions.
     UseAgentIdentity,
+    /// Enable workspace dependency support.
+    WorkspaceDependencies,
 }
 
 impl Feature {
@@ -363,6 +368,9 @@ impl Features {
                     );
                 }
                 "tui_app_server" => {
+                    continue;
+                }
+                "image_detail_original" => {
                     continue;
                 }
                 _ => {}
@@ -658,8 +666,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GeneralAnalytics,
         key: "general_analytics",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Sqlite,
@@ -670,7 +678,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::MemoryTool,
         key: "memories",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Memories",
+            menu_description: "Allow Codex to create new memories from conversations and bring relevant memories into new conversations.",
+            announcement: "NEW: Codex can now generate and uses memories. Try is now with `/memories`",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -683,16 +695,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ChildAgentsMd,
         key: "child_agents_md",
         stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::ImageDetailOriginal,
-        key: "image_detail_original",
-        stage: Stage::Experimental {
-            name: "Original image detail",
-            menu_description: "Let the model inspect tool-emitted images at full resolution on supported models instead of a resized approximation. This affects tool-emitted images such as those produced by `view_image`, not images attached directly in the UI. It is particularly important for localization and precise UI targeting, for reading small text, and for reasoning about precise layout.",
-            announcement: "NEW: Original image detail is now available in /experimental. Enable it to let tools request full-resolution image detail on supported models for CUA and localization tasks.",
-        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -788,6 +790,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ToolSearch,
         key: "tool_search",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::UnavailableDummyTools,
+        key: "unavailable_dummy_tools",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -806,8 +814,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ImageGeneration,
         key: "image_generation",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::SkillMcpDependencyInstall,
@@ -892,6 +900,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::ImageDetailOriginal,
+        key: "image_detail_original",
+        stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::TuiAppServer,
         key: "tui_app_server",
         stage: Stage::Removed,
@@ -932,6 +946,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "use_agent_identity",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WorkspaceDependencies,
+        key: "workspace_dependencies",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
 ];
 
