@@ -10,52 +10,49 @@ import tempfile
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from release_config import load_release_config
+from release_config import package_alias_name
+
 CODEX_CLI_ROOT = SCRIPT_DIR.parent
 REPO_ROOT = CODEX_CLI_ROOT.parent
 RESPONSES_API_PROXY_NPM_ROOT = REPO_ROOT / "codex-rs" / "responses-api-proxy" / "npm"
 CODEX_SDK_ROOT = REPO_ROOT / "sdk" / "typescript"
-CODEX_NPM_NAME = "@openai/codex"
 
-# `npm_name` is the local optional-dependency alias consumed by `bin/codex.js`.
-# The underlying package published to npm is always `@openai/codex`.
 CODEX_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
     "codex-linux-x64": {
-        "npm_name": "@openai/codex-linux-x64",
         "npm_tag": "linux-x64",
         "target_triple": "x86_64-unknown-linux-musl",
         "os": "linux",
         "cpu": "x64",
     },
     "codex-linux-arm64": {
-        "npm_name": "@openai/codex-linux-arm64",
         "npm_tag": "linux-arm64",
         "target_triple": "aarch64-unknown-linux-musl",
         "os": "linux",
         "cpu": "arm64",
     },
     "codex-darwin-x64": {
-        "npm_name": "@openai/codex-darwin-x64",
         "npm_tag": "darwin-x64",
         "target_triple": "x86_64-apple-darwin",
         "os": "darwin",
         "cpu": "x64",
     },
     "codex-darwin-arm64": {
-        "npm_name": "@openai/codex-darwin-arm64",
         "npm_tag": "darwin-arm64",
         "target_triple": "aarch64-apple-darwin",
         "os": "darwin",
         "cpu": "arm64",
     },
     "codex-win32-x64": {
-        "npm_name": "@openai/codex-win32-x64",
         "npm_tag": "win32-x64",
         "target_triple": "x86_64-pc-windows-msvc",
         "os": "win32",
         "cpu": "x64",
     },
     "codex-win32-arm64": {
-        "npm_name": "@openai/codex-win32-arm64",
         "npm_tag": "win32-arm64",
         "target_triple": "aarch64-pc-windows-msvc",
         "os": "win32",
@@ -137,6 +134,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Directory containing pre-installed native binaries to bundle (vendor root).",
     )
+    parser.add_argument(
+        "--release-config",
+        type=Path,
+        help="Optional JSON file that overrides npm package and repo metadata for fork releases.",
+    )
     return parser.parse_args()
 
 
@@ -144,6 +146,7 @@ def main() -> int:
     args = parse_args()
 
     package = args.package
+    release_config = load_release_config(args.release_config)
     version = args.version
     release_version = args.release_version
     if release_version:
@@ -157,7 +160,7 @@ def main() -> int:
     staging_dir, created_temp = prepare_staging_dir(args.staging_dir)
 
     try:
-        stage_sources(staging_dir, version, package)
+        stage_sources(staging_dir, version, package, release_config)
 
         vendor_src = args.vendor_src.resolve() if args.vendor_src else None
         native_components = PACKAGE_NATIVE_COMPONENTS.get(package, [])
@@ -233,14 +236,20 @@ def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
     return temp_dir, True
 
 
-def stage_sources(staging_dir: Path, version: str, package: str) -> None:
+def stage_sources(staging_dir: Path, version: str, package: str, release_config: dict) -> None:
     package_json: dict
     package_json_path: Path | None = None
+    package_name = release_config["npm_package_name"]
+    repository = {
+        "type": "git",
+        "url": release_config["repository_url"],
+        "directory": release_config["repository_directory"],
+    }
 
     if package == "codex":
         bin_dir = staging_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
+        write_codex_launcher(bin_dir / "codex.js", package_name)
         rg_manifest = CODEX_CLI_ROOT / "bin" / "rg"
         if rg_manifest.exists():
             shutil.copy2(rg_manifest, bin_dir / "rg")
@@ -263,13 +272,13 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
             codex_package_json = json.load(fh)
 
         package_json = {
-            "name": CODEX_NPM_NAME,
+            "name": package_name,
             "version": platform_version,
             "license": codex_package_json.get("license", "Apache-2.0"),
             "os": [platform_package["os"]],
             "cpu": [platform_package["cpu"]],
             "files": ["vendor"],
-            "repository": codex_package_json.get("repository"),
+            "repository": repository,
         }
 
         engines = codex_package_json.get("engines")
@@ -300,16 +309,20 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
         with open(package_json_path, "r", encoding="utf-8") as fh:
             package_json = json.load(fh)
         package_json["version"] = version
+        package_json["name"] = package_name
+        package_json["repository"] = repository
 
     if package == "codex":
+        supported_targets = set(release_config["supported_targets"])
         package_json["files"] = ["bin"]
         package_json["optionalDependencies"] = {
-            CODEX_PLATFORM_PACKAGES[platform_package]["npm_name"]: (
-                f"npm:{CODEX_NPM_NAME}@"
+            package_alias_name(package_name, CODEX_PLATFORM_PACKAGES[platform_package]["npm_tag"]): (
+                f"npm:{package_name}@"
                 f"{compute_platform_package_version(version, CODEX_PLATFORM_PACKAGES[platform_package]['npm_tag'])}"
             )
             for platform_package in PACKAGE_EXPANSIONS["codex"]
             if platform_package != "codex"
+            and CODEX_PLATFORM_PACKAGES[platform_package]["target_triple"] in supported_targets
         }
 
     elif package == "codex-sdk":
@@ -320,7 +333,7 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
         dependencies = package_json.get("dependencies")
         if not isinstance(dependencies, dict):
             dependencies = {}
-        dependencies[CODEX_NPM_NAME] = version
+        dependencies[package_name] = version
         package_json["dependencies"] = dependencies
 
     with open(staging_dir / "package.json", "w", encoding="utf-8") as out:
@@ -332,6 +345,14 @@ def compute_platform_package_version(version: str, platform_tag: str) -> str:
     # npm forbids republishing the same package name/version, so each
     # platform-specific tarball needs a unique version string.
     return f"{version}-{platform_tag}"
+
+
+def write_codex_launcher(output_path: Path, package_name: str) -> None:
+    with open(CODEX_CLI_ROOT / "bin" / "codex.js", "r", encoding="utf-8") as fh:
+        launcher = fh.read()
+
+    rewritten = launcher.replace("@openai/codex", package_name)
+    output_path.write_text(rewritten, encoding="utf-8")
 
 
 def run_command(cmd: list[str], cwd: Path | None = None) -> None:
