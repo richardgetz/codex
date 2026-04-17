@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = REPO_ROOT / "codex-cli" / "scripts" / "build_npm_package.py"
 INSTALL_NATIVE_DEPS = REPO_ROOT / "codex-cli" / "scripts" / "install_native_deps.py"
 WORKFLOW_NAME = ".github/workflows/rust-release.yml"
-GITHUB_REPO = "openai/codex"
+RELEASE_CONFIG_MODULE = REPO_ROOT / "codex-cli" / "scripts" / "release_config.py"
 
 _SPEC = importlib.util.spec_from_file_location("codex_build_npm_package", BUILD_SCRIPT)
 if _SPEC is None or _SPEC.loader is None:
@@ -27,6 +27,16 @@ _SPEC.loader.exec_module(_BUILD_MODULE)
 PACKAGE_NATIVE_COMPONENTS = getattr(_BUILD_MODULE, "PACKAGE_NATIVE_COMPONENTS", {})
 PACKAGE_EXPANSIONS = getattr(_BUILD_MODULE, "PACKAGE_EXPANSIONS", {})
 CODEX_PLATFORM_PACKAGES = getattr(_BUILD_MODULE, "CODEX_PLATFORM_PACKAGES", {})
+
+_RELEASE_CONFIG_SPEC = importlib.util.spec_from_file_location(
+    "codex_release_config",
+    RELEASE_CONFIG_MODULE,
+)
+if _RELEASE_CONFIG_SPEC is None or _RELEASE_CONFIG_SPEC.loader is None:
+    raise RuntimeError(f"Unable to load module from {RELEASE_CONFIG_MODULE}")
+_RELEASE_CONFIG_MODULE = importlib.util.module_from_spec(_RELEASE_CONFIG_SPEC)
+_RELEASE_CONFIG_SPEC.loader.exec_module(_RELEASE_CONFIG_MODULE)
+load_release_config = getattr(_RELEASE_CONFIG_MODULE, "load_release_config")
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,6 +68,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Retain temporary staging directories instead of deleting them.",
     )
+    parser.add_argument(
+        "--release-config",
+        type=Path,
+        help="Optional JSON file that overrides npm package and repo metadata for fork releases.",
+    )
     return parser.parse_args()
 
 
@@ -68,10 +83,13 @@ def collect_native_components(packages: list[str]) -> set[str]:
     return components
 
 
-def expand_packages(packages: list[str]) -> list[str]:
+def expand_packages(packages: list[str], supported_targets: set[str]) -> list[str]:
     expanded: list[str] = []
     for package in packages:
         for expanded_package in PACKAGE_EXPANSIONS.get(package, [package]):
+            target_filter = CODEX_PLATFORM_PACKAGES.get(expanded_package, {}).get("target_triple")
+            if target_filter and target_filter not in supported_targets:
+                continue
             if expanded_package in expanded:
                 continue
             expanded.append(expanded_package)
@@ -114,13 +132,17 @@ def install_native_components(
     workflow_url: str,
     components: set[str],
     vendor_root: Path,
+    github_repo: str,
+    supported_targets: set[str],
 ) -> None:
     if not components:
         return
 
-    cmd = [str(INSTALL_NATIVE_DEPS), "--workflow-url", workflow_url]
+    cmd = [str(INSTALL_NATIVE_DEPS), "--workflow-url", workflow_url, "--repo", github_repo]
     for component in sorted(components):
         cmd.extend(["--component", component])
+    for target in sorted(supported_targets):
+        cmd.extend(["--target", target])
     cmd.append(str(vendor_root))
     run_command(cmd)
 
@@ -142,10 +164,14 @@ def main() -> int:
 
     output_dir = args.output_dir or (REPO_ROOT / "dist" / "npm")
     output_dir.mkdir(parents=True, exist_ok=True)
+    release_config = load_release_config(args.release_config)
 
     runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir()))
 
-    packages = expand_packages(list(args.packages))
+    packages = expand_packages(
+        list(args.packages),
+        set(release_config["supported_targets"]),
+    )
     native_components = collect_native_components(packages)
 
     vendor_temp_root: Path | None = None
@@ -160,7 +186,13 @@ def main() -> int:
                 args.release_version, args.workflow_url
             )
             vendor_temp_root = Path(tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp))
-            install_native_components(workflow_url, native_components, vendor_temp_root)
+            install_native_components(
+                workflow_url,
+                native_components,
+                vendor_temp_root,
+                release_config["github_repo"],
+                set(release_config["supported_targets"]),
+            )
             vendor_src = vendor_temp_root / "vendor"
 
         if resolved_head_sha:
@@ -184,6 +216,8 @@ def main() -> int:
 
             if vendor_src is not None:
                 cmd.extend(["--vendor-src", str(vendor_src)])
+            if args.release_config is not None:
+                cmd.extend(["--release-config", str(args.release_config.resolve())])
 
             try:
                 run_command(cmd)

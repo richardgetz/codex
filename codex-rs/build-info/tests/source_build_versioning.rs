@@ -124,6 +124,29 @@ fn release_line_source_branch_build_appends_suffix() {
 }
 
 #[test]
+fn release_line_source_branch_build_supports_numeric_fork_suffix() {
+    let derived = derive_version(
+        "0.122.0",
+        Some("release"),
+        true,
+        None,
+        None,
+        None,
+        None,
+        Some("rick.2"),
+    );
+
+    assert_eq!(
+        derived,
+        DerivedVersion {
+            display_version: "0.122.0-rick.2".to_string(),
+            release_line_version: "0.122.0".to_string(),
+            is_source_build: true,
+        }
+    );
+}
+
+#[test]
 fn exact_release_tag_build_keeps_plain_version() {
     let derived = derive_version(
         "0.122.0",

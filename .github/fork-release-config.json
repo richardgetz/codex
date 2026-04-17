@@ -1,0 +1,11 @@
+{
+  "npm_package_name": "@rickgetz/codex",
+  "github_repo": "richardgetz/codex",
+  "repository_url": "git+https://github.com/richardgetz/codex.git",
+  "repository_directory": "codex-cli",
+  "tag_prefix": "rick-v",
+  "supported_targets": [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin"
+  ]
+}

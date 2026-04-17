@@ -2,7 +2,7 @@
 // Unified entry point for the Codex CLI.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { createRequire } from "node:module";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -12,14 +12,26 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
 
-const PLATFORM_PACKAGE_BY_TARGET = {
-  "x86_64-unknown-linux-musl": "@openai/codex-linux-x64",
-  "aarch64-unknown-linux-musl": "@openai/codex-linux-arm64",
-  "x86_64-apple-darwin": "@openai/codex-darwin-x64",
-  "aarch64-apple-darwin": "@openai/codex-darwin-arm64",
-  "x86_64-pc-windows-msvc": "@openai/codex-win32-x64",
-  "aarch64-pc-windows-msvc": "@openai/codex-win32-arm64",
+const PLATFORM_PACKAGE_SUFFIX_BY_TARGET = {
+  "x86_64-unknown-linux-musl": "codex-linux-x64",
+  "aarch64-unknown-linux-musl": "codex-linux-arm64",
+  "x86_64-apple-darwin": "codex-darwin-x64",
+  "aarch64-apple-darwin": "codex-darwin-arm64",
+  "x86_64-pc-windows-msvc": "codex-win32-x64",
+  "aarch64-pc-windows-msvc": "codex-win32-arm64",
 };
+const rootPackageJson = JSON.parse(
+  readFileSync(path.join(__dirname, "..", "package.json"), "utf8"),
+);
+const rootPackageName = rootPackageJson.name || "@openai/codex";
+
+function packageAliasName(basePackageName, suffix) {
+  if (basePackageName.startsWith("@")) {
+    const [scope, packageName] = basePackageName.split("/", 2);
+    return `${scope}/${packageName}-${suffix.replace(/^codex-/, "")}`;
+  }
+  return `${basePackageName}-${suffix.replace(/^codex-/, "")}`;
+}
 
 const { platform, arch } = process;
 
@@ -70,10 +82,11 @@ if (!targetTriple) {
   throw new Error(`Unsupported platform: ${platform} (${arch})`);
 }
 
-const platformPackage = PLATFORM_PACKAGE_BY_TARGET[targetTriple];
-if (!platformPackage) {
+const platformPackageSuffix = PLATFORM_PACKAGE_SUFFIX_BY_TARGET[targetTriple];
+if (!platformPackageSuffix) {
   throw new Error(`Unsupported target triple: ${targetTriple}`);
 }
+const platformPackage = packageAliasName(rootPackageName, platformPackageSuffix);
 
 const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
 const localVendorRoot = path.join(__dirname, "..", "vendor");
@@ -95,8 +108,8 @@ try {
     const packageManager = detectPackageManager();
     const updateCommand =
       packageManager === "bun"
-        ? "bun install -g @openai/codex@latest"
-        : "npm install -g @openai/codex@latest";
+        ? `bun install -g ${rootPackageName}@latest`
+        : `npm install -g ${rootPackageName}@latest`;
     throw new Error(
       `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
     );
@@ -107,8 +120,8 @@ if (!vendorRoot) {
   const packageManager = detectPackageManager();
   const updateCommand =
     packageManager === "bun"
-      ? "bun install -g @openai/codex@latest"
-      : "npm install -g @openai/codex@latest";
+      ? `bun install -g ${rootPackageName}@latest`
+      : `npm install -g ${rootPackageName}@latest`;
   throw new Error(
     `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
   );

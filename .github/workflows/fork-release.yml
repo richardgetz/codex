@@ -1,0 +1,213 @@
+name: fork-release
+on:
+  push:
+    branches:
+      - stable
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  compute-release:
+    runs-on: ubuntu-latest
+    outputs:
+      base_version: ${{ steps.compute.outputs.base_version }}
+      fork_counter: ${{ steps.compute.outputs.fork_counter }}
+      version: ${{ steps.compute.outputs.version }}
+      tag: ${{ steps.compute.outputs.tag }}
+      tag_exists: ${{ steps.compute.outputs.tag_exists }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: git fetch --tags --force
+
+      - name: Compute next fork release version
+        id: compute
+        run: |
+          python3 scripts/compute_fork_release.py --write-github-output
+
+  build:
+    needs: compute-release
+    name: Build - ${{ matrix.target }}
+    runs-on: macos-15-xlarge
+    defaults:
+      run:
+        working-directory: codex-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        shell: bash
+        env:
+          CODEX_SOURCE_BASE_VERSION: ${{ needs.compute-release.outputs.base_version }}
+          CODEX_SOURCE_VERSION_SUFFIX: rick.${{ needs.compute-release.outputs.fork_counter }}
+        run: |
+          set -euo pipefail
+          cargo build --target ${{ matrix.target }} --release --bin codex
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="../dist/${{ matrix.target }}"
+          mkdir -p "${dest}"
+          cp "target/${{ matrix.target }}/release/codex" "${dest}/codex-${{ matrix.target }}"
+          tar -C "${dest}" -czf "${dest}/codex-${{ matrix.target }}.tar.gz" "codex-${{ matrix.target }}"
+          zstd -T0 -19 --rm "${dest}/codex-${{ matrix.target }}"
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: ${{ matrix.target }}
+          path: dist/${{ matrix.target }}/*
+
+  release:
+    needs:
+      - compute-release
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ needs.compute-release.outputs.version }}
+      tag: ${{ needs.compute-release.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: git fetch --tags --force
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create release tag
+        if: ${{ needs.compute-release.outputs.tag_exists != 'true' }}
+        env:
+          RELEASE_TAG: ${{ needs.compute-release.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.compute-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$RELEASE_TAG" -m "Release $RELEASE_VERSION"
+          git push origin "$RELEASE_TAG"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: 24
+
+      - name: Stage npm packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.compute-release.outputs.version }}
+          WORKFLOW_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          ./scripts/stage_npm_packages.py \
+            --release-version "$RELEASE_VERSION" \
+            --package codex \
+            --workflow-url "$WORKFLOW_URL" \
+            --release-config .github/fork-release-config.json
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: fork-npm-tarballs
+          path: dist/npm/*
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
+        with:
+          name: ${{ needs.compute-release.outputs.version }}
+          tag_name: ${{ needs.compute-release.outputs.tag }}
+          files: |
+            dist/**/*.tgz
+            dist/**/*.tar.gz
+            dist/**/*.zst
+
+  publish-npm:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+          scope: "@rick"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: fork-npm-tarballs
+          path: dist/npm
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          tarballs=(dist/npm/*-"${VERSION}".tgz)
+          if [[ ${#tarballs[@]} -eq 0 ]]; then
+            echo "No npm tarballs found for ${VERSION}"
+            exit 1
+          fi
+
+          for tarball in "${tarballs[@]}"; do
+            filename="$(basename "${tarball}")"
+            publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}" --access public)
+
+            case "${filename}" in
+              codex-npm-darwin-arm64-"${VERSION}".tgz)
+                publish_cmd+=(--tag darwin-arm64)
+                ;;
+              codex-npm-darwin-x64-"${VERSION}".tgz)
+                publish_cmd+=(--tag darwin-x64)
+                ;;
+            esac
+
+            echo "+ ${publish_cmd[*]}"
+            set +e
+            publish_output="$("${publish_cmd[@]}" 2>&1)"
+            publish_status=$?
+            set -e
+
+            echo "${publish_output}"
+            if [[ ${publish_status} -eq 0 ]]; then
+              continue
+            fi
+
+            if grep -qiE "previously published|cannot publish over|version already exists" <<< "${publish_output}"; then
+              echo "Skipping already-published package version for ${filename}"
+              continue
+            fi
+
+            exit "${publish_status}"
+          done
