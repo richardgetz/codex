@@ -1,0 +1,83 @@
+# Fork npm releases
+
+This fork includes a mac-focused npm release lane for publishing `@rickgetz/codex`
+automatically from pushes to `stable`.
+
+## Versioning
+
+Use the upstream release version as the base, then append the fork revision:
+
+- `0.122.0-rick.1`
+- `0.122.0-rick.2`
+- `0.123.0-rick.1`
+
+The workflow creates a matching annotated tag automatically:
+
+- `rick-v0.122.0-rick.1`
+
+## Supported release targets
+
+The fork npm release workflow currently publishes:
+
+- `aarch64-apple-darwin`
+- `x86_64-apple-darwin`
+
+That keeps the release matrix focused on modern Macs while still covering Intel
+macOS installs for coworkers or friends who need it.
+
+## One-time npm setup
+
+You still need to do the npm account-side setup yourself:
+
+1. Ensure the `rick` npm user/scope is the one you want to publish from.
+2. Use a package name under that scope, currently `@rickgetz/codex`.
+3. Add an `NPM_TOKEN` repository secret for the first publish or as an ongoing fallback.
+4. After the package exists on npm, add this repo/workflow as a trusted publisher for `@rickgetz/codex`.
+
+The workflow is set up so npm trusted publishing can be used once configured,
+but it will also fall back to `NPM_TOKEN` if that secret is present.
+
+## Automatic counter behavior
+
+The workflow derives the upstream base version from `codex-rs/Cargo.toml` and
+then looks for existing fork release tags in this repository:
+
+- existing tags matching `rick-v0.122.0-rick.*` => next release becomes `0.122.0-rick.2`
+- once the base version changes to `0.122.1`, the next release becomes `0.122.1-rick.1`
+
+## Releasing
+
+No manual version bump or tag juggling is required.
+
+Merge or push to `stable` and the workflow will:
+
+1. Read the base version from `codex-rs/Cargo.toml`.
+2. Compute the next fork counter for that base release line.
+3. Build the macOS release binaries with the derived display version.
+4. Create the matching `rick-v<base>-rick.<n>` tag on the merge commit.
+5. Create a GitHub release.
+6. Publish the npm package.
+
+If `stable` is at upstream `0.122.0` and there is already a release
+`0.122.0-rick.1`, the next merge to `stable` will produce:
+
+```bash
+0.122.0-rick.2
+```
+
+Once upstream moves to `0.122.1`, the first merge to `stable` on that release
+line will produce:
+
+```bash
+0.122.1-rick.1
+```
+
+## Install path
+
+After publish, installs look like:
+
+```bash
+npm install -g @rickgetz/codex
+```
+
+The executable name remains `codex`.
