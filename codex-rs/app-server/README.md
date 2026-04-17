@@ -142,6 +142,9 @@ Example with notification opt-out:
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
+- `thread/control/read` — read the persisted active control-plane contract for a thread. Returns `null` when no contract is active.
+- `thread/control/set` — set or replace a persisted control-plane contract for a thread. `continuous` mode prevents the thread from stopping until explicitly released. `router` mode allows turns to complete, then re-wakes the same loaded thread on the requested `watchIntervalSeconds` cadence with the stored supervision reason and target thread ids.
+- `thread/control/release` — release a persisted thread control contract so continuous-mode threads may stop and router-mode wake timers are cancelled.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
@@ -181,7 +184,7 @@ Example with notification opt-out:
 - `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options, `additionalSpeedTiers`, optional legacy `upgrade` model ids, optional `upgradeInfo` metadata (`model`, `upgradeCopy`, `modelLink`, `migrationMarkdown`), and optional `availabilityNux` metadata.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `experimentalFeature/enablement/set` — patch the in-memory process-wide runtime feature enablement for the currently supported feature keys (`apps`, `plugins`). For each feature, precedence is: cloud requirements > --enable <feature_name> > config.toml > experimentalFeature/enablement/set (new) > code default.
-- `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
+- `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly. Selecting the built-in `continuous` mode also synchronizes the thread's continuous-run control contract; switching away from it releases that contract.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
 - `marketplace/add` — add a remote plugin marketplace from an HTTP(S) Git URL, SSH Git URL, or GitHub `owner/repo` shorthand, then persist it into the user marketplace config. Returns the installed root path plus whether the marketplace was already present.
 - `plugin/list` — list discovered plugin marketplaces and plugin state, including effective marketplace install/auth policy metadata, fail-open `marketplaceLoadErrors` entries for marketplace files that could not be parsed or loaded, and best-effort `featuredPluginIds` for the official curated marketplace. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category. Pass `forceRemoteSync: true` to refresh curated plugin state before listing (**under development; do not call from production clients yet**).
@@ -407,10 +410,91 @@ Use `thread/metadata/update` to patch sqlite-backed metadata for a thread withou
 } }
 ```
 
+### Example: Manage thread control contracts
+
+Use `thread/control/set` when a client needs an authoritative run contract that survives compaction and side questions. `continuous` mode blocks stop attempts until release, while `router` mode stores supervision metadata and re-wakes the same loaded thread on a timer after each turn finishes.
+
+If you want router wake-up turns to use a faster or cheaper model by default, set it in `config.toml`:
+
+```toml
+[thread_control.router]
+model = "gpt-5.3-codex-spark"
+```
+
+Router mode re-wakes the same thread, preserving its current collaboration mode and reasoning settings while applying this model override to the next router tick turn. Because router ticks submit a normal turn on that same thread, the override becomes the thread's active model until another turn explicitly changes it.
+
+```json
+{ "method": "thread/control/set", "id": 26, "params": {
+    "threadId": "thr_123",
+    "mode": "continuous",
+    "reason": "Keep going until the operator explicitly releases this deployment loop",
+    "releaseChannel": "imessage"
+} }
+{ "id": 26, "result": {
+    "control": {
+        "threadId": "thr_123",
+        "mode": "continuous",
+        "reason": "Keep going until the operator explicitly releases this deployment loop",
+        "releaseChannel": "imessage",
+        "watchIntervalSeconds": null,
+        "targetThreadIds": [],
+        "releasedAt": null,
+        "updatedAt": 1762456104
+    }
+} }
+```
+
+```json
+{ "method": "thread/control/set", "id": 27, "params": {
+    "threadId": "thr_router",
+    "mode": "router",
+    "reason": "Monitor worker threads and route new operator instructions",
+    "releaseChannel": "imessage",
+    "watchIntervalSeconds": 30,
+    "targetThreadIds": ["thr_worker_a", "thr_worker_b"]
+} }
+```
+
+`thread/control/read` returns the current active contract or `null` when no control state exists. Released contracts remain persisted for auditability, but `read` filters them out:
+
+```json
+{ "method": "thread/control/read", "id": 28, "params": { "threadId": "thr_123" } }
+{ "id": 28, "result": {
+    "control": {
+        "threadId": "thr_123",
+        "mode": "continuous",
+        "reason": "Keep going until the operator explicitly releases this deployment loop",
+        "releaseChannel": "imessage",
+        "watchIntervalSeconds": null,
+        "targetThreadIds": [],
+        "releasedAt": null,
+        "updatedAt": 1762456104
+    }
+} }
+```
+
+`thread/control/release` marks the contract released and cancels any future router wake-up timer:
+
+```json
+{ "method": "thread/control/release", "id": 29, "params": { "threadId": "thr_123" } }
+{ "id": 29, "result": {
+    "control": {
+        "threadId": "thr_123",
+        "mode": "continuous",
+        "reason": "Keep going until the operator explicitly releases this deployment loop",
+        "releaseChannel": "imessage",
+        "watchIntervalSeconds": null,
+        "targetThreadIds": [],
+        "releasedAt": 1762456188,
+        "updatedAt": 1762456188
+    }
+} }
+```
+
 Experimental: use `thread/memoryMode/set` to change whether a thread remains eligible for future memory generation.
 
 ```json
-{ "method": "thread/memoryMode/set", "id": 26, "params": {
+{ "method": "thread/memoryMode/set", "id": 30, "params": {
     "threadId": "thr_123",
     "mode": "disabled"
 } }

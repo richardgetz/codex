@@ -132,6 +132,14 @@ use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
+use codex_app_server_protocol::ThreadControl;
+use codex_app_server_protocol::ThreadControlMode;
+use codex_app_server_protocol::ThreadControlReadParams;
+use codex_app_server_protocol::ThreadControlReadResponse;
+use codex_app_server_protocol::ThreadControlReleaseParams;
+use codex_app_server_protocol::ThreadControlReleaseResponse;
+use codex_app_server_protocol::ThreadControlSetParams;
+use codex_app_server_protocol::ThreadControlSetResponse;
 use codex_app_server_protocol::ThreadDecrementElicitationParams;
 use codex_app_server_protocol::ThreadDecrementElicitationResponse;
 use codex_app_server_protocol::ThreadForkParams;
@@ -318,6 +326,8 @@ use codex_rollout::state_db::StateDbHandle;
 use codex_rollout::state_db::get_state_db;
 use codex_rollout::state_db::reconcile_rollout;
 use codex_state::StateRuntime;
+use codex_state::ThreadControlMode as StateThreadControlMode;
+use codex_state::ThreadControlRecord;
 use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
 use codex_state::log_db::LogDbLayer;
@@ -363,10 +373,13 @@ use codex_app_server_protocol::ServerRequest;
 mod apps_list_helpers;
 mod plugin_app_helpers;
 mod plugin_mcp_oauth;
+mod thread_control_api;
 mod token_usage_replay;
 
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
+use crate::thread_control_runtime::clear_router_tick;
+use crate::thread_control_runtime::refresh_router_tick;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
@@ -905,6 +918,18 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadMetadataUpdate { request_id, params } => {
                 self.thread_metadata_update(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadControlRead { request_id, params } => {
+                self.thread_control_read(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadControlSet { request_id, params } => {
+                self.thread_control_set(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadControlRelease { request_id, params } => {
+                self.thread_control_release(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadMemoryModeSet { request_id, params } => {
@@ -3392,7 +3417,6 @@ impl CodexMessageProcessor {
             ))),
         }
     }
-
     async fn thread_unarchive(
         &self,
         request_id: ConnectionRequestId,
@@ -7805,6 +7829,8 @@ impl CodexMessageProcessor {
             fallback_model_provider,
             codex_home,
         } = listener_task_context;
+        let conversation_for_listener = Arc::clone(&conversation);
+        let thread_state_for_listener = Arc::clone(&thread_state);
         let outgoing_for_task = Arc::clone(&outgoing);
         tokio::spawn(async move {
             loop {
@@ -7820,10 +7846,10 @@ impl CodexMessageProcessor {
                         };
                         handle_thread_listener_command(
                             conversation_id,
-                            &conversation,
+                            &conversation_for_listener,
                             codex_home.as_path(),
                             &thread_state_manager,
-                            &thread_state,
+                            &thread_state_for_listener,
                             &thread_watch_manager,
                             &outgoing_for_task,
                             &pending_thread_unloads,
@@ -7831,7 +7857,7 @@ impl CodexMessageProcessor {
                         )
                         .await;
                     }
-                    event = conversation.next_event() => {
+                    event = conversation_for_listener.next_event() => {
                         let event = match event {
                             Ok(event) => event,
                             Err(err) => {
@@ -7844,7 +7870,7 @@ impl CodexMessageProcessor {
                         // translations so thread-local state such as raw event
                         // opt-in stays synchronized with the conversation.
                         let raw_events_enabled = {
-                            let mut thread_state = thread_state.lock().await;
+                            let mut thread_state = thread_state_for_listener.lock().await;
                             thread_state.track_current_turn_event(&event.msg);
                             thread_state.experimental_raw_events
                         };
@@ -7874,13 +7900,13 @@ impl CodexMessageProcessor {
                         apply_bespoke_event_handling(
                             event.clone(),
                             conversation_id,
-                            conversation.clone(),
+                            Arc::clone(&conversation_for_listener),
                             thread_manager.clone(),
                             listener_task_context
                                 .general_analytics_enabled
                                 .then(|| listener_task_context.analytics_events_client.clone()),
                             thread_outgoing,
-                            thread_state.clone(),
+                            Arc::clone(&thread_state_for_listener),
                             thread_watch_manager.clone(),
                             api_version,
                             fallback_model_provider.clone(),
@@ -7895,7 +7921,17 @@ impl CodexMessageProcessor {
                         if !unloading_state.should_unload_now() {
                             continue;
                         }
-                        if matches!(conversation.agent_status().await, AgentStatus::Running) {
+                        if let Some(state_db) = conversation_for_listener.state_db()
+                            && thread_control_api::should_keep_loaded_for_active_router_control(
+                                conversation_id,
+                                &state_db,
+                            )
+                            .await
+                        {
+                            unloading_state.note_thread_activity_observed();
+                            continue;
+                        }
+                        if matches!(conversation_for_listener.agent_status().await, AgentStatus::Running) {
                             unloading_state.note_thread_activity_observed();
                             continue;
                         }
@@ -7916,7 +7952,7 @@ impl CodexMessageProcessor {
                             thread_state_manager.clone(),
                             thread_watch_manager.clone(),
                             conversation_id,
-                            conversation.clone(),
+                            Arc::clone(&conversation_for_listener),
                         )
                         .await;
                         break;
@@ -7924,11 +7960,14 @@ impl CodexMessageProcessor {
                 }
             }
 
-            let mut thread_state = thread_state.lock().await;
+            let mut thread_state = thread_state_for_listener.lock().await;
             if thread_state.listener_generation == listener_generation {
                 thread_state.clear_listener();
             }
         });
+        if let Some(state_db) = conversation.state_db() {
+            refresh_router_tick(conversation, thread_state, state_db).await;
+        }
         Ok(())
     }
     async fn git_diff_to_origin(&self, request_id: ConnectionRequestId, cwd: PathBuf) {

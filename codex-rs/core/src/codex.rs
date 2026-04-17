@@ -141,6 +141,8 @@ use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::RolloutConfig;
 use codex_rollout::state_db;
 use codex_shell_command::parse_command::parse_command;
+use codex_state::ThreadControlMode as StateThreadControlMode;
+use codex_state::ThreadControlRecord;
 use codex_terminal_detection::user_agent;
 use codex_thread_store::LocalThreadStore;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
@@ -189,6 +191,7 @@ use crate::codex_thread::ThreadConfigSnapshot;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
+use crate::config::ConstraintError;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
 use crate::config::StartedNetworkProxy;
@@ -957,26 +960,8 @@ impl TurnContext {
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
         let truncation_policy = model_info.truncation_policy.into();
-        let supported_reasoning_levels = model_info
-            .supported_reasoning_levels
-            .iter()
-            .map(|preset| preset.effort)
-            .collect::<Vec<_>>();
-        let reasoning_effort = if let Some(current_reasoning_effort) = self.reasoning_effort {
-            if supported_reasoning_levels.contains(&current_reasoning_effort) {
-                Some(current_reasoning_effort)
-            } else {
-                supported_reasoning_levels
-                    .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
-                    .copied()
-                    .or(model_info.default_reasoning_level)
-            }
-        } else {
-            supported_reasoning_levels
-                .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
-                .copied()
-                .or(model_info.default_reasoning_level)
-        };
+        let reasoning_effort =
+            compatible_reasoning_effort_for_model(self.reasoning_effort, &model_info);
         config.model_reasoning_effort = reasoning_effort;
 
         let collaboration_mode = self.collaboration_mode.with_updates(
@@ -1140,6 +1125,32 @@ impl TurnContext {
                 .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
                 .unwrap_or_default(),
         })
+    }
+}
+
+pub(crate) fn compatible_reasoning_effort_for_model(
+    current_reasoning_effort: Option<ReasoningEffortConfig>,
+    model_info: &ModelInfo,
+) -> Option<ReasoningEffortConfig> {
+    let supported_reasoning_levels = model_info
+        .supported_reasoning_levels
+        .iter()
+        .map(|preset| preset.effort)
+        .collect::<Vec<_>>();
+    if let Some(current_reasoning_effort) = current_reasoning_effort {
+        if supported_reasoning_levels.contains(&current_reasoning_effort) {
+            Some(current_reasoning_effort)
+        } else {
+            supported_reasoning_levels
+                .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
+                .copied()
+                .or(model_info.default_reasoning_level)
+        }
+    } else {
+        supported_reasoning_levels
+            .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
+            .copied()
+            .or(model_info.default_reasoning_level)
     }
 }
 
@@ -1351,6 +1362,9 @@ pub(crate) struct AppServerClientMetadata {
 }
 
 impl Session {
+    const CONTINUOUS_MODE_CONTROL_REASON: &str =
+        "Continuous collaboration mode is active for this thread.";
+
     pub(crate) async fn app_server_client_metadata(&self) -> AppServerClientMetadata {
         let state = self.state.lock().await;
         AppServerClientMetadata {
@@ -2031,7 +2045,13 @@ impl Session {
                 ))
                 .await;
         session_configuration.thread_name = thread_name.clone();
-        let state = SessionState::new(session_configuration.clone());
+        let mut state = SessionState::new(session_configuration.clone());
+        if let Some(state_db_ctx) = state_db_ctx.as_ref() {
+            let active_thread_control = state_db_ctx
+                .get_active_thread_control(conversation_id)
+                .await?;
+            state.set_active_thread_control(active_thread_control);
+        }
         let managed_network_requirements_configured = config
             .config_layer_stack
             .requirements_toml()
@@ -2351,6 +2371,17 @@ impl Session {
         self.services.state_db.clone()
     }
 
+    pub(crate) async fn active_thread_control(&self) -> Option<codex_state::ThreadControlRecord> {
+        self.state.lock().await.active_thread_control()
+    }
+
+    pub(crate) async fn set_active_thread_control(
+        &self,
+        control: Option<codex_state::ThreadControlRecord>,
+    ) {
+        self.state.lock().await.set_active_thread_control(control);
+    }
+
     /// Flush rollout writes and return the final durability-barrier result.
     pub(crate) async fn flush_rollout(&self) -> std::io::Result<()> {
         let recorder = {
@@ -2629,16 +2660,22 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let mut state = self.state.lock().await;
+        let state = self.state.lock().await;
 
         match state.session_configuration.apply(&updates) {
             Ok(updated) => {
                 let previous_cwd = state.session_configuration.cwd.clone();
                 let sandbox_policy_changed =
                     state.session_configuration.sandbox_policy != updated.sandbox_policy;
+                let collaboration_mode = updated.collaboration_mode.clone();
                 let next_cwd = updated.cwd.clone();
                 let codex_home = updated.codex_home.clone();
                 let session_source = updated.session_source.clone();
+                drop(state);
+                self.ensure_continuous_mode_control(&collaboration_mode)
+                    .await?;
+
+                let mut state = self.state.lock().await;
                 state.session_configuration = updated;
                 drop(state);
 
@@ -2652,7 +2689,6 @@ impl Session {
                     self.refresh_managed_network_proxy_for_current_sandbox_policy()
                         .await;
                 }
-
                 Ok(())
             }
             Err(err) => {
@@ -2674,7 +2710,7 @@ impl Session {
             codex_home,
             session_source,
         ) = {
-            let mut state = self.state.lock().await;
+            let state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
                     let previous_cwd = state.session_configuration.cwd.clone();
@@ -2682,6 +2718,22 @@ impl Session {
                         state.session_configuration.sandbox_policy != next.sandbox_policy;
                     let codex_home = next.codex_home.clone();
                     let session_source = next.session_source.clone();
+                    drop(state);
+                    if let Err(err) = self
+                        .ensure_continuous_mode_control(&next.collaboration_mode)
+                        .await
+                    {
+                        self.send_event_raw(Event {
+                            id: sub_id.clone(),
+                            msg: EventMsg::Error(ErrorEvent {
+                                message: err.to_string(),
+                                codex_error_info: Some(CodexErrorInfo::BadRequest),
+                            }),
+                        })
+                        .await;
+                        return Err(err);
+                    }
+                    let mut state = self.state.lock().await;
                     state.session_configuration = next.clone();
                     (
                         next,
@@ -2733,6 +2785,8 @@ impl Session {
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
     ) -> Arc<TurnContext> {
+        self.sync_continuous_mode_control(&session_configuration.collaboration_mode)
+            .await;
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
         {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
@@ -2801,6 +2855,100 @@ impl Session {
         let turn_context = Arc::new(turn_context);
         turn_context.turn_metadata_state.spawn_git_enrichment_task();
         turn_context
+    }
+
+    async fn sync_continuous_mode_control(&self, collaboration_mode: &CollaborationMode) {
+        let _ = self
+            .ensure_continuous_mode_control(collaboration_mode)
+            .await;
+    }
+
+    async fn ensure_continuous_mode_control(
+        &self,
+        collaboration_mode: &CollaborationMode,
+    ) -> ConstraintResult<()> {
+        let active_thread_control = self.active_thread_control().await;
+        match collaboration_mode.mode {
+            ModeKind::Continuous => {
+                if active_thread_control.as_ref().is_some_and(|control| {
+                    control.mode != StateThreadControlMode::Continuous
+                        && control.released_at.is_none()
+                }) {
+                    return Ok(());
+                }
+                if active_thread_control.as_ref().is_some_and(|control| {
+                    control.mode == StateThreadControlMode::Continuous
+                        && control.released_at.is_none()
+                }) {
+                    return Ok(());
+                }
+
+                let updated_at = Utc::now();
+                let control = active_thread_control
+                    .as_ref()
+                    .filter(|control| control.mode == StateThreadControlMode::Continuous)
+                    .map(|control| {
+                        let mut control = control.clone();
+                        control.released_at = None;
+                        control.updated_at = updated_at;
+                        control
+                    })
+                    .unwrap_or_else(|| ThreadControlRecord {
+                        thread_id: self.conversation_id,
+                        mode: StateThreadControlMode::Continuous,
+                        reason: Self::CONTINUOUS_MODE_CONTROL_REASON.to_string(),
+                        release_channel: None,
+                        watch_interval_seconds: None,
+                        released_at: None,
+                        updated_at,
+                        target_thread_ids: Vec::new(),
+                    });
+
+                if let Some(state_db) = self.state_db() {
+                    if let Err(err) = state_db.upsert_thread_control(&control).await {
+                        warn!(
+                            error = %err,
+                            thread_id = %self.conversation_id,
+                            "failed to persist continuous collaboration mode control"
+                        );
+                        return Err(ConstraintError::operation_failed(
+                            "failed to persist continuous collaboration mode control",
+                        ));
+                    }
+                }
+                self.set_active_thread_control(Some(control)).await;
+                Ok(())
+            }
+            _ => {
+                let Some(control) = active_thread_control else {
+                    return Ok(());
+                };
+                if control.mode != StateThreadControlMode::Continuous {
+                    return Ok(());
+                }
+
+                if control.released_at.is_none() {
+                    let released_at = Utc::now();
+                    if let Some(state_db) = self.state_db() {
+                        if let Err(err) = state_db
+                            .release_thread_control(self.conversation_id, released_at)
+                            .await
+                        {
+                            warn!(
+                                error = %err,
+                                thread_id = %self.conversation_id,
+                                "failed to release continuous collaboration mode control"
+                            );
+                            return Err(ConstraintError::operation_failed(
+                                "failed to release continuous collaboration mode control",
+                            ));
+                        }
+                    }
+                }
+                self.set_active_thread_control(None).await;
+                Ok(())
+            }
+        }
     }
 
     pub(crate) async fn maybe_emit_unknown_model_warning_for_turn(&self, tc: &TurnContext) {
@@ -6592,6 +6740,30 @@ pub(crate) async fn run_turn(
                         | AskForApproval::Granular(_) => "default",
                     }
                     .to_string();
+                    let active_thread_control = sess.active_thread_control().await;
+                    if let Some(control) = active_thread_control
+                        && matches!(control.mode, StateThreadControlMode::Continuous)
+                        && control.released_at.is_none()
+                    {
+                        let message = ResponseItem::Message {
+                            id: None,
+                            role: "user".to_string(),
+                            content: vec![ContentItem::InputText {
+                                text: build_continuous_run_block_message(
+                                    &control.reason,
+                                    control.release_channel.as_deref(),
+                                ),
+                            }],
+                            end_turn: None,
+                            phase: None,
+                        };
+                        sess.record_conversation_items(
+                            &turn_context,
+                            std::slice::from_ref(&message),
+                        )
+                        .await;
+                        continue;
+                    }
                     let stop_request = codex_hooks::StopRequest {
                         session_id: sess.conversation_id,
                         turn_id: turn_context.sub_id.clone(),
@@ -6735,6 +6907,43 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+fn build_continuous_run_block_message(reason: &str, release_channel: Option<&str>) -> String {
+    let mut lines = vec![
+        "Continuous run mode is still active for this thread.".to_string(),
+        format!("Reason: {reason}"),
+        "You are not allowed to stop, finalize, or hand off a completed answer yet.".to_string(),
+    ];
+    if let Some(release_channel) = release_channel {
+        lines.push(format!("Release channel: {release_channel}."));
+    }
+    lines.push(
+        "Continue working toward the objective until the user explicitly releases this thread."
+            .to_string(),
+    );
+    lines.join("\n")
+}
+
+#[cfg(test)]
+mod thread_control_tests {
+    use super::build_continuous_run_block_message;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn continuous_run_block_message_includes_release_channel_when_present() {
+        assert_eq!(
+            build_continuous_run_block_message(
+                "Finish the deployment validation loop",
+                Some("imessage"),
+            ),
+            "Continuous run mode is still active for this thread.\n\
+Reason: Finish the deployment validation loop\n\
+You are not allowed to stop, finalize, or hand off a completed answer yet.\n\
+Release channel: imessage.\n\
+Continue working toward the objective until the user explicitly releases this thread."
+        );
+    }
 }
 
 async fn track_turn_resolved_config_analytics(

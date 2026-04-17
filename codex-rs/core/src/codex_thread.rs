@@ -1,10 +1,12 @@
 use crate::agent::AgentStatus;
 use crate::codex::Codex;
 use crate::codex::SteerInputError;
+use crate::codex::compatible_reasoning_effort_for_model;
 use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
@@ -33,6 +35,7 @@ use tokio::sync::Mutex;
 use tokio::sync::watch;
 
 use codex_rollout::state_db::StateDbHandle;
+use codex_state::ThreadControlRecord;
 
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
@@ -74,6 +77,10 @@ impl CodexThread {
 
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
         self.codex.submit(op).await
+    }
+
+    pub fn id(&self) -> codex_protocol::ThreadId {
+        self.codex.session.conversation_id
     }
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
@@ -243,8 +250,66 @@ impl CodexThread {
         self.codex.state_db()
     }
 
+    pub async fn active_thread_control(&self) -> Option<ThreadControlRecord> {
+        self.codex.session.active_thread_control().await
+    }
+
+    pub async fn set_active_thread_control(&self, control: Option<ThreadControlRecord>) {
+        self.codex.session.set_active_thread_control(control).await;
+    }
+
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
+    }
+
+    pub async fn collaboration_mode(&self) -> CollaborationMode {
+        self.codex.session.collaboration_mode().await
+    }
+
+    pub async fn router_model_override(&self) -> Option<String> {
+        self.codex
+            .session
+            .get_config()
+            .await
+            .thread_control
+            .router
+            .model
+            .clone()
+    }
+
+    #[doc(hidden)]
+    pub async fn resolve_router_turn_settings(
+        &self,
+        router_model_override: Option<&str>,
+    ) -> (String, Option<ReasoningEffort>, CollaborationMode) {
+        let config_snapshot = self.codex.thread_config_snapshot().await;
+        let collaboration_mode = self.codex.session.collaboration_mode().await;
+        let Some(model) = router_model_override.filter(|model| *model != config_snapshot.model)
+        else {
+            return (
+                config_snapshot.model,
+                config_snapshot.reasoning_effort,
+                collaboration_mode,
+            );
+        };
+
+        let config = self.codex.session.get_config().await;
+        let model_info = self
+            .codex
+            .session
+            .services
+            .models_manager
+            .get_model_info(model, &config.to_models_manager_config())
+            .await;
+        let reasoning_effort = collaboration_mode
+            .reasoning_effort()
+            .and_then(|current| compatible_reasoning_effort_for_model(Some(current), &model_info));
+
+        (
+            model.to_string(),
+            reasoning_effort,
+            collaboration_mode.with_updates(Some(model.to_string()), Some(reasoning_effort), None),
+        )
     }
 
     pub async fn read_mcp_resource(

@@ -22,10 +22,13 @@ use crate::types::PluginConfig;
 use crate::types::SandboxWorkspaceWrite;
 use crate::types::ShellEnvironmentPolicyToml;
 use crate::types::SkillsConfig;
+use crate::types::ThreadControlToml;
 use crate::types::ToolSuggestConfig;
 use crate::types::Tui;
 use crate::types::UriBasedFileOpener;
 use crate::types::WindowsToml;
+use codex_app_server_protocol::RouterThreadControlConfigV1;
+use codex_app_server_protocol::ThreadControlConfigV1;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_features::FeaturesToml;
@@ -319,6 +322,10 @@ pub struct ConfigToml {
     /// Memories subsystem settings.
     pub memories: Option<MemoriesToml>,
 
+    /// Thread-control subsystem settings.
+    #[serde(default)]
+    pub thread_control: Option<ThreadControlToml>,
+
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
 
@@ -414,8 +421,19 @@ impl From<ConfigToml> for UserSavedConfig {
             model_reasoning_summary: config_toml.model_reasoning_summary,
             model_verbosity: config_toml.model_verbosity,
             tools: config_toml.tools.map(From::from),
+            thread_control: config_toml.thread_control.map(Into::into),
             profile: config_toml.profile,
             profiles,
+        }
+    }
+}
+
+impl From<ThreadControlToml> for ThreadControlConfigV1 {
+    fn from(toml: ThreadControlToml) -> Self {
+        Self {
+            router: toml.router.map(|router| RouterThreadControlConfigV1 {
+                model: router.model,
+            }),
         }
     }
 }
