@@ -11,14 +11,16 @@ pub(crate) struct DerivedVersion {
 pub(crate) fn derive_version(
     cargo_version: &str,
     profile: Option<&str>,
+    source_build_from_release_branch: bool,
     source_base_override: Option<&str>,
     official_release_version: Option<&str>,
     git_release_version: Option<&str>,
     installed_release_version: Option<&str>,
     source_version_suffix: Option<&str>,
 ) -> DerivedVersion {
-    let is_source_build = cargo_version == LOCAL_DEV_BUILD_VERSION;
-    let release_line_version = if is_source_build {
+    let is_local_dev_version = cargo_version == LOCAL_DEV_BUILD_VERSION;
+    let is_source_build = is_local_dev_version || source_build_from_release_branch;
+    let release_line_version = if is_local_dev_version {
         resolve_source_build_base_version(
             cargo_version,
             profile,

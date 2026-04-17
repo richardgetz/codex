@@ -181,6 +181,12 @@ fn tool_call_mcp_elicitation_is_stable_and_enabled_by_default() {
 }
 
 #[test]
+fn enable_mcp_approvals_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::EnableMcpApprovals.stage(), Stage::Stable);
+    assert_eq!(Feature::EnableMcpApprovals.default_enabled(), true);
+}
+
+#[test]
 fn remote_control_is_under_development() {
     assert_eq!(Feature::RemoteControl.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::RemoteControl.default_enabled(), false);
