@@ -44,7 +44,6 @@ jobs:
       matrix:
         target:
           - aarch64-apple-darwin
-          - x86_64-apple-darwin
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -158,7 +157,7 @@ jobs:
         with:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
-          scope: "@rick"
+          scope: "@rickgetz"
 
       - uses: actions/download-artifact@v4
         with:
@@ -187,9 +186,6 @@ jobs:
             case "${filename}" in
               codex-npm-darwin-arm64-"${VERSION}".tgz)
                 publish_cmd+=(--tag darwin-arm64)
-                ;;
-              codex-npm-darwin-x64-"${VERSION}".tgz)
-                publish_cmd+=(--tag darwin-x64)
                 ;;
             esac
 
