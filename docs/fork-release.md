@@ -20,16 +20,14 @@ The workflow creates a matching annotated tag automatically:
 The fork npm release workflow currently publishes:
 
 - `aarch64-apple-darwin`
-- `x86_64-apple-darwin`
 
-That keeps the release matrix focused on modern Macs while still covering Intel
-macOS installs for coworkers or friends who need it.
+That keeps the release matrix focused on Apple Silicon macOS installs only.
 
 ## One-time npm setup
 
 You still need to do the npm account-side setup yourself:
 
-1. Ensure the `rick` npm user/scope is the one you want to publish from.
+1. Ensure the `rickgetz` npm user/scope is the one you want to publish from.
 2. Use a package name under that scope, currently `@rickgetz/codex`.
 3. Add an `NPM_TOKEN` repository secret for the first publish or as an ongoing fallback.
 4. After the package exists on npm, add this repo/workflow as a trusted publisher for `@rickgetz/codex`.

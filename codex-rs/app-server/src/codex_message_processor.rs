@@ -5398,15 +5398,11 @@ impl CodexMessageProcessor {
             .iter()
             .map(|spec| {
                 let (stage, display_name, description, announcement) = match spec.stage {
-                    Stage::Experimental {
-                        name,
-                        menu_description,
-                        announcement,
-                    } => (
+                    Stage::Experimental { .. } => (
                         ApiExperimentalFeatureStage::Beta,
-                        Some(name.to_string()),
-                        Some(menu_description.to_string()),
-                        Some(announcement.to_string()),
+                        spec.user_facing_experimental_name(),
+                        spec.user_facing_experimental_description(),
+                        spec.user_facing_experimental_announcement(),
                     ),
                     Stage::UnderDevelopment => (
                         ApiExperimentalFeatureStage::UnderDevelopment,
