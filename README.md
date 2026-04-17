@@ -1,8 +1,9 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
+<p align="center"><code>npm i -g @rickgetz/codex</code></p>
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
 </p>
+<p align="center">Forked from <a href="https://github.com/openai/codex">openai/codex</a>. This fork is maintained by <a href="https://github.com/richardgetz">Rick Getz</a> and keeps upstream attribution and licensing intact.</p>
 </br>
 If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
 </br>If you want the desktop app experience, run <code>codex app</code> or visit <a href="https://chatgpt.com/codex?app-landing-page=true">the Codex App page</a>.
@@ -18,29 +19,20 @@ Install globally with your preferred package manager:
 
 ```shell
 # Install using npm
-npm install -g @openai/codex
-```
-
-```shell
-# Install using Homebrew
-brew install --cask codex
+npm install -g @rickgetz/codex
 ```
 
 Then simply run `codex` to get started.
 
 <details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+<summary>You can also go to the <a href="https://github.com/richardgetz/codex/releases/latest">latest fork GitHub Release</a> and download the Apple Silicon macOS binary.</summary>
 
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
+This fork currently publishes:
 
 - macOS
   - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
 
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+Each archive contains a single entry with the platform baked into the name (`codex-aarch64-apple-darwin`), so you likely want to rename it to `codex` after extracting it.
 
 </details>
 
@@ -55,6 +47,7 @@ You can also use Codex with an API key, but this requires [additional setup](htt
 - [**Codex Documentation**](https://developers.openai.com/codex)
 - [**Contributing**](./docs/contributing.md)
 - [**Installing & building**](./docs/install.md)
+- [**Fork differences**](./docs/fork-differences.md)
 - [**Fork npm releases**](./docs/fork-release.md)
 - [**Open source fund**](./docs/open-source-fund.md)
 
