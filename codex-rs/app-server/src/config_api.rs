@@ -41,6 +41,7 @@ const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "plugins",
     "tool_search",
     "tool_suggest",
+    "enable_mcp_approvals",
     "tool_call_mcp_elicitation",
 ];
 

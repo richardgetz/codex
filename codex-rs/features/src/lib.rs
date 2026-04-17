@@ -174,6 +174,8 @@ pub enum Feature {
     /// Enable collaboration modes (Plan, Default).
     /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
     CollaborationModes,
+    /// Allow MCP tools to trigger Codex approval prompts.
+    EnableMcpApprovals,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
     /// Enable personality selection in the TUI.
@@ -902,6 +904,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::CollaborationModes,
         key: "collaboration_modes",
         stage: Stage::Removed,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::EnableMcpApprovals,
+        key: "enable_mcp_approvals",
+        stage: Stage::Stable,
         default_enabled: true,
     },
     FeatureSpec {

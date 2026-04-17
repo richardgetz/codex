@@ -36,6 +36,7 @@ fn source_release_build_prefers_mainline_version_and_suffix() {
     let derived = derive_version(
         LOCAL_DEV_BUILD_VERSION,
         Some("release"),
+        false,
         None,
         Some("rust-v0.120.0"),
         None,
@@ -58,6 +59,7 @@ fn source_release_build_uses_git_release_when_network_and_installed_fallbacks_fa
     let derived = derive_version(
         LOCAL_DEV_BUILD_VERSION,
         Some("release"),
+        false,
         None,
         None,
         Some("rust-v0.119.0"),
@@ -80,6 +82,7 @@ fn source_release_build_uses_installed_mainline_version_for_wrapped_installs() {
     let derived = derive_version(
         LOCAL_DEV_BUILD_VERSION,
         Some("release"),
+        false,
         None,
         None,
         None,
@@ -93,6 +96,52 @@ fn source_release_build_uses_installed_mainline_version_for_wrapped_installs() {
             display_version: "0.118.0-rick".to_string(),
             release_line_version: "0.118.0".to_string(),
             is_source_build: true,
+        }
+    );
+}
+
+#[test]
+fn release_line_source_branch_build_appends_suffix() {
+    let derived = derive_version(
+        "0.122.0",
+        Some("release"),
+        true,
+        None,
+        None,
+        None,
+        None,
+        Some(DEFAULT_SOURCE_VERSION_SUFFIX),
+    );
+
+    assert_eq!(
+        derived,
+        DerivedVersion {
+            display_version: "0.122.0-rick".to_string(),
+            release_line_version: "0.122.0".to_string(),
+            is_source_build: true,
+        }
+    );
+}
+
+#[test]
+fn exact_release_tag_build_keeps_plain_version() {
+    let derived = derive_version(
+        "0.122.0",
+        Some("release"),
+        false,
+        None,
+        None,
+        None,
+        None,
+        Some(DEFAULT_SOURCE_VERSION_SUFFIX),
+    );
+
+    assert_eq!(
+        derived,
+        DerivedVersion {
+            display_version: "0.122.0".to_string(),
+            release_line_version: "0.122.0".to_string(),
+            is_source_build: false,
         }
     );
 }
