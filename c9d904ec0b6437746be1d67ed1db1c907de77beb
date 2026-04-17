@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-04-17/fork-feature-cli-hints#c9d904ec0b64"
+  change_type: "feat"
+  scope: "cli"
+  summary: "Reuse the existing feature CLI for fork-owned flags and label Rick-owned features in the output."
+  decision: "Keep the existing `codex features enable|disable` and top-level `--enable|--disable` flows, mark `enable_mcp_approvals` as Rick-owned in the feature registry, and append `(rick)` in feature CLI output and docs so users can spot fork-only flags without a separate command surface."
+  constraints:
+    - "Must not introduce a separate fork-only enable/disable command."
+    - "Must keep the raw feature key copyable for CLI usage."
+    - "Must document the supported commands for enable_mcp_approvals."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/cli/src/main.rs"
+    - "codex-rs/features/src/lib.rs"
+    - "codex-rs/features/src/tests.rs"
+    - "docs/fork-differences.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
