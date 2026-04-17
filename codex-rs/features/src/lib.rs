@@ -236,6 +236,13 @@ impl Feature {
         self.info().default_enabled
     }
 
+    pub fn owner(self) -> FeatureOwner {
+        match self {
+            Self::EnableMcpApprovals => FeatureOwner::Rick,
+            _ => FeatureOwner::Upstream,
+        }
+    }
+
     fn info(self) -> &'static FeatureSpec {
         FEATURES
             .iter()
@@ -597,6 +604,12 @@ pub struct FeatureSpec {
 }
 
 impl FeatureSpec {
+    pub fn owner(self) -> FeatureOwner {
+        self.stage
+            .experimental_owner()
+            .unwrap_or_else(|| self.id.owner())
+    }
+
     pub fn user_facing_experimental_name(self) -> Option<String> {
         self.stage.experimental_menu_name().map(str::to_owned)
     }
@@ -605,20 +618,14 @@ impl FeatureSpec {
         self.stage
             .experimental_menu_description()
             .map(|description| {
-                let prefix = self
-                    .stage
-                    .experimental_owner()
-                    .map_or("", FeatureOwner::help_text_prefix);
+                let prefix = self.owner().help_text_prefix();
                 format!("{prefix}{description}")
             })
     }
 
     pub fn user_facing_experimental_announcement(self) -> Option<String> {
         self.stage.experimental_announcement().map(|announcement| {
-            let prefix = self
-                .stage
-                .experimental_owner()
-                .map_or("", FeatureOwner::help_text_prefix);
+            let prefix = self.owner().help_text_prefix();
             format!("{prefix}{announcement}")
         })
     }

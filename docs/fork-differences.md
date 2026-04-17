@@ -23,6 +23,17 @@ or behaves differently from upstream.
 
 See [Fork npm releases](./fork-release.md) for the release workflow details.
 
+### Feature toggles
+
+- This fork carries `enable_mcp_approvals` as a Rick-owned feature.
+- Persist it in config with:
+  - `codex features enable enable_mcp_approvals`
+  - `codex features disable enable_mcp_approvals`
+- Override it for one run with:
+  - `codex --enable enable_mcp_approvals`
+  - `codex --disable enable_mcp_approvals`
+- `codex features list` marks Rick-owned features with `(rick)`.
+
 ## Fork-only feature labeling
 
 If this fork adds an experimental feature that surfaces its own help text in the
