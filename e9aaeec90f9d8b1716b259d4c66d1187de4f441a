@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-04-17/build-info-source-version#e9aaeec90"
+  change_type: "fix"
+  scope: "build-info"
+  summary: "Keep fork source installs on the current mainline release line instead of falling back to 0.0.0."
+  decision: "Parse rust-style release tags, add repo-tag and codex-real fallbacks, and lock the behavior with a standalone regression test."
+  constraints:
+    - "Source builds must keep appending the fork suffix for local installs."
+    - "Version inference must not depend solely on live network access or the currently wrapped codex binary."
+    - "The regression test must stay standalone so future syncs from upstream keep the behavior covered."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/build-info/build.rs"
+    - "codex-rs/build-info/src/versioning.rs"
+    - "codex-rs/build-info/tests/source_build_versioning.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
