@@ -56,6 +56,7 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_features::FEATURES;
+use codex_features::FeatureOwner;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
 use codex_models_manager::AuthManager;
@@ -674,6 +675,13 @@ fn stage_str(stage: Stage) -> &'static str {
     }
 }
 
+fn feature_owner_hint(owner: FeatureOwner) -> &'static str {
+    match owner {
+        FeatureOwner::Upstream => "",
+        FeatureOwner::Rick => "(rick)",
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         cli_main(arg0_paths).await?;
@@ -1141,14 +1149,21 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     let name = def.key;
                     let stage = stage_str(def.stage);
                     let enabled = config.features.enabled(def.id);
+                    let owner_hint = feature_owner_hint(def.owner());
                     name_width = name_width.max(name.len());
                     stage_width = stage_width.max(stage.len());
-                    rows.push((name, stage, enabled));
+                    rows.push((name, stage, enabled, owner_hint));
                 }
-                rows.sort_unstable_by_key(|(name, _, _)| *name);
+                rows.sort_unstable_by_key(|(name, _, _, _)| *name);
 
-                for (name, stage, enabled) in rows {
-                    println!("{name:<name_width$}  {stage:<stage_width$}  {enabled}");
+                for (name, stage, enabled, owner_hint) in rows {
+                    if owner_hint.is_empty() {
+                        println!("{name:<name_width$}  {stage:<stage_width$}  {enabled}");
+                    } else {
+                        println!(
+                            "{name:<name_width$}  {stage:<stage_width$}  {enabled}  {owner_hint}"
+                        );
+                    }
                 }
             }
             FeaturesSubcommand::Enable(FeatureSetArgs { feature }) => {
@@ -1198,7 +1213,16 @@ async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow
         .set_feature_enabled(feature, /*enabled*/ true)
         .apply()
         .await?;
-    println!("Enabled feature `{feature}` in config.toml.");
+    let owner_hint = FEATURES
+        .iter()
+        .find(|spec| spec.key == feature)
+        .map(|spec| feature_owner_hint(spec.owner()))
+        .unwrap_or("");
+    if owner_hint.is_empty() {
+        println!("Enabled feature `{feature}` in config.toml.");
+    } else {
+        println!("Enabled feature `{feature}` in config.toml. {owner_hint}");
+    }
     maybe_print_under_development_feature_warning(&codex_home, interactive, feature);
     Ok(())
 }
@@ -1211,7 +1235,16 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
         .set_feature_enabled(feature, /*enabled*/ false)
         .apply()
         .await?;
-    println!("Disabled feature `{feature}` in config.toml.");
+    let owner_hint = FEATURES
+        .iter()
+        .find(|spec| spec.key == feature)
+        .map(|spec| feature_owner_hint(spec.owner()))
+        .unwrap_or("");
+    if owner_hint.is_empty() {
+        println!("Disabled feature `{feature}` in config.toml.");
+    } else {
+        println!("Disabled feature `{feature}` in config.toml. {owner_hint}");
+    }
     Ok(())
 }
 
@@ -2354,5 +2387,11 @@ mod tests {
             .to_overrides()
             .expect_err("feature should be rejected");
         assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
+    }
+
+    #[test]
+    fn feature_owner_hint_marks_rick_owned_features() {
+        assert_eq!(feature_owner_hint(FeatureOwner::Rick), "(rick)");
+        assert_eq!(feature_owner_hint(FeatureOwner::Upstream), "");
     }
 }

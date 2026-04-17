@@ -151,6 +151,13 @@ fn fork_owned_experimental_help_text_is_labeled() {
 }
 
 #[test]
+fn enable_mcp_approvals_is_marked_as_rick_owned() {
+    let spec = Feature::EnableMcpApprovals.info();
+
+    assert_eq!(spec.owner(), FeatureOwner::Rick);
+}
+
+#[test]
 fn request_permissions_is_under_development() {
     assert_eq!(
         Feature::ExecPermissionApprovals.stage(),
