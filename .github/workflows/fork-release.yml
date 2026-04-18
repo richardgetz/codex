@@ -24,10 +24,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fetch tags
+      - name: "[5%] Fetch tags"
         run: git fetch --tags --force
 
-      - name: Compute next fork release version
+      - name: "[10%] Compute next fork release version"
         id: compute
         run: |
           python3 scripts/compute_fork_release.py --write-github-output
@@ -46,22 +46,100 @@ jobs:
           - aarch64-apple-darwin
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: "[20%] Check out release source"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+      - name: "[30%] Install Rust toolchain"
+        uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
         with:
           targets: ${{ matrix.target }}
 
-      - name: Build release binary
+      - name: "[40-60%] Build release binary"
         shell: bash
         env:
           CODEX_SOURCE_BASE_VERSION: ${{ needs.compute-release.outputs.base_version }}
           CODEX_SOURCE_VERSION_SUFFIX: rick.${{ needs.compute-release.outputs.fork_counter }}
+          HEARTBEAT_INTERVAL_SEC: 60
+          TARGET_TRIPLE: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          cargo build --target ${{ matrix.target }} --release --bin codex
 
-      - name: Stage artifacts
+          log_progress() {
+            local message="$1"
+            echo "::notice::${message}"
+          }
+
+          append_summary() {
+            local line="$1"
+            [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] || return 0
+            printf '%s\n' "${line}" >> "${GITHUB_STEP_SUMMARY}"
+          }
+
+          latest_target_snapshot() {
+            local release_dir="target/${TARGET_TRIPLE}/release"
+            local file_count latest_file latest_size latest_mtime now age_sec
+
+            if [[ ! -d "${release_dir}" ]]; then
+              echo "release_dir=missing"
+              return 0
+            fi
+
+            file_count="$(find "${release_dir}" -type f | wc -l | tr -d ' ')"
+            if [[ "${file_count}" == "0" ]]; then
+              echo "release_dir=${release_dir} files=0"
+              return 0
+            fi
+
+            latest_file="$(find "${release_dir}" -type f -print0 | xargs -0 ls -t 2>/dev/null | head -n 1 || true)"
+            if [[ -z "${latest_file}" ]]; then
+              echo "release_dir=${release_dir} files=${file_count} newest=unavailable"
+              return 0
+            fi
+
+            latest_size="$(stat -f '%z' "${latest_file}")"
+            latest_mtime="$(stat -f '%m' "${latest_file}")"
+            now="$(date +%s)"
+            age_sec="$((now - latest_mtime))"
+            echo "release_dir=${release_dir} files=${file_count} newest=${latest_file#${release_dir}/} size_bytes=${latest_size} age_sec=${age_sec}"
+          }
+
+          append_summary "### fork-release progress"
+          append_summary "- [40%] Starting cargo build for ${TARGET_TRIPLE}"
+          log_progress "[40%] Starting cargo build for ${TARGET_TRIPLE}"
+
+          cargo build --target "${TARGET_TRIPLE}" --release --bin codex -vv &
+          build_pid=$!
+          started_at="$(date +%s)"
+
+          while kill -0 "${build_pid}" 2>/dev/null; do
+            sleep "${HEARTBEAT_INTERVAL_SEC}"
+            if ! kill -0 "${build_pid}" 2>/dev/null; then
+              break
+            fi
+
+            now="$(date +%s)"
+            elapsed_sec="$((now - started_at))"
+            elapsed_min="$((elapsed_sec / 60))"
+
+            log_progress "[50%] Cargo build still running for ${elapsed_min}m (${elapsed_sec}s)"
+            echo "[proof-of-life] $(date -u '+%Y-%m-%dT%H:%M:%SZ') elapsed=${elapsed_sec}s target=${TARGET_TRIPLE}"
+            echo "[proof-of-life] active cargo/rustc processes"
+            ps -Ao pid,ppid,%cpu,etime,time,command | grep -E '[r]ustc|[c]argo' || true
+            echo "[proof-of-life] target snapshot"
+            latest_target_snapshot || true
+            echo "[proof-of-life] target disk usage"
+            du -sh "target/${TARGET_TRIPLE}" 2>/dev/null || true
+          done
+
+          wait "${build_pid}"
+
+          finished_at="$(date +%s)"
+          duration_sec="$((finished_at - started_at))"
+          duration_min="$((duration_sec / 60))"
+          log_progress "[60%] Cargo build completed in ${duration_min}m (${duration_sec}s)"
+          append_summary "- [60%] Cargo build completed in ${duration_min}m (${duration_sec}s)"
+
+      - name: "[65%] Stage artifacts"
         shell: bash
         run: |
           set -euo pipefail
@@ -71,7 +149,8 @@ jobs:
           tar -C "${dest}" -czf "${dest}/codex-${{ matrix.target }}.tar.gz" "codex-${{ matrix.target }}"
           zstd -T0 -19 --rm "${dest}/codex-${{ matrix.target }}"
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+      - name: "[70%] Upload build artifacts"
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: ${{ matrix.target }}
           path: codex-rs/dist/${{ matrix.target }}/*
@@ -88,18 +167,20 @@ jobs:
       tag: ${{ needs.compute-release.outputs.tag }}
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: "[75%] Check out release metadata"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
 
-      - name: Fetch tags
+      - name: "[78%] Fetch tags"
         run: git fetch --tags --force
 
-      - uses: actions/download-artifact@v4
+      - name: "[80%] Download build artifacts"
+        uses: actions/download-artifact@v4
         with:
           path: dist
 
-      - name: Create release tag
+      - name: "[84%] Create release tag"
         if: ${{ needs.compute-release.outputs.tag_exists != 'true' }}
         env:
           RELEASE_TAG: ${{ needs.compute-release.outputs.tag }}
@@ -111,12 +192,12 @@ jobs:
           git tag -a "$RELEASE_TAG" -m "Release $RELEASE_VERSION"
           git push origin "$RELEASE_TAG"
 
-      - name: Setup Node.js
+      - name: "[87%] Setup Node.js"
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: 24
 
-      - name: Stage npm packages
+      - name: "[90%] Stage npm packages"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_VERSION: ${{ needs.compute-release.outputs.version }}
@@ -129,12 +210,13 @@ jobs:
             --workflow-url "$WORKFLOW_URL" \
             --release-config .github/fork-release-config.json
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+      - name: "[93%] Upload npm tarballs"
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: fork-npm-tarballs
           path: dist/npm/*
 
-      - name: Create GitHub Release
+      - name: "[96%] Create GitHub Release"
         uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
         with:
           name: ${{ needs.compute-release.outputs.version }}
@@ -152,19 +234,20 @@ jobs:
       contents: read
 
     steps:
-      - name: Setup Node.js
+      - name: "[98%] Setup Node.js for npm publish"
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
           scope: "@rickgetz"
 
-      - uses: actions/download-artifact@v4
+      - name: "[99%] Download npm tarballs"
+        uses: actions/download-artifact@v4
         with:
           name: fork-npm-tarballs
           path: dist/npm
 
-      - name: Publish to npm
+      - name: "[100%] Publish to npm"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ needs.release.outputs.version }}
