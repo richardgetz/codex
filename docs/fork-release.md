@@ -35,6 +35,11 @@ You still need to do the npm account-side setup yourself:
 The workflow is set up so npm trusted publishing can be used once configured,
 but it will also fall back to `NPM_TOKEN` if that secret is present.
 
+Before any publish step runs, the workflow audits the generated npm tarballs and
+fails if they contain secret-like paths such as `.npmrc`, `.env*`, `.ssh/`,
+`.aws/`, or key/certificate files. The publish step also masks the npm token
+and redacts auth-shaped output before writing logs.
+
 ## Automatic counter behavior
 
 The workflow derives the upstream base version from `codex-rs/Cargo.toml` and
