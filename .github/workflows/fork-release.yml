@@ -252,6 +252,10 @@ jobs:
         with:
           node-version: 24
 
+      # stage_npm_packages.py shells out to DotSlash when vendoring ripgrep.
+      - name: "[88%] Install DotSlash"
+        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
       - name: "[90%] Stage npm packages"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
