@@ -36,6 +36,8 @@ jobs:
     needs: compute-release
     name: Build - ${{ matrix.target }}
     runs-on: macos-15
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     defaults:
       run:
         working-directory: codex-rs
@@ -49,10 +51,63 @@ jobs:
       - name: "[20%] Check out release source"
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
+      - name: "[25%] Compute Cargo cache key"
+        id: cargo-cache-key
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "lock_hash=$(shasum -a 256 Cargo.lock rust-toolchain.toml | shasum -a 256 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: "[28%] Restore Cargo dependency cache"
+        id: cargo-cache-restore
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: fork-release-cargo-${{ runner.os }}-${{ matrix.target }}-${{ steps.cargo-cache-key.outputs.lock_hash }}
+          restore-keys: |
+            fork-release-cargo-${{ runner.os }}-${{ matrix.target }}-
+
       - name: "[30%] Install Rust toolchain"
         uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
         with:
           targets: ${{ matrix.target }}
+
+      - name: "[35%] Prefetch Cargo dependencies"
+        shell: bash
+        env:
+          TARGET_TRIPLE: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+
+          for attempt in 1 2 3; do
+            echo "::notice::[35%] cargo fetch attempt ${attempt}/3 for ${TARGET_TRIPLE}"
+            if cargo fetch --locked --target "${TARGET_TRIPLE}" -vv; then
+              echo "::notice::[35%] cargo fetch succeeded on attempt ${attempt}/3"
+              exit 0
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              echo "::error::[35%] cargo fetch failed after ${attempt} attempts"
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 15))
+            echo "::warning::[35%] cargo fetch failed on attempt ${attempt}/3; retrying in ${sleep_seconds}s"
+            sleep "${sleep_seconds}"
+          done
+
+      - name: "[38%] Save Cargo dependency cache"
+        if: ${{ steps.cargo-cache-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: fork-release-cargo-${{ runner.os }}-${{ matrix.target }}-${{ steps.cargo-cache-key.outputs.lock_hash }}
 
       - name: "[40-60%] Build release binary"
         shell: bash
