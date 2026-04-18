@@ -208,7 +208,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: ${{ matrix.target }}
-          path: codex-rs/dist/${{ matrix.target }}/*
+          path: dist/${{ matrix.target }}/*
 
   release:
     needs:
@@ -302,6 +302,31 @@ jobs:
           name: fork-npm-tarballs
           path: dist/npm
 
+      - name: "[99.5%] Audit npm tarballs"
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          tarballs=(dist/npm/*.tgz)
+          if [[ ${#tarballs[@]} -eq 0 ]]; then
+            echo "No npm tarballs found to audit"
+            exit 1
+          fi
+
+          blocked_entry_regex='(^|/)(\.npmrc|\.env(\..*)?|id_(rsa|dsa|ecdsa|ed25519)|.*\.(pem|key|p12|pfx)|\.aws/|\.ssh/)'
+
+          for tarball in "${tarballs[@]}"; do
+            filename="$(basename "${tarball}")"
+            echo "Auditing ${filename}"
+
+            if tar -tzf "${tarball}" | grep -E "${blocked_entry_regex}" > /tmp/fork-release-blocked-entries.txt; then
+              echo "::error::Tarball ${filename} contains blocked secret-like paths"
+              cat /tmp/fork-release-blocked-entries.txt
+              exit 1
+            fi
+          done
+
       - name: "[100%] Publish to npm"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -310,6 +335,14 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
+
+          sanitize_publish_output() {
+            TOKEN_TO_REDACT="${NODE_AUTH_TOKEN:-}" python3 -c 'import os, re, sys; text = sys.stdin.read(); token = os.environ.get("TOKEN_TO_REDACT", ""); text = text.replace(token, "***REDACTED***") if token else text; text = re.sub(r"(_authToken=)[^\\s&\\\"]+", r"\\1***REDACTED***", text); text = re.sub(r"(Bearer\\s+)[A-Za-z0-9._~-]+", r"\\1***REDACTED***", text); print(text, end="")'
+          }
+
+          if [[ -n "${NODE_AUTH_TOKEN:-}" ]]; then
+            echo "::add-mask::${NODE_AUTH_TOKEN}"
+          fi
 
           tarballs=(dist/npm/*-"${VERSION}".tgz)
           if [[ ${#tarballs[@]} -eq 0 ]]; then
@@ -333,7 +366,7 @@ jobs:
             publish_status=$?
             set -e
 
-            echo "${publish_output}"
+            printf '%s' "${publish_output}" | sanitize_publish_output
             if [[ ${publish_status} -eq 0 ]]; then
               continue
             fi
