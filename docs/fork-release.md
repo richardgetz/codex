@@ -29,16 +29,21 @@ You still need to do the npm account-side setup yourself:
 
 1. Ensure the `rickgetz` npm user/scope is the one you want to publish from.
 2. Use a package name under that scope, currently `@rickgetz/codex`.
-3. Add an `NPM_TOKEN` repository secret for the first publish or as an ongoing fallback.
-4. After the package exists on npm, add this repo/workflow as a trusted publisher for `@rickgetz/codex`.
+3. Add this repo/workflow as a trusted publisher for both published npm packages:
+   `@rickgetz/codex` and `@rickgetz/codex-darwin-arm64`.
+4. In npm, configure each trusted publisher for GitHub Actions with owner
+   `richardgetz`, repository `codex`, workflow filename `fork-release.yml`, and
+   no environment unless the workflow later adds one.
 
-The workflow is set up so npm trusted publishing can be used once configured,
-but it will also fall back to `NPM_TOKEN` if that secret is present.
+The workflow publishes through npm Trusted Publishing / GitHub OIDC. It does not
+read `NPM_TOKEN`; if a bootstrap token was used for the first publish, revoke the
+npm token and remove the GitHub Actions `NPM_TOKEN` secret after Trusted
+Publishing is configured.
 
 Before any publish step runs, the workflow audits the generated npm tarballs and
 fails if they contain secret-like paths such as `.npmrc`, `.env*`, `.ssh/`,
-`.aws/`, or key/certificate files. The publish step also masks the npm token
-and redacts auth-shaped output before writing logs.
+`.aws/`, or key/certificate files. The publish step also redacts auth-shaped
+output before writing logs.
 
 ## Automatic counter behavior
 
