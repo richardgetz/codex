@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-04-20/fork-release-trusted-publishing#14ab22f932a7"
+  change_type: "ci"
+  scope: "fork-release"
+  summary: "Switch fork npm publishing from bootstrap token auth to npm Trusted Publishing."
+  decision: "Remove NODE_AUTH_TOKEN/NPM_TOKEN usage from the publish workflow and rely on GitHub OIDC trusted publishing for both fork npm packages while retaining tarball audit and auth-shaped output redaction."
+  constraints:
+    - "Must keep the fork release lane arm64-only."
+    - "Must preserve artifact upload, fetch hardening, build heartbeat logging, DotSlash install, tarball audit, and explicit npm dist-tags."
+    - "Must document that bootstrap npm tokens should be revoked and the GitHub NPM_TOKEN secret removed after Trusted Publishing is configured."
+  intent_priority: "must"
+  code_locations:
+    - ".github/workflows/fork-release.yml"
+    - "docs/fork-release.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
