@@ -359,6 +359,9 @@ jobs:
             publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}" --access public)
 
             case "${filename}" in
+              codex-npm-"${VERSION}".tgz)
+                publish_cmd+=(--tag latest)
+                ;;
               codex-npm-darwin-arm64-"${VERSION}".tgz)
                 publish_cmd+=(--tag darwin-arm64)
                 ;;
