@@ -61,6 +61,11 @@ Merge or push to `stable` and the workflow will:
 5. Create a GitHub release.
 6. Publish the npm package.
 
+Fork versions use prerelease semver suffixes like `-rick.3`, so npm requires
+explicit dist-tags at publish time. The root `@rickgetz/codex` package is
+published with `latest` so `npm install -g @rickgetz/codex` works normally, and
+the Apple Silicon payload package is published with `darwin-arm64`.
+
 If `stable` is at upstream `0.122.0` and there is already a release
 `0.122.0-rick.1`, the next merge to `stable` will produce:
 
