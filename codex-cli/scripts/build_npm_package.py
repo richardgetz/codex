@@ -314,6 +314,8 @@ def stage_sources(staging_dir: Path, version: str, package: str, release_config:
 
     if package == "codex":
         supported_targets = set(release_config["supported_targets"])
+        bin_name = release_config["npm_bin_name"]
+        package_json["bin"] = {bin_name: "bin/codex.js"}
         package_json["files"] = ["bin"]
         package_json["optionalDependencies"] = {
             package_alias_name(package_name, CODEX_PLATFORM_PACKAGES[platform_package]["npm_tag"]): (

@@ -12,6 +12,9 @@ or behaves differently from upstream.
 
 - npm package: `@rickgetz/codex`
 - Primary install command: `npm install -g @rickgetz/codex`
+- Installed executable: `codex-rick`
+- The upstream `@openai/codex` package can remain installed as `codex` for
+  fallback use.
 - GitHub releases come from this fork, not the upstream OpenAI repository.
 
 ### Release lane

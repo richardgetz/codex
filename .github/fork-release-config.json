@@ -1,5 +1,6 @@
 {
   "npm_package_name": "@rickgetz/codex",
+  "npm_bin_name": "codex-rick",
   "github_repo": "richardgetz/codex",
   "repository_url": "git+https://github.com/richardgetz/codex.git",
   "repository_directory": "codex-cli",
