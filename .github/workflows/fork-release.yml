@@ -333,7 +333,6 @@ jobs:
 
       - name: "[100%] Publish to npm"
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ needs.release.outputs.version }}
         shell: bash
         run: |
@@ -341,12 +340,8 @@ jobs:
           shopt -s nullglob
 
           sanitize_publish_output() {
-            TOKEN_TO_REDACT="${NODE_AUTH_TOKEN:-}" python3 -c 'import os, re, sys; text = sys.stdin.read(); token = os.environ.get("TOKEN_TO_REDACT", ""); text = text.replace(token, "***REDACTED***") if token else text; text = re.sub(r"(_authToken=)[^\\s&\\\"]+", r"\\1***REDACTED***", text); text = re.sub(r"(Bearer\\s+)[A-Za-z0-9._~-]+", r"\\1***REDACTED***", text); print(text, end="")'
+            python3 -c 'import re, sys; text = sys.stdin.read(); text = re.sub(r"(_authToken=)[^\\s&\\\"]+", r"\\1***REDACTED***", text); text = re.sub(r"(Bearer\\s+)[A-Za-z0-9._~-]+", r"\\1***REDACTED***", text); print(text, end="")'
           }
-
-          if [[ -n "${NODE_AUTH_TOKEN:-}" ]]; then
-            echo "::add-mask::${NODE_AUTH_TOKEN}"
-          fi
 
           tarballs=(dist/npm/*-"${VERSION}".tgz)
           if [[ ${#tarballs[@]} -eq 0 ]]; then
