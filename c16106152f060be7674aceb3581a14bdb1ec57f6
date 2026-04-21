@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-04-21/fork-npm-bin-codex-rick#c16106152"
+  change_type: "fix"
+  scope: "fork-release"
+  summary: "Publish the fork npm package with a codex-rick executable so it can coexist with upstream codex."
+  decision: "Add a release-configurable npm_bin_name, keep the upstream default as codex, and set the fork release config to codex-rick for @rickgetz/codex."
+  constraints:
+    - "The upstream @openai/codex package must continue staging the codex executable by default."
+    - "The fork @rickgetz/codex package must not claim the global codex shim during npm install."
+    - "Docs must tell users to run codex-rick and that upstream codex can remain installed as a fallback."
+  intent_priority: "must"
+  code_locations:
+    - "codex-cli/scripts/release_config.py::DEFAULT_RELEASE_CONFIG"
+    - "codex-cli/scripts/build_npm_package.py::stage_sources"
+    - ".github/fork-release-config.json"
+    - "README.md"
+    - "docs/fork-differences.md"
+    - "docs/fork-release.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
