@@ -1106,17 +1106,17 @@ impl Session {
                         target_thread_ids: Vec::new(),
                     });
 
-                if let Some(state_db) = self.state_db() {
-                    if let Err(err) = state_db.upsert_thread_control(&control).await {
-                        warn!(
-                            error = %err,
-                            thread_id = %self.conversation_id,
-                            "failed to persist continuous collaboration mode control"
-                        );
-                        return Err(ConstraintError::operation_failed(
-                            "failed to persist continuous collaboration mode control",
-                        ));
-                    }
+                if let Some(state_db) = self.state_db()
+                    && let Err(err) = state_db.upsert_thread_control(&control).await
+                {
+                    warn!(
+                        error = %err,
+                        thread_id = %self.conversation_id,
+                        "failed to persist continuous collaboration mode control"
+                    );
+                    return Err(ConstraintError::operation_failed(
+                        "failed to persist continuous collaboration mode control",
+                    ));
                 }
                 self.set_active_thread_control(Some(control)).await;
                 Ok(())
@@ -1131,20 +1131,19 @@ impl Session {
 
                 if control.released_at.is_none() {
                     let released_at = Utc::now();
-                    if let Some(state_db) = self.state_db() {
-                        if let Err(err) = state_db
+                    if let Some(state_db) = self.state_db()
+                        && let Err(err) = state_db
                             .release_thread_control(self.conversation_id, released_at)
                             .await
-                        {
-                            warn!(
-                                error = %err,
-                                thread_id = %self.conversation_id,
-                                "failed to release continuous collaboration mode control"
-                            );
-                            return Err(ConstraintError::operation_failed(
-                                "failed to release continuous collaboration mode control",
-                            ));
-                        }
+                    {
+                        warn!(
+                            error = %err,
+                            thread_id = %self.conversation_id,
+                            "failed to release continuous collaboration mode control"
+                        );
+                        return Err(ConstraintError::operation_failed(
+                            "failed to release continuous collaboration mode control",
+                        ));
                     }
                 }
                 self.set_active_thread_control(None).await;

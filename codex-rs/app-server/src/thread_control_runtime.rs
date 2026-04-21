@@ -166,7 +166,7 @@ fn spawn_router_tick_task(
                 "failed to submit router wake-up turn: {err}"
             );
             if !cancel_token.is_cancelled() {
-                arm_router_tick(conversation, thread_state, state_db, control).await;
+                arm_router_tick(Arc::clone(&conversation), thread_state, state_db, control).await;
             }
         }
     });
@@ -212,7 +212,7 @@ fn build_router_tick_turn(
             text: build_router_tick_message(control),
             text_elements: Vec::new(),
         }],
-        cwd: config_snapshot.cwd.clone(),
+        cwd: config_snapshot.cwd.clone().to_path_buf(),
         approval_policy: config_snapshot.approval_policy,
         approvals_reviewer: Some(config_snapshot.approvals_reviewer),
         sandbox_policy: config_snapshot.sandbox_policy.clone(),
@@ -303,7 +303,10 @@ Check supervised sessions for new progress, blockers, or operator instructions a
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
-            cwd: std::path::PathBuf::from("/tmp/router"),
+            cwd: codex_utils_absolute_path::AbsolutePathBuf::try_from(std::path::PathBuf::from(
+                "/tmp/router",
+            ))
+            .expect("absolute path"),
             ephemeral: false,
             reasoning_effort: Some(ReasoningEffort::High),
             personality: Some(Personality::Friendly),

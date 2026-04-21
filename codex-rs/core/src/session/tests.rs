@@ -2754,7 +2754,10 @@ async fn continuous_mode_preserves_active_router_control() {
         watch_interval_seconds: Some(30),
         released_at: None,
         updated_at: Utc::now(),
-        target_thread_ids: vec!["thread-other".to_string()],
+        target_thread_ids: vec![
+            ThreadId::from_string("00000000-0000-0000-0000-000000000022")
+                .expect("target thread id"),
+        ],
     };
     session
         .set_active_thread_control(Some(router_control.clone()))
