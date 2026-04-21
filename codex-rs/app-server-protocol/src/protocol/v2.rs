@@ -805,6 +805,7 @@ pub struct AppsConfig {
 #[ts(export_to = "v2/")]
 pub struct RouterThreadControlConfig {
     pub model: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

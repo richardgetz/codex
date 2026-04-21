@@ -10090,6 +10090,16 @@
             "string",
             "null"
           ]
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"

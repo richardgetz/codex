@@ -453,6 +453,7 @@ impl From<ThreadControlToml> for ThreadControlConfigV1 {
         Self {
             router: toml.router.map(|router| RouterThreadControlConfigV1 {
                 model: router.model,
+                reasoning_effort: router.reasoning_effort,
             }),
         }
     }
