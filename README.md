@@ -1,4 +1,4 @@
-<p align="center"><code>npm i -g @rickgetz/codex</code></p>
+<p align="center"><code>npm i -g @rickgetz/codex && codex-rick</code></p>
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
@@ -22,7 +22,8 @@ Install globally with your preferred package manager:
 npm install -g @rickgetz/codex
 ```
 
-Then simply run `codex` to get started.
+Then run `codex-rick` to start this fork. The upstream `@openai/codex`
+package can remain installed as `codex` for fallback use.
 
 <details>
 <summary>You can also go to the <a href="https://github.com/richardgetz/codex/releases/latest">latest fork GitHub Release</a> and download the Apple Silicon macOS binary.</summary>

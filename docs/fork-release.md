@@ -91,6 +91,8 @@ After publish, installs look like:
 
 ```bash
 npm install -g @rickgetz/codex
+codex-rick --version
 ```
 
-The executable name remains `codex`.
+The fork installs the executable as `codex-rick`, so the upstream
+`@openai/codex` package can remain installed as `codex` for fallback use.
