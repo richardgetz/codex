@@ -100,6 +100,7 @@ async fn config_read_includes_thread_control_router_model() -> Result<()> {
         r#"
 [thread_control.router]
 model = "gpt-5.3-codex-spark"
+reasoning_effort = "low"
 "#,
     )?;
 
@@ -124,6 +125,7 @@ model = "gpt-5.3-codex-spark"
         Some(ThreadControlConfig {
             router: Some(RouterThreadControlConfig {
                 model: Some("gpt-5.3-codex-spark".to_string()),
+                reasoning_effort: Some(ReasoningEffort::Low),
             }),
         })
     );

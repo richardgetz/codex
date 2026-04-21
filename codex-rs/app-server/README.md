@@ -441,9 +441,10 @@ If you want router wake-up turns to use a faster or cheaper model by default, se
 ```toml
 [thread_control.router]
 model = "gpt-5.3-codex-spark"
+reasoning_effort = "low"
 ```
 
-Router mode re-wakes the same thread, preserving its current collaboration mode and reasoning settings while applying this model override to the next router tick turn. Because router ticks submit a normal turn on that same thread, the override becomes the thread's active model until another turn explicitly changes it.
+Router mode re-wakes the same thread, preserving its current collaboration mode while applying these model and reasoning overrides to the next router tick turn. Because router ticks submit a normal turn on that same thread, the override becomes the thread's active model and reasoning setting until another turn explicitly changes them. Router-launched agents can still request their own model and reasoning effort through the normal agent spawn fields, so the router can run on a cheaper coordination model while delegating implementation work to a stronger model.
 
 ```json
 { "method": "thread/control/set", "id": 26, "params": {

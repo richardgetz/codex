@@ -2599,6 +2599,9 @@ async fn resolve_router_turn_settings_remaps_unsupported_explicit_effort() {
     let (session, _turn_context) = make_session_and_context().await;
     {
         let mut state = session.state.lock().await;
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+        config.thread_control.router.model = Some("gpt-5.1".to_string());
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
         state.session_configuration.collaboration_mode = CollaborationMode {
             mode: ModeKind::Plan,
             settings: Settings {
@@ -2610,8 +2613,7 @@ async fn resolve_router_turn_settings_remaps_unsupported_explicit_effort() {
     }
     let thread = test_codex_thread(session);
 
-    let (model, reasoning_effort, collaboration_mode) =
-        thread.resolve_router_turn_settings(Some("gpt-5.1")).await;
+    let (model, reasoning_effort, collaboration_mode) = thread.resolve_router_turn_settings().await;
 
     assert_eq!(model, "gpt-5.1");
     assert_eq!(reasoning_effort, Some(ReasoningEffortConfig::Medium));
@@ -2633,6 +2635,9 @@ async fn resolve_router_turn_settings_preserves_absent_effort() {
     let (session, _turn_context) = make_session_and_context().await;
     {
         let mut state = session.state.lock().await;
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+        config.thread_control.router.model = Some("gpt-5.1".to_string());
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
         state.session_configuration.collaboration_mode = CollaborationMode {
             mode: ModeKind::Plan,
             settings: Settings {
@@ -2644,8 +2649,7 @@ async fn resolve_router_turn_settings_preserves_absent_effort() {
     }
     let thread = test_codex_thread(session);
 
-    let (model, reasoning_effort, collaboration_mode) =
-        thread.resolve_router_turn_settings(Some("gpt-5.1")).await;
+    let (model, reasoning_effort, collaboration_mode) = thread.resolve_router_turn_settings().await;
 
     assert_eq!(model, "gpt-5.1");
     assert_eq!(reasoning_effort, None);
@@ -2656,6 +2660,43 @@ async fn resolve_router_turn_settings_preserves_absent_effort() {
             settings: Settings {
                 model: "gpt-5.1".to_string(),
                 reasoning_effort: None,
+                developer_instructions: Some("Stay in routing mode.".to_string()),
+            },
+        }
+    );
+}
+
+#[tokio::test]
+async fn resolve_router_turn_settings_applies_configured_reasoning_effort() {
+    let (session, _turn_context) = make_session_and_context().await;
+    {
+        let mut state = session.state.lock().await;
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+        config.thread_control.router.model = Some("gpt-5.1".to_string());
+        config.thread_control.router.reasoning_effort = Some(ReasoningEffortConfig::Low);
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+        state.session_configuration.collaboration_mode = CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: Settings {
+                model: "gpt-5".to_string(),
+                reasoning_effort: Some(ReasoningEffortConfig::High),
+                developer_instructions: Some("Stay in routing mode.".to_string()),
+            },
+        };
+    }
+    let thread = test_codex_thread(session);
+
+    let (model, reasoning_effort, collaboration_mode) = thread.resolve_router_turn_settings().await;
+
+    assert_eq!(model, "gpt-5.1");
+    assert_eq!(reasoning_effort, Some(ReasoningEffortConfig::Low));
+    assert_eq!(
+        collaboration_mode,
+        CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: Settings {
+                model: "gpt-5.1".to_string(),
+                reasoning_effort: Some(ReasoningEffortConfig::Low),
                 developer_instructions: Some("Stay in routing mode.".to_string()),
             },
         }
