@@ -9612,10 +9612,8 @@ impl ChatWidget {
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
-            ModeKind::Continuous
-            | ModeKind::Default
-            | ModeKind::PairProgramming
-            | ModeKind::Execute => None,
+            ModeKind::Continuous => Some(CollaborationModeIndicator::Continuous),
+            ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => None,
         }
     }
 
