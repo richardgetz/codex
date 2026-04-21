@@ -280,6 +280,7 @@ consolidation_model = "gpt-5"
     let thread_control = r#"
 [thread_control.router]
 model = "gpt-5.3-codex-spark"
+reasoning_effort = "low"
 "#;
     let thread_control_cfg =
         toml::from_str::<ConfigToml>(thread_control).expect("TOML deserialization should succeed");
@@ -287,6 +288,7 @@ model = "gpt-5.3-codex-spark"
         Some(ThreadControlToml {
             router: Some(RouterThreadControlToml {
                 model: Some("gpt-5.3-codex-spark".to_string()),
+                reasoning_effort: Some(ReasoningEffort::Low),
             }),
         }),
         thread_control_cfg.thread_control

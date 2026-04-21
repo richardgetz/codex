@@ -12002,6 +12002,16 @@
               "string",
               "null"
             ]
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object"

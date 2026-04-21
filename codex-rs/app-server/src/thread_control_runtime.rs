@@ -145,9 +145,8 @@ fn spawn_router_tick_task(
         }
 
         let config_snapshot = conversation.config_snapshot().await;
-        let (model, reasoning_effort, collaboration_mode) = conversation
-            .resolve_router_turn_settings(conversation.router_model_override().await.as_deref())
-            .await;
+        let (model, reasoning_effort, collaboration_mode) =
+            conversation.resolve_router_turn_settings().await;
         let submit = conversation.submit(build_router_tick_turn(
             &control,
             &config_snapshot,

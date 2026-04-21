@@ -15,6 +15,7 @@ pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::ServiceTier;
 pub use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -285,6 +286,8 @@ impl From<MemoriesToml> for MemoriesConfig {
 pub struct RouterThreadControlToml {
     /// Model to use for router-mode wake-up turns.
     pub model: Option<String>,
+    /// Reasoning effort to use for router-mode wake-up turns.
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 /// Thread-control settings loaded from config.toml.
@@ -299,6 +302,7 @@ pub struct ThreadControlToml {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RouterThreadControlConfig {
     pub model: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 /// Effective thread-control settings after defaults are applied.
@@ -309,9 +313,11 @@ pub struct ThreadControlConfig {
 
 impl From<ThreadControlToml> for ThreadControlConfig {
     fn from(toml: ThreadControlToml) -> Self {
+        let router = toml.router.unwrap_or_default();
         Self {
             router: RouterThreadControlConfig {
-                model: toml.router.and_then(|router| router.model),
+                model: router.model,
+                reasoning_effort: router.reasoning_effort,
             },
         }
     }

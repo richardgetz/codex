@@ -220,6 +220,7 @@ pub struct ThreadControlConfig {
 #[serde(rename_all = "camelCase")]
 pub struct RouterThreadControlConfig {
     pub model: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]

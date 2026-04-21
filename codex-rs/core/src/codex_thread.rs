@@ -254,49 +254,52 @@ impl CodexThread {
         self.codex.session.collaboration_mode().await
     }
 
-    pub async fn router_model_override(&self) -> Option<String> {
-        self.codex
-            .session
-            .get_config()
-            .await
-            .thread_control
-            .router
-            .model
-            .clone()
-    }
-
     #[doc(hidden)]
     pub async fn resolve_router_turn_settings(
         &self,
-        router_model_override: Option<&str>,
     ) -> (String, Option<ReasoningEffort>, CollaborationMode) {
         let config_snapshot = self.codex.thread_config_snapshot().await;
         let collaboration_mode = self.codex.session.collaboration_mode().await;
-        let Some(model) = router_model_override.filter(|model| *model != config_snapshot.model)
-        else {
+        let config = self.codex.session.get_config().await;
+        let router_config = &config.thread_control.router;
+        let selected_model = router_config
+            .model
+            .as_deref()
+            .unwrap_or(config_snapshot.model.as_str());
+        let model_changed = selected_model != config_snapshot.model;
+
+        if !model_changed && router_config.reasoning_effort.is_none() {
             return (
                 config_snapshot.model,
                 config_snapshot.reasoning_effort,
                 collaboration_mode,
             );
-        };
+        }
 
-        let config = self.codex.session.get_config().await;
         let model_info = self
             .codex
             .session
             .services
             .models_manager
-            .get_model_info(model, &config.to_models_manager_config())
+            .get_model_info(selected_model, &config.to_models_manager_config())
             .await;
-        let reasoning_effort = collaboration_mode
-            .reasoning_effort()
-            .and_then(|current| compatible_reasoning_effort_for_model(Some(current), &model_info));
+        let reasoning_effort = match router_config.reasoning_effort {
+            Some(reasoning_effort) => {
+                compatible_reasoning_effort_for_model(Some(reasoning_effort), &model_info)
+            }
+            None => collaboration_mode.reasoning_effort().and_then(|current| {
+                compatible_reasoning_effort_for_model(Some(current), &model_info)
+            }),
+        };
 
         (
-            model.to_string(),
+            selected_model.to_string(),
             reasoning_effort,
-            collaboration_mode.with_updates(Some(model.to_string()), Some(reasoning_effort), None),
+            collaboration_mode.with_updates(
+                Some(selected_model.to_string()),
+                Some(reasoning_effort),
+                None,
+            ),
         )
     }
 

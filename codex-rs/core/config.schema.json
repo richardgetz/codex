@@ -1677,6 +1677,14 @@
         "model": {
           "description": "Model to use for router-mode wake-up turns.",
           "type": "string"
+        },
+        "reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Reasoning effort to use for router-mode wake-up turns."
         }
       },
       "type": "object"
