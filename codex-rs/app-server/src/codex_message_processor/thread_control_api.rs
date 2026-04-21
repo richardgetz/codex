@@ -339,7 +339,7 @@ impl CodexMessageProcessor {
                 config_snapshot.session_source.clone(),
             );
             builder.model_provider = Some(model_provider.clone());
-            builder.cwd = config_snapshot.cwd.clone();
+            builder.cwd = config_snapshot.cwd.clone().to_path_buf();
             builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
             builder.sandbox_policy = config_snapshot.sandbox_policy.clone();
             builder.approval_mode = config_snapshot.approval_policy;
