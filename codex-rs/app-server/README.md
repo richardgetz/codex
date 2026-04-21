@@ -503,6 +503,14 @@ The preferred shape is subscription-first:
 4. When the MCP observes new relevant input, it sends a wake event back to app-server.
 5. App-server validates the router control is still active and only then submits a router turn.
 
+Security note: router wake channels should only accept callbacks from trusted, authenticated MCPs and approved messaging channels. A wake event can cause app-server to resume an agent, send user-visible content to the model, and potentially spend tokens or trigger tools, so the callback surface must not be exposed as an unauthenticated public endpoint. Implementations should:
+
+- bind each subscription to the registering thread;
+- verify the sender identity, mTLS client, signed payload, or shared secret;
+- reject unknown or unapproved channels;
+- dedupe `eventId` values before submitting a router turn;
+- treat all message text and metadata as untrusted input.
+
 MCPs that support router wake channels should expose a subscribe-style tool with this request shape:
 
 ```json
