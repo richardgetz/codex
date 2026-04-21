@@ -17,6 +17,7 @@ DEFAULT_SUPPORTED_TARGETS = [
 
 DEFAULT_RELEASE_CONFIG = {
     "npm_package_name": "@openai/codex",
+    "npm_bin_name": "codex",
     "github_repo": "openai/codex",
     "repository_url": "git+https://github.com/openai/codex.git",
     "repository_directory": "codex-cli",
