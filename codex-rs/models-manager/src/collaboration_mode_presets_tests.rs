@@ -13,10 +13,15 @@ fn preset_names_use_mode_display_names() {
         ModeKind::Continuous.display_name()
     );
     assert_eq!(
+        orchestrator_preset().name,
+        ModeKind::Orchestrator.display_name()
+    );
+    assert_eq!(
         plan_preset().reasoning_effort,
         Some(Some(ReasoningEffort::Medium))
     );
     assert_eq!(continuous_preset().reasoning_effort, None);
+    assert_eq!(orchestrator_preset().reasoning_effort, None);
 }
 
 #[test]
@@ -28,7 +33,12 @@ fn builtin_collaboration_mode_presets_are_returned_in_tui_order() {
         .collect::<Vec<_>>();
     assert_eq!(
         mode_order,
-        vec![ModeKind::Default, ModeKind::Plan, ModeKind::Continuous]
+        vec![
+            ModeKind::Default,
+            ModeKind::Plan,
+            ModeKind::Continuous,
+            ModeKind::Orchestrator,
+        ]
     );
 }
 
@@ -90,4 +100,28 @@ fn continuous_mode_instructions_replace_mode_names_placeholder() {
         /*default_mode_request_user_input*/ false,
     );
     assert!(continuous_instructions.contains(&expected_availability_message));
+}
+
+#[test]
+fn orchestrator_mode_instructions_replace_mode_names_placeholder() {
+    let orchestrator_instructions = orchestrator_preset()
+        .developer_instructions
+        .expect("orchestrator preset should include instructions")
+        .expect("orchestrator instructions should be set");
+
+    assert!(!orchestrator_instructions.contains("{{KNOWN_MODE_NAMES}}"));
+    assert!(!orchestrator_instructions.contains("{{REQUEST_USER_INPUT_AVAILABILITY}}"));
+    assert!(
+        orchestrator_instructions.contains("Orchestrator mode is for supervising delegated work")
+    );
+
+    let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
+    let expected_snippet = format!("Known mode names are {known_mode_names}.");
+    assert!(orchestrator_instructions.contains(&expected_snippet));
+
+    let expected_availability_message = request_user_input_availability_message(
+        ModeKind::Orchestrator,
+        /*default_mode_request_user_input*/ false,
+    );
+    assert!(orchestrator_instructions.contains(&expected_availability_message));
 }

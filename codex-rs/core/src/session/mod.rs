@@ -40,6 +40,7 @@ use codex_analytics::SubAgentThreadStartedInput;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_config::types::MemoriesScope;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
@@ -379,6 +380,7 @@ pub struct CodexSpawnOk {
 
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
+    pub(crate) initial_collaboration_mode: Option<CollaborationMode>,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
@@ -433,6 +435,7 @@ impl Codex {
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
         let CodexSpawnArgs {
             mut config,
+            initial_collaboration_mode,
             auth_manager,
             models_manager,
             environment_manager,
@@ -508,6 +511,11 @@ impl Codex {
             warn!("{message}");
             let _ = config.features.disable(Feature::CodeMode);
             config.startup_warnings.push(message);
+        }
+
+        if let Some(collaboration_mode) = initial_collaboration_mode.as_ref() {
+            config.model = Some(collaboration_mode.settings.model.clone());
+            config.model_reasoning_effort = collaboration_mode.settings.reasoning_effort;
         }
 
         let user_instructions = AgentsMdManager::new(&config)
@@ -588,14 +596,14 @@ impl Codex {
 
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
-        let collaboration_mode = CollaborationMode {
+        let collaboration_mode = initial_collaboration_mode.unwrap_or_else(|| CollaborationMode {
             mode: ModeKind::Default,
             settings: Settings {
                 model: model.clone(),
                 reasoning_effort: config.model_reasoning_effort,
                 developer_instructions: None,
             },
-        };
+        });
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
@@ -1339,7 +1347,7 @@ impl Session {
             let session_source = updated.session_source.clone();
             let collaboration_mode = updated.collaboration_mode.clone();
             drop(state);
-            self.ensure_continuous_mode_control(&collaboration_mode)
+            self.ensure_collaboration_mode_control(&collaboration_mode)
                 .await?;
 
             let mut state = self.state.lock().await;
@@ -2311,6 +2319,8 @@ impl Session {
         // Add developer instructions for memories.
         if turn_context.features.enabled(Feature::MemoryTool)
             && turn_context.config.memories.use_memories
+            && (turn_context.config.memories.scope == MemoriesScope::All
+                || turn_context.collaboration_mode.mode == ModeKind::Orchestrator)
             && let Some(memory_prompt) =
                 build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
         {

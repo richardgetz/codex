@@ -273,14 +273,14 @@ impl CodexThread {
         let config_snapshot = self.codex.thread_config_snapshot().await;
         let collaboration_mode = self.codex.session.collaboration_mode().await;
         let config = self.codex.session.get_config().await;
-        let router_config = &config.thread_control.router;
-        let selected_model = router_config
+        let orchestrator_config = &config.thread_control.orchestrator;
+        let selected_model = orchestrator_config
             .model
             .as_deref()
             .unwrap_or(config_snapshot.model.as_str());
         let model_changed = selected_model != config_snapshot.model;
 
-        if !model_changed && router_config.reasoning_effort.is_none() {
+        if !model_changed && orchestrator_config.reasoning_effort.is_none() {
             return (
                 config_snapshot.model,
                 config_snapshot.reasoning_effort,
@@ -295,7 +295,7 @@ impl CodexThread {
             .models_manager
             .get_model_info(selected_model, &config.to_models_manager_config())
             .await;
-        let reasoning_effort = match router_config.reasoning_effort {
+        let reasoning_effort = match orchestrator_config.reasoning_effort {
             Some(reasoning_effort) => {
                 compatible_reasoning_effort_for_model(Some(reasoning_effort), &model_info)
             }

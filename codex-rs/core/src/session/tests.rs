@@ -2597,7 +2597,7 @@ async fn resolve_router_turn_settings_remaps_unsupported_explicit_effort() {
     {
         let mut state = session.state.lock().await;
         let mut config = (*state.session_configuration.original_config_do_not_use).clone();
-        config.thread_control.router.model = Some("gpt-5.1".to_string());
+        config.thread_control.orchestrator.model = Some("gpt-5.1".to_string());
         state.session_configuration.original_config_do_not_use = Arc::new(config);
         state.session_configuration.collaboration_mode = CollaborationMode {
             mode: ModeKind::Plan,
@@ -2633,7 +2633,7 @@ async fn resolve_router_turn_settings_preserves_absent_effort() {
     {
         let mut state = session.state.lock().await;
         let mut config = (*state.session_configuration.original_config_do_not_use).clone();
-        config.thread_control.router.model = Some("gpt-5.1".to_string());
+        config.thread_control.orchestrator.model = Some("gpt-5.1".to_string());
         state.session_configuration.original_config_do_not_use = Arc::new(config);
         state.session_configuration.collaboration_mode = CollaborationMode {
             mode: ModeKind::Plan,
@@ -2669,8 +2669,8 @@ async fn resolve_router_turn_settings_applies_configured_reasoning_effort() {
     {
         let mut state = session.state.lock().await;
         let mut config = (*state.session_configuration.original_config_do_not_use).clone();
-        config.thread_control.router.model = Some("gpt-5.1".to_string());
-        config.thread_control.router.reasoning_effort = Some(ReasoningEffortConfig::Low);
+        config.thread_control.orchestrator.model = Some("gpt-5.1".to_string());
+        config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
         state.session_configuration.original_config_do_not_use = Arc::new(config);
         state.session_configuration.collaboration_mode = CollaborationMode {
             mode: ModeKind::Plan,

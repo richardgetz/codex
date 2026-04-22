@@ -36,7 +36,7 @@ async fn plan_implementation_popup_no_selected_snapshot() {
 }
 
 #[tokio::test]
-async fn collaboration_modes_popup_snapshot_includes_continuous() {
+async fn collaboration_modes_popup_snapshot_includes_continuous_and_orchestrator() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.open_collaboration_modes_popup();
 
@@ -44,6 +44,10 @@ async fn collaboration_modes_popup_snapshot_includes_continuous() {
     assert!(
         popup.contains("Continuous"),
         "expected Continuous mode in popup:\n{popup}"
+    );
+    assert!(
+        popup.contains("Orchestrator"),
+        "expected Orchestrator mode in popup:\n{popup}"
     );
     assert_chatwidget_snapshot!("collaboration_modes_popup", popup);
 }
@@ -1119,6 +1123,13 @@ async fn collab_mode_shift_tab_cycles_only_when_idle() {
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Continuous);
+    assert_eq!(chat.current_collaboration_mode(), &initial);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(
+        chat.active_collaboration_mode_kind(),
+        ModeKind::Orchestrator
+    );
     assert_eq!(chat.current_collaboration_mode(), &initial);
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));

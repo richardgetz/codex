@@ -6,6 +6,7 @@ use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use codex_protocol::config_types::ModeKind;
 
 pub(crate) struct Handler;
 
@@ -65,6 +66,7 @@ impl ToolHandler for Handler {
                 role_name,
                 args.model.as_deref(),
                 args.reasoning_effort,
+                args.collaboration_mode,
             )?;
         } else {
             apply_requested_spawn_agent_model_overrides(
@@ -81,6 +83,14 @@ impl ToolHandler for Handler {
         }
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
         apply_spawn_agent_overrides(&mut config, child_depth);
+        let initial_collaboration_mode = requested_spawn_agent_collaboration_mode(
+            turn.as_ref(),
+            &config,
+            args.collaboration_mode,
+            args.model.as_deref(),
+            args.reasoning_effort,
+            &session.services.models_manager.list_collaboration_modes(),
+        )?;
 
         let result = session
             .services
@@ -98,6 +108,7 @@ impl ToolHandler for Handler {
                 SpawnAgentOptions {
                     fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
                     fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
+                    initial_collaboration_mode,
                 },
             )
             .await
@@ -182,6 +193,7 @@ struct SpawnAgentArgs {
     agent_type: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
+    collaboration_mode: Option<ModeKind>,
     #[serde(default)]
     fork_context: bool,
 }

@@ -8,6 +8,9 @@ pub trait RolloutConfigView {
     fn cwd(&self) -> &Path;
     fn model_provider_id(&self) -> &str;
     fn generate_memories(&self) -> bool;
+    fn initial_memory_mode(&self) -> Option<&str> {
+        (!self.generate_memories()).then_some("disabled")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17,6 +20,7 @@ pub struct RolloutConfig {
     pub cwd: PathBuf,
     pub model_provider_id: String,
     pub generate_memories: bool,
+    pub initial_memory_mode: Option<String>,
 }
 
 pub type Config = RolloutConfig;
@@ -29,6 +33,7 @@ impl RolloutConfig {
             cwd: view.cwd().to_path_buf(),
             model_provider_id: view.model_provider_id().to_string(),
             generate_memories: view.generate_memories(),
+            initial_memory_mode: view.initial_memory_mode().map(str::to_string),
         }
     }
 }
@@ -53,6 +58,10 @@ impl RolloutConfigView for RolloutConfig {
     fn generate_memories(&self) -> bool {
         self.generate_memories
     }
+
+    fn initial_memory_mode(&self) -> Option<&str> {
+        self.initial_memory_mode.as_deref()
+    }
 }
 
 impl<T: RolloutConfigView + ?Sized> RolloutConfigView for &T {
@@ -75,6 +84,10 @@ impl<T: RolloutConfigView + ?Sized> RolloutConfigView for &T {
     fn generate_memories(&self) -> bool {
         (*self).generate_memories()
     }
+
+    fn initial_memory_mode(&self) -> Option<&str> {
+        (*self).initial_memory_mode()
+    }
 }
 
 impl<T: RolloutConfigView + ?Sized> RolloutConfigView for Arc<T> {
@@ -96,5 +109,9 @@ impl<T: RolloutConfigView + ?Sized> RolloutConfigView for Arc<T> {
 
     fn generate_memories(&self) -> bool {
         self.as_ref().generate_memories()
+    }
+
+    fn initial_memory_mode(&self) -> Option<&str> {
+        self.as_ref().initial_memory_mode()
     }
 }

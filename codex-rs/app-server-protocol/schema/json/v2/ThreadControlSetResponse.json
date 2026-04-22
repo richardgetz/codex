@@ -56,7 +56,7 @@
     "ThreadControlMode": {
       "enum": [
         "continuous",
-        "router"
+        "orchestrator"
       ],
       "type": "string"
     }
