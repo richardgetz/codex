@@ -40,6 +40,7 @@ use codex_analytics::SubAgentThreadStartedInput;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_config::types::MemoriesScope;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
@@ -1339,7 +1340,7 @@ impl Session {
             let session_source = updated.session_source.clone();
             let collaboration_mode = updated.collaboration_mode.clone();
             drop(state);
-            self.ensure_continuous_mode_control(&collaboration_mode)
+            self.ensure_collaboration_mode_control(&collaboration_mode)
                 .await?;
 
             let mut state = self.state.lock().await;
@@ -2311,6 +2312,8 @@ impl Session {
         // Add developer instructions for memories.
         if turn_context.features.enabled(Feature::MemoryTool)
             && turn_context.config.memories.use_memories
+            && (turn_context.config.memories.scope == MemoriesScope::All
+                || turn_context.collaboration_mode.mode == ModeKind::Orchestrator)
             && let Some(memory_prompt) =
                 build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
         {

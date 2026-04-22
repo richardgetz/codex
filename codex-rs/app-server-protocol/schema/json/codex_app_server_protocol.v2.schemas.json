@@ -6594,6 +6594,7 @@
       "enum": [
         "plan",
         "continuous",
+        "orchestrator",
         "default"
       ],
       "type": "string"
@@ -6959,6 +6960,27 @@
         "compact"
       ],
       "type": "string"
+    },
+    "OrchestratorThreadControlConfig": {
+      "properties": {
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "OverriddenMetadata": {
       "properties": {
@@ -9038,27 +9060,6 @@
           "type": "object"
         }
       ]
-    },
-    "RouterThreadControlConfig": {
-      "properties": {
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "reasoning_effort": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
     },
     "SandboxMode": {
       "enum": [
@@ -11216,10 +11217,10 @@
     },
     "ThreadControlConfig": {
       "properties": {
-        "router": {
+        "orchestrator": {
           "anyOf": [
             {
-              "$ref": "#/definitions/RouterThreadControlConfig"
+              "$ref": "#/definitions/OrchestratorThreadControlConfig"
             },
             {
               "type": "null"
@@ -11232,7 +11233,7 @@
     "ThreadControlMode": {
       "enum": [
         "continuous",
-        "router"
+        "orchestrator"
       ],
       "type": "string"
     },

@@ -29,7 +29,7 @@ pub(crate) async fn refresh_router_tick(
         Err(err) => {
             warn!(
                 thread_id = %conversation_id,
-                "failed to load router control state: {err}"
+                "failed to load orchestrator control state: {err}"
             );
             conversation.active_thread_control().await
         }
@@ -109,7 +109,7 @@ fn spawn_router_tick_task(
             Err(err) => {
                 warn!(
                     thread_id = %control.thread_id,
-                    "failed to revalidate router control before wake-up: {err}"
+                    "failed to revalidate orchestrator control before wake-up: {err}"
                 );
                 conversation.active_thread_control().await
             }
@@ -132,7 +132,7 @@ fn spawn_router_tick_task(
             Err(err) => {
                 warn!(
                     thread_id = %control.thread_id,
-                    "failed to confirm router control immediately before wake-up submit: {err}"
+                    "failed to confirm orchestrator control immediately before wake-up submit: {err}"
                 );
                 conversation.active_thread_control().await
             }
@@ -162,7 +162,7 @@ fn spawn_router_tick_task(
         if let Err(err) = submit_result {
             warn!(
                 thread_id = %control.thread_id,
-                "failed to submit router wake-up turn: {err}"
+                "failed to submit orchestrator wake-up turn: {err}"
             );
             if !cancel_token.is_cancelled() {
                 arm_router_tick(Arc::clone(&conversation), thread_state, state_db, control).await;
@@ -173,7 +173,7 @@ fn spawn_router_tick_task(
 
 fn build_router_tick_message(control: &ThreadControlRecord) -> String {
     let mut lines = vec![
-        "Router mode is still active for this thread.".to_string(),
+        "Orchestrator mode is still active for this thread.".to_string(),
         format!("Reason: {}", control.reason),
         format!(
             "Watch interval: {} seconds.",
@@ -270,7 +270,7 @@ mod tests {
 
         assert_eq!(
             message,
-            "Router mode is still active for this thread.\n\
+            "Orchestrator mode is still active for this thread.\n\
 Reason: Keep supervising the worker pool\n\
 Watch interval: 45 seconds.\n\
 Release channel: imessage.\n\

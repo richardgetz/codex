@@ -390,6 +390,7 @@ pub enum AltScreenMode {
 pub enum ModeKind {
     Plan,
     Continuous,
+    Orchestrator,
     #[default]
     #[serde(
         alias = "code",
@@ -410,14 +411,19 @@ pub enum ModeKind {
     Execute,
 }
 
-pub const TUI_VISIBLE_COLLABORATION_MODES: [ModeKind; 3] =
-    [ModeKind::Default, ModeKind::Plan, ModeKind::Continuous];
+pub const TUI_VISIBLE_COLLABORATION_MODES: [ModeKind; 4] = [
+    ModeKind::Default,
+    ModeKind::Plan,
+    ModeKind::Continuous,
+    ModeKind::Orchestrator,
+];
 
 impl ModeKind {
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::Plan => "Plan",
             Self::Continuous => "Continuous",
+            Self::Orchestrator => "Orchestrator",
             Self::Default => "Default",
             Self::PairProgramming => "Pair Programming",
             Self::Execute => "Execute",
@@ -425,7 +431,10 @@ impl ModeKind {
     }
 
     pub const fn is_tui_visible(self) -> bool {
-        matches!(self, Self::Plan | Self::Default | Self::Continuous)
+        matches!(
+            self,
+            Self::Plan | Self::Default | Self::Continuous | Self::Orchestrator
+        )
     }
 
     pub const fn allows_request_user_input(self) -> bool {
@@ -567,7 +576,12 @@ mod tests {
 
     #[test]
     fn tui_visible_collaboration_modes_match_mode_kind_visibility() {
-        let expected = [ModeKind::Default, ModeKind::Plan, ModeKind::Continuous];
+        let expected = [
+            ModeKind::Default,
+            ModeKind::Plan,
+            ModeKind::Continuous,
+            ModeKind::Orchestrator,
+        ];
         assert_eq!(expected, TUI_VISIBLE_COLLABORATION_MODES);
 
         for mode in TUI_VISIBLE_COLLABORATION_MODES {

@@ -594,6 +594,27 @@
       ],
       "type": "string"
     },
+    "OrchestratorThreadControlConfig": {
+      "properties": {
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ProfileV2": {
       "additionalProperties": true,
       "properties": {
@@ -731,27 +752,6 @@
         }
       ]
     },
-    "RouterThreadControlConfig": {
-      "properties": {
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "reasoning_effort": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
-    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -793,10 +793,10 @@
     },
     "ThreadControlConfig": {
       "properties": {
-        "router": {
+        "orchestrator": {
           "anyOf": [
             {
-              "$ref": "#/definitions/RouterThreadControlConfig"
+              "$ref": "#/definitions/OrchestratorThreadControlConfig"
             },
             {
               "type": "null"

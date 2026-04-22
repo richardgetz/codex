@@ -583,6 +583,7 @@ sqlite = true
         cwd: codex_home.path().to_path_buf(),
         model_provider_id: "mock_provider".to_string(),
         generate_memories: false,
+        initial_memory_mode: Some("disabled".to_string()),
     };
     let repaired_page = codex_core::RolloutRecorder::list_threads(
         &rollout_config,

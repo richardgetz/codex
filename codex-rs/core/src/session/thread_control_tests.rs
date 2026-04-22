@@ -53,6 +53,51 @@ async fn continuous_mode_update_creates_and_releases_thread_control() {
 }
 
 #[tokio::test]
+async fn orchestrator_mode_update_creates_and_releases_thread_control() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let mut orchestrator_mode = session.collaboration_mode().await;
+    orchestrator_mode.mode = ModeKind::Orchestrator;
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(orchestrator_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("orchestrator mode update should succeed");
+
+    let active_control = session
+        .active_thread_control()
+        .await
+        .expect("orchestrator control should be active");
+    assert_eq!(
+        active_control,
+        ThreadControlRecord {
+            thread_id: session.conversation_id,
+            mode: ThreadControlMode::Router,
+            reason: Session::ORCHESTRATOR_MODE_CONTROL_REASON.to_string(),
+            release_channel: None,
+            watch_interval_seconds: Some(60),
+            released_at: None,
+            updated_at: active_control.updated_at,
+            target_thread_ids: Vec::new(),
+        }
+    );
+
+    let mut default_mode = session.collaboration_mode().await;
+    default_mode.mode = ModeKind::Default;
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(default_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("default mode update should succeed");
+
+    assert_eq!(session.active_thread_control().await, None);
+}
+
+#[tokio::test]
 async fn continuous_mode_does_not_replace_active_router_control() {
     let (session, _turn_context) = make_session_and_context().await;
     let router_control = ThreadControlRecord {

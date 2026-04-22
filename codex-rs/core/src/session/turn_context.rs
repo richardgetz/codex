@@ -1,4 +1,5 @@
 use super::*;
+use crate::rollout::ORCHESTRATOR_SCOPED_MEMORY_MODE;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_state::ThreadControlMode as StateThreadControlMode;
@@ -311,6 +312,9 @@ fn local_time_context() -> (String, String) {
 impl Session {
     pub(crate) const CONTINUOUS_MODE_CONTROL_REASON: &str =
         "Continuous collaboration mode is active for this thread.";
+    pub(crate) const ORCHESTRATOR_MODE_CONTROL_REASON: &str =
+        "Orchestrator collaboration mode is active for this thread.";
+    const ORCHESTRATOR_MODE_WATCH_INTERVAL_SECONDS: u32 = 60;
 
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
     pub(crate) fn build_per_turn_config(session_configuration: &SessionConfiguration) -> Config {
@@ -475,7 +479,7 @@ impl Session {
                     let session_source = next.session_source.clone();
                     drop(state);
                     if let Err(err) = self
-                        .ensure_continuous_mode_control(&next.collaboration_mode)
+                        .ensure_collaboration_mode_control(&next.collaboration_mode)
                         .await
                     {
                         self.send_event_raw(Event {
@@ -550,7 +554,7 @@ impl Session {
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
     ) -> Arc<TurnContext> {
-        self.sync_continuous_mode_control(&session_configuration.collaboration_mode)
+        self.sync_collaboration_mode_control(&session_configuration.collaboration_mode)
             .await;
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
         {
@@ -622,76 +626,51 @@ impl Session {
         turn_context
     }
 
-    pub(crate) async fn sync_continuous_mode_control(
+    pub(crate) async fn sync_collaboration_mode_control(
         &self,
         collaboration_mode: &CollaborationMode,
     ) {
         let _ = self
-            .ensure_continuous_mode_control(collaboration_mode)
+            .ensure_collaboration_mode_control(collaboration_mode)
             .await;
     }
 
-    pub(crate) async fn ensure_continuous_mode_control(
+    pub(crate) async fn ensure_collaboration_mode_control(
         &self,
         collaboration_mode: &CollaborationMode,
     ) -> ConstraintResult<()> {
         let active_thread_control = self.active_thread_control().await;
-        match collaboration_mode.mode {
-            ModeKind::Continuous => {
-                if active_thread_control.as_ref().is_some_and(|control| {
-                    control.mode != StateThreadControlMode::Continuous
-                        && control.released_at.is_none()
-                }) {
-                    return Ok(());
-                }
-                if active_thread_control.as_ref().is_some_and(|control| {
-                    control.mode == StateThreadControlMode::Continuous
-                        && control.released_at.is_none()
-                }) {
-                    return Ok(());
-                }
-
-                let updated_at = Utc::now();
-                let control = active_thread_control
-                    .as_ref()
-                    .filter(|control| control.mode == StateThreadControlMode::Continuous)
-                    .map(|control| {
-                        let mut control = control.clone();
-                        control.released_at = None;
-                        control.updated_at = updated_at;
-                        control
-                    })
-                    .unwrap_or_else(|| ThreadControlRecord {
-                        thread_id: self.conversation_id,
-                        mode: StateThreadControlMode::Continuous,
-                        reason: Self::CONTINUOUS_MODE_CONTROL_REASON.to_string(),
-                        release_channel: None,
-                        watch_interval_seconds: None,
-                        released_at: None,
-                        updated_at,
-                        target_thread_ids: Vec::new(),
-                    });
-
-                if let Some(state_db) = self.state_db()
-                    && let Err(err) = state_db.upsert_thread_control(&control).await
-                {
-                    warn!(
-                        error = %err,
-                        thread_id = %self.conversation_id,
-                        "failed to persist continuous collaboration mode control"
-                    );
-                    return Err(ConstraintError::operation_failed(
-                        "failed to persist continuous collaboration mode control",
-                    ));
-                }
-                self.set_active_thread_control(Some(control)).await;
-                Ok(())
-            }
-            _ => {
+        let automatic_control_active = |control: &ThreadControlRecord| {
+            control.released_at.is_none()
+                && matches!(
+                    (control.mode, control.reason.as_str()),
+                    (
+                        StateThreadControlMode::Continuous,
+                        Self::CONTINUOUS_MODE_CONTROL_REASON
+                    ) | (
+                        StateThreadControlMode::Router,
+                        Self::ORCHESTRATOR_MODE_CONTROL_REASON,
+                    )
+                )
+        };
+        let desired_control = match collaboration_mode.mode {
+            ModeKind::Continuous => Some((
+                StateThreadControlMode::Continuous,
+                Self::CONTINUOUS_MODE_CONTROL_REASON,
+                None,
+            )),
+            ModeKind::Orchestrator => Some((
+                StateThreadControlMode::Router,
+                Self::ORCHESTRATOR_MODE_CONTROL_REASON,
+                Some(Self::ORCHESTRATOR_MODE_WATCH_INTERVAL_SECONDS),
+            )),
+            ModeKind::Default | ModeKind::Plan | ModeKind::PairProgramming | ModeKind::Execute => {
                 let Some(control) = active_thread_control else {
+                    self.disable_orchestrator_scoped_memories().await;
                     return Ok(());
                 };
-                if control.mode != StateThreadControlMode::Continuous {
+                if !automatic_control_active(&control) {
+                    self.disable_orchestrator_scoped_memories().await;
                     return Ok(());
                 }
 
@@ -708,13 +687,174 @@ impl Session {
                             "failed to release continuous collaboration mode control"
                         );
                         return Err(ConstraintError::operation_failed(
-                            "failed to release continuous collaboration mode control",
+                            "failed to release collaboration mode control",
                         ));
                     }
                 }
+                self.disable_orchestrator_scoped_memories().await;
                 self.set_active_thread_control(None).await;
-                Ok(())
+                return Ok(());
             }
+        };
+
+        let Some((mode, reason, watch_interval_seconds)) = desired_control else {
+            return Ok(());
+        };
+        if active_thread_control.as_ref().is_some_and(|control| {
+            control.mode == mode && control.reason == reason && control.released_at.is_none()
+        }) {
+            if collaboration_mode.mode == ModeKind::Orchestrator {
+                self.enable_orchestrator_scoped_memories().await;
+            } else {
+                self.disable_orchestrator_scoped_memories().await;
+            }
+            return Ok(());
+        }
+        if active_thread_control.as_ref().is_some_and(|control| {
+            control.released_at.is_none() && !automatic_control_active(control)
+        }) {
+            if collaboration_mode.mode == ModeKind::Orchestrator {
+                self.enable_orchestrator_scoped_memories().await;
+            } else {
+                self.disable_orchestrator_scoped_memories().await;
+            }
+            return Ok(());
+        }
+
+        let updated_at = Utc::now();
+        let control = ThreadControlRecord {
+            thread_id: self.conversation_id,
+            mode,
+            reason: reason.to_string(),
+            release_channel: None,
+            watch_interval_seconds,
+            released_at: None,
+            updated_at,
+            target_thread_ids: Vec::new(),
+        };
+
+        if let Some(state_db) = self.state_db()
+            && let Err(err) = state_db.upsert_thread_control(&control).await
+        {
+            warn!(
+                error = %err,
+                thread_id = %self.conversation_id,
+                "failed to persist collaboration mode control"
+            );
+            return Err(ConstraintError::operation_failed(
+                "failed to persist collaboration mode control",
+            ));
+        }
+        self.set_active_thread_control(Some(control)).await;
+        if collaboration_mode.mode == ModeKind::Orchestrator {
+            self.enable_orchestrator_scoped_memories().await;
+        } else {
+            self.disable_orchestrator_scoped_memories().await;
+        }
+        Ok(())
+    }
+
+    async fn enable_orchestrator_scoped_memories(&self) {
+        let memories = {
+            let state = self.state.lock().await;
+            state
+                .session_configuration
+                .original_config_do_not_use
+                .memories
+                .clone()
+        };
+        if !memories.generate_memories || memories.scope != MemoriesScope::Orchestrator {
+            return;
+        }
+        if let Some(state_db) = self.state_db() {
+            match state_db.get_thread_memory_mode(self.conversation_id).await {
+                Ok(Some(memory_mode)) if memory_mode == "enabled" => return,
+                Ok(Some(memory_mode)) if memory_mode == ORCHESTRATOR_SCOPED_MEMORY_MODE => {}
+                Ok(Some(_)) => return,
+                Ok(None) => {}
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        thread_id = %self.conversation_id,
+                        "failed to read thread memory mode before enabling orchestrator-scoped memories"
+                    );
+                }
+            }
+        }
+        if let Err(err) = handlers::persist_thread_memory_mode_update(
+            self,
+            codex_protocol::protocol::ThreadMemoryMode::Enabled,
+        )
+        .await
+        {
+            warn!(
+                error = %err,
+                thread_id = %self.conversation_id,
+                "failed to persist orchestrator-scoped memory mode update"
+            );
+            return;
+        }
+        if let Some(state_db) = self.state_db()
+            && let Err(err) = state_db
+                .set_thread_memory_mode(self.conversation_id, "enabled")
+                .await
+        {
+            warn!(
+                error = %err,
+                thread_id = %self.conversation_id,
+                "failed to update state db for orchestrator-scoped memories"
+            );
+        }
+    }
+
+    async fn disable_orchestrator_scoped_memories(&self) {
+        let memories = {
+            let state = self.state.lock().await;
+            state
+                .session_configuration
+                .original_config_do_not_use
+                .memories
+                .clone()
+        };
+        if !memories.generate_memories || memories.scope != MemoriesScope::Orchestrator {
+            return;
+        }
+
+        if let Some(state_db) = self.state_db() {
+            match state_db.get_thread_memory_mode(self.conversation_id).await {
+                Ok(Some(memory_mode)) if memory_mode == "enabled" => {}
+                Ok(_) => return,
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        thread_id = %self.conversation_id,
+                        "failed to read thread memory mode before disabling orchestrator-scoped memories"
+                    );
+                    return;
+                }
+            }
+        }
+        if let Err(err) =
+            handlers::persist_thread_memory_mode_str_update(self, ORCHESTRATOR_SCOPED_MEMORY_MODE)
+                .await
+        {
+            warn!(
+                error = %err,
+                thread_id = %self.conversation_id,
+                "failed to persist orchestrator-scoped memory mode disable"
+            );
+            return;
+        }
+        if let Some(state_db) = self.state_db()
+            && let Err(err) = state_db
+                .set_thread_memory_mode(self.conversation_id, ORCHESTRATOR_SCOPED_MEMORY_MODE)
+                .await
+        {
+            warn!(
+                error = %err,
+                thread_id = %self.conversation_id,
+                "failed to update state db while disabling orchestrator-scoped memories"
+            );
         }
     }
 

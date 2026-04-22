@@ -17,8 +17,8 @@ use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MergeStrategy;
+use codex_app_server_protocol::OrchestratorThreadControlConfig;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::RouterThreadControlConfig;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ThreadControlConfig;
 use codex_app_server_protocol::ToolsV2;
@@ -93,12 +93,12 @@ sandbox_mode = "workspace-write"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_read_includes_thread_control_router_model() -> Result<()> {
+async fn config_read_includes_thread_control_orchestrator_model() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(
         &codex_home,
         r#"
-[thread_control.router]
+[thread_control.orchestrator]
 model = "gpt-5.3-codex-spark"
 reasoning_effort = "low"
 "#,
@@ -123,7 +123,7 @@ reasoning_effort = "low"
     assert_eq!(
         config.thread_control,
         Some(ThreadControlConfig {
-            router: Some(RouterThreadControlConfig {
+            orchestrator: Some(OrchestratorThreadControlConfig {
                 model: Some("gpt-5.3-codex-spark".to_string()),
                 reasoning_effort: Some(ReasoningEffort::Low),
             }),
