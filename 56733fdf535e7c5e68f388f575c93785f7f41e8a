@@ -1,0 +1,36 @@
+intent:
+  id: "intent/2026-04-22/orchestrator-collab-mode#56733fdf535e"
+  change_type: "feat"
+  scope: "collaboration"
+  summary: "Add Orchestrator as the user-facing collaboration mode for router-style supervision."
+  decision: "Rename the experimental router thread-control config and app-server API surface to orchestrator without compatibility aliases, expose Orchestrator in TUI collaboration selection, wire it to automatic router wake control, and add Orchestrator-scoped memory eligibility so memory learning can be limited to Orchestrator mode."
+  constraints:
+    - "Must target the stable branch and intentionally break [thread_control.router] compatibility because the feature is not in use yet."
+    - "Must preserve configurable orchestrator wake model and reasoning behavior from the prior router control work."
+    - "Must keep generated config and app-server schema fixtures current."
+    - "Must prevent Orchestrator-scoped memories from staying enabled after leaving Orchestrator or overriding polluted/manual memory states."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/protocol/src/config_types.rs::ModeKind::Orchestrator"
+    - "codex-rs/models-manager/src/collaboration_mode_presets.rs::orchestrator_preset"
+    - "codex-rs/core/src/session/turn_context.rs::ensure_collaboration_mode_control"
+    - "codex-rs/config/src/types.rs::OrchestratorThreadControlToml"
+    - "codex-rs/app-server-protocol/src/protocol/v2.rs::ThreadControlMode"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.4"
+  tests:
+    - "just write-config-schema"
+    - "just write-app-server-schema"
+    - "just fmt"
+    - "cargo check -p codex-core -p codex-app-server-protocol -p codex-app-server -p codex-tui -p codex-models-manager -p codex-config -p codex-protocol"
+    - "cargo test -p codex-core thread_control"
+    - "cargo test -p codex-core config::schema::tests::config_schema_matches_fixture"
+    - "cargo test -p codex-tui collab"
+    - "cargo test -p codex-core orchestrator_memory_scope_only_enables_during_orchestrator_mode"
+    - "cargo test -p codex-rollout"
+    - "cargo test -p codex-app-server thread_list"
+    - "just fix -p codex-protocol -p codex-config -p codex-core -p codex-rollout -p codex-thread-store -p codex-app-server-protocol -p codex-app-server -p codex-tui -p codex-models-manager -p codex-analytics -p codex-collaboration-mode-templates"
+  review:
+    - "post-change-review pair mode completed with independent public-contract and session-behavior reviewers; final pass reported no actionable findings."
