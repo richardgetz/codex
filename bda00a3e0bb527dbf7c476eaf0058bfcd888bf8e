@@ -1,0 +1,33 @@
+intent:
+  id: "intent/2026-04-21/continuous-mode-stable#bda00a3e0"
+  change_type: "fix"
+  scope: "app-server"
+  summary: "Replay continuous/thread control mode work onto the stable release branch."
+  decision: "Cherry-pick the original PR commits onto current stable and add a small compatibility commit for stable's current path types, migration numbering, release-version test expectations, and CI formatting."
+  constraints:
+    - "Must target stable rather than main so release branches pick up the feature cleanly."
+    - "Must preserve the continuous/router thread-control semantics from the original PR."
+    - "Must keep migration numbering compatible with existing stable migrations."
+    - "Must keep generated config and app-server schema fixtures current."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server/src/thread_control_runtime.rs"
+    - "codex-rs/app-server/src/codex_message_processor/thread_control_api.rs"
+    - "codex-rs/core/src/codex.rs"
+    - "codex-rs/state/migrations/0026_thread_controls.sql"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.4"
+  related:
+    - "https://github.com/richardgetz/codex/pull/4"
+  tests:
+    - "just write-app-server-schema"
+    - "just write-config-schema"
+    - "cargo test -p codex-app-server-protocol"
+    - "CODEX_HOME=/tmp/codex-test-home cargo test -p codex-app-server -- --test-threads=1"
+    - "CODEX_HOME=/tmp/codex-test-home cargo test -p codex-core --lib -- --test-threads=1"
+    - "CODEX_HOME=/tmp/codex-test-home cargo test -- --test-threads=1 with ulimit -n 8192; one unrelated Xcode python seatbelt test failed, then passed in isolation with Homebrew python"
+    - "just fmt"
+    - "just fix -p codex-app-server"
+    - "just fix -p codex-core"

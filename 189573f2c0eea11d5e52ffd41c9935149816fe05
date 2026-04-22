@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-04-18/fork-release-fetch-hardening#189573f2c"
+  change_type: "ci"
+  scope: "fork-release"
+  summary: "Reduce repeated fork-release failures from flaky upstream Cargo git dependency fetches."
+  decision: "Enable Cargo git fetches through the system git CLI, add a cached/retried cargo fetch phase ahead of the build, and persist fetched Cargo git/registry state for later runs."
+  constraints:
+    - "Must keep the fork release lane arm64-only."
+    - "Must preserve the existing progress and heartbeat logging added to fork-release."
+    - "Must reduce repeated network fetch churn without changing the release outputs or npm package target."
+  intent_priority: "must"
+  code_locations:
+    - ".github/workflows/fork-release.yml"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

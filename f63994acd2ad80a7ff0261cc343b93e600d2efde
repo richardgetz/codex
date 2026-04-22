@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-04-21/router-wake-channel-docs#f63994acd"
+  change_type: "docs"
+  scope: "app-server"
+  summary: "Document the expected MCP-facing router wake channel integration shape."
+  decision: "Describe a subscription-first MCP contract with normalized wake events, empty acknowledgement, polling fallback, and app-server validation responsibilities while marking the callback transport as follow-up work."
+  constraints:
+    - "Must not imply the push callback endpoint is implemented in this PR."
+    - "Must give MCP authors stable request and event shapes to target."
+    - "Must keep app-server authoritative for wake validation before model submission."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/app-server/README.md::Router wake channel integration shape"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.4"
+  tests:
+    - "Documentation-only change; no tests run."

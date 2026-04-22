@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-04-18/fork-release-install-dotslash#64ccf6701"
+  change_type: "fix"
+  scope: "fork-release"
+  summary: "Make the release job able to stage npm packages when vendoring ripgrep for the macOS arm64 package."
+  decision: "Install DotSlash in the release job before stage_npm_packages.py runs, matching the upstream npm packaging workflow that already depends on DotSlash for parsing codex-cli/bin/rg."
+  constraints:
+    - "Must keep the fork release lane arm64-only."
+    - "Must preserve the existing artifact upload fix, fetch hardening, build heartbeat logging, and publish hardening in fork-release."
+    - "Must not change the produced package contents beyond unblocking ripgrep vendoring during release staging."
+  intent_priority: "must"
+  code_locations:
+    - ".github/workflows/fork-release.yml"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

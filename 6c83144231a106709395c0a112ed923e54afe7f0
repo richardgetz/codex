@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-04-16/continuous-mode-preserve-router-control"
+  change_type: "fix"
+  scope: "core"
+  summary: "Avoid clobbering an existing router thread-control contract when a thread enters continuous collaboration mode."
+  decision: "Treat an active non-continuous control contract as authoritative and leave it intact instead of rewriting the single persisted thread-control row to continuous."
+  constraints:
+    - "Continuous collaboration mode must not silently erase router supervision targets or cadence."
+    - "The fix must stay local to continuous-mode synchronization and avoid broad thread-control schema changes."
+    - "Existing continuous-mode behavior for threads without another active control contract should stay unchanged."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/codex.rs"
+    - "codex-rs/core/src/codex_tests.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

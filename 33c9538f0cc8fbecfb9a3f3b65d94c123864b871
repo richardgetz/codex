@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-04-16/router-model-override-effort#33c9538f0cc8"
+  change_type: "fix"
+  scope: "app-server"
+  summary: "Keep router wake-up turns from leaking incompatible reasoning effort into later thread turns."
+  decision: "Resolve router wake-up settings from the thread state, remapping explicit effort only when one was already set and leaving absent effort absent."
+  constraints:
+    - "Router wake-up must preserve collaboration mode semantics while applying the router model override."
+    - "Threads without explicit reasoning effort must not gain one solely because router mode ran."
+    - "Router-only helpers should avoid unnecessary public codex-core API surface."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/codex_thread.rs::resolve_router_turn_settings"
+    - "codex-rs/core/src/codex_tests.rs::resolve_router_turn_settings_preserves_absent_effort"
+    - "codex-rs/app-server/src/thread_control_runtime.rs::build_router_tick_turn"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

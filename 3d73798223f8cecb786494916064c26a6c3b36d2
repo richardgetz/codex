@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-04-17/fork-differences-docs#3d73798223f8"
+  change_type: "feat"
+  scope: "fork"
+  summary: "Document fork-specific behavior and automatically label fork-only experimental help text."
+  decision: "Add a dedicated fork-differences doc, update the README and fork-release docs for @rickgetz/codex Apple Silicon-only distribution, and make experimental feature metadata auto-prefix '(rick)' for fork-owned help text."
+  constraints:
+    - "Must advertise @rickgetz/codex instead of upstream npm install commands in the fork README."
+    - "Must not claim Intel/macOS fork releases exist in the automated release lane."
+    - "Must centralize fork-only help-text labeling in the feature registry so future UI surfaces inherit it automatically."
+  intent_priority: "must"
+  code_locations:
+    - "README.md"
+    - "docs/fork-differences.md"
+    - "docs/fork-release.md"
+    - "codex-rs/features/src/lib.rs"
+    - "codex-rs/features/src/tests.rs"
+    - "codex-rs/app-server/src/codex_message_processor.rs"
+    - "codex-rs/app-server/tests/suite/v2/experimental_feature_list.rs"
+    - "codex-rs/tui/src/chatwidget.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

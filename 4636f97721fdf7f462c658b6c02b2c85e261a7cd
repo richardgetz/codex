@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-04-18/fork-release-progress-heartbeats#4636f9772"
+  change_type: "ci"
+  scope: "fork-release"
+  summary: "Make the fork release workflow show end-to-end progress and build proof-of-life while compiling."
+  decision: "Label the fork-release steps with rough overall percentages and wrap the Rust build in a heartbeat loop that emits elapsed time, active cargo/rustc processes, and target-directory activity every minute."
+  constraints:
+    - "Must keep the fork release lane arm64-only."
+    - "Must not change the release outputs or npm package target."
+    - "Must make long cargo builds visibly alive in GitHub Actions logs."
+  intent_priority: "must"
+  code_locations:
+    - ".github/workflows/fork-release.yml"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

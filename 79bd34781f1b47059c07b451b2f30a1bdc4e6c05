@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-04-18/fork-release-publish-hardening#79bd34781"
+  change_type: "ci"
+  scope: "fork-release"
+  summary: "Reduce the chance that secret material is published or echoed in the fork npm release lane."
+  decision: "Audit generated npm tarballs for secret-like paths before publishing, explicitly mask the npm token, and redact auth-shaped publish output before writing it to public GitHub Actions logs."
+  constraints:
+    - "Must keep the fork release lane arm64-only."
+    - "Must preserve the existing artifact upload fix, fetch hardening, and build heartbeat logging in fork-release."
+    - "Must not change the npm package contents except to fail the workflow if blocked secret-like paths are present."
+  intent_priority: "must"
+  code_locations:
+    - ".github/workflows/fork-release.yml"
+    - "docs/fork-release.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

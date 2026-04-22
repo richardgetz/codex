@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-04-14/mcp-approval-disable#7f4eee95c"
+  change_type: "fix"
+  scope: "mcp"
+  summary: "Add a stable feature flag that disables MCP approval prompts when turned off."
+  decision: "Gate MCP tool approval prompting on a new enable_mcp_approvals feature so users can disable the erratic approval requirement through config.toml without changing elicitation transport behavior."
+  constraints:
+    - "tool_call_mcp_elicitation must remain a transport/UI-path switch only."
+    - "The config schema and app-server feature allowlist must expose enable_mcp_approvals."
+    - "Default behavior must remain unchanged when the feature is not disabled."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/mcp_tool_call.rs::maybe_request_mcp_tool_approval"
+    - "codex-rs/features/src/lib.rs"
+    - "codex-rs/app-server/src/config_api.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "unknown"

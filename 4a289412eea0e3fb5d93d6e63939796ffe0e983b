@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-04-17/apple-silicon-fork-release#4a289412eea0"
+  change_type: "fix"
+  scope: "release"
+  summary: "Limit fork npm releases to Apple Silicon macOS and align docs/config with the @rickgetz scope."
+  decision: "Publish only the aarch64-apple-darwin release artifact so stable merges do not spend runner time on Intel macOS builds that are not needed by this fork."
+  constraints:
+    - "Must keep automatic release-on-stable behavior intact."
+    - "Must publish under @rickgetz/codex."
+    - "Must remove Intel-specific workflow and docs expectations."
+  intent_priority: "must"
+  code_locations:
+    - ".github/workflows/fork-release.yml"
+    - ".github/fork-release-config.json"
+    - "docs/fork-release.md"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

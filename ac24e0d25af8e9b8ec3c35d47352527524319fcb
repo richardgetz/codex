@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-04-21/continuous-mode-footer#ac24e0d25"
+  change_type: "fix"
+  scope: "tui"
+  summary: "Show Continuous mode in the TUI footer like other selectable collaboration modes."
+  decision: "Add a Continuous collaboration mode indicator and snapshot coverage so users can see when the selected mode is Continuous."
+  constraints:
+    - "Must keep router mode separate from the simple Shift+Tab collaboration mode selector because router control requires additional configuration."
+    - "Must include snapshot coverage for visible TUI output."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tui/src/chatwidget.rs::collaboration_mode_indicator"
+    - "codex-rs/tui/src/bottom_pane/footer.rs::CollaborationModeIndicator"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.4"
+  tests:
+    - "cargo test -p codex-tui bottom_pane::footer::tests::footer_snapshots -- --exact"
+    - "cargo test -p codex-tui chatwidget::tests::plan_mode::collaboration_modes_popup_snapshot_includes_continuous -- --exact"
+    - "cargo test -p codex-tui (failed only on unrelated release-version snapshot drift: v0.0.0-rick vs v0.122.0)"
+    - "just fmt"
+    - "just fix -p codex-tui"
