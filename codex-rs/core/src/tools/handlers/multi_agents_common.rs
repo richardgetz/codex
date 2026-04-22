@@ -10,6 +10,10 @@ use codex_features::Feature;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -240,10 +244,15 @@ pub(crate) fn reject_full_fork_spawn_overrides(
     agent_type: Option<&str>,
     model: Option<&str>,
     reasoning_effort: Option<ReasoningEffort>,
+    collaboration_mode: Option<ModeKind>,
 ) -> Result<(), FunctionCallError> {
-    if agent_type.is_some() || model.is_some() || reasoning_effort.is_some() {
+    if agent_type.is_some()
+        || model.is_some()
+        || reasoning_effort.is_some()
+        || collaboration_mode.is_some()
+    {
         return Err(FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without a full-history fork.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and collaboration mode; omit agent_type, model, reasoning_effort, and collaboration_mode, or spawn without fork_context/fork_turns=all.".to_string(),
         ));
     }
     Ok(())
@@ -335,6 +344,53 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
     }
 
     Ok(())
+}
+
+pub(crate) fn requested_spawn_agent_collaboration_mode(
+    turn: &TurnContext,
+    config: &Config,
+    requested_mode: Option<ModeKind>,
+    requested_model: Option<&str>,
+    requested_reasoning_effort: Option<ReasoningEffort>,
+    mode_masks: &[CollaborationModeMask],
+) -> Result<Option<CollaborationMode>, FunctionCallError> {
+    let Some(requested_mode) = requested_mode else {
+        return Ok(None);
+    };
+    if !requested_mode.is_tui_visible() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "collaboration_mode `{requested_mode:?}` is not supported for spawned agents"
+        )));
+    }
+
+    let Some(mode_mask) = mode_masks
+        .iter()
+        .find(|mask| mask.mode == Some(requested_mode))
+    else {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "collaboration_mode `{}` is not available",
+            requested_mode.display_name()
+        )));
+    };
+
+    let base_mode = CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model: config
+                .model
+                .clone()
+                .unwrap_or_else(|| turn.model_info.slug.clone()),
+            reasoning_effort: config.model_reasoning_effort,
+            developer_instructions: None,
+        },
+    };
+    let collaboration_mode = base_mode.apply_mask(mode_mask).with_updates(
+        requested_model.map(str::to_string),
+        requested_reasoning_effort.map(Some),
+        None,
+    );
+
+    Ok(Some(collaboration_mode))
 }
 
 fn find_spawn_agent_model_name(

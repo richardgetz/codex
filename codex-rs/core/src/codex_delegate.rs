@@ -76,6 +76,7 @@ pub(crate) async fn run_codex_thread_interactive(
 
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
+        initial_collaboration_mode: None,
         auth_manager,
         models_manager,
         environment_manager: Arc::clone(&parent_session.services.environment_manager),

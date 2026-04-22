@@ -13,10 +13,12 @@ use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::thread_manager::ThreadManagerState;
+use crate::thread_manager::latest_collaboration_mode_from_rollout_items;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::MessagePhase;
@@ -52,6 +54,7 @@ pub(crate) enum SpawnAgentForkMode {
 pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_parent_spawn_call_id: Option<String>,
     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
+    pub(crate) initial_collaboration_mode: Option<CollaborationMode>,
 }
 
 #[derive(Clone, Debug)]
@@ -237,11 +240,19 @@ impl AgentControl {
                 .await?
             }
             (Some(session_source), None) => {
+                let initial_collaboration_mode = self
+                    .initial_collaboration_mode_for_spawn(
+                        &state,
+                        notification_source.as_ref(),
+                        &options,
+                    )
+                    .await?;
                 state
                     .spawn_new_thread_with_source(
                         config,
                         self.clone(),
                         session_source,
+                        initial_collaboration_mode,
                         /*persist_extended_history*/ false,
                         /*metrics_service_name*/ None,
                         inherited_shell_snapshot,
@@ -332,6 +343,39 @@ impl AgentControl {
         })
     }
 
+    async fn initial_collaboration_mode_for_spawn(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        session_source: Option<&SessionSource>,
+        options: &SpawnAgentOptions,
+    ) -> CodexResult<Option<CollaborationMode>> {
+        if let Some(collaboration_mode) = options.initial_collaboration_mode.clone() {
+            return Ok(Some(collaboration_mode));
+        }
+        if !matches!(options.fork_mode, Some(SpawnAgentForkMode::FullHistory)) {
+            return Ok(None);
+        }
+
+        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        })) = session_source
+        else {
+            return Ok(None);
+        };
+        let parent_thread = match state.get_thread(*parent_thread_id).await {
+            Ok(parent_thread) => parent_thread,
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    parent_thread_id = %parent_thread_id,
+                    "skipping collaboration mode inheritance: parent thread is not loaded"
+                );
+                return Ok(None);
+            }
+        };
+        Ok(Some(parent_thread.codex.session.collaboration_mode().await))
+    }
+
     async fn spawn_forked_thread(
         &self,
         state: &Arc<ThreadManagerState>,
@@ -390,9 +434,24 @@ impl AgentControl {
         let mut forked_rollout_items = RolloutRecorder::get_rollout_history(&rollout_path)
             .await?
             .get_rollout_items();
+        let mut initial_collaboration_mode = self
+            .initial_collaboration_mode_for_spawn(state, Some(&session_source), options)
+            .await?;
         if let SpawnAgentForkMode::LastNTurns(last_n_turns) = fork_mode {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
+        }
+        if initial_collaboration_mode.is_none() {
+            initial_collaboration_mode = latest_collaboration_mode_from_rollout_items(
+                &forked_rollout_items,
+            )
+            .map(|collaboration_mode| {
+                collaboration_mode.with_updates(
+                    config.model.clone(),
+                    config.model_reasoning_effort.map(Some),
+                    /*developer_instructions*/ None,
+                )
+            });
         }
         forked_rollout_items.retain(keep_forked_rollout_item);
 
@@ -402,6 +461,7 @@ impl AgentControl {
                 InitialHistory::Forked(forked_rollout_items),
                 self.clone(),
                 session_source,
+                initial_collaboration_mode,
                 /*persist_extended_history*/ false,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
