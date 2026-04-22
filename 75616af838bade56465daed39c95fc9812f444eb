@@ -25,7 +25,6 @@ intent:
     - "cargo test -p codex-app-server-protocol"
     - "cargo test -p codex-core thread_control -- --test-threads=1"
     - "cargo test -p codex-app-server thread_control -- --test-threads=1"
-    - "cargo test -p codex-app-server thread_control -- --test-threads=1"
     - "cargo test -p codex-models-manager collaboration_mode_presets -- --test-threads=1"
     - "cargo test -p codex-tui side -- --test-threads=1"
     - "cargo test -p codex-tui continuous -- --test-threads=1"
