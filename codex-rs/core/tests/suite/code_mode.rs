@@ -236,6 +236,8 @@ async fn run_code_mode_turn_with_rmcp_config(
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
+                startup: codex_config::McpServerStartupMode::Auto,
+                sharing: codex_config::McpServerSharingMode::Auto,
                 disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(10)),
                 tool_timeout_sec: None,

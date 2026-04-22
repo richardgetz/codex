@@ -1171,6 +1171,7 @@ pub(crate) async fn built_tools(
         .list_all_tools()
         .or_cancel(cancellation_token)
         .await?;
+    let lazy_mcp_servers = mcp_connection_manager.lazy_server_infos();
     drop(mcp_connection_manager);
     let loaded_plugins = sess
         .services
@@ -1287,6 +1288,7 @@ pub(crate) async fn built_tools(
         ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,
+            lazy_mcp_servers,
             unavailable_called_tools,
             parallel_mcp_server_names,
             discoverable_tools,

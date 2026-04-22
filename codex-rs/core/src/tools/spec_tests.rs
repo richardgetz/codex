@@ -289,6 +289,7 @@ fn build_specs_with_unavailable_tools(
         config,
         mcp_tools,
         deferred_mcp_tools,
+        Vec::new(),
         unavailable_called_tools,
         /*discoverable_tools*/ None,
         dynamic_tools,
@@ -374,6 +375,7 @@ async fn assert_model_tools(
         ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
+            lazy_mcp_servers: Vec::new(),
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: std::collections::HashSet::new(),
             discoverable_tools: None,
@@ -814,6 +816,7 @@ async fn tool_suggest_requires_apps_and_plugins_features() {
             /*mcp_tools*/ None,
             /*deferred_mcp_tools*/ None,
             Vec::new(),
+            Vec::new(),
             discoverable_tools.clone(),
             &[],
         )
@@ -860,6 +863,43 @@ async fn search_tool_description_handles_no_enabled_mcp_tools() {
 
     assert!(description.contains("None currently enabled."));
     assert!(!description.contains("{{source_descriptions}}"));
+}
+
+#[tokio::test]
+async fn router_find_spec_returns_tool_search() {
+    let model_info = search_capable_model_info().await;
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Apps);
+    features.enable(Feature::ToolSearch);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let router = ToolRouter::from_config(
+        &tools_config,
+        ToolRouterParams {
+            mcp_tools: None,
+            deferred_mcp_tools: Some(HashMap::new()),
+            lazy_mcp_servers: Vec::new(),
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: std::collections::HashSet::new(),
+            discoverable_tools: None,
+            dynamic_tools: &[],
+        },
+    );
+
+    assert!(matches!(
+        router.find_spec(&ToolName::plain(TOOL_SEARCH_TOOL_NAME)),
+        Some(ToolSpec::ToolSearch { .. })
+    ));
 }
 
 #[tokio::test]

@@ -5,6 +5,7 @@ use crate::tools::context::ToolSearchOutput;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::tool_search_entry::ToolSearchEntry;
+use crate::tools::tool_search_entry::ToolSearchEntryOutput;
 use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngine;
@@ -13,6 +14,8 @@ use codex_tools::LoadableToolSpec;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::coalesce_loadable_tool_specs;
+use futures::FutureExt;
+use futures::future::BoxFuture;
 use std::collections::HashMap;
 
 const COMPUTER_USE_MCP_SERVER_NAME: &str = "computer-use";
@@ -52,7 +55,9 @@ impl ToolHandler for ToolSearchHandler {
         &self,
         invocation: ToolInvocation,
     ) -> Result<ToolSearchOutput, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation {
+            payload, session, ..
+        } = invocation;
 
         let args = match payload {
             ToolPayload::ToolSearch { arguments } => arguments,
@@ -82,21 +87,28 @@ impl ToolHandler for ToolSearchHandler {
             return Ok(ToolSearchOutput { tools: Vec::new() });
         }
 
-        let tools = self.search(query, limit, requested_limit.is_none())?;
+        let tools = self
+            .search(query, limit, requested_limit.is_none(), &session)
+            .await?;
 
         Ok(ToolSearchOutput { tools })
     }
 }
 
 impl ToolSearchHandler {
-    fn search(
-        &self,
-        query: &str,
+    fn search<'a>(
+        &'a self,
+        query: &'a str,
         limit: usize,
         use_default_limit: bool,
-    ) -> Result<Vec<LoadableToolSpec>, FunctionCallError> {
-        let results = self.search_result_entries(query, limit, use_default_limit);
-        self.search_output_tools(results)
+        session: &'a std::sync::Arc<crate::session::session::Session>,
+    ) -> BoxFuture<'a, Result<Vec<LoadableToolSpec>, FunctionCallError>> {
+        async move {
+            let results = self.search_result_entries(query, limit, use_default_limit);
+            self.search_output_tools(results, query, limit, use_default_limit, session)
+                .await
+        }
+        .boxed()
     }
 
     fn search_result_entries(
@@ -133,13 +145,69 @@ impl ToolSearchHandler {
         limit_results_by_bucket(results)
     }
 
-    fn search_output_tools<'a>(
+    async fn search_output_tools<'a>(
+        &self,
+        results: impl IntoIterator<Item = &'a ToolSearchEntry>,
+        query: &str,
+        limit: usize,
+        use_default_limit: bool,
+        session: &std::sync::Arc<crate::session::session::Session>,
+    ) -> Result<Vec<LoadableToolSpec>, FunctionCallError> {
+        let mut tools = Vec::new();
+        for entry in results {
+            match &entry.output {
+                ToolSearchEntryOutput::Tool(tool) => tools.push(tool.clone()),
+                ToolSearchEntryOutput::LazyMcpServer { server_name } => {
+                    let manager = session.services.mcp_connection_manager.read().await;
+                    let mcp_tools = match manager.list_tools_for_server(server_name).await {
+                        Ok(tools) => tools,
+                        Err(err) => {
+                            tracing::warn!(
+                                "failed to start MCP server `{server_name}` for tool search: {err:#}"
+                            );
+                            continue;
+                        }
+                    };
+                    drop(manager);
+                    let entries = crate::tools::tool_search_entry::build_tool_search_entries(
+                        Some(&mcp_tools),
+                        &[],
+                        &[],
+                    );
+                    let handler = ToolSearchHandler::new(entries);
+                    let mut started_tools = handler
+                        .search(query, limit, use_default_limit, session)
+                        .await?;
+                    if started_tools.is_empty() {
+                        started_tools =
+                            handler.search_output_tools_without_lazy(handler.entries.iter())?;
+                    }
+                    let remaining_limit = limit.saturating_sub(count_loadable_tools(&tools));
+                    started_tools = truncate_output_tools(started_tools, remaining_limit);
+                    tools.extend(started_tools);
+                }
+            }
+        }
+
+        Ok(coalesce_loadable_tool_specs(tools))
+    }
+
+    fn search_output_tools_without_lazy<'a>(
         &self,
         results: impl IntoIterator<Item = &'a ToolSearchEntry>,
     ) -> Result<Vec<LoadableToolSpec>, FunctionCallError> {
-        Ok(coalesce_loadable_tool_specs(
-            results.into_iter().map(|entry| entry.output.clone()),
-        ))
+        let mut tools = Vec::new();
+        for entry in results {
+            match &entry.output {
+                ToolSearchEntryOutput::Tool(tool) => tools.push(tool.clone()),
+                ToolSearchEntryOutput::LazyMcpServer { server_name } => {
+                    return Err(FunctionCallError::Fatal(format!(
+                        "test helper cannot resolve lazy MCP server `{server_name}`"
+                    )));
+                }
+            }
+        }
+        Ok(coalesce_loadable_tool_specs(tools))
     }
 }
 
@@ -170,10 +238,47 @@ fn default_limit_for_bucket(bucket: &str) -> usize {
     }
 }
 
+fn count_loadable_tools(tools: &[LoadableToolSpec]) -> usize {
+    tools
+        .iter()
+        .map(|tool| match tool {
+            LoadableToolSpec::Function(_) => 1,
+            LoadableToolSpec::Namespace(namespace) => namespace.tools.len(),
+        })
+        .sum()
+}
+
+fn truncate_output_tools(
+    tools: Vec<LoadableToolSpec>,
+    mut limit: usize,
+) -> Vec<LoadableToolSpec> {
+    let mut truncated = Vec::new();
+    for tool in tools {
+        if limit == 0 {
+            break;
+        }
+        match tool {
+            LoadableToolSpec::Function(tool) => {
+                truncated.push(LoadableToolSpec::Function(tool));
+                limit = limit.saturating_sub(1);
+            }
+            LoadableToolSpec::Namespace(mut namespace) => {
+                namespace.tools.truncate(limit);
+                limit = limit.saturating_sub(namespace.tools.len());
+                if !namespace.tools.is_empty() {
+                    truncated.push(LoadableToolSpec::Namespace(namespace));
+                }
+            }
+        }
+    }
+    truncated
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tools::tool_search_entry::build_tool_search_entries;
+    use codex_mcp::LazyMcpServerInfo;
     use codex_mcp::ToolInfo;
     use codex_protocol::dynamic_tools::DynamicToolSpec;
     use codex_tools::ResponsesApiNamespace;
@@ -219,7 +324,7 @@ mod tests {
         ];
 
         let tools = handler
-            .search_output_tools(results)
+            .search_output_tools_without_lazy(results)
             .expect("mixed search output should serialize");
 
         assert_eq!(
@@ -345,6 +450,32 @@ mod tests {
     }
 
     #[test]
+    fn lazy_mcp_servers_are_searchable_before_startup() {
+        let entries = build_tool_search_entries(
+            /*mcp_tools*/ None,
+            &[LazyMcpServerInfo {
+                server_name: "playwright".to_string(),
+                description: Some("Browser automation tools.".to_string()),
+            }],
+            &[],
+        );
+        let handler = ToolSearchHandler::new(entries);
+
+        let results = handler.search_result_entries(
+            "browser automation",
+            TOOL_SEARCH_DEFAULT_LIMIT,
+            /*use_default_limit*/ true,
+        );
+
+        assert_eq!(results.len(), 1);
+        assert!(matches!(
+            results[0].output,
+            ToolSearchEntryOutput::LazyMcpServer { ref server_name }
+                if server_name == "playwright"
+        ));
+    }
+
+    #[test]
     fn expanded_search_keeps_non_computer_use_servers_at_default_limit() {
         let mut tools = numbered_tools(
             COMPUTER_USE_MCP_SERVER_NAME,
@@ -426,6 +557,6 @@ mod tests {
         mcp_tools: Option<&std::collections::HashMap<String, ToolInfo>>,
         dynamic_tools: &[DynamicToolSpec],
     ) -> ToolSearchHandler {
-        ToolSearchHandler::new(build_tool_search_entries(mcp_tools, dynamic_tools))
+        ToolSearchHandler::new(build_tool_search_entries(mcp_tools, &[], dynamic_tools))
     }
 }

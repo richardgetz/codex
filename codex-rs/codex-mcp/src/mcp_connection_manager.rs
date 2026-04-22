@@ -14,6 +14,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -28,6 +29,7 @@ use crate::mcp::configured_mcp_servers;
 use crate::mcp::effective_mcp_servers;
 use crate::mcp::mcp_permission_prompt_is_auto_approved;
 use crate::mcp::tool_plugin_provenance;
+use crate::mcp_tool_names::qualify_server_namespaces;
 pub(crate) use crate::mcp_tool_names::qualify_tools;
 use anyhow::Context;
 use anyhow::Result;
@@ -93,6 +95,8 @@ use tracing::warn;
 use url::Url;
 
 use codex_config::McpServerConfig;
+use codex_config::McpServerSharingMode;
+use codex_config::McpServerStartupMode;
 use codex_config::McpServerTransportConfig;
 use codex_login::CodexAuth;
 use codex_utils_plugins::mcp_connector::is_connector_id_allowed;
@@ -112,6 +116,18 @@ const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
 const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
 const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str = "codex.mcp.tools.fetch_uncached.duration_ms";
 const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str = "codex.mcp.tools.cache_write.duration_ms";
+
+type ManagedClientStartup = Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>;
+type ManagedClientStartupFactory = Arc<dyn Fn() -> ManagedClientStartup + Send + Sync>;
+
+#[derive(Clone)]
+enum SharedMcpClientEntry {
+    Starting(ManagedClientStartup),
+    Ready(Box<ManagedClient>),
+}
+
+static SHARED_MCP_CLIENTS: OnceLock<StdMutex<HashMap<String, SharedMcpClientEntry>>> =
+    OnceLock::new();
 
 fn sha1_hex(s: &str) -> String {
     let mut hasher = Sha1::new();
@@ -159,6 +175,12 @@ pub struct ToolInfo {
     #[serde(default)]
     pub plugin_display_names: Vec<String>,
     pub connector_description: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LazyMcpServerInfo {
+    pub server_name: String,
+    pub description: Option<String>,
 }
 
 impl ToolInfo {
@@ -437,12 +459,26 @@ impl ElicitationRequestManager {
     }
 }
 
+fn decline_elicitation_sender() -> SendElicitation {
+    Box::new(|_, _| {
+        async move {
+            Ok(ElicitationResponse {
+                action: ElicitationAction::Decline,
+                content: None,
+                meta: None,
+            })
+        }
+        .boxed()
+    })
+}
+
 #[derive(Clone)]
 struct ManagedClient {
     client: Arc<RmcpClient>,
     tools: Vec<ToolInfo>,
     tool_filter: ToolFilter,
     tool_timeout: Option<Duration>,
+    shared_key: Option<String>,
     server_instructions: Option<String>,
     server_supports_sandbox_state_meta_capability: bool,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
@@ -475,8 +511,96 @@ impl ManagedClient {
     }
 }
 
-type ManagedClientStartup = Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>;
-type ManagedClientStartupFactory = Arc<dyn Fn() -> ManagedClientStartup + Send + Sync>;
+enum EffectiveMcpSharingMode {
+    Standalone,
+    Shared { key: String },
+}
+
+fn shared_mcp_client_startup(
+    key: String,
+    startup: BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>,
+) -> ManagedClientStartup {
+    let pool = SHARED_MCP_CLIENTS.get_or_init(|| StdMutex::new(HashMap::new()));
+    let mut guard = pool
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(entry) = guard.get(&key) {
+        return match entry {
+            SharedMcpClientEntry::Starting(startup) => startup.clone(),
+            SharedMcpClientEntry::Ready(client) => {
+                let client = client.as_ref().clone();
+                async move { Ok(client) }.boxed().shared()
+            }
+        };
+    }
+
+    let startup_key = key.clone();
+    let shared_startup = async move {
+        match startup.await {
+            Ok(client) => {
+                store_shared_mcp_ready_client(startup_key, client.clone());
+                Ok(client)
+            }
+            Err(error) => {
+                remove_shared_mcp_client_startup(&startup_key);
+                Err(error)
+            }
+        }
+    }
+    .boxed()
+    .shared();
+    guard.insert(key, SharedMcpClientEntry::Starting(shared_startup.clone()));
+    shared_startup
+}
+
+fn shared_mcp_ready_client(key: &str) -> Option<ManagedClient> {
+    let pool = SHARED_MCP_CLIENTS.get_or_init(|| StdMutex::new(HashMap::new()));
+    let guard = pool
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match guard.get(key) {
+        Some(SharedMcpClientEntry::Ready(client)) => Some(client.as_ref().clone()),
+        Some(SharedMcpClientEntry::Starting(_)) | None => None,
+    }
+}
+
+fn store_shared_mcp_ready_client(key: String, client: ManagedClient) {
+    let pool = SHARED_MCP_CLIENTS.get_or_init(|| StdMutex::new(HashMap::new()));
+    let mut guard = pool
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.insert(key, SharedMcpClientEntry::Ready(Box::new(client)));
+}
+
+fn remove_shared_mcp_client_startup(key: &str) {
+    let pool = SHARED_MCP_CLIENTS.get_or_init(|| StdMutex::new(HashMap::new()));
+    let mut guard = pool
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if matches!(guard.get(key), Some(SharedMcpClientEntry::Starting(_))) {
+        guard.remove(key);
+    }
+}
+
+fn remove_shared_mcp_ready_client(client: &ManagedClient) {
+    let Some(key) = client.shared_key.as_deref() else {
+        return;
+    };
+    let pool = SHARED_MCP_CLIENTS.get_or_init(|| StdMutex::new(HashMap::new()));
+    let mut guard = pool
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if matches!(
+        guard.get(key),
+        Some(SharedMcpClientEntry::Ready(ready)) if Arc::ptr_eq(&ready.client, &client.client)
+    ) {
+        guard.remove(key);
+    }
+}
+
+fn evict_shared_mcp_ready_client(client: &ManagedClient) {
+    remove_shared_mcp_ready_client(client);
+}
 
 #[derive(Clone)]
 struct RetryableManagedClientStartup {
@@ -546,6 +670,19 @@ impl ManagedClientStartupState {
             Self::Retryable(startup) => startup.clear_if_current(generation),
         }
     }
+    fn clear(&self) {
+        match self {
+            #[cfg(test)]
+            Self::Fixed(_) => {}
+            Self::Retryable(startup) => {
+                let mut guard = startup
+                    .current
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                *guard = None;
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -553,6 +690,10 @@ struct AsyncManagedClient {
     client: ManagedClientStartupState,
     startup_snapshot: Option<Vec<ToolInfo>>,
     startup_complete: Arc<AtomicBool>,
+    start_requested: Arc<AtomicBool>,
+    start_on_startup: bool,
+    cancel_token: CancellationToken,
+    ready_client_identity: Arc<StdMutex<Option<Arc<RmcpClient>>>>,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
 }
 
@@ -570,6 +711,8 @@ impl AsyncManagedClient {
         codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
         tool_plugin_provenance: Arc<ToolPluginProvenance>,
         runtime_environment: McpRuntimeEnvironment,
+        start_on_startup: bool,
+        sharing_mode: EffectiveMcpSharingMode,
     ) -> Self {
         let tool_filter = ToolFilter::from_config(&config);
         let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
@@ -577,24 +720,40 @@ impl AsyncManagedClient {
             codex_apps_tools_cache_context.as_ref(),
         )
         .map(|tools| filter_tools(tools, &tool_filter));
-        let startup_tool_filter = tool_filter;
         let startup_complete = Arc::new(AtomicBool::new(false));
+        let shared_key = match &sharing_mode {
+            EffectiveMcpSharingMode::Standalone => None,
+            EffectiveMcpSharingMode::Shared { key } => Some(key.clone()),
+        };
+        let shared_ready_client = shared_key.as_deref().and_then(shared_mcp_ready_client);
+        if shared_ready_client.is_some() {
+            startup_complete.store(true, Ordering::Release);
+        }
+        let allow_elicitation = shared_key.is_none();
+        let startup_cancel_token = if shared_key.is_some() {
+            CancellationToken::new()
+        } else {
+            cancel_token.clone()
+        };
+        let startup_complete_for_factory = Arc::clone(&startup_complete);
         let startup_factory: ManagedClientStartupFactory = Arc::new({
-            let startup_complete = Arc::clone(&startup_complete);
+            let tool_filter = tool_filter.clone();
+            let shared_key = shared_key.clone();
             move || {
-                startup_complete.store(false, Ordering::Release);
-                let startup_complete = Arc::clone(&startup_complete);
+                startup_complete_for_factory.store(false, Ordering::Release);
                 let server_name = server_name.clone();
                 let config = config.clone();
                 let store_mode = store_mode.clone();
-                let cancel_token = cancel_token.clone();
-                let startup_tool_filter = startup_tool_filter.clone();
+                let startup_complete = Arc::clone(&startup_complete_for_factory);
+                let startup_tool_filter = tool_filter.clone();
                 let tx_event = tx_event.clone();
                 let elicitation_requests = elicitation_requests.clone();
-                let codex_apps_tools_cache_context = codex_apps_tools_cache_context.clone();
                 let runtime_environment = runtime_environment.clone();
-                async move {
-                    let outcome = async {
+                let codex_apps_tools_cache_context = codex_apps_tools_cache_context.clone();
+                let startup_cancel_token = startup_cancel_token.clone();
+                let startup_shared_key = shared_key.clone();
+                let startup = async move {
+                    async {
                         if let Err(error) = validate_mcp_server_name(&server_name) {
                             return Err(error.into());
                         }
@@ -603,7 +762,7 @@ impl AsyncManagedClient {
                             make_rmcp_client(
                                 &server_name,
                                 config.clone(),
-                                store_mode,
+                                store_mode.clone(),
                                 runtime_environment,
                             )
                             .await?,
@@ -618,53 +777,124 @@ impl AsyncManagedClient {
                                 tool_timeout: config
                                     .tool_timeout_sec
                                     .unwrap_or(DEFAULT_TOOL_TIMEOUT),
-                                tool_filter: startup_tool_filter.clone(),
+                                tool_filter: startup_tool_filter,
+                                shared_key: startup_shared_key,
                                 tx_event,
                                 elicitation_requests,
                                 codex_apps_tools_cache_context,
+                                allow_elicitation,
                             },
                         )
-                        .or_cancel(&cancel_token)
+                        .or_cancel(&startup_cancel_token)
                         .await
                         {
                             Ok(result) => result,
                             Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
                         }
                     }
-                    .await;
-
-                    startup_complete.store(true, Ordering::Release);
-                    outcome
+                    .await
                 }
-                .boxed()
-                .shared()
+                .boxed();
+                match &shared_key {
+                    Some(key) => {
+                        let startup = shared_mcp_client_startup(key.clone(), startup);
+                        let startup_complete = Arc::clone(&startup_complete);
+                        async move {
+                            let outcome = startup.await;
+                            startup_complete.store(true, Ordering::Release);
+                            outcome
+                        }
+                        .boxed()
+                        .shared()
+                    }
+                    None => {
+                        let startup_complete = Arc::clone(&startup_complete);
+                        async move {
+                            let outcome = startup.await;
+                            startup_complete.store(true, Ordering::Release);
+                            outcome
+                        }
+                        .boxed()
+                        .shared()
+                    }
+                }
             }
         });
+        let start_requested = Arc::new(AtomicBool::new(
+            start_on_startup || shared_ready_client.is_some(),
+        ));
         let client = ManagedClientStartupState::Retryable(RetryableManagedClientStartup::new(
             startup_factory,
         ));
-        if startup_snapshot.is_some() {
-            let startup_task = client.startup().1;
-            tokio::spawn(async move {
-                let _ = startup_task.await;
-            });
-        }
 
         Self {
             client,
             startup_snapshot,
             startup_complete,
+            start_requested,
+            start_on_startup,
+            cancel_token,
+            ready_client_identity: Arc::new(StdMutex::new(None)),
             tool_plugin_provenance,
         }
     }
 
+    fn request_start(&self) -> bool {
+        let was_requested = self.start_requested.swap(true, Ordering::AcqRel);
+        !self.start_on_startup && !was_requested
+    }
+
     async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
+        let _ = self.request_start();
+        self.await_client().await
+    }
+
+    async fn await_client(&self) -> Result<ManagedClient, StartupOutcomeError> {
         let (generation, startup) = self.client.startup();
-        let result = startup.await;
-        if matches!(result, Err(StartupOutcomeError::Cancelled)) {
+        let result = match startup.or_cancel(&self.cancel_token).await {
+            Ok(result) => result,
+            Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
+        };
+        if result.is_err() && !self.start_on_startup {
+            self.start_requested.store(false, Ordering::Release);
+            self.client.clear_if_current(generation);
+        } else if matches!(result, Err(StartupOutcomeError::Cancelled)) {
             self.client.clear_if_current(generation);
         }
+        if let Ok(client) = &result {
+            let mut guard = self
+                .ready_client_identity
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *guard = Some(Arc::clone(&client.client));
+        }
         result
+    }
+
+    fn evict_failed_shared_client(&self, failed_client: &ManagedClient) {
+        if failed_client.shared_key.is_none() {
+            return;
+        }
+        let mut guard = self
+            .ready_client_identity
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard
+            .as_ref()
+            .is_some_and(|client| Arc::ptr_eq(client, &failed_client.client))
+        {
+            *guard = None;
+            self.client.clear();
+            self.start_requested.store(false, Ordering::Release);
+        }
+    }
+
+    fn has_started_or_starting(&self) -> bool {
+        self.start_requested.load(Ordering::Acquire)
+    }
+
+    fn is_lazy_unstarted(&self) -> bool {
+        !self.start_on_startup && !self.has_started_or_starting()
     }
 
     fn startup_snapshot_while_initializing(&self) -> Option<Vec<ToolInfo>> {
@@ -675,59 +905,64 @@ impl AsyncManagedClient {
     }
 
     async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
-        let annotate_tools = |tools: Vec<ToolInfo>| {
-            let mut tools = tools;
-            for tool in &mut tools {
-                if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
-                    tool.tool = tool_with_model_visible_input_schema(&tool.tool);
-                }
+        self.listed_tools_inner().await
+    }
 
-                let plugin_names = match tool.connector_id.as_deref() {
-                    Some(connector_id) => self
-                        .tool_plugin_provenance
-                        .plugin_display_names_for_connector_id(connector_id),
-                    None => self
-                        .tool_plugin_provenance
-                        .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
-                };
-                tool.plugin_display_names = plugin_names.to_vec();
-
-                if plugin_names.is_empty() {
-                    continue;
-                }
-
-                let plugin_source_note = if plugin_names.len() == 1 {
-                    format!("This tool is part of plugin `{}`.", plugin_names[0])
-                } else {
-                    format!(
-                        "This tool is part of plugins {}.",
-                        plugin_names
-                            .iter()
-                            .map(|plugin_name| format!("`{plugin_name}`"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                };
-                let description = tool
-                    .tool
-                    .description
-                    .as_deref()
-                    .map(str::trim)
-                    .unwrap_or("");
-                let annotated_description = if description.is_empty() {
-                    plugin_source_note
-                } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
-                    format!("{description} {plugin_source_note}")
-                } else {
-                    format!("{description}. {plugin_source_note}")
-                };
-                tool.tool.description = Some(Cow::Owned(annotated_description));
+    fn annotate_tools(&self, mut tools: Vec<ToolInfo>) -> Vec<ToolInfo> {
+        for tool in &mut tools {
+            if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
+                tool.tool = tool_with_model_visible_input_schema(&tool.tool);
             }
-            tools
-        };
 
+            let plugin_names = match tool.connector_id.as_deref() {
+                Some(connector_id) => self
+                    .tool_plugin_provenance
+                    .plugin_display_names_for_connector_id(connector_id),
+                None => self
+                    .tool_plugin_provenance
+                    .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
+            };
+            tool.plugin_display_names = plugin_names.to_vec();
+
+            if plugin_names.is_empty() {
+                continue;
+            }
+
+            let plugin_source_note = if plugin_names.len() == 1 {
+                format!("This tool is part of plugin `{}`.", plugin_names[0])
+            } else {
+                format!(
+                    "This tool is part of plugins {}.",
+                    plugin_names
+                        .iter()
+                        .map(|plugin_name| format!("`{plugin_name}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            let description = tool
+                .tool
+                .description
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("");
+            let annotated_description = if description.is_empty() {
+                plugin_source_note
+            } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
+                format!("{description} {plugin_source_note}")
+            } else {
+                format!("{description}. {plugin_source_note}")
+            };
+            tool.tool.description = Some(Cow::Owned(annotated_description));
+        }
+        tools
+    }
+
+    async fn listed_tools_inner(&self) -> Option<Vec<ToolInfo>> {
         // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
-        let tools = if let Some(startup_tools) = self.startup_snapshot_while_initializing() {
+        let tools = if self.is_lazy_unstarted() {
+            self.startup_snapshot.clone()
+        } else if let Some(startup_tools) = self.startup_snapshot_while_initializing() {
             Some(startup_tools)
         } else {
             match self.client().await {
@@ -735,7 +970,7 @@ impl AsyncManagedClient {
                 Err(_) => self.startup_snapshot.clone(),
             }
         };
-        tools.map(annotate_tools)
+        tools.map(|tools| self.annotate_tools(tools))
     }
 }
 
@@ -757,7 +992,38 @@ pub struct SandboxState {
 pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     server_origins: HashMap<String, String>,
+    lazy_server_descriptions: HashMap<String, String>,
     elicitation_requests: ElicitationRequestManager,
+    startup_event_emitter: Option<McpStartupEventEmitter>,
+}
+
+#[derive(Clone)]
+struct McpStartupEventEmitter {
+    submit_id: String,
+    tx_event: Sender<Event>,
+    auth_entries: Arc<HashMap<String, McpAuthStatusEntry>>,
+}
+
+impl McpStartupEventEmitter {
+    async fn emit_status(&self, server_name: &str, status: McpStartupStatus) {
+        let _ = emit_update(
+            self.submit_id.as_str(),
+            &self.tx_event,
+            McpStartupUpdateEvent {
+                server: server_name.to_string(),
+                status,
+            },
+        )
+        .await;
+    }
+
+    fn status_for_outcome(
+        &self,
+        server_name: &str,
+        outcome: &Result<ManagedClient, StartupOutcomeError>,
+    ) -> McpStartupStatus {
+        startup_status_for_outcome(server_name, self.auth_entries.get(server_name), outcome)
+    }
 }
 
 /// Runtime placement information used when starting MCP server transports.
@@ -815,10 +1081,12 @@ impl McpConnectionManager {
         Self {
             clients: HashMap::new(),
             server_origins: HashMap::new(),
+            lazy_server_descriptions: HashMap::new(),
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
                 sandbox_policy.get().clone(),
             ),
+            startup_event_emitter: None,
         }
     }
 
@@ -855,30 +1123,45 @@ impl McpConnectionManager {
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         tool_plugin_provenance: ToolPluginProvenance,
+        lazy_mcp_servers_by_default: bool,
     ) -> (Self, CancellationToken) {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
         let mut server_origins = HashMap::new();
+        let mut lazy_server_descriptions = HashMap::new();
         let mut join_set = JoinSet::new();
         let elicitation_requests =
             ElicitationRequestManager::new(approval_policy.value(), initial_sandbox_policy);
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
+        let startup_event_emitter = McpStartupEventEmitter {
+            submit_id,
+            tx_event: tx_event.clone(),
+            auth_entries: Arc::new(auth_entries.clone()),
+        };
         let mcp_servers = mcp_servers.clone();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
+            let start_on_startup = should_start_server_on_session_start(
+                &server_name,
+                &cfg,
+                lazy_mcp_servers_by_default,
+            );
             if let Some(origin) = transport_origin(&cfg.transport) {
                 server_origins.insert(server_name.clone(), origin);
             }
+            let lazy_server_description = lazy_mcp_server_description(&server_name, &cfg);
             let cancel_token = cancel_token.child_token();
-            let _ = emit_update(
-                startup_submit_id.as_str(),
-                &tx_event,
-                McpStartupUpdateEvent {
-                    server: server_name.clone(),
-                    status: McpStartupStatus::Starting,
-                },
-            )
-            .await;
+            if start_on_startup {
+                let _ = emit_update(
+                    startup_submit_id.as_str(),
+                    &tx_event,
+                    McpStartupUpdateEvent {
+                        server: server_name.clone(),
+                        status: McpStartupStatus::Starting,
+                    },
+                )
+                .await;
+            }
             let codex_apps_tools_cache_context = if server_name == CODEX_APPS_MCP_SERVER_NAME {
                 Some(CodexAppsToolsCacheContext {
                     codex_home: codex_home.clone(),
@@ -887,6 +1170,7 @@ impl McpConnectionManager {
             } else {
                 None
             };
+            let sharing_mode = effective_sharing_mode(&server_name, &cfg, &runtime_environment);
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
                 cfg,
@@ -897,8 +1181,14 @@ impl McpConnectionManager {
                 codex_apps_tools_cache_context,
                 Arc::clone(&tool_plugin_provenance),
                 runtime_environment.clone(),
+                start_on_startup,
+                sharing_mode,
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
+            if !start_on_startup {
+                lazy_server_descriptions.insert(server_name.clone(), lazy_server_description);
+                continue;
+            }
             let tx_event = tx_event.clone();
             let submit_id = startup_submit_id.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
@@ -907,18 +1197,8 @@ impl McpConnectionManager {
                 if cancel_token.is_cancelled() {
                     outcome = Err(StartupOutcomeError::Cancelled);
                 }
-                let status = match &outcome {
-                    Ok(_) => McpStartupStatus::Ready,
-                    Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
-                    Err(error) => {
-                        let error_str = mcp_init_error_display(
-                            server_name.as_str(),
-                            auth_entry.as_ref(),
-                            error,
-                        );
-                        McpStartupStatus::Failed { error: error_str }
-                    }
-                };
+                let status =
+                    startup_status_for_outcome(server_name.as_str(), auth_entry.as_ref(), &outcome);
 
                 let _ = emit_update(
                     submit_id.as_str(),
@@ -936,7 +1216,9 @@ impl McpConnectionManager {
         let manager = Self {
             clients,
             server_origins,
+            lazy_server_descriptions,
             elicitation_requests: elicitation_requests.clone(),
+            startup_event_emitter: Some(startup_event_emitter),
         };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
@@ -964,12 +1246,44 @@ impl McpConnectionManager {
     }
 
     async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {
-        self.clients
+        let managed_client = self
+            .clients
             .get(name)
-            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?
-            .client()
+            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?;
+        self.start_client(name, managed_client)
             .await
             .context("failed to get client")
+    }
+
+    async fn start_client(
+        &self,
+        server_name: &str,
+        managed_client: &AsyncManagedClient,
+    ) -> Result<ManagedClient, StartupOutcomeError> {
+        let emit_lazy_startup_status = managed_client.request_start();
+        if emit_lazy_startup_status && let Some(emitter) = &self.startup_event_emitter {
+            emitter
+                .emit_status(server_name, McpStartupStatus::Starting)
+                .await;
+        }
+
+        let outcome = managed_client.await_client().await;
+        if emit_lazy_startup_status && let Some(emitter) = &self.startup_event_emitter {
+            emitter
+                .emit_status(
+                    server_name,
+                    emitter.status_for_outcome(server_name, &outcome),
+                )
+                .await;
+        }
+        outcome
+    }
+
+    fn evict_failed_shared_client(&self, server_name: &str, failed_client: &ManagedClient) {
+        evict_shared_mcp_ready_client(failed_client);
+        if let Some(managed_client) = self.clients.get(server_name) {
+            managed_client.evict_failed_shared_client(failed_client);
+        }
     }
 
     pub async fn resolve_elicitation(
@@ -987,6 +1301,9 @@ impl McpConnectionManager {
         let Some(async_managed_client) = self.clients.get(server_name) else {
             return false;
         };
+        if async_managed_client.is_lazy_unstarted() {
+            return false;
+        }
 
         match tokio::time::timeout(timeout, async_managed_client.client()).await {
             Ok(Ok(_)) => true,
@@ -1031,6 +1348,33 @@ impl McpConnectionManager {
             tools.extend(server_tools);
         }
         qualify_tools(tools)
+    }
+
+    pub fn lazy_server_infos(&self) -> Vec<LazyMcpServerInfo> {
+        let mut servers = self
+            .clients
+            .iter()
+            .filter(|(_, client)| client.is_lazy_unstarted())
+            .map(|(server_name, _)| LazyMcpServerInfo {
+                server_name: server_name.clone(),
+                description: self.lazy_server_descriptions.get(server_name).cloned(),
+            })
+            .collect::<Vec<_>>();
+        servers.sort_by(|left, right| left.server_name.cmp(&right.server_name));
+        servers
+    }
+
+    pub async fn list_tools_for_server(
+        &self,
+        server_name: &str,
+    ) -> Result<HashMap<String, ToolInfo>> {
+        let managed_client = self
+            .clients
+            .get(server_name)
+            .ok_or_else(|| anyhow!("unknown MCP server '{server_name}'"))?;
+        let client = self.start_client(server_name, managed_client).await?;
+        let tools = managed_client.annotate_tools(client.listed_tools());
+        Ok(qualify_tools(tools))
     }
 
     /// Force-refresh codex apps tools by bypassing the in-process cache.
@@ -1092,12 +1436,20 @@ impl McpConnectionManager {
         let clients_snapshot = &self.clients;
 
         for (server_name, async_managed_client) in clients_snapshot {
+            if async_managed_client.is_lazy_unstarted() {
+                continue;
+            }
             let server_name = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client().await else {
+            let Ok(managed_client) = self
+                .start_client(server_name.as_str(), async_managed_client)
+                .await
+            else {
                 continue;
             };
             let timeout = managed_client.tool_timeout;
             let client = managed_client.client.clone();
+            let failed_managed_client = managed_client.clone();
+            let async_managed_client = async_managed_client.clone();
 
             join_set.spawn(async move {
                 let mut collected: Vec<Resource> = Vec::new();
@@ -1110,7 +1462,11 @@ impl McpConnectionManager {
                     });
                     let response = match client.list_resources(params, timeout).await {
                         Ok(result) => result,
-                        Err(err) => return (server_name, Err(err)),
+                        Err(err) => {
+                            evict_shared_mcp_ready_client(&failed_managed_client);
+                            async_managed_client.evict_failed_shared_client(&failed_managed_client);
+                            return (server_name, Err(err));
+                        }
                     };
 
                     collected.extend(response.resources);
@@ -1158,12 +1514,20 @@ impl McpConnectionManager {
         let clients_snapshot = &self.clients;
 
         for (server_name, async_managed_client) in clients_snapshot {
+            if async_managed_client.is_lazy_unstarted() {
+                continue;
+            }
             let server_name_cloned = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client().await else {
+            let Ok(managed_client) = self
+                .start_client(server_name.as_str(), async_managed_client)
+                .await
+            else {
                 continue;
             };
             let client = managed_client.client.clone();
             let timeout = managed_client.tool_timeout;
+            let failed_managed_client = managed_client.clone();
+            let async_managed_client = async_managed_client.clone();
 
             join_set.spawn(async move {
                 let mut collected: Vec<ResourceTemplate> = Vec::new();
@@ -1176,7 +1540,11 @@ impl McpConnectionManager {
                     });
                     let response = match client.list_resource_templates(params, timeout).await {
                         Ok(result) => result,
-                        Err(err) => return (server_name_cloned, Err(err)),
+                        Err(err) => {
+                            evict_shared_mcp_ready_client(&failed_managed_client);
+                            async_managed_client.evict_failed_shared_client(&failed_managed_client);
+                            return (server_name_cloned, Err(err));
+                        }
                     };
 
                     collected.extend(response.resource_templates);
@@ -1235,11 +1603,18 @@ impl McpConnectionManager {
             ));
         }
 
-        let result: rmcp::model::CallToolResult = client
+        let result = client
             .client
             .call_tool(tool.to_string(), arguments, meta, client.tool_timeout)
-            .await
-            .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
+            .await;
+        let result: rmcp::model::CallToolResult = match result {
+            Ok(result) => result,
+            Err(error) => {
+                self.evict_failed_shared_client(server, &client);
+                return Err(error)
+                    .with_context(|| format!("tool call failed for `{server}/{tool}`"));
+            }
+        };
 
         let content = result
             .content
@@ -1277,11 +1652,14 @@ impl McpConnectionManager {
         let managed = self.client_by_name(server).await?;
         let timeout = managed.tool_timeout;
 
-        managed
-            .client
-            .list_resources(params, timeout)
-            .await
-            .with_context(|| format!("resources/list failed for `{server}`"))
+        let result = managed.client.list_resources(params, timeout).await;
+        match result {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                self.evict_failed_shared_client(server, &managed);
+                Err(error).with_context(|| format!("resources/list failed for `{server}`"))
+            }
+        }
     }
 
     /// List resource templates from the specified server.
@@ -1294,10 +1672,15 @@ impl McpConnectionManager {
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
 
-        client
-            .list_resource_templates(params, timeout)
-            .await
-            .with_context(|| format!("resources/templates/list failed for `{server}`"))
+        let result = client.list_resource_templates(params, timeout).await;
+        match result {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                self.evict_failed_shared_client(server, &managed);
+                Err(error)
+                    .with_context(|| format!("resources/templates/list failed for `{server}`"))
+            }
+        }
     }
 
     /// Read a resource from the specified server.
@@ -1311,17 +1694,43 @@ impl McpConnectionManager {
         let timeout = managed.tool_timeout;
         let uri = params.uri.clone();
 
-        client
-            .read_resource(params, timeout)
-            .await
-            .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
+        let result = client.read_resource(params, timeout).await;
+        match result {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                self.evict_failed_shared_client(server, &managed);
+                Err(error).with_context(|| format!("resources/read failed for `{server}` ({uri})"))
+            }
+        }
     }
 
     pub async fn resolve_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
         let all_tools = self.list_all_tools().await;
-        all_tools
+        if let Some(tool) = all_tools
             .into_values()
             .find(|tool| tool.canonical_tool_name() == *tool_name)
+        {
+            return Some(tool);
+        }
+
+        let server_name = self.server_name_from_tool_namespace(tool_name)?;
+        let tools = self.list_tools_for_server(server_name).await.ok()?;
+        tools
+            .into_values()
+            .find(|tool| tool.canonical_tool_name() == *tool_name)
+    }
+
+    fn server_name_from_tool_namespace(&self, tool_name: &ToolName) -> Option<&str> {
+        let namespace = tool_name.namespace.as_deref()?;
+        let namespaces = qualify_server_namespaces(self.clients.keys());
+        namespaces
+            .into_iter()
+            .find_map(|(server_name, callable_namespace)| {
+                (namespace == callable_namespace)
+                    .then(|| self.clients.get_key_value(&server_name))
+                    .flatten()
+                    .map(|(server_name, _)| server_name.as_str())
+            })
     }
 }
 
@@ -1336,6 +1745,21 @@ async fn emit_update(
             msg: EventMsg::McpStartupUpdate(update),
         })
         .await
+}
+
+fn startup_status_for_outcome(
+    server_name: &str,
+    auth_entry: Option<&McpAuthStatusEntry>,
+    outcome: &Result<ManagedClient, StartupOutcomeError>,
+) -> McpStartupStatus {
+    match outcome {
+        Ok(_) => McpStartupStatus::Ready,
+        Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
+        Err(error) => {
+            let error = mcp_init_error_display(server_name, auth_entry, error);
+            McpStartupStatus::Failed { error }
+        }
+    }
 }
 
 /// A tool is allowed to be used if both are true:
@@ -1535,11 +1959,15 @@ async fn start_server_task(
         startup_timeout,
         tool_timeout,
         tool_filter,
+        shared_key,
         tx_event,
         elicitation_requests,
         codex_apps_tools_cache_context,
+        allow_elicitation,
     } = params;
-    let elicitation = elicitation_capability_for_server(&server_name);
+    let elicitation = allow_elicitation
+        .then(|| elicitation_capability_for_server(&server_name))
+        .flatten();
     let params = InitializeRequestParams {
         meta: None,
         capabilities: ClientCapabilities {
@@ -1561,7 +1989,11 @@ async fn start_server_task(
         protocol_version: ProtocolVersion::V_2025_06_18,
     };
 
-    let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
+    let send_elicitation = if allow_elicitation {
+        elicitation_requests.make_sender(server_name.clone(), tx_event)
+    } else {
+        decline_elicitation_sender()
+    };
 
     let initialize_result = client
         .initialize(params, startup_timeout, send_elicitation)
@@ -1608,6 +2040,7 @@ async fn start_server_task(
         tools,
         tool_timeout: Some(tool_timeout),
         tool_filter,
+        shared_key,
         server_instructions: initialize_result.instructions,
         server_supports_sandbox_state_meta_capability,
         codex_apps_tools_cache_context,
@@ -1620,9 +2053,11 @@ struct StartServerTaskParams {
     startup_timeout: Option<Duration>, // TODO: cancel_token should handle this.
     tool_timeout: Duration,
     tool_filter: ToolFilter,
+    shared_key: Option<String>,
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+    allow_elicitation: bool,
 }
 
 async fn make_rmcp_client(

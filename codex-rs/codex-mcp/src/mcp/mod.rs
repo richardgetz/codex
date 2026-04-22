@@ -276,6 +276,8 @@ fn codex_apps_mcp_server_config(config: &McpConfig, auth: Option<&CodexAuth>) ->
         enabled: true,
         required: false,
         supports_parallel_tool_calls: false,
+        startup: codex_config::McpServerStartupMode::Auto,
+        sharing: codex_config::McpServerSharingMode::Auto,
         disabled_reason: None,
         startup_timeout_sec: Some(Duration::from_secs(30)),
         tool_timeout_sec: None,
@@ -345,6 +347,7 @@ pub async fn read_mcp_resource(
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance(config),
+        /*lazy_mcp_servers_by_default*/ false,
     )
     .await;
 
@@ -413,6 +416,7 @@ pub async fn collect_mcp_snapshot_with_detail(
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance,
+        /*lazy_mcp_servers_by_default*/ false,
     )
     .await;
 
@@ -488,6 +492,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance,
+        /*lazy_mcp_servers_by_default*/ false,
     )
     .await;
 

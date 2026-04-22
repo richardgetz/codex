@@ -15,6 +15,8 @@ use crate::AppToolApproval;
 use crate::CONFIG_TOML_FILE;
 use crate::McpServerConfig;
 use crate::McpServerEnvVar;
+use crate::McpServerSharingMode;
+use crate::McpServerStartupMode;
 use crate::McpServerTransportConfig;
 
 pub async fn load_global_mcp_servers(
@@ -183,6 +185,20 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
     }
     if config.supports_parallel_tool_calls {
         entry["supports_parallel_tool_calls"] = value(true);
+    }
+    if config.startup != McpServerStartupMode::Auto {
+        entry["startup"] = value(match config.startup {
+            McpServerStartupMode::Auto => "auto",
+            McpServerStartupMode::Eager => "eager",
+            McpServerStartupMode::Lazy => "lazy",
+        });
+    }
+    if config.sharing != McpServerSharingMode::Auto {
+        entry["sharing"] = value(match config.sharing {
+            McpServerSharingMode::Auto => "auto",
+            McpServerSharingMode::Standalone => "standalone",
+            McpServerSharingMode::Shared => "shared",
+        });
     }
     if let Some(timeout) = config.startup_timeout_sec {
         entry["startup_timeout_sec"] = value(timeout.as_secs_f64());

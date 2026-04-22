@@ -37,6 +37,7 @@ async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
         &turn.tools_config,
         ToolRouterParams {
             deferred_mcp_tools,
+            lazy_mcp_servers: Vec::new(),
             mcp_tools: Some(mcp_tools),
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
@@ -96,6 +97,7 @@ async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> 
         &turn.tools_config,
         ToolRouterParams {
             deferred_mcp_tools,
+            lazy_mcp_servers: Vec::new(),
             mcp_tools: Some(mcp_tools),
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
@@ -144,6 +146,7 @@ async fn js_repl_tools_only_blocks_namespaced_js_repl_tool() -> anyhow::Result<(
         &turn.tools_config,
         ToolRouterParams {
             deferred_mcp_tools: None,
+            lazy_mcp_servers: Vec::new(),
             mcp_tools: None,
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
@@ -200,6 +203,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
         &turn.tools_config,
         ToolRouterParams {
             deferred_mcp_tools: None,
+            lazy_mcp_servers: Vec::new(),
             mcp_tools: Some(mcp_tools),
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
@@ -273,6 +277,7 @@ async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> 
         &turn.tools_config,
         ToolRouterParams {
             deferred_mcp_tools: None,
+            lazy_mcp_servers: Vec::new(),
             mcp_tools: None,
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::from(["echo".to_string()]),

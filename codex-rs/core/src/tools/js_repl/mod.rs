@@ -15,6 +15,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::SearchToolCallParams;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -1586,18 +1587,15 @@ impl JsReplManager {
             };
         }
 
-        let mcp_tools = exec
-            .session
-            .services
-            .mcp_connection_manager
-            .read()
-            .await
-            .list_all_tools()
-            .await;
+        let mcp_connection_manager = exec.session.services.mcp_connection_manager.read().await;
+        let mcp_tools = mcp_connection_manager.list_all_tools().await;
+        let lazy_mcp_servers = mcp_connection_manager.lazy_server_infos();
+        drop(mcp_connection_manager);
         let router = ToolRouter::from_config(
             &exec.turn.tools_config,
             crate::tools::router::ToolRouterParams {
                 deferred_mcp_tools: None,
+                lazy_mcp_servers,
                 mcp_tools: Some(mcp_tools),
                 unavailable_called_tools: Vec::new(),
                 // JS REPL dispatches nested tool calls directly, not through
@@ -1616,6 +1614,9 @@ impl JsReplManager {
                     Some(ToolName::plain(req.tool_name.clone()))
                 }
                 ToolSpec::Freeform(tool) if tool.name == req.tool_name => {
+                    Some(ToolName::plain(req.tool_name.clone()))
+                }
+                ToolSpec::ToolSearch { .. } if req.tool_name == "tool_search" => {
                     Some(ToolName::plain(req.tool_name.clone()))
                 }
                 ToolSpec::Namespace(namespace) => {
@@ -1651,6 +1652,35 @@ impl JsReplManager {
                     tool: tool_info.tool.name.to_string(),
                     raw_arguments: req.arguments.clone(),
                 },
+            )
+        } else if matches!(
+            router.find_spec(&requested_tool_name),
+            Some(ToolSpec::ToolSearch { .. })
+        ) {
+            let arguments = match serde_json::from_str::<SearchToolCallParams>(&req.arguments) {
+                Ok(arguments) => arguments,
+                Err(error) => {
+                    let error =
+                        format!("failed to parse tool `{requested_tool_name}` arguments: {error}");
+                    let summary = Self::summarize_tool_call_error(&error);
+                    Self::log_tool_call_response(
+                        &req,
+                        /*ok*/ false,
+                        &summary,
+                        /*response*/ None,
+                        Some(&error),
+                    );
+                    return RunToolResult {
+                        id: req.id,
+                        ok: false,
+                        response: None,
+                        error: Some(error),
+                    };
+                }
+            };
+            (
+                requested_tool_name,
+                crate::tools::context::ToolPayload::ToolSearch { arguments },
             )
         } else if matches!(
             router.find_spec(&requested_tool_name),

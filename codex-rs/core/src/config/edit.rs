@@ -136,6 +136,8 @@ pub fn model_availability_nux_count_edits(shown_count: &HashMap<String, u32>) ->
 
 // TODO(jif) move to a dedicated file
 mod document_helpers {
+    use codex_config::McpServerSharingMode;
+    use codex_config::McpServerStartupMode;
     use codex_config::types::AppToolApproval;
     use codex_config::types::McpServerConfig;
     use codex_config::types::McpServerEnvVar;
@@ -241,6 +243,20 @@ mod document_helpers {
         }
         if config.supports_parallel_tool_calls {
             entry["supports_parallel_tool_calls"] = value(true);
+        }
+        if config.startup != McpServerStartupMode::Auto {
+            entry["startup"] = value(match config.startup {
+                McpServerStartupMode::Auto => "auto",
+                McpServerStartupMode::Eager => "eager",
+                McpServerStartupMode::Lazy => "lazy",
+            });
+        }
+        if config.sharing != McpServerSharingMode::Auto {
+            entry["sharing"] = value(match config.sharing {
+                McpServerSharingMode::Auto => "auto",
+                McpServerSharingMode::Standalone => "standalone",
+                McpServerSharingMode::Shared => "shared",
+            });
         }
         if let Some(timeout) = config.startup_timeout_sec {
             entry["startup_timeout_sec"] = value(timeout.as_secs_f64());
