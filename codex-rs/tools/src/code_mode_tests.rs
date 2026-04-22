@@ -123,18 +123,36 @@ declare const tools: { apply_patch(input: string): Promise<unknown>; };
 }
 
 #[test]
-fn tool_spec_to_code_mode_tool_definition_skips_unsupported_variants() {
+fn tool_spec_to_code_mode_tool_definition_exposes_tool_search() {
+    let parameters = JsonSchema::object(
+        BTreeMap::from([(
+            "query".to_string(),
+            JsonSchema::string(/*description*/ None),
+        )]),
+        Some(vec!["query".to_string()]),
+        /*additional_properties*/ None,
+    );
+
     assert_eq!(
         tool_spec_to_code_mode_tool_definition(&ToolSpec::ToolSearch {
             execution: "sync".to_string(),
             description: "Search".to_string(),
-            parameters: JsonSchema::object(
-                BTreeMap::new(),
-                /*required*/ None,
-                /*additional_properties*/ None
-            ),
+            parameters: parameters.clone(),
         }),
-        None
+        Some(codex_code_mode::ToolDefinition {
+            name: "tool_search".to_string(),
+            tool_name: ToolName::plain("tool_search"),
+            description: r#"Search
+
+exec tool declaration:
+```ts
+declare const tools: { tool_search(args: { query: string; }): Promise<unknown>; };
+```"#
+                .to_string(),
+            kind: codex_code_mode::CodeModeToolKind::Function,
+            input_schema: serde_json::to_value(parameters).ok(),
+            output_schema: None,
+        })
     );
 }
 

@@ -907,6 +907,56 @@
         }
       ]
     },
+    "McpServerSharingMode": {
+      "oneOf": [
+        {
+          "description": "Let Codex choose whether this server is safe to share.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Always use a private client/process for each session.",
+          "enum": [
+            "standalone"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Reuse a process-local client when the transport/config key matches.",
+          "enum": [
+            "shared"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "McpServerStartupMode": {
+      "oneOf": [
+        {
+          "description": "Let Codex choose between eager and lazy startup for this server.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Initialize and list tools during session startup.",
+          "enum": [
+            "eager"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Defer initialization until a tool/search/resource operation needs this server.",
+          "enum": [
+            "lazy"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "McpServerToolConfig": {
       "additionalProperties": false,
       "description": "Per-tool approval settings for a single MCP server tool.",
@@ -1634,6 +1684,22 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "sharing": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/McpServerSharingMode"
+            }
+          ],
+          "default": null
+        },
+        "startup": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/McpServerStartupMode"
+            }
+          ],
+          "default": null
         },
         "startup_timeout_ms": {
           "default": null,

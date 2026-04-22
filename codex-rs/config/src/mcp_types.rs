@@ -22,6 +22,30 @@ pub enum AppToolApproval {
     Approve,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum McpServerStartupMode {
+    /// Let Codex choose between eager and lazy startup for this server.
+    #[default]
+    Auto,
+    /// Initialize and list tools during session startup.
+    Eager,
+    /// Defer initialization until a tool/search/resource operation needs this server.
+    Lazy,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum McpServerSharingMode {
+    /// Let Codex choose whether this server is safe to share.
+    #[default]
+    Auto,
+    /// Always use a private client/process for each session.
+    Standalone,
+    /// Reuse a process-local client when the transport/config key matches.
+    Shared,
+}
+
 /// Human-readable reason a configured MCP server was disabled after requirements
 /// were applied.
 ///
@@ -135,6 +159,14 @@ pub struct McpServerConfig {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub supports_parallel_tool_calls: bool,
 
+    /// Controls whether Codex initializes this server during session startup or on first use.
+    #[serde(default, skip_serializing_if = "is_default_startup_mode")]
+    pub startup: McpServerStartupMode,
+
+    /// Controls whether Codex may reuse a matching process-local MCP client.
+    #[serde(default, skip_serializing_if = "is_default_sharing_mode")]
+    pub sharing: McpServerSharingMode,
+
     /// Reason this server was disabled after applying requirements.
     #[serde(skip)]
     pub disabled_reason: Option<McpServerDisabledReason>,
@@ -220,6 +252,10 @@ pub struct RawMcpServerConfig {
     #[serde(default)]
     pub supports_parallel_tool_calls: Option<bool>,
     #[serde(default)]
+    pub startup: Option<McpServerStartupMode>,
+    #[serde(default)]
+    pub sharing: Option<McpServerSharingMode>,
+    #[serde(default)]
     pub default_tools_approval_mode: Option<AppToolApproval>,
     #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
@@ -258,6 +294,8 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             enabled,
             required,
             supports_parallel_tool_calls,
+            startup,
+            sharing,
             default_tools_approval_mode,
             enabled_tools,
             disabled_tools,
@@ -328,6 +366,8 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             enabled: enabled.unwrap_or_else(default_enabled),
             required: required.unwrap_or_default(),
             supports_parallel_tool_calls: supports_parallel_tool_calls.unwrap_or_default(),
+            startup: startup.unwrap_or_default(),
+            sharing: sharing.unwrap_or_default(),
             disabled_reason: None,
             default_tools_approval_mode,
             enabled_tools,
@@ -352,6 +392,16 @@ impl<'de> Deserialize<'de> for McpServerConfig {
 
 const fn default_enabled() -> bool {
     true
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_startup_mode(value: &McpServerStartupMode) -> bool {
+    *value == McpServerStartupMode::Auto
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_sharing_mode(value: &McpServerSharingMode) -> bool {
+    *value == McpServerSharingMode::Auto
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]

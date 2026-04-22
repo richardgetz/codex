@@ -215,6 +215,7 @@ impl Session {
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             tool_plugin_provenance,
+            matches!(turn_context.session_source, SessionSource::SubAgent(_)),
         )
         .await;
         {

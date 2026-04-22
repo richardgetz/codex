@@ -1,4 +1,6 @@
 use super::*;
+use crate::McpServerSharingMode;
+use crate::McpServerStartupMode;
 use crate::McpServerToolConfig;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -26,6 +28,8 @@ async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow:
             enabled: true,
             required: false,
             supports_parallel_tool_calls: true,
+            startup: McpServerStartupMode::Lazy,
+            sharing: McpServerSharingMode::Shared,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -63,6 +67,8 @@ async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow:
         r#"[mcp_servers.docs]
 command = "docs-server"
 supports_parallel_tool_calls = true
+startup = "lazy"
+sharing = "shared"
 default_tools_approval_mode = "auto"
 
 [mcp_servers.docs.tools]
