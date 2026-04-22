@@ -4,6 +4,7 @@ mod versioning;
 use versioning::DEFAULT_SOURCE_VERSION_SUFFIX;
 use versioning::DerivedVersion;
 use versioning::LOCAL_DEV_BUILD_VERSION;
+use versioning::VersionDerivationInputs;
 use versioning::derive_version;
 use versioning::extract_semver_base;
 
@@ -33,16 +34,14 @@ fn extracts_semver_from_codex_version_output() {
 
 #[test]
 fn source_release_build_prefers_mainline_version_and_suffix() {
-    let derived = derive_version(
-        LOCAL_DEV_BUILD_VERSION,
-        Some("release"),
-        false,
-        None,
-        Some("rust-v0.120.0"),
-        None,
-        Some("codex-cli 0.0.0-rick"),
-        Some(DEFAULT_SOURCE_VERSION_SUFFIX),
-    );
+    let derived = derive_version(VersionDerivationInputs {
+        cargo_version: LOCAL_DEV_BUILD_VERSION,
+        profile: Some("release"),
+        official_release_version: Some("rust-v0.120.0"),
+        installed_release_version: Some("codex-cli 0.0.0-rick"),
+        source_version_suffix: Some(DEFAULT_SOURCE_VERSION_SUFFIX),
+        ..Default::default()
+    });
 
     assert_eq!(
         derived,
@@ -56,16 +55,14 @@ fn source_release_build_prefers_mainline_version_and_suffix() {
 
 #[test]
 fn source_release_build_uses_git_release_when_network_and_installed_fallbacks_fail() {
-    let derived = derive_version(
-        LOCAL_DEV_BUILD_VERSION,
-        Some("release"),
-        false,
-        None,
-        None,
-        Some("rust-v0.119.0"),
-        Some("codex-cli 0.0.0-rick"),
-        Some(DEFAULT_SOURCE_VERSION_SUFFIX),
-    );
+    let derived = derive_version(VersionDerivationInputs {
+        cargo_version: LOCAL_DEV_BUILD_VERSION,
+        profile: Some("release"),
+        git_release_version: Some("rust-v0.119.0"),
+        installed_release_version: Some("codex-cli 0.0.0-rick"),
+        source_version_suffix: Some(DEFAULT_SOURCE_VERSION_SUFFIX),
+        ..Default::default()
+    });
 
     assert_eq!(
         derived,
@@ -79,16 +76,13 @@ fn source_release_build_uses_git_release_when_network_and_installed_fallbacks_fa
 
 #[test]
 fn source_release_build_uses_installed_mainline_version_for_wrapped_installs() {
-    let derived = derive_version(
-        LOCAL_DEV_BUILD_VERSION,
-        Some("release"),
-        false,
-        None,
-        None,
-        None,
-        Some("codex-cli 0.118.0"),
-        Some(DEFAULT_SOURCE_VERSION_SUFFIX),
-    );
+    let derived = derive_version(VersionDerivationInputs {
+        cargo_version: LOCAL_DEV_BUILD_VERSION,
+        profile: Some("release"),
+        installed_release_version: Some("codex-cli 0.118.0"),
+        source_version_suffix: Some(DEFAULT_SOURCE_VERSION_SUFFIX),
+        ..Default::default()
+    });
 
     assert_eq!(
         derived,
@@ -102,16 +96,13 @@ fn source_release_build_uses_installed_mainline_version_for_wrapped_installs() {
 
 #[test]
 fn release_line_source_branch_build_appends_suffix() {
-    let derived = derive_version(
-        "0.122.0",
-        Some("release"),
-        true,
-        None,
-        None,
-        None,
-        None,
-        Some(DEFAULT_SOURCE_VERSION_SUFFIX),
-    );
+    let derived = derive_version(VersionDerivationInputs {
+        cargo_version: "0.122.0",
+        profile: Some("release"),
+        source_build_from_release_branch: true,
+        source_version_suffix: Some(DEFAULT_SOURCE_VERSION_SUFFIX),
+        ..Default::default()
+    });
 
     assert_eq!(
         derived,
@@ -125,16 +116,13 @@ fn release_line_source_branch_build_appends_suffix() {
 
 #[test]
 fn release_line_source_branch_build_supports_numeric_fork_suffix() {
-    let derived = derive_version(
-        "0.122.0",
-        Some("release"),
-        true,
-        None,
-        None,
-        None,
-        None,
-        Some("rick.2"),
-    );
+    let derived = derive_version(VersionDerivationInputs {
+        cargo_version: "0.122.0",
+        profile: Some("release"),
+        source_build_from_release_branch: true,
+        source_version_suffix: Some("rick.2"),
+        ..Default::default()
+    });
 
     assert_eq!(
         derived,
@@ -148,16 +136,12 @@ fn release_line_source_branch_build_supports_numeric_fork_suffix() {
 
 #[test]
 fn exact_release_tag_build_keeps_plain_version() {
-    let derived = derive_version(
-        "0.122.0",
-        Some("release"),
-        false,
-        None,
-        None,
-        None,
-        None,
-        Some(DEFAULT_SOURCE_VERSION_SUFFIX),
-    );
+    let derived = derive_version(VersionDerivationInputs {
+        cargo_version: "0.122.0",
+        profile: Some("release"),
+        source_version_suffix: Some(DEFAULT_SOURCE_VERSION_SUFFIX),
+        ..Default::default()
+    });
 
     assert_eq!(
         derived,

@@ -35,16 +35,16 @@ fn main() {
         .then(installed_codex_semver_base)
         .flatten();
     let source_version_suffix = source_version_suffix();
-    let derived = versioning::derive_version(
-        &cargo_version,
-        profile.as_deref(),
+    let derived = versioning::derive_version(versioning::VersionDerivationInputs {
+        cargo_version: &cargo_version,
+        profile: profile.as_deref(),
         source_build_from_release_branch,
-        source_base_override.as_deref(),
-        official_release_version.as_deref(),
-        git_release_version.as_deref(),
-        installed_release_version.as_deref(),
-        source_version_suffix.as_deref(),
-    );
+        source_base_override: source_base_override.as_deref(),
+        official_release_version: official_release_version.as_deref(),
+        git_release_version: git_release_version.as_deref(),
+        installed_release_version: installed_release_version.as_deref(),
+        source_version_suffix: source_version_suffix.as_deref(),
+    });
 
     println!(
         "cargo:rustc-env=CODEX_DISPLAY_VERSION={}",
