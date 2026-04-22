@@ -679,8 +679,7 @@ impl RolloutRecorder {
                         } else {
                             Some(dynamic_tools)
                         },
-                        memory_mode: (!config.generate_memories())
-                            .then_some("disabled".to_string()),
+                        memory_mode: config.initial_memory_mode().map(str::to_string),
                     };
 
                     (

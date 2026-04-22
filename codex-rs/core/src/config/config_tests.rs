@@ -37,13 +37,14 @@ use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
+use codex_config::types::MemoriesScope;
 use codex_config::types::MemoriesToml;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
-use codex_config::types::RouterThreadControlToml;
+use codex_config::types::OrchestratorThreadControlToml;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SkillsConfig;
 use codex_config::types::ThreadControlConfig;
@@ -239,6 +240,7 @@ persistence = "none"
 disable_on_external_context = true
 generate_memories = false
 use_memories = false
+scope = "orchestrator"
 max_raw_memories_for_consolidation = 512
 max_unused_days = 21
 max_rollout_age_days = 42
@@ -254,6 +256,7 @@ consolidation_model = "gpt-5.2"
             disable_on_external_context: Some(true),
             generate_memories: Some(false),
             use_memories: Some(false),
+            scope: Some(MemoriesScope::Orchestrator),
             max_raw_memories_for_consolidation: Some(512),
             max_unused_days: Some(21),
             max_rollout_age_days: Some(42),
@@ -278,6 +281,7 @@ consolidation_model = "gpt-5.2"
             disable_on_external_context: true,
             generate_memories: false,
             use_memories: false,
+            scope: MemoriesScope::Orchestrator,
             max_raw_memories_for_consolidation: 512,
             max_unused_days: 21,
             max_rollout_age_days: 42,
@@ -301,7 +305,7 @@ consolidation_model = "gpt-5.2"
     );
 
     let thread_control = r#"
-[thread_control.router]
+[thread_control.orchestrator]
 model = "gpt-5.3-codex-spark"
 reasoning_effort = "low"
 "#;
@@ -309,7 +313,7 @@ reasoning_effort = "low"
         toml::from_str::<ConfigToml>(thread_control).expect("TOML deserialization should succeed");
     assert_eq!(
         Some(ThreadControlToml {
-            router: Some(RouterThreadControlToml {
+            orchestrator: Some(OrchestratorThreadControlToml {
                 model: Some("gpt-5.3-codex-spark".to_string()),
                 reasoning_effort: Some(ReasoningEffort::Low),
             }),

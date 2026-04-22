@@ -191,6 +191,8 @@ pub struct MemoriesToml {
     pub generate_memories: Option<bool>,
     /// When `false`, skip injecting memory usage instructions into developer prompts.
     pub use_memories: Option<bool>,
+    /// Which collaboration modes may read from and generate memories.
+    pub scope: Option<MemoriesScope>,
     /// Maximum number of recent raw memories retained for global consolidation.
     #[schemars(range(min = 1, max = 4096))]
     pub max_raw_memories_for_consolidation: Option<usize>,
@@ -209,12 +211,21 @@ pub struct MemoriesToml {
     pub consolidation_model: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoriesScope {
+    #[default]
+    All,
+    Orchestrator,
+}
+
 /// Effective memories settings after defaults are applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoriesConfig {
     pub disable_on_external_context: bool,
     pub generate_memories: bool,
     pub use_memories: bool,
+    pub scope: MemoriesScope,
     pub max_raw_memories_for_consolidation: usize,
     pub max_unused_days: i64,
     pub max_rollout_age_days: i64,
@@ -230,6 +241,7 @@ impl Default for MemoriesConfig {
             disable_on_external_context: false,
             generate_memories: true,
             use_memories: true,
+            scope: MemoriesScope::All,
             max_raw_memories_for_consolidation: DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
             max_unused_days: DEFAULT_MEMORIES_MAX_UNUSED_DAYS,
             max_rollout_age_days: DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS,
@@ -250,6 +262,7 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .unwrap_or(defaults.disable_on_external_context),
             generate_memories: toml.generate_memories.unwrap_or(defaults.generate_memories),
             use_memories: toml.use_memories.unwrap_or(defaults.use_memories),
+            scope: toml.scope.unwrap_or(defaults.scope),
             max_raw_memories_for_consolidation: toml
                 .max_raw_memories_for_consolidation
                 .unwrap_or(defaults.max_raw_memories_for_consolidation)
@@ -282,13 +295,13 @@ impl From<MemoriesToml> for MemoriesConfig {
     }
 }
 
-/// Router-specific thread-control settings loaded from config.toml.
+/// Orchestrator-specific thread-control settings loaded from config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-pub struct RouterThreadControlToml {
-    /// Model to use for router-mode wake-up turns.
+pub struct OrchestratorThreadControlToml {
+    /// Model to use for orchestrator wake-up turns.
     pub model: Option<String>,
-    /// Reasoning effort to use for router-mode wake-up turns.
+    /// Reasoning effort to use for orchestrator wake-up turns.
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -297,12 +310,12 @@ pub struct RouterThreadControlToml {
 #[schemars(deny_unknown_fields)]
 pub struct ThreadControlToml {
     #[serde(default)]
-    pub router: Option<RouterThreadControlToml>,
+    pub orchestrator: Option<OrchestratorThreadControlToml>,
 }
 
-/// Effective router-specific thread-control settings after defaults are applied.
+/// Effective orchestrator-specific thread-control settings after defaults are applied.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct RouterThreadControlConfig {
+pub struct OrchestratorThreadControlConfig {
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -310,16 +323,16 @@ pub struct RouterThreadControlConfig {
 /// Effective thread-control settings after defaults are applied.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ThreadControlConfig {
-    pub router: RouterThreadControlConfig,
+    pub orchestrator: OrchestratorThreadControlConfig,
 }
 
 impl From<ThreadControlToml> for ThreadControlConfig {
     fn from(toml: ThreadControlToml) -> Self {
-        let router = toml.router.unwrap_or_default();
+        let orchestrator = toml.orchestrator.unwrap_or_default();
         Self {
-            router: RouterThreadControlConfig {
-                model: router.model,
-                reasoning_effort: router.reasoning_effort,
+            orchestrator: OrchestratorThreadControlConfig {
+                model: orchestrator.model,
+                reasoning_effort: orchestrator.reasoning_effort,
             },
         }
     }

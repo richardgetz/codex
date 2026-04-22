@@ -28,7 +28,7 @@ use crate::types::ToolSuggestConfig;
 use crate::types::Tui;
 use crate::types::UriBasedFileOpener;
 use crate::types::WindowsToml;
-use codex_app_server_protocol::RouterThreadControlConfigV1;
+use codex_app_server_protocol::OrchestratorThreadControlConfigV1;
 use codex_app_server_protocol::ThreadControlConfigV1;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
@@ -451,10 +451,12 @@ impl From<ConfigToml> for UserSavedConfig {
 impl From<ThreadControlToml> for ThreadControlConfigV1 {
     fn from(toml: ThreadControlToml) -> Self {
         Self {
-            router: toml.router.map(|router| RouterThreadControlConfigV1 {
-                model: router.model,
-                reasoning_effort: router.reasoning_effort,
-            }),
+            orchestrator: toml
+                .orchestrator
+                .map(|orchestrator| OrchestratorThreadControlConfigV1 {
+                    model: orchestrator.model,
+                    reasoning_effort: orchestrator.reasoning_effort,
+                }),
         }
     }
 }

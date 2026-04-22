@@ -1,4 +1,5 @@
 use crate::config::Config;
+use codex_config::types::MemoriesScope;
 pub use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use codex_rollout::Cursor;
 pub use codex_rollout::EventPersistenceMode;
@@ -24,6 +25,8 @@ pub use codex_rollout::read_head_for_summary;
 pub use codex_rollout::read_session_meta_line;
 pub use codex_rollout::rollout_date_parts;
 
+pub(crate) const ORCHESTRATOR_SCOPED_MEMORY_MODE: &str = "orchestrator_scoped";
+
 impl codex_rollout::RolloutConfigView for Config {
     fn codex_home(&self) -> &std::path::Path {
         self.codex_home.as_path()
@@ -42,7 +45,17 @@ impl codex_rollout::RolloutConfigView for Config {
     }
 
     fn generate_memories(&self) -> bool {
-        self.memories.generate_memories
+        self.memories.generate_memories && self.memories.scope == MemoriesScope::All
+    }
+
+    fn initial_memory_mode(&self) -> Option<&str> {
+        if !self.memories.generate_memories {
+            Some("disabled")
+        } else if self.memories.scope == MemoriesScope::Orchestrator {
+            Some(ORCHESTRATOR_SCOPED_MEMORY_MODE)
+        } else {
+            None
+        }
     }
 }
 

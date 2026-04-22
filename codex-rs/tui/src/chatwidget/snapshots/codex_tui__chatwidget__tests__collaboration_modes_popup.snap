@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests/plan_mode.rs
+expression: popup
+---
+  Select Collaboration Mode
+  Pick a collaboration preset.
+
+› 1. Default (current)
+  2. Plan
+  3. Continuous
+  4. Orchestrator
+
+  Press enter to confirm or esc to go back

@@ -213,12 +213,12 @@ pub struct UserSavedConfig {
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadControlConfig {
-    pub router: Option<RouterThreadControlConfig>,
+    pub orchestrator: Option<OrchestratorThreadControlConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct RouterThreadControlConfig {
+pub struct OrchestratorThreadControlConfig {
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
