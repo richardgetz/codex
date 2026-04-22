@@ -142,6 +142,9 @@ Example with notification opt-out:
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
+- `thread/control/read` — read the persisted active control-plane contract for a thread. Returns `null` when no contract is active.
+- `thread/control/set` — set or replace a persisted control-plane contract for a thread. `continuous` mode prevents the thread from stopping until explicitly released. `router` mode allows turns to complete, then re-wakes the same loaded thread on the requested `watchIntervalSeconds` cadence with the stored supervision reason and target thread ids.
+- `thread/control/release` — release a persisted thread control contract so continuous-mode threads may stop and router-mode wake timers are cancelled.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
@@ -181,7 +184,7 @@ Example with notification opt-out:
 - `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options, `additionalSpeedTiers`, optional legacy `upgrade` model ids, optional `upgradeInfo` metadata (`model`, `upgradeCopy`, `modelLink`, `migrationMarkdown`), and optional `availabilityNux` metadata.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `experimentalFeature/enablement/set` — patch the in-memory process-wide runtime feature enablement for the currently supported feature keys (`apps`, `plugins`). For each feature, precedence is: cloud requirements > --enable <feature_name> > config.toml > experimentalFeature/enablement/set (new) > code default.
-- `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
+- `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly. Selecting the built-in `continuous` mode also synchronizes the thread's continuous-run control contract; switching away from it releases that contract.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
 - `marketplace/add` — add a remote plugin marketplace from an HTTP(S) Git URL, SSH Git URL, or GitHub `owner/repo` shorthand, then persist it into the user marketplace config. Returns the installed root path plus whether the marketplace was already present.
 - `plugin/list` — list discovered plugin marketplaces and plugin state, including effective marketplace install/auth policy metadata, fail-open `marketplaceLoadErrors` entries for marketplace files that could not be parsed or loaded, and best-effort `featuredPluginIds` for the official curated marketplace. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category. Pass `forceRemoteSync: true` to refresh curated plugin state before listing (**under development; do not call from production clients yet**).
@@ -407,10 +410,189 @@ Use `thread/metadata/update` to patch sqlite-backed metadata for a thread withou
 } }
 ```
 
+### Example: Manage thread control contracts
+
+Use `thread/control/set` when a client needs an authoritative run contract that survives compaction and side questions. `continuous` mode blocks stop attempts until release, while `router` mode stores supervision metadata and re-wakes the same loaded thread on a timer after each turn finishes.
+
+If you want router wake-up turns to use a faster or cheaper model by default, set it in `config.toml`:
+
+```toml
+[thread_control.router]
+model = "gpt-5.3-codex-spark"
+reasoning_effort = "low"
+```
+
+Router mode re-wakes the same thread, preserving its current collaboration mode while applying these model and reasoning overrides to the next router tick turn. Because router ticks submit a normal turn on that same thread, the override becomes the thread's active model and reasoning setting until another turn explicitly changes them. Router-launched agents can still request their own model and reasoning effort through the normal agent spawn fields, so the router can run on a cheaper coordination model while delegating implementation work to a stronger model.
+
+```json
+{ "method": "thread/control/set", "id": 26, "params": {
+    "threadId": "thr_123",
+    "mode": "continuous",
+    "reason": "Keep going until the operator explicitly releases this deployment loop",
+    "releaseChannel": "imessage"
+} }
+{ "id": 26, "result": {
+    "control": {
+        "threadId": "thr_123",
+        "mode": "continuous",
+        "reason": "Keep going until the operator explicitly releases this deployment loop",
+        "releaseChannel": "imessage",
+        "watchIntervalSeconds": null,
+        "targetThreadIds": [],
+        "releasedAt": null,
+        "updatedAt": 1762456104
+    }
+} }
+```
+
+```json
+{ "method": "thread/control/set", "id": 27, "params": {
+    "threadId": "thr_router",
+    "mode": "router",
+    "reason": "Monitor worker threads and route new operator instructions",
+    "releaseChannel": "imessage",
+    "watchIntervalSeconds": 30,
+    "targetThreadIds": ["thr_worker_a", "thr_worker_b"]
+} }
+```
+
+`thread/control/read` returns the current active contract or `null` when no control state exists. Released contracts remain persisted for auditability, but `read` filters them out:
+
+```json
+{ "method": "thread/control/read", "id": 28, "params": { "threadId": "thr_123" } }
+{ "id": 28, "result": {
+    "control": {
+        "threadId": "thr_123",
+        "mode": "continuous",
+        "reason": "Keep going until the operator explicitly releases this deployment loop",
+        "releaseChannel": "imessage",
+        "watchIntervalSeconds": null,
+        "targetThreadIds": [],
+        "releasedAt": null,
+        "updatedAt": 1762456104
+    }
+} }
+```
+
+`thread/control/release` marks the contract released and cancels any future router wake-up timer:
+
+```json
+{ "method": "thread/control/release", "id": 29, "params": { "threadId": "thr_123" } }
+{ "id": 29, "result": {
+    "control": {
+        "threadId": "thr_123",
+        "mode": "continuous",
+        "reason": "Keep going until the operator explicitly releases this deployment loop",
+        "releaseChannel": "imessage",
+        "watchIntervalSeconds": null,
+        "targetThreadIds": [],
+        "releasedAt": 1762456188,
+        "updatedAt": 1762456188
+    }
+} }
+```
+
+### Router wake channel integration shape
+
+The current router implementation re-wakes a loaded router thread on the configured `watchIntervalSeconds` cadence. Messaging MCPs should be designed so a follow-up app-server integration can avoid waking the model when there is no new user input.
+
+The preferred shape is subscription-first:
+
+1. App-server sets router control with `thread/control/set`.
+2. App-server registers one or more wake subscriptions with messaging MCPs.
+3. Each MCP owns channel-specific polling, webhooks, cursors, auth, and dedupe.
+4. When the MCP observes new relevant input, it sends a wake event back to app-server.
+5. App-server validates the router control is still active and only then submits a router turn.
+
+Security note: router wake channels should only accept callbacks from trusted, authenticated MCPs and approved messaging channels. A wake event can cause app-server to resume an agent, send user-visible content to the model, and potentially spend tokens or trigger tools, so the callback surface must not be exposed as an unauthenticated public endpoint. Implementations should:
+
+- bind each subscription to the registering thread;
+- verify the sender identity, mTLS client, signed payload, or shared secret;
+- reject unknown or unapproved channels;
+- dedupe `eventId` values before submitting a router turn;
+- treat all message text and metadata as untrusted input.
+
+MCPs that support router wake channels should expose a subscribe-style tool with this request shape:
+
+```json
+{
+  "subscriptionId": "thr_router:imessage",
+  "threadId": "thr_router",
+  "channel": "imessage",
+  "cursor": "msg_122",
+  "pollIntervalSeconds": 30,
+  "filters": {
+    "participants": ["rick"],
+    "conversationId": "chat_abc"
+  }
+}
+```
+
+Fields:
+
+- `subscriptionId` — stable id generated by app-server; MCPs should treat repeated registrations with the same id as replacements.
+- `threadId` — router thread to wake when new input arrives.
+- `channel` — MCP-defined channel name, for example `imessage`, `slack`, `gmail`, or `webhook`.
+- `cursor` — optional opaque checkpoint from a prior registration or wake event. MCPs define the format.
+- `pollIntervalSeconds` — fallback cadence for MCPs that cannot use native push/webhook events.
+- `filters` — MCP-defined channel filters. App-server stores and passes these through without interpreting provider-specific fields.
+
+The callback transport is intentionally left to the follow-up app-server integration. If the callback uses JSON-RPC, the expected method name should be `thread/control/wake` with the wake event as `params`. The MCP should persist enough state to avoid duplicate wake events across restarts when possible. When it detects new user input, it should send a normalized wake event to app-server:
+
+```json
+{
+  "subscriptionId": "thr_router:imessage",
+  "threadId": "thr_router",
+  "channel": "imessage",
+  "eventId": "msg_123",
+  "cursor": "msg_123",
+  "receivedAt": 1762456104,
+  "messages": [
+    {
+      "id": "msg_123",
+      "from": "rick",
+      "text": "status?",
+      "timestamp": 1762456104,
+      "metadata": {
+        "conversationId": "chat_abc"
+      }
+    }
+  ]
+}
+```
+
+The app-server acknowledgement should be empty on success:
+
+```json
+{ "result": {} }
+```
+
+Wake event fields:
+
+- `subscriptionId` — original subscription id.
+- `threadId` — target router thread.
+- `channel` — source channel name.
+- `eventId` — stable MCP/provider event id for dedupe.
+- `cursor` — opaque checkpoint app-server can pass back on the next registration.
+- `receivedAt` — integer Unix seconds when the MCP observed the event.
+- `messages` — normalized user-visible messages. `text` should be the content app-server can include in the router turn.
+- `metadata` — MCP-defined object for provider-specific ids or routing details.
+
+MCPs that cannot push notifications should expose a polling tool with the same result shape. A no-op poll should return an updated `cursor` and an empty `messages` array:
+
+```json
+{
+  "cursor": "msg_123",
+  "messages": []
+}
+```
+
+App-server should treat MCP wake events as untrusted wake candidates. Before submitting a router turn it should re-check that the thread exists, router control is still active, the subscription is still registered, the event was not already consumed, and the channel is allowed by config or user approval.
+
 Experimental: use `thread/memoryMode/set` to change whether a thread remains eligible for future memory generation.
 
 ```json
-{ "method": "thread/memoryMode/set", "id": 26, "params": {
+{ "method": "thread/memoryMode/set", "id": 30, "params": {
     "threadId": "thr_123",
     "mode": "disabled"
 } }

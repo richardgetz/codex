@@ -360,6 +360,16 @@
             }
           ]
         },
+        "thread_control": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadControlConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "tools": {
           "anyOf": [
             {
@@ -721,6 +731,27 @@
         }
       ]
     },
+    "RouterThreadControlConfig": {
+      "properties": {
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -759,6 +790,21 @@
         "flex"
       ],
       "type": "string"
+    },
+    "ThreadControlConfig": {
+      "properties": {
+        "router": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RouterThreadControlConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "ToolsV2": {
       "properties": {

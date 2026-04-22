@@ -719,6 +719,21 @@ pub struct AppsConfig {
     pub apps: HashMap<String, AppConfig>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct RouterThreadControlConfig {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControlConfig {
+    pub router: Option<RouterThreadControlConfig>,
+}
+
 const fn default_enabled() -> bool {
     true
 }
@@ -759,6 +774,7 @@ pub struct Config {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub service_tier: Option<ServiceTier>,
+    pub thread_control: Option<ThreadControlConfig>,
     pub analytics: Option<AnalyticsConfig>,
     #[experimental("config/read.apps")]
     #[serde(default)]
@@ -3075,6 +3091,90 @@ pub struct ThreadMetadataGitInfoUpdateParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadMetadataUpdateResponse {
     pub thread: Thread,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ThreadControlMode {
+    Continuous,
+    Router,
+}
+
+impl ThreadControlMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Continuous => "continuous",
+            Self::Router => "router",
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControl {
+    pub thread_id: String,
+    pub mode: ThreadControlMode,
+    pub reason: String,
+    pub release_channel: Option<String>,
+    #[ts(type = "number | null")]
+    pub watch_interval_seconds: Option<u32>,
+    #[ts(type = "number | null")]
+    pub released_at: Option<i64>,
+    #[ts(type = "number")]
+    pub updated_at: i64,
+    pub target_thread_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControlReadParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControlReadResponse {
+    pub control: Option<ThreadControl>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControlSetParams {
+    pub thread_id: String,
+    pub mode: ThreadControlMode,
+    pub reason: String,
+    #[ts(optional = nullable)]
+    pub release_channel: Option<String>,
+    #[ts(optional = nullable)]
+    pub watch_interval_seconds: Option<u32>,
+    #[ts(optional = nullable)]
+    pub target_thread_ids: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControlSetResponse {
+    pub control: ThreadControl,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControlReleaseParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadControlReleaseResponse {
+    pub control: Option<ThreadControl>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -7540,6 +7640,7 @@ mod tests {
             model_reasoning_summary: None,
             model_verbosity: None,
             service_tier: None,
+            thread_control: None,
             analytics: None,
             apps: None,
             additional: HashMap::new(),
@@ -7573,6 +7674,7 @@ mod tests {
             model_reasoning_summary: None,
             model_verbosity: None,
             service_tier: None,
+            thread_control: None,
             analytics: None,
             apps: None,
             additional: HashMap::new(),
@@ -7628,6 +7730,7 @@ mod tests {
             model_reasoning_summary: None,
             model_verbosity: None,
             service_tier: None,
+            thread_control: None,
             analytics: None,
             apps: None,
             additional: HashMap::new(),
@@ -7677,6 +7780,7 @@ mod tests {
             model_reasoning_summary: None,
             model_verbosity: None,
             service_tier: None,
+            thread_control: None,
             analytics: None,
             apps: None,
             additional: HashMap::new(),

@@ -62,6 +62,9 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
+use codex_app_server_protocol::ThreadControlReadParams;
+use codex_app_server_protocol::ThreadControlReleaseParams;
+use codex_app_server_protocol::ThreadControlSetParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadListParams;
@@ -390,6 +393,33 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/metadata/update", params).await
+    }
+
+    /// Send a `thread/control/read` JSON-RPC request.
+    pub async fn send_thread_control_read_request(
+        &mut self,
+        params: ThreadControlReadParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/control/read", params).await
+    }
+
+    /// Send a `thread/control/set` JSON-RPC request.
+    pub async fn send_thread_control_set_request(
+        &mut self,
+        params: ThreadControlSetParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/control/set", params).await
+    }
+
+    /// Send a `thread/control/release` JSON-RPC request.
+    pub async fn send_thread_control_release_request(
+        &mut self,
+        params: ThreadControlReleaseParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/control/release", params).await
     }
 
     /// Send a `thread/unsubscribe` JSON-RPC request.

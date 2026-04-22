@@ -132,6 +132,14 @@ use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
+use codex_app_server_protocol::ThreadControl;
+use codex_app_server_protocol::ThreadControlMode;
+use codex_app_server_protocol::ThreadControlReadParams;
+use codex_app_server_protocol::ThreadControlReadResponse;
+use codex_app_server_protocol::ThreadControlReleaseParams;
+use codex_app_server_protocol::ThreadControlReleaseResponse;
+use codex_app_server_protocol::ThreadControlSetParams;
+use codex_app_server_protocol::ThreadControlSetResponse;
 use codex_app_server_protocol::ThreadDecrementElicitationParams;
 use codex_app_server_protocol::ThreadDecrementElicitationResponse;
 use codex_app_server_protocol::ThreadForkParams;
@@ -318,6 +326,8 @@ use codex_rollout::state_db::StateDbHandle;
 use codex_rollout::state_db::get_state_db;
 use codex_rollout::state_db::reconcile_rollout;
 use codex_state::StateRuntime;
+use codex_state::ThreadControlMode as StateThreadControlMode;
+use codex_state::ThreadControlRecord;
 use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
 use codex_state::log_db::LogDbLayer;
@@ -363,9 +373,12 @@ use codex_app_server_protocol::ServerRequest;
 mod apps_list_helpers;
 mod plugin_app_helpers;
 mod plugin_mcp_oauth;
+mod thread_control_api;
 
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
+use crate::thread_control_runtime::clear_router_tick;
+use crate::thread_control_runtime::refresh_router_tick;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
@@ -908,6 +921,18 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadMetadataUpdate { request_id, params } => {
                 self.thread_metadata_update(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadControlRead { request_id, params } => {
+                self.thread_control_read(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadControlSet { request_id, params } => {
+                self.thread_control_set(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadControlRelease { request_id, params } => {
+                self.thread_control_release(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadMemoryModeSet { request_id, params } => {
@@ -3262,138 +3287,6 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_response(request_id, ThreadMetadataUpdateResponse { thread })
             .await;
-    }
-
-    async fn ensure_thread_metadata_row_exists(
-        &self,
-        thread_uuid: ThreadId,
-        state_db_ctx: &Arc<StateRuntime>,
-        loaded_thread: Option<&Arc<CodexThread>>,
-    ) -> Result<(), JSONRPCErrorError> {
-        fn invalid_request(message: String) -> JSONRPCErrorError {
-            JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message,
-                data: None,
-            }
-        }
-
-        fn internal_error(message: String) -> JSONRPCErrorError {
-            JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message,
-                data: None,
-            }
-        }
-
-        match state_db_ctx.get_thread(thread_uuid).await {
-            Ok(Some(_)) => return Ok(()),
-            Ok(None) => {}
-            Err(err) => {
-                return Err(internal_error(format!(
-                    "failed to load thread metadata for {thread_uuid}: {err}"
-                )));
-            }
-        }
-
-        if let Some(thread) = loaded_thread {
-            let Some(rollout_path) = thread.rollout_path() else {
-                return Err(invalid_request(format!(
-                    "ephemeral thread does not support metadata updates: {thread_uuid}"
-                )));
-            };
-
-            reconcile_rollout(
-                Some(state_db_ctx),
-                rollout_path.as_path(),
-                self.config.model_provider_id.as_str(),
-                /*builder*/ None,
-                &[],
-                /*archived_only*/ None,
-                /*new_thread_memory_mode*/ None,
-            )
-            .await;
-
-            match state_db_ctx.get_thread(thread_uuid).await {
-                Ok(Some(_)) => return Ok(()),
-                Ok(None) => {}
-                Err(err) => {
-                    return Err(internal_error(format!(
-                        "failed to load reconciled thread metadata for {thread_uuid}: {err}"
-                    )));
-                }
-            }
-
-            let config_snapshot = thread.config_snapshot().await;
-            let model_provider = config_snapshot.model_provider_id.clone();
-            let mut builder = ThreadMetadataBuilder::new(
-                thread_uuid,
-                rollout_path,
-                Utc::now(),
-                config_snapshot.session_source.clone(),
-            );
-            builder.model_provider = Some(model_provider.clone());
-            builder.cwd = config_snapshot.cwd.to_path_buf();
-            builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
-            builder.sandbox_policy = config_snapshot.sandbox_policy.clone();
-            builder.approval_mode = config_snapshot.approval_policy;
-            let metadata = builder.build(model_provider.as_str());
-            if let Err(err) = state_db_ctx.insert_thread_if_absent(&metadata).await {
-                return Err(internal_error(format!(
-                    "failed to create thread metadata for {thread_uuid}: {err}"
-                )));
-            }
-            return Ok(());
-        }
-
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
-                .await
-            {
-                Ok(Some(path)) => path,
-                Ok(None) => match find_archived_thread_path_by_id_str(
-                    &self.config.codex_home,
-                    &thread_uuid.to_string(),
-                )
-                .await
-                {
-                    Ok(Some(path)) => path,
-                    Ok(None) => {
-                        return Err(invalid_request(format!("thread not found: {thread_uuid}")));
-                    }
-                    Err(err) => {
-                        return Err(internal_error(format!(
-                            "failed to locate archived thread id {thread_uuid}: {err}"
-                        )));
-                    }
-                },
-                Err(err) => {
-                    return Err(internal_error(format!(
-                        "failed to locate thread id {thread_uuid}: {err}"
-                    )));
-                }
-            };
-
-        reconcile_rollout(
-            Some(state_db_ctx),
-            rollout_path.as_path(),
-            self.config.model_provider_id.as_str(),
-            /*builder*/ None,
-            &[],
-            /*archived_only*/ None,
-            /*new_thread_memory_mode*/ None,
-        )
-        .await;
-
-        match state_db_ctx.get_thread(thread_uuid).await {
-            Ok(Some(_)) => Ok(()),
-            Ok(None) => Err(internal_error(format!(
-                "failed to create thread metadata from rollout for {thread_uuid}"
-            ))),
-            Err(err) => Err(internal_error(format!(
-                "failed to load reconciled thread metadata for {thread_uuid}: {err}"
-            ))),
-        }
     }
 
     async fn thread_unarchive(
@@ -7762,6 +7655,8 @@ impl CodexMessageProcessor {
             fallback_model_provider,
             codex_home,
         } = listener_task_context;
+        let conversation_for_listener = Arc::clone(&conversation);
+        let thread_state_for_listener = Arc::clone(&thread_state);
         let outgoing_for_task = Arc::clone(&outgoing);
         tokio::spawn(async move {
             loop {
@@ -7777,10 +7672,10 @@ impl CodexMessageProcessor {
                         };
                         handle_thread_listener_command(
                             conversation_id,
-                            &conversation,
+                            &conversation_for_listener,
                             codex_home.as_path(),
                             &thread_state_manager,
-                            &thread_state,
+                            &thread_state_for_listener,
                             &thread_watch_manager,
                             &outgoing_for_task,
                             &pending_thread_unloads,
@@ -7788,7 +7683,7 @@ impl CodexMessageProcessor {
                         )
                         .await;
                     }
-                    event = conversation.next_event() => {
+                    event = conversation_for_listener.next_event() => {
                         let event = match event {
                             Ok(event) => event,
                             Err(err) => {
@@ -7801,7 +7696,7 @@ impl CodexMessageProcessor {
                         // translations so thread-local state such as raw event
                         // opt-in stays synchronized with the conversation.
                         let raw_events_enabled = {
-                            let mut thread_state = thread_state.lock().await;
+                            let mut thread_state = thread_state_for_listener.lock().await;
                             thread_state.track_current_turn_event(&event.msg);
                             thread_state.experimental_raw_events
                         };
@@ -7831,13 +7726,13 @@ impl CodexMessageProcessor {
                         apply_bespoke_event_handling(
                             event.clone(),
                             conversation_id,
-                            conversation.clone(),
+                            Arc::clone(&conversation_for_listener),
                             thread_manager.clone(),
                             listener_task_context
                                 .general_analytics_enabled
                                 .then(|| listener_task_context.analytics_events_client.clone()),
                             thread_outgoing,
-                            thread_state.clone(),
+                            Arc::clone(&thread_state_for_listener),
                             thread_watch_manager.clone(),
                             api_version,
                             fallback_model_provider.clone(),
@@ -7852,7 +7747,17 @@ impl CodexMessageProcessor {
                         if !unloading_state.should_unload_now() {
                             continue;
                         }
-                        if matches!(conversation.agent_status().await, AgentStatus::Running) {
+                        if let Some(state_db) = conversation_for_listener.state_db()
+                            && thread_control_api::should_keep_loaded_for_active_router_control(
+                                conversation_id,
+                                &state_db,
+                            )
+                            .await
+                        {
+                            unloading_state.note_thread_activity_observed();
+                            continue;
+                        }
+                        if matches!(conversation_for_listener.agent_status().await, AgentStatus::Running) {
                             unloading_state.note_thread_activity_observed();
                             continue;
                         }
@@ -7873,7 +7778,7 @@ impl CodexMessageProcessor {
                             thread_state_manager.clone(),
                             thread_watch_manager.clone(),
                             conversation_id,
-                            conversation.clone(),
+                            Arc::clone(&conversation_for_listener),
                         )
                         .await;
                         break;
@@ -7881,11 +7786,14 @@ impl CodexMessageProcessor {
                 }
             }
 
-            let mut thread_state = thread_state.lock().await;
+            let mut thread_state = thread_state_for_listener.lock().await;
             if thread_state.listener_generation == listener_generation {
                 thread_state.clear_listener();
             }
         });
+        if let Some(state_db) = conversation.state_db() {
+            refresh_router_tick(conversation, thread_state, state_db).await;
+        }
         Ok(())
     }
     async fn git_diff_to_origin(&self, request_id: ConnectionRequestId, cwd: PathBuf) {

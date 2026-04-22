@@ -205,8 +205,22 @@ pub struct UserSavedConfig {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub tools: Option<Tools>,
+    pub thread_control: Option<ThreadControlConfig>,
     pub profile: Option<String>,
     pub profiles: HashMap<String, Profile>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadControlConfig {
+    pub router: Option<RouterThreadControlConfig>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RouterThreadControlConfig {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]

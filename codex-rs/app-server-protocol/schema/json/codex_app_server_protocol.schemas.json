@@ -417,6 +417,78 @@
             },
             "method": {
               "enum": [
+                "thread/control/read"
+              ],
+              "title": "Thread/control/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadControlReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/control/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/control/set"
+              ],
+              "title": "Thread/control/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadControlSetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/control/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/control/release"
+              ],
+              "title": "Thread/control/releaseRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadControlReleaseParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/control/releaseRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/unarchive"
               ],
               "title": "Thread/unarchiveRequestMethod",
@@ -6557,6 +6629,16 @@
               }
             ]
           },
+          "thread_control": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadControlConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "tools": {
             "anyOf": [
               {
@@ -9580,6 +9662,7 @@
         "description": "Initial collaboration mode to use when the TUI starts.",
         "enum": [
           "plan",
+          "continuous",
           "default"
         ],
         "type": "string"
@@ -11912,6 +11995,27 @@
           }
         ]
       },
+      "RouterThreadControlConfig": {
+        "properties": {
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
       "SandboxMode": {
         "enum": [
           "read-only",
@@ -12867,6 +12971,197 @@
       "ThreadCompactStartResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadCompactStartResponse",
+        "type": "object"
+      },
+      "ThreadControl": {
+        "properties": {
+          "mode": {
+            "$ref": "#/definitions/v2/ThreadControlMode"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "releaseChannel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "releasedAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "targetThreadIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "watchIntervalSeconds": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "reason",
+          "targetThreadIds",
+          "threadId",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "ThreadControlConfig": {
+        "properties": {
+          "router": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/RouterThreadControlConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ThreadControlMode": {
+        "enum": [
+          "continuous",
+          "router"
+        ],
+        "type": "string"
+      },
+      "ThreadControlReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadControlReadParams",
+        "type": "object"
+      },
+      "ThreadControlReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "control": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadControl"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "ThreadControlReadResponse",
+        "type": "object"
+      },
+      "ThreadControlReleaseParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadControlReleaseParams",
+        "type": "object"
+      },
+      "ThreadControlReleaseResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "control": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadControl"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "ThreadControlReleaseResponse",
+        "type": "object"
+      },
+      "ThreadControlSetParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "mode": {
+            "$ref": "#/definitions/v2/ThreadControlMode"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "releaseChannel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "targetThreadIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "watchIntervalSeconds": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "reason",
+          "threadId"
+        ],
+        "title": "ThreadControlSetParams",
+        "type": "object"
+      },
+      "ThreadControlSetResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "control": {
+            "$ref": "#/definitions/v2/ThreadControl"
+          }
+        },
+        "required": [
+          "control"
+        ],
+        "title": "ThreadControlSetResponse",
         "type": "object"
       },
       "ThreadForkParams": {
