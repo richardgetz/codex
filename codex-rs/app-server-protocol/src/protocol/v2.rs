@@ -754,7 +754,7 @@ pub struct AppsConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
-pub struct RouterThreadControlConfig {
+pub struct OrchestratorThreadControlConfig {
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -763,7 +763,7 @@ pub struct RouterThreadControlConfig {
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct ThreadControlConfig {
-    pub router: Option<RouterThreadControlConfig>,
+    pub orchestrator: Option<OrchestratorThreadControlConfig>,
 }
 
 const fn default_enabled() -> bool {
@@ -3471,14 +3471,14 @@ pub struct ThreadMetadataUpdateResponse {
 #[ts(export_to = "v2/")]
 pub enum ThreadControlMode {
     Continuous,
-    Router,
+    Orchestrator,
 }
 
 impl ThreadControlMode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Continuous => "continuous",
-            Self::Router => "router",
+            Self::Orchestrator => "orchestrator",
         }
     }
 }

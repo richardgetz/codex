@@ -99,21 +99,21 @@ impl CodexMessageProcessor {
                 .await;
             return;
         }
-        if matches!(params.mode, ThreadControlMode::Router)
+        if matches!(params.mode, ThreadControlMode::Orchestrator)
             && matches!(params.watch_interval_seconds, Some(0) | None)
         {
             self.send_invalid_request_error(
                 request_id,
-                "router mode requires watchIntervalSeconds > 0".to_string(),
+                "orchestrator mode requires watchIntervalSeconds > 0".to_string(),
             )
             .await;
             return;
         }
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
-        if matches!(params.mode, ThreadControlMode::Router) && loaded_thread.is_none() {
+        if matches!(params.mode, ThreadControlMode::Orchestrator) && loaded_thread.is_none() {
             self.send_invalid_request_error(
                 request_id,
-                "router mode currently requires a loaded thread".to_string(),
+                "orchestrator mode currently requires a loaded thread".to_string(),
             )
             .await;
             return;
@@ -175,7 +175,7 @@ impl CodexMessageProcessor {
             thread_id: thread_uuid,
             mode: match params.mode {
                 ThreadControlMode::Continuous => StateThreadControlMode::Continuous,
-                ThreadControlMode::Router => StateThreadControlMode::Router,
+                ThreadControlMode::Orchestrator => StateThreadControlMode::Router,
             },
             reason,
             release_channel: params.release_channel,
@@ -408,7 +408,7 @@ pub(super) fn thread_control_from_state_record(record: ThreadControlRecord) -> T
         thread_id: record.thread_id.to_string(),
         mode: match record.mode {
             StateThreadControlMode::Continuous => ThreadControlMode::Continuous,
-            StateThreadControlMode::Router => ThreadControlMode::Router,
+            StateThreadControlMode::Router => ThreadControlMode::Orchestrator,
         },
         reason: record.reason,
         release_channel: record.release_channel,

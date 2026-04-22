@@ -54,7 +54,7 @@ async fn thread_control_set_read_and_release_round_trip() -> Result<()> {
     let set_id = mcp
         .send_thread_control_set_request(ThreadControlSetParams {
             thread_id: thread.id.clone(),
-            mode: ThreadControlMode::Router,
+            mode: ThreadControlMode::Orchestrator,
             reason: "Keep supervising the spawned worker threads".to_string(),
             release_channel: Some("imessage".to_string()),
             watch_interval_seconds: Some(30),
@@ -70,7 +70,7 @@ async fn thread_control_set_read_and_release_round_trip() -> Result<()> {
     )
     .await??;
     let ThreadControlSetResponse { control } = to_response::<ThreadControlSetResponse>(set_resp)?;
-    assert_eq!(control.mode, ThreadControlMode::Router);
+    assert_eq!(control.mode, ThreadControlMode::Orchestrator);
     assert_eq!(
         control.reason,
         "Keep supervising the spawned worker threads"
@@ -99,7 +99,7 @@ async fn thread_control_set_read_and_release_round_trip() -> Result<()> {
     let ThreadControlReadResponse { control } =
         to_response::<ThreadControlReadResponse>(read_resp)?;
     let control = control.expect("control");
-    assert_eq!(control.mode, ThreadControlMode::Router);
+    assert_eq!(control.mode, ThreadControlMode::Orchestrator);
     assert_eq!(
         control.reason,
         "Keep supervising the spawned worker threads"
@@ -183,7 +183,7 @@ async fn thread_control_set_repairs_missing_sqlite_row_for_stored_thread() -> Re
 }
 
 #[tokio::test]
-async fn thread_control_set_rejects_router_mode_for_stored_thread() -> Result<()> {
+async fn thread_control_set_rejects_orchestrator_mode_for_stored_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -204,7 +204,7 @@ async fn thread_control_set_rejects_router_mode_for_stored_thread() -> Result<()
     let set_id = mcp
         .send_thread_control_set_request(ThreadControlSetParams {
             thread_id,
-            mode: ThreadControlMode::Router,
+            mode: ThreadControlMode::Orchestrator,
             reason: "Keep supervising the spawned worker threads".to_string(),
             release_channel: Some("imessage".to_string()),
             watch_interval_seconds: Some(30),
@@ -218,7 +218,7 @@ async fn thread_control_set_rejects_router_mode_for_stored_thread() -> Result<()
     .await??;
     assert_eq!(
         error.error.message,
-        "router mode currently requires a loaded thread"
+        "orchestrator mode currently requires a loaded thread"
     );
     Ok(())
 }

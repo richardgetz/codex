@@ -922,6 +922,13 @@
       },
       "type": "object"
     },
+    "MemoriesScope": {
+      "enum": [
+        "all",
+        "orchestrator"
+      ],
+      "type": "string"
+    },
     "MemoriesToml": {
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
@@ -970,6 +977,14 @@
           "description": "Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.",
           "format": "int64",
           "type": "integer"
+        },
+        "scope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MemoriesScope"
+            }
+          ],
+          "description": "Which collaboration modes may read from and generate memories."
         },
         "use_memories": {
           "description": "When `false`, skip injecting memory usage instructions into developer prompts.",
@@ -1348,6 +1363,25 @@
           "type": "string"
         }
       ]
+    },
+    "OrchestratorThreadControlToml": {
+      "additionalProperties": false,
+      "description": "Orchestrator-specific thread-control settings loaded from config.toml.",
+      "properties": {
+        "model": {
+          "description": "Model to use for orchestrator wake-up turns.",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Reasoning effort to use for orchestrator wake-up turns."
+        }
+      },
+      "type": "object"
     },
     "OtelConfigToml": {
       "additionalProperties": false,
@@ -1792,25 +1826,6 @@
         }
       ]
     },
-    "RouterThreadControlToml": {
-      "additionalProperties": false,
-      "description": "Router-specific thread-control settings loaded from config.toml.",
-      "properties": {
-        "model": {
-          "description": "Model to use for router-mode wake-up turns.",
-          "type": "string"
-        },
-        "reasoning_effort": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            }
-          ],
-          "description": "Reasoning effort to use for router-mode wake-up turns."
-        }
-      },
-      "type": "object"
-    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -1959,10 +1974,10 @@
       "additionalProperties": false,
       "description": "Thread-control settings loaded from config.toml.",
       "properties": {
-        "router": {
+        "orchestrator": {
           "allOf": [
             {
-              "$ref": "#/definitions/RouterThreadControlToml"
+              "$ref": "#/definitions/OrchestratorThreadControlToml"
             }
           ],
           "default": null

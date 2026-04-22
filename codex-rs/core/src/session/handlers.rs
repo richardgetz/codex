@@ -812,8 +812,22 @@ async fn persist_thread_name_update(
 }
 
 pub(super) async fn persist_thread_memory_mode_update(
-    sess: &Arc<Session>,
+    sess: &Session,
     mode: ThreadMemoryMode,
+) -> anyhow::Result<()> {
+    persist_thread_memory_mode_str_update(
+        sess,
+        match mode {
+            ThreadMemoryMode::Enabled => "enabled",
+            ThreadMemoryMode::Disabled => "disabled",
+        },
+    )
+    .await
+}
+
+pub(super) async fn persist_thread_memory_mode_str_update(
+    sess: &Session,
+    memory_mode: &str,
 ) -> anyhow::Result<()> {
     let recorder = {
         let guard = sess.services.rollout.lock().await;
@@ -834,13 +848,7 @@ pub(super) async fn persist_thread_memory_mode_update(
             session_meta.meta.id
         );
     }
-    session_meta.meta.memory_mode = Some(
-        match mode {
-            ThreadMemoryMode::Enabled => "enabled",
-            ThreadMemoryMode::Disabled => "disabled",
-        }
-        .to_string(),
-    );
+    session_meta.meta.memory_mode = Some(memory_mode.to_string());
 
     let item = RolloutItem::SessionMeta(session_meta);
     recorder.record_items(std::slice::from_ref(&item)).await?;

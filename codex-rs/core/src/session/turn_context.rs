@@ -469,7 +469,7 @@ impl Session {
                     let session_source = next.session_source.clone();
                     drop(state);
                     if let Err(err) = self
-                        .ensure_continuous_mode_control(&next.collaboration_mode)
+                        .ensure_collaboration_mode_control(&next.collaboration_mode)
                         .await
                     {
                         self.send_event_raw(Event {
@@ -544,7 +544,7 @@ impl Session {
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
     ) -> Arc<TurnContext> {
-        self.sync_continuous_mode_control(&session_configuration.collaboration_mode)
+        self.sync_collaboration_mode_control(&session_configuration.collaboration_mode)
             .await;
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
         {

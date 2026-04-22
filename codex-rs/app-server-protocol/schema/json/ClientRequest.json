@@ -1619,6 +1619,7 @@
       "enum": [
         "plan",
         "continuous",
+        "orchestrator",
         "default"
       ],
       "type": "string"
@@ -2968,7 +2969,7 @@
     "ThreadControlMode": {
       "enum": [
         "continuous",
-        "router"
+        "orchestrator"
       ],
       "type": "string"
     },

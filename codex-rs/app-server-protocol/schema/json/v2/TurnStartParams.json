@@ -103,6 +103,7 @@
       "enum": [
         "plan",
         "continuous",
+        "orchestrator",
         "default"
       ],
       "type": "string"

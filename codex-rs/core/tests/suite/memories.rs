@@ -1,11 +1,16 @@
 use anyhow::Result;
 use chrono::Duration as ChronoDuration;
 use chrono::Utc;
+use codex_config::types::MemoriesScope;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
+use codex_state::ThreadControlMode;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
@@ -25,6 +30,8 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
+
+const ORCHESTRATOR_SCOPED_MEMORY_MODE: &str = "orchestrator_scoped";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn memories_startup_phase2_tracks_added_and_removed_inputs_across_runs() -> Result<()> {
@@ -156,6 +163,64 @@ async fn memories_startup_phase2_tracks_added_and_removed_inputs_across_runs() -
     );
 
     shutdown_test_codex(&second).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn orchestrator_memory_scope_only_enables_during_orchestrator_mode() -> Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let mut builder = test_codex().with_home(home.clone()).with_config(|config| {
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::MemoryTool)
+            .expect("test config should allow feature update");
+        config.memories.scope = MemoriesScope::Orchestrator;
+    });
+    let test = builder.build(&server).await?;
+    let state_db = codex_state::StateRuntime::init(
+        test.config.sqlite_home.to_path_buf(),
+        test.config.model_provider_id.clone(),
+    )
+    .await?;
+    let thread_id = test.session_configured.session_id;
+    test.codex.ensure_rollout_materialized().await;
+    test.codex.flush_rollout().await?;
+
+    assert_eq!(
+        state_db.get_thread_memory_mode(thread_id).await?.as_deref(),
+        Some(ORCHESTRATOR_SCOPED_MEMORY_MODE)
+    );
+
+    set_collaboration_mode(&test, ModeKind::Orchestrator).await?;
+    wait_for_memory_mode(&state_db, thread_id, Some("enabled")).await?;
+
+    set_collaboration_mode(&test, ModeKind::Default).await?;
+    wait_for_memory_mode(&state_db, thread_id, Some(ORCHESTRATOR_SCOPED_MEMORY_MODE)).await?;
+
+    set_collaboration_mode(&test, ModeKind::Orchestrator).await?;
+    wait_for_memory_mode(&state_db, thread_id, Some("enabled")).await?;
+    set_collaboration_mode(&test, ModeKind::Continuous).await?;
+    wait_for_memory_mode(&state_db, thread_id, Some(ORCHESTRATOR_SCOPED_MEMORY_MODE)).await?;
+
+    set_collaboration_mode(&test, ModeKind::Default).await?;
+    wait_for_memory_mode(&state_db, thread_id, Some(ORCHESTRATOR_SCOPED_MEMORY_MODE)).await?;
+
+    state_db
+        .set_thread_memory_mode(thread_id, "polluted")
+        .await?;
+    set_collaboration_mode(&test, ModeKind::Orchestrator).await?;
+    wait_for_active_thread_control_mode(&state_db, thread_id, ThreadControlMode::Router).await?;
+    assert_eq!(
+        state_db.get_thread_memory_mode(thread_id).await?.as_deref(),
+        Some("polluted")
+    );
+
+    shutdown_test_codex(&test).await?;
     Ok(())
 }
 
@@ -485,6 +550,68 @@ async fn init_state_db(home: &Arc<TempDir>) -> Result<Arc<codex_state::StateRunt
         codex_state::StateRuntime::init(home.path().to_path_buf(), "test-provider".into()).await?;
     db.mark_backfill_complete(/*last_watermark*/ None).await?;
     Ok(db)
+}
+
+async fn set_collaboration_mode(test: &TestCodex, mode: ModeKind) -> Result<()> {
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: Some(CollaborationMode {
+                mode,
+                settings: Settings {
+                    model: test.session_configured.model.clone(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            }),
+            personality: None,
+        })
+        .await?;
+    Ok(())
+}
+
+async fn wait_for_memory_mode(
+    state_db: &codex_state::StateRuntime,
+    thread_id: ThreadId,
+    expected: Option<&str>,
+) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let memory_mode = state_db.get_thread_memory_mode(thread_id).await?;
+        if memory_mode.as_deref() == expected {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            assert_eq!(memory_mode.as_deref(), expected);
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+async fn wait_for_active_thread_control_mode(
+    state_db: &codex_state::StateRuntime,
+    thread_id: ThreadId,
+    expected: ThreadControlMode,
+) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let control = state_db.get_active_thread_control(thread_id).await?;
+        if control.as_ref().map(|control| control.mode) == Some(expected) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            assert_eq!(control.as_ref().map(|control| control.mode), Some(expected));
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 async fn seed_stage1_output(
