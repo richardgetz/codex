@@ -239,6 +239,7 @@ async fn run_code_mode_turn_with_rmcp_config(
                 disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(10)),
                 tool_timeout_sec: None,
+                default_tools_approval_mode: None,
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
@@ -1969,14 +1970,16 @@ image("data:image/png;base64,AAA");
         items[1],
         serde_json::json!({
             "type": "input_image",
-            "image_url": "https://example.com/image.jpg"
+            "image_url": "https://example.com/image.jpg",
+            "detail": "high"
         }),
     );
     assert_eq!(
         items[2],
         serde_json::json!({
             "type": "input_image",
-            "image_url": "data:image/png;base64,AAA"
+            "image_url": "data:image/png;base64,AAA",
+            "detail": "high"
         }),
     );
 

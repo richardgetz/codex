@@ -8,16 +8,30 @@ pub(crate) struct DerivedVersion {
     pub(crate) is_source_build: bool,
 }
 
-pub(crate) fn derive_version(
-    cargo_version: &str,
-    profile: Option<&str>,
-    source_build_from_release_branch: bool,
-    source_base_override: Option<&str>,
-    official_release_version: Option<&str>,
-    git_release_version: Option<&str>,
-    installed_release_version: Option<&str>,
-    source_version_suffix: Option<&str>,
-) -> DerivedVersion {
+#[derive(Default)]
+pub(crate) struct VersionDerivationInputs<'a> {
+    pub(crate) cargo_version: &'a str,
+    pub(crate) profile: Option<&'a str>,
+    pub(crate) source_build_from_release_branch: bool,
+    pub(crate) source_base_override: Option<&'a str>,
+    pub(crate) official_release_version: Option<&'a str>,
+    pub(crate) git_release_version: Option<&'a str>,
+    pub(crate) installed_release_version: Option<&'a str>,
+    pub(crate) source_version_suffix: Option<&'a str>,
+}
+
+pub(crate) fn derive_version(inputs: VersionDerivationInputs<'_>) -> DerivedVersion {
+    let VersionDerivationInputs {
+        cargo_version,
+        profile,
+        source_build_from_release_branch,
+        source_base_override,
+        official_release_version,
+        git_release_version,
+        installed_release_version,
+        source_version_suffix,
+    } = inputs;
+
     let is_local_dev_version = cargo_version == LOCAL_DEV_BUILD_VERSION;
     let is_source_build = is_local_dev_version || source_build_from_release_branch;
     let release_line_version = if is_local_dev_version {
