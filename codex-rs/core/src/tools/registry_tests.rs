@@ -23,17 +23,20 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
     let tool_name = "gmail_get_recent_emails";
     let plain_name = codex_tools::ToolName::plain(tool_name);
     let namespaced_name = codex_tools::ToolName::namespaced(namespace, tool_name);
-    let registry = ToolRegistry::new(HashMap::from([
-        (plain_name.clone(), Arc::clone(&plain_handler)),
-        (namespaced_name.clone(), Arc::clone(&namespaced_handler)),
-    ]));
+    let registry = ToolRegistry::new(
+        HashMap::from([
+            (plain_name.clone(), Arc::clone(&plain_handler)),
+            (namespaced_name.clone(), Arc::clone(&namespaced_handler)),
+        ]),
+        None,
+    );
 
-    let plain = registry.handler(&plain_name);
-    let namespaced = registry.handler(&namespaced_name);
-    let missing_namespaced = registry.handler(&codex_tools::ToolName::namespaced(
-        "mcp__codex_apps__calendar",
-        tool_name,
-    ));
+    let plain = registry.handler(&plain_name, /*payload*/ None);
+    let namespaced = registry.handler(&namespaced_name, /*payload*/ None);
+    let missing_namespaced = registry.handler(
+        &codex_tools::ToolName::namespaced("mcp__codex_apps__calendar", tool_name),
+        /*payload*/ None,
+    );
 
     assert_eq!(plain.is_some(), true);
     assert_eq!(namespaced.is_some(), true);

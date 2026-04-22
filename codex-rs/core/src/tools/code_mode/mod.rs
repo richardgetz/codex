@@ -12,6 +12,7 @@ use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::SearchToolCallParams;
 use serde_json::Value as JsonValue;
 use tokio_util::sync::CancellationToken;
 
@@ -261,14 +262,10 @@ pub(super) async fn build_enabled_tools(
 
 async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
     let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
-    let listed_mcp_tools = exec
-        .session
-        .services
-        .mcp_connection_manager
-        .read()
-        .await
-        .list_all_tools()
-        .await;
+    let mcp_connection_manager = exec.session.services.mcp_connection_manager.read().await;
+    let listed_mcp_tools = mcp_connection_manager.list_all_tools().await;
+    let lazy_mcp_servers = mcp_connection_manager.lazy_server_infos();
+    drop(mcp_connection_manager);
     let parallel_mcp_server_names = exec
         .turn
         .config
@@ -286,6 +283,7 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
         &nested_tools_config,
         ToolRouterParams {
             deferred_mcp_tools: None,
+            lazy_mcp_servers,
             mcp_tools: Some(listed_mcp_tools),
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names,
@@ -362,6 +360,10 @@ fn build_nested_tool_payload(
     tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
+    if matches!(spec, Some(ToolSpec::ToolSearch { .. })) {
+        return build_tool_search_payload(tool_name, input);
+    }
+
     let actual_kind = tool_kind_for_name(spec, tool_name)?;
     match actual_kind {
         codex_code_mode::CodeModeToolKind::Function => {
@@ -371,6 +373,24 @@ fn build_nested_tool_payload(
             build_freeform_tool_payload(tool_name, input)
         }
     }
+}
+
+fn build_tool_search_payload(
+    tool_name: &ToolName,
+    input: Option<JsonValue>,
+) -> Result<ToolPayload, String> {
+    let arguments = match input {
+        None => JsonValue::Object(Default::default()),
+        Some(JsonValue::Object(map)) => JsonValue::Object(map),
+        Some(_) => {
+            return Err(format!(
+                "tool `{tool_name}` expects a JSON object for arguments"
+            ));
+        }
+    };
+    let arguments = serde_json::from_value::<SearchToolCallParams>(arguments)
+        .map_err(|err| format!("failed to parse tool `{tool_name}` arguments: {err}"))?;
+    Ok(ToolPayload::ToolSearch { arguments })
 }
 
 fn build_function_tool_payload(

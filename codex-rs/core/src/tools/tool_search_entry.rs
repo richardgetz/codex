@@ -1,3 +1,4 @@
+use codex_mcp::LazyMcpServerInfo;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::ToolSearchOutputTool;
@@ -9,12 +10,19 @@ use std::collections::HashMap;
 #[derive(Clone)]
 pub(crate) struct ToolSearchEntry {
     pub(crate) search_text: String,
-    pub(crate) output: ToolSearchOutputTool,
+    pub(crate) output: ToolSearchEntryOutput,
     pub(crate) limit_bucket: Option<String>,
+}
+
+#[derive(Clone)]
+pub(crate) enum ToolSearchEntryOutput {
+    Tool(Box<ToolSearchOutputTool>),
+    LazyMcpServer { server_name: String },
 }
 
 pub(crate) fn build_tool_search_entries(
     mcp_tools: Option<&HashMap<String, ToolInfo>>,
+    lazy_mcp_servers: &[LazyMcpServerInfo],
     dynamic_tools: &[DynamicToolSpec],
 ) -> Vec<ToolSearchEntry> {
     let mut entries = Vec::new();
@@ -33,6 +41,10 @@ pub(crate) fn build_tool_search_entries(
                 );
             }
         }
+    }
+
+    for server in lazy_mcp_servers {
+        entries.push(lazy_mcp_server_search_entry(server));
     }
 
     let mut dynamic_tools = dynamic_tools.iter().collect::<Vec<_>>();
@@ -55,22 +67,40 @@ pub(crate) fn build_tool_search_entries(
 fn mcp_tool_search_entry(info: &ToolInfo) -> Result<ToolSearchEntry, serde_json::Error> {
     Ok(ToolSearchEntry {
         search_text: build_mcp_search_text(info),
-        output: tool_search_result_source_to_output_tool(ToolSearchResultSource {
-            server_name: info.server_name.as_str(),
-            tool_namespace: info.callable_namespace.as_str(),
-            tool_name: info.callable_name.as_str(),
-            tool: &info.tool,
-            connector_name: info.connector_name.as_deref(),
-            connector_description: info.connector_description.as_deref(),
-        })?,
+        output: ToolSearchEntryOutput::Tool(Box::new(tool_search_result_source_to_output_tool(
+            ToolSearchResultSource {
+                server_name: info.server_name.as_str(),
+                tool_namespace: info.callable_namespace.as_str(),
+                tool_name: info.callable_name.as_str(),
+                tool: &info.tool,
+                connector_name: info.connector_name.as_deref(),
+                connector_description: info.connector_description.as_deref(),
+            },
+        )?)),
         limit_bucket: Some(info.server_name.clone()),
     })
+}
+
+fn lazy_mcp_server_search_entry(info: &LazyMcpServerInfo) -> ToolSearchEntry {
+    ToolSearchEntry {
+        search_text: [
+            info.server_name.as_str(),
+            info.description.as_deref().unwrap_or_default(),
+        ]
+        .join(" "),
+        output: ToolSearchEntryOutput::LazyMcpServer {
+            server_name: info.server_name.clone(),
+        },
+        limit_bucket: Some(info.server_name.clone()),
+    }
 }
 
 fn dynamic_tool_search_entry(tool: &DynamicToolSpec) -> Result<ToolSearchEntry, serde_json::Error> {
     Ok(ToolSearchEntry {
         search_text: build_dynamic_search_text(tool),
-        output: ToolSearchOutputTool::Function(dynamic_tool_to_responses_api_tool(tool)?),
+        output: ToolSearchEntryOutput::Tool(Box::new(ToolSearchOutputTool::Function(
+            dynamic_tool_to_responses_api_tool(tool)?,
+        ))),
         limit_bucket: None,
     })
 }

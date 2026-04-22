@@ -312,6 +312,46 @@ fn deserialize_server_config_with_parallel_tool_calls() {
 }
 
 #[test]
+fn deserialize_server_config_with_startup_and_sharing_modes() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            command = "echo"
+            startup = "lazy"
+            sharing = "shared"
+        "#,
+    )
+    .expect("should deserialize startup and sharing modes");
+
+    assert_eq!(cfg.startup, McpServerStartupMode::Lazy);
+    assert_eq!(cfg.sharing, McpServerSharingMode::Shared);
+
+    let serialized = toml::to_string(&cfg).expect("should serialize MCP config");
+    assert!(serialized.contains("startup = \"lazy\""));
+    assert!(serialized.contains("sharing = \"shared\""));
+
+    let round_tripped: McpServerConfig =
+        toml::from_str(&serialized).expect("should deserialize serialized MCP config");
+    assert_eq!(round_tripped, cfg);
+}
+
+#[test]
+fn deserialize_server_config_defaults_startup_and_sharing_to_auto() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            command = "echo"
+        "#,
+    )
+    .expect("should deserialize default modes");
+
+    assert_eq!(cfg.startup, McpServerStartupMode::Auto);
+    assert_eq!(cfg.sharing, McpServerSharingMode::Auto);
+
+    let serialized = toml::to_string(&cfg).expect("should serialize MCP config");
+    assert!(!serialized.contains("startup"));
+    assert!(!serialized.contains("sharing"));
+}
+
+#[test]
 fn deserialize_server_config_with_default_tool_approval_mode() {
     let cfg: McpServerConfig = toml::from_str(
         r#"
@@ -386,6 +426,8 @@ fn deserialize_ignores_unknown_server_fields() {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            startup: McpServerStartupMode::Auto,
+            sharing: McpServerSharingMode::Auto,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,

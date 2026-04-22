@@ -62,6 +62,24 @@ fn create_codex_apps_tools_cache_context(
     }
 }
 
+fn test_async_managed_client(
+    client: ManagedClientStartupState,
+    start_requested: bool,
+    start_on_startup: bool,
+    cancel_token: CancellationToken,
+) -> AsyncManagedClient {
+    AsyncManagedClient {
+        client,
+        startup_snapshot: None,
+        startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        start_requested: Arc::new(std::sync::atomic::AtomicBool::new(start_requested)),
+        start_on_startup,
+        cancel_token,
+        ready_client_identity: Arc::new(StdMutex::new(None)),
+        tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+    }
+}
+
 #[test]
 fn declared_openai_file_fields_treat_names_literally() {
     let meta = serde_json::json!({
@@ -632,9 +650,13 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
-            client: pending_client,
+            client: ManagedClientStartupState::Fixed(pending_client),
             startup_snapshot: Some(startup_tools),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            start_requested: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            start_on_startup: true,
+            cancel_token: CancellationToken::new(),
+            ready_client_identity: Arc::new(StdMutex::new(None)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         },
     );
@@ -659,9 +681,13 @@ async fn resolve_tool_info_accepts_canonical_namespaced_tool_names() {
     manager.clients.insert(
         "rmcp".to_string(),
         AsyncManagedClient {
-            client: pending_client,
+            client: ManagedClientStartupState::Fixed(pending_client),
             startup_snapshot: Some(startup_tools),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            start_requested: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            start_on_startup: true,
+            cancel_token: CancellationToken::new(),
+            ready_client_identity: Arc::new(StdMutex::new(None)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         },
     );
@@ -694,9 +720,13 @@ async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot(
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
-            client: pending_client,
+            client: ManagedClientStartupState::Fixed(pending_client),
             startup_snapshot: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            start_requested: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            start_on_startup: true,
+            cancel_token: CancellationToken::new(),
+            ready_client_identity: Arc::new(StdMutex::new(None)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         },
     );
@@ -704,6 +734,234 @@ async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot(
     let timeout_result =
         tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools()).await;
     assert!(timeout_result.is_err());
+}
+
+#[tokio::test]
+async fn lazy_unstarted_client_is_discoverable_without_blocking_list_all_tools() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    manager.clients.insert(
+        "playwright".to_string(),
+        AsyncManagedClient {
+            client: ManagedClientStartupState::Fixed(pending_client),
+            startup_snapshot: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            start_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            start_on_startup: false,
+            cancel_token: CancellationToken::new(),
+            ready_client_identity: Arc::new(StdMutex::new(None)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+        },
+    );
+
+    let timeout_result =
+        tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools()).await;
+    let tools = timeout_result.expect("lazy unstarted client should not block tool listing");
+
+    assert!(tools.is_empty());
+    assert_eq!(
+        manager.lazy_server_infos(),
+        vec![LazyMcpServerInfo {
+            server_name: "playwright".to_string(),
+            description: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn wait_for_server_ready_does_not_start_lazy_unstarted_client() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    manager.clients.insert(
+        "codex_apps".to_string(),
+        test_async_managed_client(
+            ManagedClientStartupState::Fixed(pending_client),
+            /*start_requested*/ false,
+            /*start_on_startup*/ false,
+            CancellationToken::new(),
+        ),
+    );
+
+    assert!(
+        !manager
+            .wait_for_server_ready("codex_apps", Duration::from_millis(10))
+            .await
+    );
+    assert_eq!(
+        manager.lazy_server_infos(),
+        vec![LazyMcpServerInfo {
+            server_name: "codex_apps".to_string(),
+            description: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn list_all_resources_skips_lazy_unstarted_clients() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    manager.clients.insert(
+        "playwright".to_string(),
+        test_async_managed_client(
+            ManagedClientStartupState::Fixed(pending_client),
+            /*start_requested*/ false,
+            /*start_on_startup*/ false,
+            CancellationToken::new(),
+        ),
+    );
+
+    let resources =
+        tokio::time::timeout(Duration::from_millis(10), manager.list_all_resources()).await;
+    assert_eq!(
+        resources.expect("resource listing should not block"),
+        HashMap::new()
+    );
+    assert_eq!(
+        manager.lazy_server_infos(),
+        vec![LazyMcpServerInfo {
+            server_name: "playwright".to_string(),
+            description: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn server_name_from_tool_namespace_accepts_sanitized_lazy_namespace() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    manager.clients.insert(
+        "music-studio".to_string(),
+        test_async_managed_client(
+            ManagedClientStartupState::Fixed(pending_client),
+            /*start_requested*/ false,
+            /*start_on_startup*/ false,
+            CancellationToken::new(),
+        ),
+    );
+
+    assert_eq!(
+        manager.server_name_from_tool_namespace(&ToolName::namespaced(
+            "mcp__music_studio__",
+            "get_strudel_guide",
+        )),
+        Some("music-studio")
+    );
+}
+
+#[tokio::test]
+async fn lazy_startup_failure_can_retry_in_same_session() {
+    let attempts = Arc::new(AtomicU64::new(0));
+    let startup_factory: ManagedClientStartupFactory = Arc::new({
+        let attempts = Arc::clone(&attempts);
+        move || {
+            attempts.fetch_add(1, Ordering::AcqRel);
+            futures::future::ready::<Result<ManagedClient, StartupOutcomeError>>(Err(
+                StartupOutcomeError::Failed {
+                    error: "temporary failure".to_string(),
+                },
+            ))
+            .boxed()
+            .shared()
+        }
+    });
+    let client = test_async_managed_client(
+        ManagedClientStartupState::Retryable(RetryableManagedClientStartup::new(startup_factory)),
+        /*start_requested*/ false,
+        /*start_on_startup*/ false,
+        CancellationToken::new(),
+    );
+
+    assert!(client.client().await.is_err());
+    assert!(!client.has_started_or_starting());
+
+    assert!(client.client().await.is_err());
+    assert_eq!(attempts.load(Ordering::Acquire), 2);
+}
+
+#[tokio::test]
+async fn session_cancellation_stops_waiting_on_shared_startup() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let cancel_token = CancellationToken::new();
+    let client = test_async_managed_client(
+        ManagedClientStartupState::Fixed(pending_client),
+        /*start_requested*/ true,
+        /*start_on_startup*/ true,
+        cancel_token.clone(),
+    );
+
+    cancel_token.cancel();
+
+    assert!(matches!(
+        client.client().await,
+        Err(StartupOutcomeError::Cancelled)
+    ));
+}
+
+#[tokio::test]
+async fn lazy_on_demand_startup_emits_status_events() {
+    let failed_client = futures::future::ready::<Result<ManagedClient, StartupOutcomeError>>(Err(
+        StartupOutcomeError::Failed {
+            error: "startup failed".to_string(),
+        },
+    ))
+    .boxed()
+    .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    let (tx_event, rx_event) = async_channel::unbounded();
+    manager.startup_event_emitter = Some(McpStartupEventEmitter {
+        submit_id: "sub-1".to_string(),
+        tx_event,
+        auth_entries: Arc::new(HashMap::new()),
+    });
+    manager.clients.insert(
+        "playwright".to_string(),
+        test_async_managed_client(
+            ManagedClientStartupState::Fixed(failed_client),
+            /*start_requested*/ false,
+            /*start_on_startup*/ false,
+            CancellationToken::new(),
+        ),
+    );
+
+    let result = manager.list_tools_for_server("playwright").await;
+    assert!(result.is_err());
+
+    let starting = rx_event.recv().await.expect("starting event");
+    let failed = rx_event.recv().await.expect("failed event");
+    assert!(matches!(
+        starting.msg,
+        EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            status: McpStartupStatus::Starting,
+            ..
+        })
+    ));
+    assert!(matches!(
+        failed.msg,
+        EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            status: McpStartupStatus::Failed { .. },
+            ..
+        })
+    ));
 }
 
 #[tokio::test]
@@ -717,9 +975,13 @@ async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty(
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
-            client: pending_client,
+            client: ManagedClientStartupState::Fixed(pending_client),
             startup_snapshot: Some(Vec::new()),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            start_requested: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            start_on_startup: true,
+            cancel_token: CancellationToken::new(),
+            ready_client_identity: Arc::new(StdMutex::new(None)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         },
     );
@@ -750,9 +1012,13 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
-            client: failed_client,
+            client: ManagedClientStartupState::Fixed(failed_client),
             startup_snapshot: Some(startup_tools),
             startup_complete,
+            start_requested: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            start_on_startup: true,
+            cancel_token: CancellationToken::new(),
+            ready_client_identity: Arc::new(StdMutex::new(None)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         },
     );
@@ -763,6 +1029,79 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
         .expect("tool from startup cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
     assert_eq!(tool.callable_name, "calendar_create_event");
+}
+
+#[test]
+fn startup_mode_required_and_explicit_values_override_auto_lazy_defaults() {
+    let mut config = test_stdio_server_config("playwright");
+    assert!(!should_start_server_on_session_start(
+        "playwright",
+        &config,
+        /*lazy_mcp_servers_by_default*/ false,
+    ));
+
+    config.required = true;
+    assert!(should_start_server_on_session_start(
+        "playwright",
+        &config,
+        /*lazy_mcp_servers_by_default*/ true,
+    ));
+
+    config.required = false;
+    config.startup = codex_config::McpServerStartupMode::Eager;
+    assert!(should_start_server_on_session_start(
+        "playwright",
+        &config,
+        /*lazy_mcp_servers_by_default*/ true,
+    ));
+
+    config.startup = codex_config::McpServerStartupMode::Lazy;
+    assert!(!should_start_server_on_session_start(
+        "docs", &config, /*lazy_mcp_servers_by_default*/ false,
+    ));
+}
+
+#[test]
+fn lazy_mcp_server_description_includes_auto_lazy_terms() {
+    let config = test_stdio_server_config("chrome-driver");
+
+    assert_eq!(
+        lazy_mcp_server_description("pinchtab", &config),
+        "Configured lazy MCP server for chrome, browser automation tools; Codex will start it only if a search or tool call needs it."
+    );
+}
+
+#[test]
+fn auto_sharing_is_conservative_for_known_read_only_stdio_servers() {
+    let docs_config = test_stdio_server_config("npx");
+    let context7_config = McpServerConfig {
+        transport: McpServerTransportConfig::Stdio {
+            command: "npx".to_string(),
+            args: vec!["@upstash/context7-mcp".to_string()],
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        },
+        ..docs_config.clone()
+    };
+    assert!(auto_shared_server("context7", &context7_config));
+
+    let renamed_stateful_config = test_stdio_server_config("stateful-server");
+    assert!(!auto_shared_server("context7", &renamed_stateful_config));
+
+    let playwright_config = test_stdio_server_config("playwright");
+    assert!(!auto_shared_server("playwright", &playwright_config));
+
+    let http_config = McpServerConfig {
+        transport: McpServerTransportConfig::StreamableHttp {
+            url: "https://example.com/mcp".to_string(),
+            bearer_token_env_var: None,
+            http_headers: None,
+            env_http_headers: None,
+        },
+        ..docs_config
+    };
+    assert!(!auto_shared_server("context7", &http_config));
 }
 
 #[test]
@@ -781,6 +1120,33 @@ fn elicitation_capability_enabled_for_custom_servers() {
     }
 }
 
+fn test_stdio_server_config(command: &str) -> McpServerConfig {
+    McpServerConfig {
+        transport: McpServerTransportConfig::Stdio {
+            command: command.to_string(),
+            args: Vec::new(),
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        },
+        experimental_environment: None,
+        enabled: true,
+        required: false,
+        supports_parallel_tool_calls: false,
+        startup: codex_config::McpServerStartupMode::Auto,
+        sharing: codex_config::McpServerSharingMode::Auto,
+        disabled_reason: None,
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
+        default_tools_approval_mode: None,
+        enabled_tools: None,
+        disabled_tools: None,
+        scopes: None,
+        oauth_resource: None,
+        tools: HashMap::new(),
+    }
+}
+
 #[test]
 fn mcp_init_error_display_prompts_for_github_pat() {
     let server_name = "github";
@@ -796,6 +1162,8 @@ fn mcp_init_error_display_prompts_for_github_pat() {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            startup: codex_config::McpServerStartupMode::Auto,
+            sharing: codex_config::McpServerSharingMode::Auto,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -848,6 +1216,8 @@ fn mcp_init_error_display_reports_generic_errors() {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            startup: codex_config::McpServerStartupMode::Auto,
+            sharing: codex_config::McpServerSharingMode::Auto,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,

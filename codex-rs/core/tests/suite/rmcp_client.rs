@@ -236,6 +236,8 @@ fn insert_mcp_server(
             enabled: true,
             required: false,
             supports_parallel_tool_calls: options.supports_parallel_tool_calls,
+            startup: codex_config::McpServerStartupMode::Auto,
+            sharing: codex_config::McpServerSharingMode::Auto,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(10)),
             tool_timeout_sec: options.tool_timeout_sec,

@@ -218,10 +218,21 @@ fn code_mode_tool_definitions_for_spec(spec: &ToolSpec) -> Vec<CodeModeToolDefin
                 }
             })
             .collect(),
-        ToolSpec::LocalShell {}
-        | ToolSpec::ImageGeneration { .. }
-        | ToolSpec::ToolSearch { .. }
-        | ToolSpec::WebSearch { .. } => Vec::new(),
+        ToolSpec::ToolSearch {
+            description,
+            parameters,
+            ..
+        } => vec![CodeModeToolDefinition {
+            tool_name: ToolName::plain("tool_search"),
+            name: "tool_search".to_string(),
+            description: description.clone(),
+            kind: CodeModeToolKind::Function,
+            input_schema: serde_json::to_value(parameters).ok(),
+            output_schema: None,
+        }],
+        ToolSpec::LocalShell {} | ToolSpec::ImageGeneration { .. } | ToolSpec::WebSearch { .. } => {
+            Vec::new()
+        }
     }
 }
 

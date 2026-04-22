@@ -932,6 +932,8 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
                     scopes: None,
                     oauth_resource: None,
                     supports_parallel_tool_calls: false,
+                    startup: codex_config::McpServerStartupMode::Auto,
+                    sharing: codex_config::McpServerSharingMode::Auto,
                     tools: HashMap::new(),
                 },
             );

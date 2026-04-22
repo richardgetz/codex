@@ -9,6 +9,7 @@ use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::build_specs_with_discoverable_tools;
+use codex_mcp::LazyMcpServerInfo;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::LocalShellAction;
@@ -45,6 +46,7 @@ pub struct ToolRouter {
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<HashMap<String, ToolInfo>>,
     pub(crate) deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
+    pub(crate) lazy_mcp_servers: Vec<LazyMcpServerInfo>,
     pub(crate) unavailable_called_tools: Vec<ToolName>,
     pub(crate) parallel_mcp_server_names: HashSet<String>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
@@ -56,6 +58,7 @@ impl ToolRouter {
         let ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,
+            lazy_mcp_servers,
             unavailable_called_tools,
             parallel_mcp_server_names,
             discoverable_tools,
@@ -65,6 +68,7 @@ impl ToolRouter {
             config,
             mcp_tools,
             deferred_mcp_tools,
+            lazy_mcp_servers,
             unavailable_called_tools,
             discoverable_tools,
             dynamic_tools,
@@ -119,6 +123,11 @@ impl ToolRouter {
             {
                 Some(config.spec.clone())
             }
+            ToolSpec::ToolSearch { .. }
+                if tool_name.namespace.is_none() && tool_name.name == "tool_search" =>
+            {
+                Some(config.spec.clone())
+            }
             ToolSpec::Namespace(namespace) => namespace.tools.iter().find_map(|tool| match tool {
                 ResponsesApiNamespaceTool::Function(tool)
                     if tool_name.namespace.as_deref() == Some(namespace.name.as_str())
@@ -150,8 +159,8 @@ impl ToolRouter {
             .any(|config| match &config.spec {
                 ToolSpec::Function(tool) => tool.name == tool_name.name.as_str(),
                 ToolSpec::Freeform(tool) => tool.name == tool_name.name.as_str(),
+                ToolSpec::ToolSearch { .. } => tool_name.name == "tool_search",
                 ToolSpec::Namespace(_)
-                | ToolSpec::ToolSearch { .. }
                 | ToolSpec::LocalShell {}
                 | ToolSpec::ImageGeneration { .. }
                 | ToolSpec::WebSearch { .. } => false,
