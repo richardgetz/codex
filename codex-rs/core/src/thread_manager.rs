@@ -27,6 +27,7 @@ use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -78,6 +79,19 @@ pub(crate) fn set_thread_manager_test_mode_for_tests(enabled: bool) {
 
 fn should_use_test_thread_manager_behavior() -> bool {
     FORCE_TEST_THREAD_MANAGER_BEHAVIOR.load(Ordering::Relaxed)
+}
+
+pub(crate) fn latest_collaboration_mode_from_rollout_items(
+    items: &[RolloutItem],
+) -> Option<CollaborationMode> {
+    items.iter().rev().find_map(|item| match item {
+        RolloutItem::TurnContext(context) => context.collaboration_mode.clone(),
+        RolloutItem::ResponseItem(_)
+        | RolloutItem::SessionState(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::EventMsg(_)
+        | RolloutItem::SessionMeta(_) => None,
+    })
 }
 
 struct TempCodexHomeGuard {
@@ -516,6 +530,7 @@ impl ThreadManager {
     ) -> CodexResult<NewThread> {
         Box::pin(self.state.spawn_thread(
             config,
+            /*initial_collaboration_mode*/ None,
             initial_history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
@@ -556,6 +571,7 @@ impl ThreadManager {
     ) -> CodexResult<NewThread> {
         Box::pin(self.state.spawn_thread(
             config,
+            /*initial_collaboration_mode*/ None,
             initial_history,
             auth_manager,
             self.agent_control(),
@@ -575,6 +591,7 @@ impl ThreadManager {
     ) -> CodexResult<NewThread> {
         Box::pin(self.state.spawn_thread(
             config,
+            /*initial_collaboration_mode*/ None,
             InitialHistory::New,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
@@ -597,6 +614,7 @@ impl ThreadManager {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
         Box::pin(self.state.spawn_thread(
             config,
+            /*initial_collaboration_mode*/ None,
             initial_history,
             auth_manager,
             self.agent_control(),
@@ -703,8 +721,19 @@ impl ThreadManager {
                 }
             }
         };
+        let initial_collaboration_mode = latest_collaboration_mode_from_rollout_items(
+            &history.get_rollout_items(),
+        )
+        .map(|collaboration_mode| {
+            collaboration_mode.with_updates(
+                config.model.clone(),
+                config.model_reasoning_effort.map(Some),
+                /*developer_instructions*/ None,
+            )
+        });
         Box::pin(self.state.spawn_thread(
             config,
+            initial_collaboration_mode,
             history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
@@ -782,6 +811,7 @@ impl ThreadManagerState {
             config,
             agent_control,
             self.session_source.clone(),
+            /*initial_collaboration_mode*/ None,
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
@@ -796,6 +826,7 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
         session_source: SessionSource,
+        initial_collaboration_mode: Option<CollaborationMode>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -803,6 +834,7 @@ impl ThreadManagerState {
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
+            initial_collaboration_mode,
             InitialHistory::New,
             Arc::clone(&self.auth_manager),
             agent_control,
@@ -830,6 +862,7 @@ impl ThreadManagerState {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
         Box::pin(self.spawn_thread_with_source(
             config,
+            /*initial_collaboration_mode*/ None,
             initial_history,
             Arc::clone(&self.auth_manager),
             agent_control,
@@ -852,12 +885,14 @@ impl ThreadManagerState {
         initial_history: InitialHistory,
         agent_control: AgentControl,
         session_source: SessionSource,
+        initial_collaboration_mode: Option<CollaborationMode>,
         persist_extended_history: bool,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
+            initial_collaboration_mode,
             initial_history,
             Arc::clone(&self.auth_manager),
             agent_control,
@@ -878,6 +913,7 @@ impl ThreadManagerState {
     pub(crate) async fn spawn_thread(
         &self,
         config: Config,
+        initial_collaboration_mode: Option<CollaborationMode>,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
@@ -889,6 +925,7 @@ impl ThreadManagerState {
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
+            initial_collaboration_mode,
             initial_history,
             auth_manager,
             agent_control,
@@ -908,6 +945,7 @@ impl ThreadManagerState {
     pub(crate) async fn spawn_thread_with_source(
         &self,
         config: Config,
+        initial_collaboration_mode: Option<CollaborationMode>,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
@@ -942,6 +980,7 @@ impl ThreadManagerState {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
             config,
+            initial_collaboration_mode,
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
             environment_manager: Arc::clone(&self.environment_manager),

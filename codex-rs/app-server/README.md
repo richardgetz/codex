@@ -444,7 +444,7 @@ model = "gpt-5.3-codex-spark"
 reasoning_effort = "low"
 ```
 
-Orchestrator mode re-wakes the same thread, preserving its current collaboration mode while applying these model and reasoning overrides to the next orchestrator tick turn. Because orchestrator ticks submit a normal turn on that same thread, the override becomes the thread's active model and reasoning setting until another turn explicitly changes them. Orchestrator-launched agents can still request their own model and reasoning effort through the normal agent spawn fields, so the orchestrator can run on a cheaper coordination model while delegating implementation work to a stronger model.
+Orchestrator mode re-wakes the same thread, preserving its current collaboration mode while applying these model and reasoning overrides to the next orchestrator tick turn. Because orchestrator ticks submit a normal turn on that same thread, the override becomes the thread's active model and reasoning setting until another turn explicitly changes them. Orchestrator-launched agents can still request their own model, reasoning effort, and collaboration mode through the normal agent spawn fields, so the orchestrator can run on a cheaper coordination model while delegating implementation work to a stronger model or a different execution mode.
 
 ```json
 { "method": "thread/control/set", "id": 26, "params": {
@@ -477,6 +477,26 @@ Orchestrator mode re-wakes the same thread, preserving its current collaboration
     "targetThreadIds": ["thr_worker_a", "thr_worker_b"]
 } }
 ```
+
+The intended parent/child model is:
+
+```text
+User or channel adapter
+  -> Orchestrator thread
+       -> default child for normal scoped work
+       -> plan child for planning and decomposition
+       -> continuous child for long-running execution
+       -> orchestrator child for delegated coordination
+```
+
+`spawn_agent` accepts an optional `collaboration_mode` value of `default`, `plan`, `continuous`, or `orchestrator`. The orchestrator should use that field to choose the child execution mode instead of encoding the mode only in natural-language instructions. Clients can visualize the relationship by reading thread metadata: spawned children use `source: { type: "subAgent", ... }`, carry their parent thread id in the thread-spawn source, and expose `agentNickname` / `agentRole` for display.
+
+Next implementation steps for a fuller orchestrator experience are:
+
+- add first-class app-server task graph queries so clients do not need to reconstruct parent/child trees from thread lists;
+- add orchestrator callback events for child `completed`, `blocked`, `needsApproval`, and `failed` states;
+- let trusted channel adapters deliver wake events directly to app-server instead of relying on timer-only orchestrator wakes;
+- keep memory writes scoped to the orchestrator layer unless a child thread is explicitly configured to learn.
 
 `thread/control/read` returns the current active contract or `null` when no control state exists. Released contracts remain persisted for auditability, but `read` filters them out:
 
