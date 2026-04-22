@@ -59,6 +59,7 @@ pub struct ToolRegistryPlan {
 pub struct ToolRegistryPlanParams<'a> {
     pub mcp_tools: Option<&'a [ToolRegistryPlanMcpTool<'a>]>,
     pub deferred_mcp_tools: Option<&'a [ToolRegistryPlanDeferredTool<'a>]>,
+    pub lazy_mcp_servers: &'a [ToolRegistryPlanLazyMcpServer<'a>],
     pub tool_namespaces: Option<&'a HashMap<String, ToolNamespace>>,
     pub discoverable_tools: Option<&'a [DiscoverableTool]>,
     pub dynamic_tools: &'a [DynamicToolSpec],
@@ -87,6 +88,12 @@ pub struct ToolRegistryPlanDeferredTool<'a> {
     pub server_name: &'a str,
     pub connector_name: Option<&'a str>,
     pub connector_description: Option<&'a str>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolRegistryPlanLazyMcpServer<'a> {
+    pub server_name: &'a str,
+    pub description: Option<&'a str>,
 }
 
 impl ToolRegistryPlan {

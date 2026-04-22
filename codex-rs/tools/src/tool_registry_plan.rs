@@ -261,7 +261,9 @@ pub fn build_tool_registry_plan(
         .collect::<Vec<_>>();
 
     if config.search_tool
-        && (params.deferred_mcp_tools.is_some() || !deferred_dynamic_tools.is_empty())
+        && (params.deferred_mcp_tools.is_some()
+            || !params.lazy_mcp_servers.is_empty()
+            || !deferred_dynamic_tools.is_empty())
     {
         let mut search_source_infos = params
             .deferred_mcp_tools
@@ -275,6 +277,12 @@ pub fn build_tool_registry_plan(
                 }))
             })
             .unwrap_or_default();
+        search_source_infos.extend(params.lazy_mcp_servers.iter().map(|server| {
+            ToolSearchSourceInfo {
+                name: server.server_name.to_string(),
+                description: server.description.map(str::to_string),
+            }
+        }));
 
         if !deferred_dynamic_tools.is_empty() {
             search_source_infos.push(ToolSearchSourceInfo {

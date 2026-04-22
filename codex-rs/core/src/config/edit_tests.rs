@@ -703,6 +703,8 @@ fn blocking_replace_mcp_servers_round_trips() {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: true,
+            startup: codex_config::McpServerStartupMode::Auto,
+            sharing: codex_config::McpServerSharingMode::Auto,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -732,6 +734,8 @@ fn blocking_replace_mcp_servers_round_trips() {
             enabled: false,
             required: false,
             supports_parallel_tool_calls: false,
+            startup: codex_config::McpServerStartupMode::Auto,
+            sharing: codex_config::McpServerSharingMode::Auto,
             disabled_reason: None,
             startup_timeout_sec: Some(std::time::Duration::from_secs(5)),
             tool_timeout_sec: None,
@@ -798,6 +802,8 @@ fn blocking_replace_mcp_servers_serializes_tool_approval_overrides() {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            startup: codex_config::McpServerStartupMode::Lazy,
+            sharing: codex_config::McpServerSharingMode::Standalone,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -826,6 +832,8 @@ fn blocking_replace_mcp_servers_serializes_tool_approval_overrides() {
     let expected = "\
 [mcp_servers.docs]
 command = \"docs-server\"
+startup = \"lazy\"
+sharing = \"standalone\"
 default_tools_approval_mode = \"prompt\"
 
 [mcp_servers.docs.tools.search]
@@ -862,6 +870,8 @@ foo = { command = "cmd" }
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            startup: codex_config::McpServerStartupMode::Auto,
+            sharing: codex_config::McpServerSharingMode::Auto,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -916,6 +926,8 @@ foo = { command = "cmd" } # keep me
             enabled: false,
             required: false,
             supports_parallel_tool_calls: false,
+            startup: codex_config::McpServerStartupMode::Auto,
+            sharing: codex_config::McpServerSharingMode::Auto,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -969,6 +981,8 @@ foo = { command = "cmd", args = ["--flag"] } # keep me
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            startup: codex_config::McpServerStartupMode::Auto,
+            sharing: codex_config::McpServerSharingMode::Auto,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -1023,6 +1037,8 @@ foo = { command = "cmd" }
             enabled: false,
             required: false,
             supports_parallel_tool_calls: false,
+            startup: codex_config::McpServerStartupMode::Auto,
+            sharing: codex_config::McpServerSharingMode::Auto,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,

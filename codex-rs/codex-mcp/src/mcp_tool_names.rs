@@ -103,6 +103,59 @@ struct CallableToolCandidate {
     callable_name: String,
 }
 
+pub(crate) fn qualify_server_namespaces<I, S>(server_names: I) -> HashMap<String, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    struct ServerNamespaceCandidate {
+        server_name: String,
+        raw_namespace_identity: String,
+        callable_namespace: String,
+    }
+
+    let mut candidates = server_names
+        .into_iter()
+        .map(|server_name| {
+            let server_name = server_name.as_ref().to_string();
+            let callable_namespace =
+                sanitize_responses_api_tool_name(&format!("mcp{MCP_TOOL_NAME_DELIMITER}{server_name}{MCP_TOOL_NAME_DELIMITER}"));
+            ServerNamespaceCandidate {
+                raw_namespace_identity: format!(
+                    "{server_name}\0mcp{MCP_TOOL_NAME_DELIMITER}{server_name}{MCP_TOOL_NAME_DELIMITER}\0"
+                ),
+                server_name,
+                callable_namespace,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut namespace_identities_by_base = HashMap::<String, HashSet<String>>::new();
+    for candidate in &candidates {
+        namespace_identities_by_base
+            .entry(candidate.callable_namespace.clone())
+            .or_default()
+            .insert(candidate.raw_namespace_identity.clone());
+    }
+    let colliding_namespaces = namespace_identities_by_base
+        .into_iter()
+        .filter_map(|(namespace, identities)| (identities.len() > 1).then_some(namespace))
+        .collect::<HashSet<_>>();
+    for candidate in &mut candidates {
+        if colliding_namespaces.contains(&candidate.callable_namespace) {
+            candidate.callable_namespace = append_namespace_hash_suffix(
+                &candidate.callable_namespace,
+                &candidate.raw_namespace_identity,
+            );
+        }
+    }
+
+    candidates
+        .into_iter()
+        .map(|candidate| (candidate.server_name, candidate.callable_namespace))
+        .collect()
+}
+
 /// Returns a qualified-name lookup for MCP tools.
 ///
 /// Raw MCP server/tool names are kept on each [`ToolInfo`] for protocol calls, while

@@ -208,27 +208,42 @@ where
 
 pub struct ToolRegistry {
     handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>,
+    fallback_mcp_handler: Option<Arc<dyn AnyToolHandler>>,
 }
 
 impl ToolRegistry {
-    fn new(handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>) -> Self {
-        Self { handlers }
+    fn new(
+        handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>,
+        fallback_mcp_handler: Option<Arc<dyn AnyToolHandler>>,
+    ) -> Self {
+        Self {
+            handlers,
+            fallback_mcp_handler,
+        }
     }
 
-    fn handler(&self, name: &ToolName) -> Option<Arc<dyn AnyToolHandler>> {
-        self.handlers.get(name).map(Arc::clone)
+    fn handler(
+        &self,
+        name: &ToolName,
+        payload: Option<&ToolPayload>,
+    ) -> Option<Arc<dyn AnyToolHandler>> {
+        self.handlers.get(name).map(Arc::clone).or_else(|| {
+            matches!(payload, Some(ToolPayload::Mcp { .. }))
+                .then(|| self.fallback_mcp_handler.as_ref().map(Arc::clone))
+                .flatten()
+        })
     }
 
     #[cfg(test)]
     pub(crate) fn has_handler(&self, name: &ToolName) -> bool {
-        self.handler(name).is_some()
+        self.handler(name, /*payload*/ None).is_some()
     }
 
     pub(crate) fn create_diff_consumer(
         &self,
         name: &ToolName,
     ) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
-        self.handler(name)?.create_diff_consumer()
+        self.handler(name, /*payload*/ None)?.create_diff_consumer()
     }
 
     // TODO(jif) for dynamic tools.
@@ -290,7 +305,7 @@ impl ToolRegistry {
             }
         }
 
-        let handler = match self.handler(&tool_name) {
+        let handler = match self.handler(&tool_name, Some(&invocation.payload)) {
             Some(handler) => handler,
             None => {
                 let message = unsupported_tool_call_message(&invocation.payload, &tool_name);
@@ -468,6 +483,7 @@ impl ToolRegistry {
 
 pub struct ToolRegistryBuilder {
     handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>,
+    fallback_mcp_handler: Option<Arc<dyn AnyToolHandler>>,
     specs: Vec<ConfiguredToolSpec>,
 }
 
@@ -475,6 +491,7 @@ impl ToolRegistryBuilder {
     pub fn new() -> Self {
         Self {
             handlers: HashMap::new(),
+            fallback_mcp_handler: None,
             specs: Vec::new(),
         }
     }
@@ -504,6 +521,14 @@ impl ToolRegistryBuilder {
         }
     }
 
+    pub fn register_fallback_mcp_handler<H>(&mut self, handler: Arc<H>)
+    where
+        H: ToolHandler + 'static,
+    {
+        let handler: Arc<dyn AnyToolHandler> = handler;
+        self.fallback_mcp_handler = Some(handler);
+    }
+
     // TODO(jif) for dynamic tools.
     // pub fn register_many<I>(&mut self, names: I, handler: Arc<dyn ToolHandler>)
     // where
@@ -523,7 +548,7 @@ impl ToolRegistryBuilder {
     // }
 
     pub fn build(self) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
-        let registry = ToolRegistry::new(self.handlers);
+        let registry = ToolRegistry::new(self.handlers, self.fallback_mcp_handler);
         (self.specs, registry)
     }
 }

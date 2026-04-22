@@ -804,6 +804,10 @@ impl Session {
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth),
             tool_plugin_provenance,
+            matches!(
+                session_configuration.session_source,
+                SessionSource::SubAgent(_)
+            ),
         )
         .instrument(info_span!(
             "session_init.mcp_manager_init",

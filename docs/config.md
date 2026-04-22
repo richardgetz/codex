@@ -26,6 +26,36 @@ Only enable parallel calls for MCP servers whose tools are safe to run at the
 same time. If tools read and write shared state, files, databases, or external
 resources, review those read/write race conditions before enabling this setting.
 
+MCP servers start eagerly by default, except for servers Codex can safely defer
+such as browser automation servers and sub-agent sessions. You can override that
+per server with `startup`:
+
+```toml
+[mcp_servers.playwright]
+command = "playwright-mcp"
+startup = "lazy"
+```
+
+`startup = "lazy"` keeps the server out of session startup and exposes it
+through `tool_search`; Codex starts it the first time a search or tool call needs
+its tools. `startup = "eager"` keeps the previous start-on-session behavior, and
+`startup = "auto"` lets Codex choose. Servers marked `required = true` always
+start eagerly so startup failures can still block the session.
+
+Some local stdio MCP servers are safe to reuse across sessions. Codex shares only
+known read-only stdio servers automatically, and falls back to a standalone
+server process for remote or HTTP transports:
+
+```toml
+[mcp_servers.docs]
+command = "aws-documentation-mcp-server"
+sharing = "shared"
+```
+
+Use `sharing = "standalone"` for servers with per-session state, prompts,
+browser profiles, writable resources, or credentials that should not cross
+session boundaries. `sharing = "auto"` is the default.
+
 ## MCP tool approvals
 
 Codex stores approval defaults and per-tool overrides for custom MCP servers

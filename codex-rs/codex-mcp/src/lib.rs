@@ -41,6 +41,7 @@ pub use mcp::with_codex_apps_mcp;
 pub use mcp::with_codex_apps_mcp_with_authorization_header;
 pub use mcp_connection_manager::CodexAppsToolsCacheKey;
 pub use mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
+pub use mcp_connection_manager::LazyMcpServerInfo;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_META_CAPABILITY;
 pub use mcp_connection_manager::McpConnectionManager;
 pub use mcp_connection_manager::McpRuntimeEnvironment;

@@ -5,6 +5,7 @@ use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolRegistryBuilder;
+use codex_mcp::LazyMcpServerInfo;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::AdditionalProperties;
@@ -15,6 +16,7 @@ use codex_tools::ToolHandlerKind;
 use codex_tools::ToolName;
 use codex_tools::ToolNamespace;
 use codex_tools::ToolRegistryPlanDeferredTool;
+use codex_tools::ToolRegistryPlanLazyMcpServer;
 use codex_tools::ToolRegistryPlanMcpTool;
 use codex_tools::ToolRegistryPlanParams;
 use codex_tools::ToolUserShellType;
@@ -72,6 +74,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, ToolInfo>>,
     deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
+    lazy_mcp_servers: Vec<LazyMcpServerInfo>,
     unavailable_called_tools: Vec<ToolName>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
@@ -123,6 +126,13 @@ pub(crate) fn build_specs_with_discoverable_tools(
             })
             .collect::<Vec<_>>()
     });
+    let lazy_mcp_server_sources = lazy_mcp_servers
+        .iter()
+        .map(|server| ToolRegistryPlanLazyMcpServer {
+            server_name: server.server_name.as_str(),
+            description: server.description.as_deref(),
+        })
+        .collect::<Vec<_>>();
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let plan = build_tool_registry_plan(
@@ -132,6 +142,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 .as_ref()
                 .map(|inputs| inputs.mcp_tools.as_slice()),
             deferred_mcp_tools: deferred_mcp_tool_sources.as_deref(),
+            lazy_mcp_servers: lazy_mcp_server_sources.as_slice(),
             tool_namespaces: mcp_tool_plan_inputs
                 .as_ref()
                 .map(|inputs| &inputs.tool_namespaces),
@@ -175,6 +186,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
         .iter()
         .map(|configured_tool| configured_tool.name().to_string())
         .collect::<HashSet<_>>();
+
+    if !lazy_mcp_servers.is_empty() {
+        builder.register_fallback_mcp_handler(mcp_handler.clone());
+    }
 
     for spec in plan.specs {
         if spec.supports_parallel_tool_calls {
@@ -267,6 +282,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 if tool_search_handler.is_none() {
                     let entries = build_tool_search_entries(
                         deferred_mcp_tools.as_ref(),
+                        lazy_mcp_servers.as_slice(),
                         &deferred_dynamic_tools,
                     );
                     tool_search_handler = Some(Arc::new(ToolSearchHandler::new(entries)));

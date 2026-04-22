@@ -15,6 +15,7 @@ use crate::ToolHandlerSpec;
 use crate::ToolName;
 use crate::ToolNamespace;
 use crate::ToolRegistryPlanDeferredTool;
+use crate::ToolRegistryPlanLazyMcpServer;
 use crate::ToolRegistryPlanMcpTool;
 use crate::ToolsConfigParams;
 use crate::WaitAgentTimeoutOptions;
@@ -1335,6 +1336,57 @@ fn search_tool_description_lists_each_mcp_source_once() {
 }
 
 #[test]
+fn search_tool_description_lists_lazy_mcp_servers() {
+    let model_info = search_capable_model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ToolSearch);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let lazy_mcp_servers = [ToolRegistryPlanLazyMcpServer {
+        server_name: "playwright",
+        description: Some("Browser automation tools."),
+    }];
+
+    let plan = build_tool_registry_plan(
+        &tools_config,
+        ToolRegistryPlanParams {
+            mcp_tools: None,
+            deferred_mcp_tools: None,
+            lazy_mcp_servers: &lazy_mcp_servers,
+            tool_namespaces: None,
+            discoverable_tools: None,
+            dynamic_tools: &[],
+            default_agent_type_description: DEFAULT_AGENT_TYPE_DESCRIPTION,
+            wait_agent_timeouts: wait_agent_timeout_options(),
+        },
+    );
+
+    let search_tool = plan
+        .specs
+        .iter()
+        .find(|tool| tool.name() == TOOL_SEARCH_TOOL_NAME)
+        .expect("tool_search should be present for lazy MCP servers");
+    let ToolSpec::ToolSearch { description, .. } = &search_tool.spec else {
+        panic!("expected tool_search tool");
+    };
+
+    assert!(description.contains("- playwright: Browser automation tools."));
+    assert!(plan.handlers.contains(&ToolHandlerSpec {
+        name: ToolName::plain(TOOL_SEARCH_TOOL_NAME),
+        kind: ToolHandlerKind::ToolSearch,
+    }));
+}
+
+#[test]
 fn search_tool_requires_model_capability_and_enabled_feature() {
     let model_info = search_capable_model_info();
     let deferred_mcp_tools = Some(vec![deferred_mcp_tool(
@@ -2024,6 +2076,7 @@ fn build_specs_with_optional_tool_namespaces<'a>(
         ToolRegistryPlanParams {
             mcp_tools: mcp_tool_inputs.as_deref(),
             deferred_mcp_tools: deferred_mcp_tools.as_deref(),
+            lazy_mcp_servers: &[],
             tool_namespaces: tool_namespaces.as_ref(),
             discoverable_tools: discoverable_tools.as_deref(),
             dynamic_tools,
