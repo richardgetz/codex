@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-04-22/drop-stale-cargo-deny-ignore#1a9731facf7a"
+  change_type: "fix"
+  scope: "ci"
+  summary: "Remove a stale cargo-deny ignored advisory after the 0.122.0 refresh changed the dependency graph."
+  decision: "Delete the obsolete RUSTSEC-2026-0097 ignore because cargo-deny reports the advisory is no longer encountered."
+  constraints:
+    - "Must not add new license or advisory allowances."
+    - "Must keep deny.toml aligned with the current Cargo.lock after the upstream refresh."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/deny.toml"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "git diff --check"
+    - "CI cargo-deny log identified RUSTSEC-2026-0097 as advisory-not-detected."
+  risks:
+    - "cargo-deny was not installed locally, so CI is the verification source for this follow-up."

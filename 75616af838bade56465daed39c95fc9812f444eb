@@ -1,0 +1,34 @@
+intent:
+  id: "intent/2026-04-22/rick-stable-refresh#75616af838ba"
+  change_type: "test"
+  scope: "stable-refresh"
+  summary: "Refresh Rick stable onto official rust-v0.122.0 while preserving fork-specific behavior and standalone guard tests."
+  decision: "Use a merge-shaped PR branch based on current stable with official rust-v0.122.0 as the second parent, and set the tree to the already-tested replay result."
+  constraints:
+    - "Must preserve official rust-v0.122.0 behavior, including /side support."
+    - "Must preserve Rick fork continuous-mode thread-control behavior across future upstream refreshes."
+    - "Must keep generated app-server/config fixtures consistent with replayed source."
+    - "Must keep the PR mergeable into stable without patch-equivalent duplicate stable history conflicts."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/session/thread_control_tests.rs"
+    - "codex-rs/core/src/session/turn_context.rs::Session::sync_continuous_mode_control"
+    - "codex-rs/build-info/src/versioning.rs::derive_version"
+    - "codex-rs/tui/src/slash_command.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "Verified merge commit tree matches tested replay commit 596e347df9ed."
+    - "cargo test -p codex-build-info"
+    - "cargo test -p codex-app-server-protocol"
+    - "cargo test -p codex-core thread_control -- --test-threads=1"
+    - "cargo test -p codex-app-server thread_control -- --test-threads=1"
+    - "cargo test -p codex-models-manager collaboration_mode_presets -- --test-threads=1"
+    - "cargo test -p codex-tui side -- --test-threads=1"
+    - "cargo test -p codex-tui continuous -- --test-threads=1"
+    - "cargo test -p codex-tui bottom_pane::footer::tests::footer_snapshots -- --exact"
+    - "scoped just fix for codex-core, codex-app-server-protocol, codex-app-server, codex-models-manager, codex-build-info, codex-tui"
+  risks:
+    - "Full codex-rs workspace test suite was not run locally."
