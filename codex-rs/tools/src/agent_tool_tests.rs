@@ -66,11 +66,23 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         description
             .contains("Available model overrides (optional; inherited parent model is preferred):")
     );
+    assert!(description.contains("Use collaboration_mode to choose how the child should operate"));
     assert!(description.contains("visible display (`visible-model`)"));
     assert!(!description.contains("hidden display (`hidden-model`)"));
     assert!(properties.contains_key("task_name"));
     assert!(properties.contains_key("message"));
     assert!(properties.contains_key("fork_turns"));
+    assert_eq!(
+        properties
+            .get("collaboration_mode")
+            .and_then(|schema| schema.enum_values.as_ref()),
+        Some(&vec![
+            json!("default"),
+            json!("plan"),
+            json!("continuous"),
+            json!("orchestrator"),
+        ])
+    );
     assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
     assert_eq!(

@@ -25,6 +25,10 @@ use codex_model_provider::create_model_provider;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -91,6 +95,82 @@ fn thread_manager() -> ThreadManager {
         CodexAuth::from_api_key("dummy"),
         built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone(),
     )
+}
+
+#[tokio::test]
+async fn requested_spawn_agent_collaboration_mode_preserves_mask_model() {
+    let (_session, turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config.model = Some("gpt-parent".to_string());
+    config.model_reasoning_effort = Some(ReasoningEffort::Low);
+    let mode_masks = vec![CollaborationModeMask {
+        name: "Orchestrator".to_string(),
+        mode: Some(ModeKind::Orchestrator),
+        model: Some("gpt-orchestrator".to_string()),
+        reasoning_effort: Some(Some(ReasoningEffort::Medium)),
+        developer_instructions: Some(Some("mode instructions".to_string())),
+    }];
+
+    let collaboration_mode = requested_spawn_agent_collaboration_mode(
+        &turn,
+        &config,
+        Some(ModeKind::Orchestrator),
+        None,
+        None,
+        &mode_masks,
+    )
+    .expect("mode should be available")
+    .expect("mode should be selected");
+
+    assert_eq!(
+        collaboration_mode,
+        CollaborationMode {
+            mode: ModeKind::Orchestrator,
+            settings: Settings {
+                model: "gpt-orchestrator".to_string(),
+                reasoning_effort: Some(ReasoningEffort::Medium),
+                developer_instructions: Some("mode instructions".to_string()),
+            },
+        }
+    );
+}
+
+#[tokio::test]
+async fn requested_spawn_agent_collaboration_mode_applies_explicit_overrides() {
+    let (_session, turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config.model = Some("gpt-parent".to_string());
+    config.model_reasoning_effort = Some(ReasoningEffort::Low);
+    let mode_masks = vec![CollaborationModeMask {
+        name: "Orchestrator".to_string(),
+        mode: Some(ModeKind::Orchestrator),
+        model: Some("gpt-orchestrator".to_string()),
+        reasoning_effort: Some(Some(ReasoningEffort::Medium)),
+        developer_instructions: Some(Some("mode instructions".to_string())),
+    }];
+
+    let collaboration_mode = requested_spawn_agent_collaboration_mode(
+        &turn,
+        &config,
+        Some(ModeKind::Orchestrator),
+        Some("gpt-explicit"),
+        Some(ReasoningEffort::High),
+        &mode_masks,
+    )
+    .expect("mode should be available")
+    .expect("mode should be selected");
+
+    assert_eq!(
+        collaboration_mode,
+        CollaborationMode {
+            mode: ModeKind::Orchestrator,
+            settings: Settings {
+                model: "gpt-explicit".to_string(),
+                reasoning_effort: Some(ReasoningEffort::High),
+                developer_instructions: Some("mode instructions".to_string()),
+            },
+        }
+    );
 }
 
 async fn install_role_with_model_override(turn: &mut TurnContext) -> String {
@@ -431,7 +511,7 @@ async fn spawn_agent_fork_context_rejects_agent_type_override() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without a full-history fork.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and collaboration mode; omit agent_type, model, reasoning_effort, and collaboration_mode, or spawn without fork_context/fork_turns=all.".to_string(),
         )
     );
 }
@@ -464,8 +544,8 @@ async fn spawn_agent_fork_context_rejects_child_model_overrides() {
 
     assert_eq!(
         err,
-            FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without a full-history fork.".to_string(),
+        FunctionCallError::RespondToModel(
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and collaboration mode; omit agent_type, model, reasoning_effort, and collaboration_mode, or spawn without fork_context/fork_turns=all.".to_string(),
         )
     );
 }
@@ -509,7 +589,7 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without a full-history fork.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and collaboration mode; omit agent_type, model, reasoning_effort, and collaboration_mode, or spawn without fork_context/fork_turns=all.".to_string(),
         )
     );
 }
@@ -548,9 +628,217 @@ async fn multi_agent_v2_spawn_defaults_to_full_fork_and_rejects_child_model_over
 
     assert_eq!(
         err,
-            FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without a full-history fork.".to_string(),
+        FunctionCallError::RespondToModel(
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and collaboration mode; omit agent_type, model, reasoning_effort, and collaboration_mode, or spawn without fork_context/fork_turns=all.".to_string(),
         )
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_fork_turns_all_rejects_collaboration_mode_override() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config);
+
+    let err = SpawnAgentHandlerV2
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "fork_context_v2",
+                "collaboration_mode": "plan",
+                "fork_turns": "all"
+            })),
+        ))
+        .await
+        .expect_err("forked spawn should reject child collaboration mode overrides");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and collaboration mode; omit agent_type, model, reasoning_effort, and collaboration_mode, or spawn without fork_context/fork_turns=all.".to_string(),
+        )
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_fork_turns_all_inherits_parent_collaboration_mode() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config);
+    let parent_mode = CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: turn.model_info.slug.clone(),
+            reasoning_effort: None,
+            developer_instructions: Some("plan mode".to_string()),
+        },
+    };
+    root.thread
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: Some(parent_mode.clone()),
+            personality: None,
+        })
+        .await
+        .expect("parent mode override should submit");
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if root.thread.codex.session.collaboration_mode().await == parent_mode {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("parent collaboration mode should be updated");
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "continue with the forked context",
+                "task_name": "forked_plan",
+                "fork_turns": "all"
+            })),
+        ))
+        .await
+        .expect("forked spawn should inherit parent collaboration mode");
+
+    let child_thread_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.conversation_id, &turn.session_source, "forked_plan")
+        .await
+        .expect("relative path should resolve");
+    let child_thread = manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be tracked");
+
+    assert_eq!(
+        child_thread.codex.session.collaboration_mode().await,
+        parent_mode
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_fork_turns_all_does_not_require_loaded_parent_for_mode_inheritance() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config);
+    let parent_mode = CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: turn.model_info.slug.clone(),
+            reasoning_effort: None,
+            developer_instructions: Some("plan mode".to_string()),
+        },
+    };
+    let mut persisted_context = turn.to_turn_context_item();
+    persisted_context.collaboration_mode = Some(parent_mode.clone());
+    root.thread
+        .codex
+        .session
+        .persist_rollout_items(&[RolloutItem::TurnContext(persisted_context)])
+        .await;
+    root.thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    root.thread
+        .codex
+        .session
+        .flush_rollout()
+        .await
+        .expect("parent rollout should flush before unloading");
+    manager
+        .remove_thread(&root.thread_id)
+        .await
+        .expect("parent thread should be removed from live manager");
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "continue with the forked context",
+                "task_name": "unloaded_parent_fork",
+                "fork_turns": "all"
+            })),
+        ))
+        .await
+        .expect("forked spawn should fall back when parent mode cannot be inherited");
+
+    let child_thread_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(
+            session.conversation_id,
+            &turn.session_source,
+            "unloaded_parent_fork",
+        )
+        .await
+        .expect("relative path should resolve");
+    let child_thread = manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be tracked");
+
+    assert_eq!(
+        child_thread.codex.session.collaboration_mode().await,
+        parent_mode
     );
 }
 
@@ -827,6 +1115,70 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                         && !communication.trigger_turn
             )
     }));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_can_select_child_collaboration_mode() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config);
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "build continuously until the stop condition",
+                "task_name": "runner",
+                "collaboration_mode": "continuous"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should accept a child collaboration mode");
+
+    let child_thread_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.conversation_id, &turn.session_source, "runner")
+        .await
+        .expect("relative path should resolve");
+    let child_ops = manager
+        .captured_ops()
+        .into_iter()
+        .filter(|(id, _)| *id == child_thread_id)
+        .map(|(_, op)| op)
+        .collect::<Vec<_>>();
+    let child_thread = manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be tracked");
+
+    assert_eq!(
+        child_thread.codex.session.collaboration_mode().await.mode,
+        ModeKind::Continuous
+    );
+    assert!(matches!(
+        child_ops.first(),
+        Some(Op::InterAgentCommunication { communication })
+            if communication.author == AgentPath::root()
+                && communication.recipient.as_str() == "/root/runner"
+                && communication.content == "build continuously until the stop condition"
+                && communication.trigger_turn
+    ));
 }
 
 #[tokio::test]
