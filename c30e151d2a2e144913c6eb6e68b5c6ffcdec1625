@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-04-23/tui-slash-new-mcp-startup#c30e151d2a2e"
+  change_type: "fix"
+  scope: "tui"
+  summary: "Allow /new when only MCP startup/status work is active."
+  decision: "Split slash-command task gating from the broader bottom-pane running indicator so MCP startup can keep status and Esc behavior without blocking session commands."
+  constraints:
+    - "Must keep /new and other unavailable-during-task commands blocked during actual agent or review work."
+    - "Must preserve background MCP startup status and Esc interrupt behavior driven by the bottom pane."
+    - "Must report disabled slash commands once and keep the draft available for recall."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/chatwidget.rs::ChatWidget::update_task_running_state"
+    - "codex-rs/tui/src/chatwidget/slash_dispatch.rs::ChatWidget::dispatch_command"
+    - "codex-rs/tui/src/bottom_pane/chat_composer.rs::ChatComposer::reject_slash_command_if_unavailable"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.4"
