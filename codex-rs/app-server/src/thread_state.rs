@@ -1,5 +1,7 @@
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
+use codex_app_server_protocol::McpServerStartupState;
+use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::Turn;
@@ -65,6 +67,7 @@ pub(crate) struct ThreadState {
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
     listener_thread: Option<Weak<CodexThread>>,
+    mcp_startup_statuses: HashMap<String, McpServerStatusUpdatedNotification>,
 }
 
 impl ThreadState {
@@ -123,6 +126,36 @@ impl ThreadState {
         {
             self.current_turn_history.reset();
         }
+    }
+
+    pub(crate) fn should_emit_mcp_startup_status(
+        &self,
+        status: &McpServerStatusUpdatedNotification,
+    ) -> bool {
+        self.mcp_startup_statuses.get(&status.name) != Some(status)
+    }
+
+    pub(crate) fn prepare_mcp_startup_status(
+        &mut self,
+        status: &McpServerStatusUpdatedNotification,
+    ) {
+        if status.status == McpServerStartupState::Starting
+            && self
+                .mcp_startup_statuses
+                .get(&status.name)
+                .is_some_and(|current| current.status != McpServerStartupState::Starting)
+        {
+            self.mcp_startup_statuses.remove(&status.name);
+        }
+    }
+
+    pub(crate) fn apply_mcp_startup_status(&mut self, status: McpServerStatusUpdatedNotification) {
+        self.mcp_startup_statuses
+            .insert(status.name.clone(), status);
+    }
+
+    pub(crate) fn clear_mcp_startup_statuses(&mut self) {
+        self.mcp_startup_statuses.clear();
     }
 }
 

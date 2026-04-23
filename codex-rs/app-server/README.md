@@ -182,7 +182,7 @@ Example with notification opt-out:
 - `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options, `additionalSpeedTiers`, optional legacy `upgrade` model ids, optional `upgradeInfo` metadata (`model`, `upgradeCopy`, `modelLink`, `migrationMarkdown`), and optional `availabilityNux` metadata.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `experimentalFeature/enablement/set` — patch the in-memory process-wide runtime feature enablement for the currently supported feature keys (`apps`, `plugins`). For each feature, precedence is: cloud requirements > --enable <feature_name> > config.toml > experimentalFeature/enablement/set (new) > code default.
-- `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
+- `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly. Selecting the built-in `continuous` mode synchronizes the thread's continuous-run control contract. Selecting the built-in `orchestrator` mode synchronizes the router control contract and immediately applies any `thread_control.orchestrator` model/reasoning overrides to the thread's active collaboration mode. Switching away from either releases the automatic contract.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
 - `marketplace/add` — add a remote plugin marketplace from an HTTP(S) Git URL, SSH Git URL, or GitHub `owner/repo` shorthand, then persist it into the user marketplace config. Returns the installed root path plus whether the marketplace was already present.
 - `marketplace/remove` — remove a configured marketplace by name from the user marketplace config, and delete its installed marketplace root when one exists.
@@ -436,6 +436,204 @@ Use `thread/metadata/update` to patch sqlite-backed metadata for a thread withou
 } }
 ```
 
+### Example: Manage thread control contracts
+
+Use `thread/control/set` when a client needs an authoritative run contract that survives compaction and side questions. `continuous` mode blocks stop attempts until release, while `orchestrator` mode stores supervision metadata and re-wakes the same loaded thread on a timer after each turn finishes.
+
+If you want orchestrator wake-up turns to use a faster or cheaper model by default, set it in `config.toml`:
+
+```toml
+[thread_control.orchestrator]
+model = "gpt-5.3-codex-spark"
+reasoning_effort = "low"
+```
+
+When a thread enters orchestrator mode, Codex immediately applies these model and reasoning overrides to the thread's active collaboration mode. Subsequent orchestrator wake-up turns reuse that resolved model/reasoning pair unless a later settings update changes them. Orchestrator-launched agents can still request their own model, reasoning effort, and collaboration mode through the normal agent spawn fields, so the orchestrator can run on a cheaper coordination model while delegating implementation work to a stronger model or a different execution mode.
+
+```json
+{ "method": "thread/control/set", "id": 26, "params": {
+    "threadId": "thr_123",
+    "mode": "continuous",
+    "reason": "Keep going until the operator explicitly releases this deployment loop",
+    "releaseChannel": "imessage"
+} }
+{ "id": 26, "result": {
+    "control": {
+        "threadId": "thr_123",
+        "mode": "continuous",
+        "reason": "Keep going until the operator explicitly releases this deployment loop",
+        "releaseChannel": "imessage",
+        "watchIntervalSeconds": null,
+        "targetThreadIds": [],
+        "releasedAt": null,
+        "updatedAt": 1762456104
+    }
+} }
+```
+
+```json
+{ "method": "thread/control/set", "id": 27, "params": {
+    "threadId": "thr_orchestrator",
+    "mode": "orchestrator",
+    "reason": "Monitor worker threads and route new operator instructions",
+    "releaseChannel": "imessage",
+    "watchIntervalSeconds": 30,
+    "targetThreadIds": ["thr_worker_a", "thr_worker_b"]
+} }
+```
+
+The intended parent/child model is:
+
+```text
+User or channel adapter
+  -> Orchestrator thread
+       -> default child for normal scoped work
+       -> plan child for planning and decomposition
+       -> continuous child for long-running execution
+       -> orchestrator child for delegated coordination
+```
+
+`spawn_agent` accepts an optional `collaboration_mode` value of `default`, `plan`, `continuous`, or `orchestrator`. The orchestrator should use that field to choose the child execution mode instead of encoding the mode only in natural-language instructions. Clients can visualize the relationship by reading thread metadata: spawned children use `source: { type: "subAgent", ... }`, carry their parent thread id in the thread-spawn source, and expose `agentNickname` / `agentRole` for display.
+
+Next implementation steps for a fuller orchestrator experience are:
+
+- add first-class app-server task graph queries so clients do not need to reconstruct parent/child trees from thread lists;
+- add orchestrator callback events for child `completed`, `blocked`, `needsApproval`, and `failed` states;
+- let trusted channel adapters deliver wake events directly to app-server instead of relying on timer-only orchestrator wakes;
+- keep memory writes scoped to the orchestrator layer unless a child thread is explicitly configured to learn.
+
+`thread/control/read` returns the current active contract or `null` when no control state exists. Released contracts remain persisted for auditability, but `read` filters them out:
+
+```json
+{ "method": "thread/control/read", "id": 28, "params": { "threadId": "thr_123" } }
+{ "id": 28, "result": {
+    "control": {
+        "threadId": "thr_123",
+        "mode": "continuous",
+        "reason": "Keep going until the operator explicitly releases this deployment loop",
+        "releaseChannel": "imessage",
+        "watchIntervalSeconds": null,
+        "targetThreadIds": [],
+        "releasedAt": null,
+        "updatedAt": 1762456104
+    }
+} }
+```
+
+`thread/control/release` marks the contract released and cancels any future orchestrator wake-up timer:
+
+```json
+{ "method": "thread/control/release", "id": 29, "params": { "threadId": "thr_123" } }
+{ "id": 29, "result": {
+    "control": {
+        "threadId": "thr_123",
+        "mode": "continuous",
+        "reason": "Keep going until the operator explicitly releases this deployment loop",
+        "releaseChannel": "imessage",
+        "watchIntervalSeconds": null,
+        "targetThreadIds": [],
+        "releasedAt": 1762456188,
+        "updatedAt": 1762456188
+    }
+} }
+```
+
+### Orchestrator Wake Channel Integration Shape
+
+The current orchestrator implementation re-wakes a loaded orchestrator thread on the configured `watchIntervalSeconds` cadence. Messaging MCPs should be designed so a follow-up app-server integration can avoid waking the model when there is no new user input.
+
+The preferred shape is subscription-first:
+
+1. App-server sets orchestrator control with `thread/control/set`.
+2. App-server registers one or more wake subscriptions with messaging MCPs.
+3. Each MCP owns channel-specific polling, webhooks, cursors, auth, and dedupe.
+4. When the MCP observes new relevant input, it sends a wake event back to app-server.
+5. App-server validates the orchestrator control is still active and only then submits an orchestrator turn.
+
+Security note: orchestrator wake channels should only accept callbacks from trusted, authenticated MCPs and approved messaging channels. A wake event can cause app-server to resume an agent, send user-visible content to the model, and potentially spend tokens or trigger tools, so the callback surface must not be exposed as an unauthenticated public endpoint. Implementations should:
+
+- bind each subscription to the registering thread;
+- verify the sender identity, mTLS client, signed payload, or shared secret;
+- reject unknown or unapproved channels;
+- dedupe `eventId` values before submitting an orchestrator turn;
+- treat all message text and metadata as untrusted input.
+
+MCPs that support orchestrator wake channels should expose a subscribe-style tool with this request shape:
+
+```json
+{
+  "subscriptionId": "thr_orchestrator:imessage",
+  "threadId": "thr_orchestrator",
+  "channel": "imessage",
+  "cursor": "msg_122",
+  "pollIntervalSeconds": 30,
+  "filters": {
+    "participants": ["rick"],
+    "conversationId": "chat_abc"
+  }
+}
+```
+
+Fields:
+
+- `subscriptionId` — stable id generated by app-server; MCPs should treat repeated registrations with the same id as replacements.
+- `threadId` — orchestrator thread to wake when new input arrives.
+- `channel` — MCP-defined channel name, for example `imessage`, `slack`, `gmail`, or `webhook`.
+- `cursor` — optional opaque checkpoint from a prior registration or wake event. MCPs define the format.
+- `pollIntervalSeconds` — fallback cadence for MCPs that cannot use native push/webhook events.
+- `filters` — MCP-defined channel filters. App-server stores and passes these through without interpreting provider-specific fields.
+
+The callback transport is intentionally left to the follow-up app-server integration. If the callback uses JSON-RPC, the expected method name should be `thread/control/wake` with the wake event as `params`. The MCP should persist enough state to avoid duplicate wake events across restarts when possible. When it detects new user input, it should send a normalized wake event to app-server:
+
+```json
+{
+  "subscriptionId": "thr_orchestrator:imessage",
+  "threadId": "thr_orchestrator",
+  "channel": "imessage",
+  "eventId": "msg_123",
+  "cursor": "msg_123",
+  "receivedAt": 1762456104,
+  "messages": [
+    {
+      "id": "msg_123",
+      "from": "rick",
+      "text": "status?",
+      "timestamp": 1762456104,
+      "metadata": {
+        "conversationId": "chat_abc"
+      }
+    }
+  ]
+}
+```
+
+The app-server acknowledgement should be empty on success:
+
+```json
+{ "result": {} }
+```
+
+Wake event fields:
+
+- `subscriptionId` — original subscription id.
+- `threadId` — target orchestrator thread.
+- `channel` — source channel name.
+- `eventId` — stable MCP/provider event id for dedupe.
+- `cursor` — opaque checkpoint app-server can pass back on the next registration.
+- `receivedAt` — integer Unix seconds when the MCP observed the event.
+- `messages` — normalized user-visible messages. `text` should be the content app-server can include in the orchestrator turn.
+- `metadata` — MCP-defined object for provider-specific ids or routing details.
+
+MCPs that cannot push notifications should expose a polling tool with the same result shape. A no-op poll should return an updated `cursor` and an empty `messages` array:
+
+```json
+{
+  "cursor": "msg_123",
+  "messages": []
+}
+```
+
+App-server should treat MCP wake events as untrusted wake candidates. Before submitting an orchestrator turn it should re-check that the thread exists, orchestrator control is still active, the subscription is still registered, the event was not already consumed, and the channel is allowed by config or user approval.
 Experimental: use `thread/memoryMode/set` to change whether a thread remains eligible for future memory generation.
 
 ```json
