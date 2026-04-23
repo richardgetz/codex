@@ -383,6 +383,7 @@ pub async fn read_mcp_resource(
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance(config),
+        /*lazy_mcp_servers_by_default*/ false,
     )
     .await;
 

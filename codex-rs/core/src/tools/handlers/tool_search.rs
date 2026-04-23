@@ -249,10 +249,7 @@ fn count_output_tools(tools: &[LoadableToolSpec]) -> usize {
         .sum()
 }
 
-fn truncate_output_tools(
-    tools: Vec<LoadableToolSpec>,
-    mut limit: usize,
-) -> Vec<LoadableToolSpec> {
+fn truncate_output_tools(tools: Vec<LoadableToolSpec>, mut limit: usize) -> Vec<LoadableToolSpec> {
     let mut truncated = Vec::new();
     for tool in tools {
         if limit == 0 {

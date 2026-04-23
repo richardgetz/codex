@@ -1144,7 +1144,8 @@ async fn multi_agent_v2_spawn_can_select_child_collaboration_mode() {
             function_payload(json!({
                 "message": "build continuously until the stop condition",
                 "task_name": "runner",
-                "collaboration_mode": "continuous"
+                "collaboration_mode": "continuous",
+                "fork_turns": "none"
             })),
         ))
         .await

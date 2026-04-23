@@ -1,7 +1,7 @@
 use super::*;
+use crate::CodexThread;
 use crate::agent_identity::RegisteredAgentTask;
 use crate::agent_identity::StoredAgentIdentity;
-use crate::CodexThread;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
@@ -2601,7 +2601,7 @@ async fn resolve_router_turn_settings_remaps_unsupported_explicit_effort() {
     {
         let mut state = session.state.lock().await;
         let mut config = (*state.session_configuration.original_config_do_not_use).clone();
-        config.thread_control.orchestrator.model = Some("gpt-5.1".to_string());
+        config.thread_control.orchestrator.model = Some("gpt-5.4".to_string());
         state.session_configuration.original_config_do_not_use = Arc::new(config);
         state.session_configuration.collaboration_mode = CollaborationMode {
             mode: ModeKind::Plan,
@@ -2616,14 +2616,14 @@ async fn resolve_router_turn_settings_remaps_unsupported_explicit_effort() {
 
     let (model, reasoning_effort, collaboration_mode) = thread.resolve_router_turn_settings().await;
 
-    assert_eq!(model, "gpt-5.1");
+    assert_eq!(model, "gpt-5.4");
     assert_eq!(reasoning_effort, Some(ReasoningEffortConfig::Medium));
     assert_eq!(
         collaboration_mode,
         CollaborationMode {
             mode: ModeKind::Plan,
             settings: Settings {
-                model: "gpt-5.1".to_string(),
+                model: "gpt-5.4".to_string(),
                 reasoning_effort: Some(ReasoningEffortConfig::Medium),
                 developer_instructions: Some("Stay in routing mode.".to_string()),
             },
@@ -2637,7 +2637,7 @@ async fn resolve_router_turn_settings_preserves_absent_effort() {
     {
         let mut state = session.state.lock().await;
         let mut config = (*state.session_configuration.original_config_do_not_use).clone();
-        config.thread_control.orchestrator.model = Some("gpt-5.1".to_string());
+        config.thread_control.orchestrator.model = Some("gpt-5.4".to_string());
         state.session_configuration.original_config_do_not_use = Arc::new(config);
         state.session_configuration.collaboration_mode = CollaborationMode {
             mode: ModeKind::Plan,
@@ -2652,14 +2652,14 @@ async fn resolve_router_turn_settings_preserves_absent_effort() {
 
     let (model, reasoning_effort, collaboration_mode) = thread.resolve_router_turn_settings().await;
 
-    assert_eq!(model, "gpt-5.1");
+    assert_eq!(model, "gpt-5.4");
     assert_eq!(reasoning_effort, None);
     assert_eq!(
         collaboration_mode,
         CollaborationMode {
             mode: ModeKind::Plan,
             settings: Settings {
-                model: "gpt-5.1".to_string(),
+                model: "gpt-5.4".to_string(),
                 reasoning_effort: None,
                 developer_instructions: Some("Stay in routing mode.".to_string()),
             },
@@ -2673,7 +2673,7 @@ async fn resolve_router_turn_settings_applies_configured_reasoning_effort() {
     {
         let mut state = session.state.lock().await;
         let mut config = (*state.session_configuration.original_config_do_not_use).clone();
-        config.thread_control.orchestrator.model = Some("gpt-5.1".to_string());
+        config.thread_control.orchestrator.model = Some("gpt-5.4".to_string());
         config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
         state.session_configuration.original_config_do_not_use = Arc::new(config);
         state.session_configuration.collaboration_mode = CollaborationMode {
@@ -2689,14 +2689,14 @@ async fn resolve_router_turn_settings_applies_configured_reasoning_effort() {
 
     let (model, reasoning_effort, collaboration_mode) = thread.resolve_router_turn_settings().await;
 
-    assert_eq!(model, "gpt-5.1");
+    assert_eq!(model, "gpt-5.4");
     assert_eq!(reasoning_effort, Some(ReasoningEffortConfig::Low));
     assert_eq!(
         collaboration_mode,
         CollaborationMode {
             mode: ModeKind::Plan,
             settings: Settings {
-                model: "gpt-5.1".to_string(),
+                model: "gpt-5.4".to_string(),
                 reasoning_effort: Some(ReasoningEffortConfig::Low),
                 developer_instructions: Some("Stay in routing mode.".to_string()),
             },

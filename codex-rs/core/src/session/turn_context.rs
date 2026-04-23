@@ -99,7 +99,8 @@ impl TurnContext {
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
         let truncation_policy = model_info.truncation_policy.into();
-        let reasoning_effort = compatible_reasoning_effort_for_model(self.reasoning_effort, &model_info);
+        let reasoning_effort =
+            compatible_reasoning_effort_for_model(self.reasoning_effort, &model_info);
         config.model_reasoning_effort = reasoning_effort;
 
         let collaboration_mode = self.collaboration_mode.with_updates(

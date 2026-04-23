@@ -120,13 +120,13 @@ use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
-use codex_state::ThreadControlMode as StateThreadControlMode;
-use codex_state::ThreadControlRecord;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::RolloutConfig;
 use codex_rollout::state_db;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::parse_command;
+use codex_state::ThreadControlMode as StateThreadControlMode;
+use codex_state::ThreadControlRecord;
 use codex_terminal_detection::user_agent;
 use codex_thread_store::LocalThreadStore;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -1582,14 +1582,7 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let (
-            previous_cwd,
-            sandbox_policy_changed,
-            next_cwd,
-            codex_home,
-            session_source,
-            collaboration_mode,
-        ) = {
+        let (previous_cwd, sandbox_policy_changed, next_cwd, codex_home, session_source) = {
             let state = self.state.lock().await;
             let updated = match state.session_configuration.apply(&updates) {
                 Ok(updated) => updated,
@@ -1618,7 +1611,6 @@ impl Session {
                 next_cwd,
                 codex_home,
                 session_source,
-                collaboration_mode,
             )
         };
 
