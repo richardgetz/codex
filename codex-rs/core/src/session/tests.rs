@@ -346,6 +346,18 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
     assert!(duration_ms.is_some());
 }
 
+#[tokio::test]
+async fn interrupt_task_cancels_mcp_startup_even_with_active_turn() {
+    let (sess, _tc) = make_session_and_context().await;
+    let sess = Arc::new(sess);
+    let startup_token = sess.mcp_startup_cancellation_token().await;
+    *sess.active_turn.lock().await = Some(ActiveTurn::default());
+
+    sess.interrupt_task().await;
+
+    assert!(startup_token.is_cancelled());
+}
+
 fn test_model_client_session() -> crate::client::ModelClientSession {
     crate::client::ModelClient::new(
         /*auth_manager*/ None,
