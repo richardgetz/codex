@@ -256,30 +256,16 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::McpStartupUpdate(update) => {
             if let ApiVersion::V2 = api_version {
-                let (status, error) = match update.status {
-                    codex_protocol::protocol::McpStartupStatus::Starting => {
-                        (McpServerStartupState::Starting, None)
-                    }
-                    codex_protocol::protocol::McpStartupStatus::Ready => {
-                        (McpServerStartupState::Ready, None)
-                    }
-                    codex_protocol::protocol::McpStartupStatus::Failed { error } => {
-                        (McpServerStartupState::Failed, Some(error))
-                    }
-                    codex_protocol::protocol::McpStartupStatus::Cancelled => {
-                        (McpServerStartupState::Cancelled, None)
-                    }
-                };
-                let notification = McpServerStatusUpdatedNotification {
-                    name: update.server,
-                    status,
-                    error,
-                };
                 outgoing
-                    .send_server_notification(ServerNotification::McpServerStatusUpdated(
-                        notification,
-                    ))
+                    .send_server_notification(mcp_startup_update_notification(update))
                     .await;
+            }
+        }
+        EventMsg::McpStartupComplete(complete) => {
+            if let ApiVersion::V2 = api_version {
+                for notification in mcp_startup_complete_notifications(complete) {
+                    outgoing.send_server_notification(notification).await;
+                }
             }
         }
         EventMsg::Warning(warning_event) => {
@@ -1985,6 +1971,60 @@ pub(crate) async fn apply_bespoke_event_handling(
     }
 }
 
+fn mcp_startup_update_notification(
+    update: codex_protocol::protocol::McpStartupUpdateEvent,
+) -> ServerNotification {
+    let (status, error) = match update.status {
+        codex_protocol::protocol::McpStartupStatus::Starting => {
+            (McpServerStartupState::Starting, None)
+        }
+        codex_protocol::protocol::McpStartupStatus::Ready => (McpServerStartupState::Ready, None),
+        codex_protocol::protocol::McpStartupStatus::Failed { error } => {
+            (McpServerStartupState::Failed, Some(error))
+        }
+        codex_protocol::protocol::McpStartupStatus::Cancelled => {
+            (McpServerStartupState::Cancelled, None)
+        }
+    };
+    mcp_server_status_notification(update.server, status, error)
+}
+
+fn mcp_startup_complete_notifications(
+    complete: codex_protocol::protocol::McpStartupCompleteEvent,
+) -> Vec<ServerNotification> {
+    let ready = complete.ready.into_iter().map(|server| {
+        mcp_server_status_notification(server, McpServerStartupState::Ready, /*error*/ None)
+    });
+    let failed = complete.failed.into_iter().map(|failure| {
+        mcp_server_status_notification(
+            failure.server,
+            McpServerStartupState::Failed,
+            Some(failure.error),
+        )
+    });
+    let cancelled = complete.cancelled.into_iter().map(|server| {
+        mcp_server_status_notification(
+            server,
+            McpServerStartupState::Cancelled,
+            /*error*/ None,
+        )
+    });
+
+    ready.chain(failed).chain(cancelled).collect()
+}
+
+fn mcp_server_status_notification(
+    name: String,
+    status: McpServerStartupState,
+    error: Option<String>,
+) -> ServerNotification {
+    ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+        name,
+        status,
+        error,
+    })
+}
+
 async fn handle_turn_diff(
     conversation_id: ThreadId,
     event_turn_id: &str,
@@ -3099,6 +3139,48 @@ mod tests {
     use tempfile::TempDir;
     use tokio::sync::Mutex;
     use tokio::sync::mpsc;
+
+    #[test]
+    fn mcp_startup_complete_maps_to_terminal_status_notifications() {
+        let notifications =
+            mcp_startup_complete_notifications(codex_protocol::protocol::McpStartupCompleteEvent {
+                ready: vec!["ready-server".to_string()],
+                failed: vec![codex_protocol::protocol::McpStartupFailure {
+                    server: "failed-server".to_string(),
+                    error: "handshake failed".to_string(),
+                }],
+                cancelled: vec!["cancelled-server".to_string()],
+            });
+
+        let statuses = notifications
+            .into_iter()
+            .map(|notification| match notification {
+                ServerNotification::McpServerStatusUpdated(status) => status,
+                other => panic!("unexpected notification: {other:?}"),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            statuses,
+            vec![
+                McpServerStatusUpdatedNotification {
+                    name: "ready-server".to_string(),
+                    status: McpServerStartupState::Ready,
+                    error: None,
+                },
+                McpServerStatusUpdatedNotification {
+                    name: "failed-server".to_string(),
+                    status: McpServerStartupState::Failed,
+                    error: Some("handshake failed".to_string()),
+                },
+                McpServerStatusUpdatedNotification {
+                    name: "cancelled-server".to_string(),
+                    status: McpServerStartupState::Cancelled,
+                    error: None,
+                },
+            ]
+        );
+    }
 
     fn new_thread_state() -> Arc<Mutex<ThreadState>> {
         Arc::new(Mutex::new(ThreadState::default()))

@@ -11175,6 +11175,11 @@ impl ChatWidget {
         self.thread_id
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_thread_id_for_test(&mut self, thread_id: ThreadId) {
+        self.thread_id = Some(thread_id);
+    }
+
     pub(crate) fn thread_name(&self) -> Option<String> {
         self.thread_name.clone()
     }
@@ -11243,6 +11248,14 @@ impl ChatWidget {
     /// runtime overrides applied via TUI, e.g., model or approval policy).
     pub(crate) fn config_ref(&self) -> &Config {
         &self.config
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_mcp_servers_for_test(
+        &mut self,
+        mcp_servers: HashMap<String, codex_config::McpServerConfig>,
+    ) {
+        self.config.mcp_servers = codex_config::Constrained::allow_any(mcp_servers);
     }
 
     #[cfg(test)]

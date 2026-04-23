@@ -2267,7 +2267,7 @@ fn transport_origin(transport: &McpServerTransportConfig) -> Option<String> {
     }
 }
 
-fn should_start_server_on_session_start(
+pub fn should_start_server_on_session_start(
     server_name: &str,
     config: &McpServerConfig,
     lazy_mcp_servers_by_default: bool,
