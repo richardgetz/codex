@@ -275,11 +275,28 @@ jobs:
           name: fork-npm-tarballs
           path: dist/npm/*
 
+      - name: "[95%] Generate release notes"
+        id: release-notes
+        env:
+          RELEASE_VERSION: ${{ needs.compute-release.outputs.version }}
+          RELEASE_TAG: ${{ needs.compute-release.outputs.tag }}
+          BASE_VERSION: ${{ needs.compute-release.outputs.base_version }}
+        run: |
+          set -euo pipefail
+          notes_path="${RUNNER_TEMP}/fork-release-notes.md"
+          python3 scripts/generate_fork_release_notes.py \
+            --release-version "$RELEASE_VERSION" \
+            --release-tag "$RELEASE_TAG" \
+            --base-version "$BASE_VERSION" \
+            --output "$notes_path"
+          echo "path=${notes_path}" >> "$GITHUB_OUTPUT"
+
       - name: "[96%] Create GitHub Release"
         uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
         with:
           name: ${{ needs.compute-release.outputs.version }}
           tag_name: ${{ needs.compute-release.outputs.tag }}
+          body_path: ${{ steps.release-notes.outputs.path }}
           files: |
             dist/**/*.tgz
             dist/**/*.tar.gz

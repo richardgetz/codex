@@ -581,6 +581,94 @@ fn sanitize_mcp_tool_result_for_model_preserves_image_when_supported() {
     assert_eq!(got, original);
 }
 
+#[test]
+fn mcp_smart_wait_retry_after_recognizes_no_update_meta() {
+    let result = CallToolResult {
+        content: vec![serde_json::json!({
+            "type": "text",
+            "text": "No update yet",
+        })],
+        structured_content: None,
+        is_error: Some(false),
+        meta: Some(serde_json::json!({
+            "codex/wait": {
+                "v": 1,
+                "state": "no_update",
+                "retry_after_ms": 120_000,
+            },
+        })),
+    };
+
+    assert_eq!(
+        mcp_smart_wait_retry_after(&result),
+        Some(Duration::from_secs(120))
+    );
+}
+
+#[test]
+fn mcp_smart_wait_retry_after_caps_retry_delay() {
+    let result = CallToolResult {
+        content: vec![],
+        structured_content: None,
+        is_error: None,
+        meta: Some(serde_json::json!({
+            "codex/wait": {
+                "v": 1,
+                "state": "no_update",
+                "retry_after_ms": 900_000,
+            },
+        })),
+    };
+
+    assert_eq!(
+        mcp_smart_wait_retry_after(&result),
+        Some(Duration::from_secs(600))
+    );
+}
+
+#[test]
+fn mcp_smart_wait_retry_after_ignores_errors_and_invalid_meta() {
+    let error_result = CallToolResult {
+        content: vec![],
+        structured_content: None,
+        is_error: Some(true),
+        meta: Some(serde_json::json!({
+            "codex/wait": {
+                "v": 1,
+                "state": "no_update",
+                "retry_after_ms": 120_000,
+            },
+        })),
+    };
+    let missing_retry = CallToolResult {
+        content: vec![],
+        structured_content: None,
+        is_error: Some(false),
+        meta: Some(serde_json::json!({
+            "codex/wait": {
+                "v": 1,
+                "state": "no_update",
+            },
+        })),
+    };
+    let unknown_state = CallToolResult {
+        content: vec![],
+        structured_content: None,
+        is_error: Some(false),
+        meta: Some(serde_json::json!({
+            "codex/wait": {
+                "v": 1,
+                "state": "done",
+                "retry_after_ms": 120_000,
+            },
+        })),
+    };
+
+    assert_eq!(mcp_smart_wait_retry_after(&error_result), None);
+    assert_eq!(mcp_smart_wait_retry_after(&missing_retry), None);
+    assert_eq!(mcp_smart_wait_retry_after(&unknown_state), None);
+}
+
 #[tokio::test]
 async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
     let (_, turn_context) = make_session_and_context().await;

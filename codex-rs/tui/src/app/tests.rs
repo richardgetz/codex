@@ -4676,6 +4676,23 @@ async fn interrupt_without_active_turn_is_treated_as_handled() {
 }
 
 #[tokio::test]
+async fn interrupt_targets_displayed_thread_when_active_thread_is_not_attached() {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    app.chat_widget.handle_thread_session(test_thread_session(
+        thread_id,
+        test_path_buf("/tmp/project"),
+    ));
+
+    assert_eq!(app.active_thread_id, None);
+    assert_eq!(
+        app.thread_id_for_active_op(&AppCommand::interrupt()),
+        Some(thread_id)
+    );
+    assert_eq!(app.thread_id_for_active_op(&AppCommand::compact()), None);
+}
+
+#[tokio::test]
 async fn clear_only_ui_reset_preserves_chat_session_state() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();

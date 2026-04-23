@@ -56,6 +56,33 @@ Use `sharing = "standalone"` for servers with per-session state, prompts,
 browser profiles, writable resources, or credentials that should not cross
 session boundaries. `sharing = "auto"` is the default.
 
+### MCP smart wait metadata
+
+Poll or wait-style MCP tools can ask Codex to continue waiting without returning
+an intermediate "no update yet" result to the model. Return a successful tool
+result with this `_meta` shape:
+
+```json
+{
+  "_meta": {
+    "codex/wait": {
+      "v": 1,
+      "state": "no_update",
+      "retry_after_ms": 120000
+    }
+  }
+}
+```
+
+Codex treats `state = "no_update"` as a non-terminal result, waits for
+`retry_after_ms`, then calls the same MCP tool again with the same arguments and
+request metadata. Hidden polling is bounded: Codex returns the latest result
+after 12 consecutive no-update results, and caps each advised delay at 10
+minutes. Results without this exact metadata, invalid metadata, or error results
+are returned normally. MCP clients that do not understand this metadata can
+ignore it, so poll tools should still keep their normal
+`content`/`structuredContent` useful for dumb clients.
+
 ## MCP tool approvals
 
 Codex stores approval defaults and per-tool overrides for custom MCP servers

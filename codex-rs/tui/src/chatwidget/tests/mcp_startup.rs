@@ -146,6 +146,30 @@ async fn app_server_mcp_startup_failure_renders_warning_history() {
 }
 
 #[tokio::test]
+async fn app_server_mcp_startup_does_not_block_slash_new() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
+
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "alpha".to_string(),
+            status: McpServerStartupState::Starting,
+            error: None,
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(!chat.bottom_pane.slash_command_task_running());
+
+    chat.bottom_pane
+        .set_composer_text("/new".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::NewSession));
+}
+
+#[tokio::test]
 async fn app_server_mcp_startup_lag_settles_startup_and_ignores_late_updates() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
