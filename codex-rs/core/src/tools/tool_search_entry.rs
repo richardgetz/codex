@@ -16,7 +16,7 @@ pub(crate) struct ToolSearchEntry {
 
 #[derive(Clone)]
 pub(crate) enum ToolSearchEntryOutput {
-    Tool(Box<ToolSearchOutputTool>),
+    Tool(LoadableToolSpec),
     LazyMcpServer { server_name: String },
 }
 

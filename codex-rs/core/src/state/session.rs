@@ -3,6 +3,7 @@
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
+use codex_state::ThreadControlRecord;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -32,6 +33,7 @@ pub(crate) struct SessionState {
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
+    active_thread_control: Option<ThreadControlRecord>,
     granted_permissions: Option<PermissionProfile>,
     next_turn_is_first: bool,
 }
@@ -51,6 +53,7 @@ impl SessionState {
             startup_prewarm: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
+            active_thread_control: None,
             granted_permissions: None,
             next_turn_is_first: true,
         }
@@ -216,6 +219,14 @@ impl SessionState {
         &mut self,
     ) -> Option<codex_hooks::SessionStartSource> {
         self.pending_session_start_source.take()
+    }
+
+    pub(crate) fn active_thread_control(&self) -> Option<ThreadControlRecord> {
+        self.active_thread_control.clone()
+    }
+
+    pub(crate) fn set_active_thread_control(&mut self, control: Option<ThreadControlRecord>) {
+        self.active_thread_control = control;
     }
 
     pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {

@@ -320,6 +320,32 @@ impl TurnContext {
     }
 }
 
+pub(crate) fn compatible_reasoning_effort_for_model(
+    current_reasoning_effort: Option<ReasoningEffortConfig>,
+    model_info: &ModelInfo,
+) -> Option<ReasoningEffortConfig> {
+    let supported_reasoning_levels = model_info
+        .supported_reasoning_levels
+        .iter()
+        .map(|preset| preset.effort)
+        .collect::<Vec<_>>();
+    if let Some(current_reasoning_effort) = current_reasoning_effort {
+        if supported_reasoning_levels.contains(&current_reasoning_effort) {
+            Some(current_reasoning_effort)
+        } else {
+            supported_reasoning_levels
+                .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
+                .copied()
+                .or(model_info.default_reasoning_level)
+        }
+    } else {
+        supported_reasoning_levels
+            .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
+            .copied()
+            .or(model_info.default_reasoning_level)
+    }
+}
+
 fn local_time_context() -> (String, String) {
     match iana_time_zone::get_timezone() {
         Ok(timezone) => (Local::now().format("%Y-%m-%d").to_string(), timezone),
@@ -555,7 +581,7 @@ impl Session {
                 }),
             })
             .await;
-            return Err(err);
+            return Err(CodexErr::InvalidRequest(err.to_string()));
         }
         {
             let mut state = self.state.lock().await;

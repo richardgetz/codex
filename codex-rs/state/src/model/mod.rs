@@ -1,3 +1,7 @@
+use chrono::DateTime;
+use chrono::Utc;
+use codex_protocol::ThreadId;
+
 mod agent_job;
 mod backfill_state;
 mod graph;
@@ -33,6 +37,24 @@ pub use thread_metadata::SortKey;
 pub use thread_metadata::ThreadMetadata;
 pub use thread_metadata::ThreadMetadataBuilder;
 pub use thread_metadata::ThreadsPage;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadControlMode {
+    Continuous,
+    Router,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadControlRecord {
+    pub thread_id: ThreadId,
+    pub mode: ThreadControlMode,
+    pub reason: String,
+    pub release_channel: Option<String>,
+    pub watch_interval_seconds: Option<u32>,
+    pub released_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
+    pub target_thread_ids: Vec<ThreadId>,
+}
 
 pub(crate) use agent_job::AgentJobItemRow;
 pub(crate) use agent_job::AgentJobRow;

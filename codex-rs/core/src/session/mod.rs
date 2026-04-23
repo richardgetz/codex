@@ -1086,23 +1086,6 @@ impl Session {
                     return Ok(());
                 }
 
-                if control.released_at.is_none() {
-                    let released_at = Utc::now();
-                    if let Some(state_db) = self.state_db()
-                        && let Err(err) = state_db
-                            .release_thread_control(self.conversation_id, released_at)
-                            .await
-                    {
-                        warn!(
-                            error = %err,
-                            thread_id = %self.conversation_id,
-                            "failed to release collaboration mode control"
-                        );
-                        return Err(ConstraintError::operation_failed(
-                            "failed to release collaboration mode control",
-                        ));
-                    }
-                }
                 self.disable_orchestrator_scoped_memories().await;
                 self.set_active_thread_control(None).await;
                 return Ok(());
@@ -1145,18 +1128,6 @@ impl Session {
             target_thread_ids: Vec::new(),
         };
 
-        if let Some(state_db) = self.state_db()
-            && let Err(err) = state_db.upsert_thread_control(&control).await
-        {
-            warn!(
-                error = %err,
-                thread_id = %self.conversation_id,
-                "failed to persist collaboration mode control"
-            );
-            return Err(ConstraintError::operation_failed(
-                "failed to persist collaboration mode control",
-            ));
-        }
         self.set_active_thread_control(Some(control)).await;
         if collaboration_mode.mode == ModeKind::Orchestrator {
             self.enable_orchestrator_scoped_memories().await;
@@ -1243,19 +1214,6 @@ impl Session {
             return;
         }
 
-        if let Some(state_db) = self.state_db()
-            && let Err(err) = state_db
-                .release_thread_control(self.conversation_id, Utc::now())
-                .await
-        {
-            warn!(
-                error = %err,
-                thread_id = %self.conversation_id,
-                "failed to release orchestrator control during interrupt"
-            );
-            return;
-        }
-
         self.disable_orchestrator_scoped_memories().await;
         self.set_active_thread_control(None).await;
     }
@@ -1275,8 +1233,7 @@ impl Session {
         if let Some(state_db) = self.state_db() {
             match state_db.get_thread_memory_mode(self.conversation_id).await {
                 Ok(Some(memory_mode)) if memory_mode == "enabled" => return,
-                Ok(Some(memory_mode)) if memory_mode == ORCHESTRATOR_SCOPED_MEMORY_MODE => {}
-                Ok(Some(_)) => return,
+                Ok(Some(_)) => {}
                 Ok(None) => {}
                 Err(err) => {
                     warn!(
@@ -1340,9 +1297,11 @@ impl Session {
                 }
             }
         }
-        if let Err(err) =
-            handlers::persist_thread_memory_mode_str_update(self, ORCHESTRATOR_SCOPED_MEMORY_MODE)
-                .await
+        if let Err(err) = handlers::persist_thread_memory_mode_update(
+            self,
+            codex_protocol::protocol::ThreadMemoryMode::Disabled,
+        )
+        .await
         {
             warn!(
                 error = %err,
@@ -1353,7 +1312,7 @@ impl Session {
         }
         if let Some(state_db) = self.state_db()
             && let Err(err) = state_db
-                .set_thread_memory_mode(self.conversation_id, ORCHESTRATOR_SCOPED_MEMORY_MODE)
+                .set_thread_memory_mode(self.conversation_id, "disabled")
                 .await
         {
             warn!(
