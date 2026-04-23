@@ -484,18 +484,18 @@ impl BottomPane {
                 .and_then(parse_slash_name)
                 .is_some_and(|(name, _, _)| name == "agent");
 
-            // If a task is running and a status line is visible, allow Esc to
-            // send an interrupt even while the composer has focus.
+            // If a task is running, allow Esc to send an interrupt even while
+            // the composer has focus.
             // When a popup is active, prefer dismissing it over interrupting the task.
             if key_event.code == KeyCode::Esc
                 && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
                 && self.is_task_running
                 && !is_agent_command
                 && !self.composer.popup_active()
-                && let Some(status) = &self.status
             {
-                // Send Op::Interrupt
-                status.interrupt();
+                // The status row may be hidden while output streams, but Esc should
+                // continue to interrupt any running task while the footer advertises it.
+                self.app_event_tx.interrupt();
                 self.request_redraw();
                 return InputResult::None;
             }
@@ -782,7 +782,6 @@ impl BottomPane {
             if !was_running {
                 if self.status.is_none() {
                     self.status = Some(StatusIndicatorWidget::new(
-                        self.app_event_tx.clone(),
                         self.frame_requester.clone(),
                         self.animations_enabled,
                     ));
@@ -809,7 +808,6 @@ impl BottomPane {
     pub(crate) fn ensure_status_indicator(&mut self) {
         if self.status.is_none() {
             self.status = Some(StatusIndicatorWidget::new(
-                self.app_event_tx.clone(),
                 self.frame_requester.clone(),
                 self.animations_enabled,
             ));
@@ -2153,6 +2151,32 @@ mod tests {
         assert!(
             matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
             "expected Esc to send Op::Interrupt while a task is running"
+        );
+    }
+
+    #[test]
+    fn esc_interrupts_running_task_when_status_indicator_hidden() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(/*running*/ true);
+        pane.hide_status_indicator();
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
+            "expected Esc to send Op::Interrupt while a task is running even when status is hidden"
         );
     }
 
