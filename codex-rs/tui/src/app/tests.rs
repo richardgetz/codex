@@ -55,6 +55,9 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as AppServerUserInput;
 use codex_app_server_protocol::WarningNotification;
+use codex_config::Constrained;
+use codex_config::McpServerConfig;
+use codex_config::McpServerStartupMode;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -3263,6 +3266,72 @@ async fn side_thread_ignores_global_mcp_startup_notifications() {
 }
 
 #[tokio::test]
+async fn app_server_mcp_startup_lazy_server_does_not_keep_tui_running() {
+    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    app.chat_widget.set_thread_id_for_test(ThreadId::new());
+    let mcp_servers = HashMap::from([
+        (
+            "eager-docs".to_string(),
+            test_mcp_server_config("eager-docs", McpServerStartupMode::Eager),
+        ),
+        (
+            "lazy-docs".to_string(),
+            test_mcp_server_config("lazy-docs", McpServerStartupMode::Lazy),
+        ),
+    ]);
+    app.config.mcp_servers = Constrained::allow_any(mcp_servers.clone());
+    app.chat_widget.set_mcp_servers_for_test(mcp_servers);
+
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                name: "eager-docs".to_string(),
+                status: McpServerStartupState::Starting,
+                error: None,
+            }),
+        ),
+    )
+    .await;
+    assert!(app.chat_widget.is_task_running_for_test());
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                name: "eager-docs".to_string(),
+                status: McpServerStartupState::Ready,
+                error: None,
+            }),
+        ),
+    )
+    .await;
+
+    assert!(!app.chat_widget.is_task_running_for_test());
+
+    app.chat_widget
+        .set_composer_text("follow up".to_string(), Vec::new(), Vec::new());
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match next_user_turn_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "follow up".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected follow-up user turn, got {other:?}"),
+    }
+    assert!(app.chat_widget.queued_user_message_texts().is_empty());
+}
+
+#[tokio::test]
 async fn side_restore_user_message_puts_inline_question_back_in_composer() {
     let mut app = make_test_app().await;
     let user_message = crate::chatwidget::UserMessage::from("side question");
@@ -3983,6 +4052,16 @@ fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op
         seen.push(format!("{op:?}"));
     }
     panic!("expected UserTurn op, saw: {seen:?}");
+}
+
+fn test_mcp_server_config(command: &str, startup: McpServerStartupMode) -> McpServerConfig {
+    let startup = match startup {
+        McpServerStartupMode::Auto => "auto",
+        McpServerStartupMode::Eager => "eager",
+        McpServerStartupMode::Lazy => "lazy",
+    };
+    toml::from_str(&format!("command = \"{command}\"\nstartup = \"{startup}\""))
+        .expect("test MCP server config should deserialize")
 }
 
 fn lines_to_single_string(lines: &[Line<'_>]) -> String {

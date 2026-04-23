@@ -1827,6 +1827,129 @@ fn transport_origin(transport: &McpServerTransportConfig) -> Option<String> {
     }
 }
 
+pub fn should_start_server_on_session_start(
+    server_name: &str,
+    config: &McpServerConfig,
+    lazy_mcp_servers_by_default: bool,
+) -> bool {
+    if config.required {
+        return true;
+    }
+
+    match config.startup {
+        McpServerStartupMode::Eager => true,
+        McpServerStartupMode::Lazy => false,
+        McpServerStartupMode::Auto => {
+            !lazy_mcp_servers_by_default && !auto_lazy_server(server_name, config)
+        }
+    }
+}
+
+fn auto_lazy_server(server_name: &str, config: &McpServerConfig) -> bool {
+    !auto_lazy_terms(server_name, config).is_empty()
+}
+
+fn lazy_mcp_server_description(server_name: &str, config: &McpServerConfig) -> String {
+    let terms = auto_lazy_terms(server_name, config);
+    if terms.is_empty() {
+        return "Configured lazy MCP server; Codex will start it only if a search or tool call needs it."
+            .to_string();
+    }
+
+    format!(
+        "Configured lazy MCP server for {} tools; Codex will start it only if a search or tool call needs it.",
+        terms.join(", ")
+    )
+}
+
+fn auto_lazy_terms(server_name: &str, config: &McpServerConfig) -> Vec<&'static str> {
+    let mut haystack = server_name.to_ascii_lowercase();
+    match &config.transport {
+        McpServerTransportConfig::Stdio { command, args, .. } => {
+            haystack.push(' ');
+            haystack.push_str(&command.to_ascii_lowercase());
+            for arg in args {
+                haystack.push(' ');
+                haystack.push_str(&arg.to_ascii_lowercase());
+            }
+        }
+        McpServerTransportConfig::StreamableHttp { url, .. } => {
+            haystack.push(' ');
+            haystack.push_str(&url.to_ascii_lowercase());
+        }
+    }
+
+    let mut terms = ["playwright", "browser", "chrome", "drawio", "semgrep"]
+        .iter()
+        .copied()
+        .filter(|needle| haystack.contains(needle))
+        .collect::<Vec<_>>();
+    if terms
+        .iter()
+        .any(|term| matches!(*term, "playwright" | "browser" | "chrome"))
+        && !terms.contains(&"browser automation")
+    {
+        terms.push("browser automation");
+    }
+    terms
+}
+
+fn effective_sharing_mode(
+    server_name: &str,
+    config: &McpServerConfig,
+    runtime_environment: &McpRuntimeEnvironment,
+) -> EffectiveMcpSharingMode {
+    let should_share = match config.sharing {
+        McpServerSharingMode::Standalone => false,
+        McpServerSharingMode::Shared => true,
+        McpServerSharingMode::Auto => auto_shared_server(server_name, config),
+    };
+
+    if !should_share {
+        return EffectiveMcpSharingMode::Standalone;
+    }
+
+    match shared_mcp_client_key(server_name, config, runtime_environment) {
+        Some(key) => EffectiveMcpSharingMode::Shared { key },
+        None => EffectiveMcpSharingMode::Standalone,
+    }
+}
+
+fn auto_shared_server(_server_name: &str, config: &McpServerConfig) -> bool {
+    let McpServerTransportConfig::Stdio { command, args, .. } = &config.transport else {
+        return false;
+    };
+    let mut haystack = command.to_ascii_lowercase();
+    for arg in args {
+        haystack.push(' ');
+        haystack.push_str(&arg.to_ascii_lowercase());
+    }
+
+    haystack.contains("aws-documentation-mcp-server") || haystack.contains("context7")
+}
+
+fn shared_mcp_client_key(
+    server_name: &str,
+    config: &McpServerConfig,
+    runtime_environment: &McpRuntimeEnvironment,
+) -> Option<String> {
+    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        return None;
+    }
+    if runtime_environment.environment().is_remote() {
+        return None;
+    }
+    if !matches!(config.transport, McpServerTransportConfig::Stdio { .. }) {
+        return None;
+    }
+
+    let config_json = serde_json::to_string(config).ok()?;
+    Some(format!(
+        "local-stdio:{server_name}:{}:{}",
+        runtime_environment.fallback_cwd().display(),
+        sha1_hex(&config_json)
+    ))
+}
 async fn list_tools_for_client_uncached(
     server_name: &str,
     client: &Arc<RmcpClient>,

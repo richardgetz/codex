@@ -45,3 +45,4 @@ pub use mcp_connection_manager::ToolInfo;
 pub use mcp_connection_manager::codex_apps_tools_cache_key;
 pub use mcp_connection_manager::declared_openai_file_input_param_names;
 pub use mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
+pub use mcp_connection_manager::should_start_server_on_session_start;
