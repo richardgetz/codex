@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-04-23/mcp-startup-lazy-status#7e0cdeb87f75"
+  change_type: "fix"
+  scope: "tui"
+  summary: "Prevent lazy MCP servers from keeping TUI startup status running."
+  decision: "Seed app-server-backed TUI MCP startup expectations from the shared core startup predicate and forward core startup completion as terminal app-server status notifications."
+  constraints:
+    - "Must not wait for explicit lazy or auto-lazy MCP servers during session startup."
+    - "Must preserve eager and required MCP startup status, warnings, and interrupt behavior."
+    - "Must let follow-up user input submit once eager startup settles."
+    - "Must keep app-server v2 clients compatible by reusing existing MCP status notifications."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/app/app_server_adapter.rs::App::refresh_mcp_startup_expected_servers_from_config"
+    - "codex-rs/app-server/src/bespoke_event_handling.rs::apply_bespoke_event_handling"
+    - "codex-rs/codex-mcp/src/mcp_connection_manager.rs::should_start_server_on_session_start"
+    - "codex-rs/tui/src/app/tests.rs::app_server_mcp_startup_lazy_server_does_not_keep_tui_running"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.4"
