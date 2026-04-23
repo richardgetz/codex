@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
@@ -474,9 +475,82 @@ impl ManagedClient {
     }
 }
 
+type ManagedClientStartup = Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>;
+type ManagedClientStartupFactory = Arc<dyn Fn() -> ManagedClientStartup + Send + Sync>;
+
+#[derive(Clone)]
+struct RetryableManagedClientStartup {
+    current: Arc<StdMutex<Option<(u64, ManagedClientStartup)>>>,
+    next_generation: Arc<AtomicU64>,
+    factory: ManagedClientStartupFactory,
+}
+
+impl RetryableManagedClientStartup {
+    fn new(factory: ManagedClientStartupFactory) -> Self {
+        Self {
+            current: Arc::new(StdMutex::new(None)),
+            next_generation: Arc::new(AtomicU64::new(1)),
+            factory,
+        }
+    }
+
+    fn startup(&self) -> (Option<u64>, ManagedClientStartup) {
+        let mut guard = self
+            .current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((generation, startup)) = guard.as_ref() {
+            return (Some(*generation), startup.clone());
+        }
+
+        let generation = self.next_generation.fetch_add(1, Ordering::AcqRel);
+        let startup = (self.factory)();
+        *guard = Some((generation, startup.clone()));
+        (Some(generation), startup)
+    }
+
+    fn clear_if_current(&self, generation: Option<u64>) {
+        let Some(generation) = generation else {
+            return;
+        };
+        let mut guard = self
+            .current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(guard.as_ref(), Some((current, _)) if *current == generation) {
+            *guard = None;
+        }
+    }
+}
+
+#[derive(Clone)]
+enum ManagedClientStartupState {
+    #[cfg(test)]
+    Fixed(ManagedClientStartup),
+    Retryable(RetryableManagedClientStartup),
+}
+
+impl ManagedClientStartupState {
+    fn startup(&self) -> (Option<u64>, ManagedClientStartup) {
+        match self {
+            #[cfg(test)]
+            Self::Fixed(startup) => (None, startup.clone()),
+            Self::Retryable(startup) => startup.startup(),
+        }
+    }
+
+    fn clear_if_current(&self, generation: Option<u64>) {
+        match self {
+            #[cfg(test)]
+            Self::Fixed(_) => {}
+            Self::Retryable(startup) => startup.clear_if_current(generation),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct AsyncManagedClient {
-    client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
+    client: ManagedClientStartupState,
     startup_snapshot: Option<Vec<ToolInfo>>,
     startup_complete: Arc<AtomicBool>,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
@@ -505,51 +579,72 @@ impl AsyncManagedClient {
         .map(|tools| filter_tools(tools, &tool_filter));
         let startup_tool_filter = tool_filter;
         let startup_complete = Arc::new(AtomicBool::new(false));
-        let startup_complete_for_fut = Arc::clone(&startup_complete);
-        let fut = async move {
-            let outcome = async {
-                if let Err(error) = validate_mcp_server_name(&server_name) {
-                    return Err(error.into());
-                }
+        let startup_factory: ManagedClientStartupFactory = Arc::new({
+            let startup_complete = Arc::clone(&startup_complete);
+            move || {
+                startup_complete.store(false, Ordering::Release);
+                let startup_complete = Arc::clone(&startup_complete);
+                let server_name = server_name.clone();
+                let config = config.clone();
+                let store_mode = store_mode.clone();
+                let cancel_token = cancel_token.clone();
+                let startup_tool_filter = startup_tool_filter.clone();
+                let tx_event = tx_event.clone();
+                let elicitation_requests = elicitation_requests.clone();
+                let codex_apps_tools_cache_context = codex_apps_tools_cache_context.clone();
+                let runtime_environment = runtime_environment.clone();
+                async move {
+                    let outcome = async {
+                        if let Err(error) = validate_mcp_server_name(&server_name) {
+                            return Err(error.into());
+                        }
 
-                let client = Arc::new(
-                    make_rmcp_client(
-                        &server_name,
-                        config.clone(),
-                        store_mode,
-                        runtime_environment,
-                    )
-                    .await?,
-                );
-                match start_server_task(
-                    server_name,
-                    client,
-                    StartServerTaskParams {
-                        startup_timeout: config
-                            .startup_timeout_sec
-                            .or(Some(DEFAULT_STARTUP_TIMEOUT)),
-                        tool_timeout: config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
-                        tool_filter: startup_tool_filter,
-                        tx_event,
-                        elicitation_requests,
-                        codex_apps_tools_cache_context,
-                    },
-                )
-                .or_cancel(&cancel_token)
-                .await
-                {
-                    Ok(result) => result,
-                    Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
+                        let client = Arc::new(
+                            make_rmcp_client(
+                                &server_name,
+                                config.clone(),
+                                store_mode,
+                                runtime_environment,
+                            )
+                            .await?,
+                        );
+                        match start_server_task(
+                            server_name,
+                            client,
+                            StartServerTaskParams {
+                                startup_timeout: config
+                                    .startup_timeout_sec
+                                    .or(Some(DEFAULT_STARTUP_TIMEOUT)),
+                                tool_timeout: config
+                                    .tool_timeout_sec
+                                    .unwrap_or(DEFAULT_TOOL_TIMEOUT),
+                                tool_filter: startup_tool_filter.clone(),
+                                tx_event,
+                                elicitation_requests,
+                                codex_apps_tools_cache_context,
+                            },
+                        )
+                        .or_cancel(&cancel_token)
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
+                        }
+                    }
+                    .await;
+
+                    startup_complete.store(true, Ordering::Release);
+                    outcome
                 }
+                .boxed()
+                .shared()
             }
-            .await;
-
-            startup_complete_for_fut.store(true, Ordering::Release);
-            outcome
-        };
-        let client = fut.boxed().shared();
+        });
+        let client = ManagedClientStartupState::Retryable(RetryableManagedClientStartup::new(
+            startup_factory,
+        ));
         if startup_snapshot.is_some() {
-            let startup_task = client.clone();
+            let startup_task = client.startup().1;
             tokio::spawn(async move {
                 let _ = startup_task.await;
             });
@@ -564,7 +659,12 @@ impl AsyncManagedClient {
     }
 
     async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
-        self.client.clone().await
+        let (generation, startup) = self.client.startup();
+        let result = startup.await;
+        if matches!(result, Err(StartupOutcomeError::Cancelled)) {
+            self.client.clear_if_current(generation);
+        }
+        result
     }
 
     fn startup_snapshot_while_initializing(&self) -> Option<Vec<ToolInfo>> {
