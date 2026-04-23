@@ -204,6 +204,7 @@ use self::turn::filter_connectors_for_input;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
 use self::turn_context::TurnSkillsContext;
+use self::turn_context::compatible_reasoning_effort_for_model;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
@@ -1199,6 +1200,100 @@ impl Session {
         Ok(())
     }
 
+    async fn apply_orchestrator_mode_overrides(
+        &self,
+        previous_collaboration_mode: &CollaborationMode,
+        mut session_configuration: SessionConfiguration,
+    ) -> SessionConfiguration {
+        let collaboration_mode = session_configuration.collaboration_mode.clone();
+        if collaboration_mode.mode != ModeKind::Orchestrator {
+            return session_configuration;
+        }
+        let entering_orchestrator = previous_collaboration_mode.mode != ModeKind::Orchestrator;
+        let explicit_model_change =
+            collaboration_mode.model() != previous_collaboration_mode.model();
+        let explicit_effort_change =
+            collaboration_mode.reasoning_effort() != previous_collaboration_mode.reasoning_effort();
+        if !entering_orchestrator {
+            return session_configuration;
+        }
+
+        let orchestrator_config = &session_configuration
+            .original_config_do_not_use
+            .thread_control
+            .orchestrator;
+        let selected_model = if explicit_model_change {
+            collaboration_mode.model()
+        } else {
+            orchestrator_config
+                .model
+                .as_deref()
+                .unwrap_or(collaboration_mode.model())
+        };
+        let selected_reasoning_effort = if explicit_effort_change {
+            collaboration_mode.reasoning_effort()
+        } else {
+            orchestrator_config
+                .reasoning_effort
+                .or(collaboration_mode.reasoning_effort())
+        };
+        let model_changed = selected_model != collaboration_mode.model();
+        let reasoning_changed = selected_reasoning_effort != collaboration_mode.reasoning_effort();
+        if !model_changed && !reasoning_changed {
+            return session_configuration;
+        }
+
+        let model_info = self
+            .services
+            .models_manager
+            .get_model_info(
+                selected_model,
+                &session_configuration
+                    .original_config_do_not_use
+                    .to_models_manager_config(),
+            )
+            .await;
+        let reasoning_effort = selected_reasoning_effort.and_then(|reasoning_effort| {
+            compatible_reasoning_effort_for_model(Some(reasoning_effort), &model_info)
+        });
+
+        session_configuration.collaboration_mode = collaboration_mode.with_updates(
+            Some(selected_model.to_string()),
+            Some(reasoning_effort),
+            None,
+        );
+        session_configuration
+    }
+
+    async fn release_active_orchestrator_control(&self) {
+        let active_thread_control = self.active_thread_control().await;
+        let Some(control) = active_thread_control else {
+            return;
+        };
+        if control.released_at.is_some()
+            || control.mode != StateThreadControlMode::Router
+            || control.reason != Self::ORCHESTRATOR_MODE_CONTROL_REASON
+        {
+            return;
+        }
+
+        if let Some(state_db) = self.state_db()
+            && let Err(err) = state_db
+                .release_thread_control(self.conversation_id, Utc::now())
+                .await
+        {
+            warn!(
+                error = %err,
+                thread_id = %self.conversation_id,
+                "failed to release orchestrator control during interrupt"
+            );
+            return;
+        }
+
+        self.disable_orchestrator_scoped_memories().await;
+        self.set_active_thread_control(None).await;
+    }
+
     async fn enable_orchestrator_scoped_memories(&self) {
         let memories = {
             let state = self.state.lock().await;
@@ -1582,37 +1677,51 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let (previous_cwd, sandbox_policy_changed, next_cwd, codex_home, session_source) = {
+        let (previous_collaboration_mode, updated) = {
             let state = self.state.lock().await;
-            let updated = match state.session_configuration.apply(&updates) {
-                Ok(updated) => updated,
+            let previous_collaboration_mode =
+                state.session_configuration.collaboration_mode.clone();
+            match state.session_configuration.apply(&updates) {
+                Ok(updated) => (previous_collaboration_mode, updated),
                 Err(err) => {
                     warn!("rejected session settings update: {err}");
                     return Err(err);
                 }
-            };
-
+            }
+        };
+        let updated = self
+            .apply_orchestrator_mode_overrides(&previous_collaboration_mode, updated)
+            .await;
+        let (
+            previous_cwd,
+            sandbox_policy_changed,
+            next_cwd,
+            codex_home,
+            session_source,
+            collaboration_mode,
+        ) = {
+            let state = self.state.lock().await;
             let previous_cwd = state.session_configuration.cwd.clone();
             let sandbox_policy_changed =
                 state.session_configuration.sandbox_policy != updated.sandbox_policy;
-            let collaboration_mode = updated.collaboration_mode.clone();
             let next_cwd = updated.cwd.clone();
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
-            drop(state);
-            self.ensure_collaboration_mode_control(&collaboration_mode)
-                .await?;
-
-            let mut state = self.state.lock().await;
-            state.session_configuration = updated;
             (
                 previous_cwd,
                 sandbox_policy_changed,
                 next_cwd,
                 codex_home,
                 session_source,
+                updated.collaboration_mode.clone(),
             )
         };
+        self.ensure_collaboration_mode_control(&collaboration_mode)
+            .await?;
+        {
+            let mut state = self.state.lock().await;
+            state.session_configuration = updated;
+        }
 
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,
@@ -3408,6 +3517,7 @@ impl Session {
         let has_active_turn = { self.active_turn.lock().await.is_some() };
         self.cancel_mcp_startup().await;
         if has_active_turn {
+            self.release_active_orchestrator_control().await;
             self.abort_all_tasks(TurnAbortReason::Interrupted).await;
         }
     }

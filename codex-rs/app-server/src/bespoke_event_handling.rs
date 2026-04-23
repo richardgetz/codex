@@ -256,14 +256,19 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::McpStartupUpdate(update) => {
             if let ApiVersion::V2 = api_version {
-                outgoing
-                    .send_server_notification(mcp_startup_update_notification(update))
-                    .await;
+                send_mcp_startup_status_notification(
+                    &outgoing,
+                    &thread_state,
+                    mcp_startup_update_notification(update),
+                )
+                .await;
             }
         }
         EventMsg::McpStartupComplete(complete) => {
             if let ApiVersion::V2 = api_version {
-                for notification in mcp_startup_complete_notifications(complete) {
+                for notification in
+                    mcp_startup_complete_reconciliation_notifications(&thread_state, complete).await
+                {
                     outgoing.send_server_notification(notification).await;
                 }
             }
@@ -1989,30 +1994,6 @@ fn mcp_startup_update_notification(
     mcp_server_status_notification(update.server, status, error)
 }
 
-fn mcp_startup_complete_notifications(
-    complete: codex_protocol::protocol::McpStartupCompleteEvent,
-) -> Vec<ServerNotification> {
-    let ready = complete.ready.into_iter().map(|server| {
-        mcp_server_status_notification(server, McpServerStartupState::Ready, /*error*/ None)
-    });
-    let failed = complete.failed.into_iter().map(|failure| {
-        mcp_server_status_notification(
-            failure.server,
-            McpServerStartupState::Failed,
-            Some(failure.error),
-        )
-    });
-    let cancelled = complete.cancelled.into_iter().map(|server| {
-        mcp_server_status_notification(
-            server,
-            McpServerStartupState::Cancelled,
-            /*error*/ None,
-        )
-    });
-
-    ready.chain(failed).chain(cancelled).collect()
-}
-
 fn mcp_server_status_notification(
     name: String,
     status: McpServerStartupState,
@@ -2023,6 +2004,78 @@ fn mcp_server_status_notification(
         status,
         error,
     })
+}
+
+async fn send_mcp_startup_status_notification(
+    outgoing: &ThreadScopedOutgoingMessageSender,
+    thread_state: &Arc<Mutex<ThreadState>>,
+    notification: ServerNotification,
+) {
+    let ServerNotification::McpServerStatusUpdated(status_notification) = &notification else {
+        outgoing.send_server_notification(notification).await;
+        return;
+    };
+    let should_emit = {
+        let mut state = thread_state.lock().await;
+        state.prepare_mcp_startup_status(status_notification);
+        if !state.should_emit_mcp_startup_status(status_notification) {
+            false
+        } else {
+            state.apply_mcp_startup_status(status_notification.clone());
+            true
+        }
+    };
+    if should_emit {
+        outgoing.send_server_notification(notification).await;
+    }
+}
+
+async fn mcp_startup_complete_reconciliation_notifications(
+    thread_state: &Arc<Mutex<ThreadState>>,
+    complete: codex_protocol::protocol::McpStartupCompleteEvent,
+) -> Vec<ServerNotification> {
+    let terminal_notifications =
+        complete
+            .ready
+            .into_iter()
+            .map(|server| McpServerStatusUpdatedNotification {
+                name: server,
+                status: McpServerStartupState::Ready,
+                error: None,
+            });
+    let failed_notifications =
+        complete
+            .failed
+            .into_iter()
+            .map(|failure| McpServerStatusUpdatedNotification {
+                name: failure.server,
+                status: McpServerStartupState::Failed,
+                error: Some(failure.error),
+            });
+    let cancelled_notifications =
+        complete
+            .cancelled
+            .into_iter()
+            .map(|server| McpServerStatusUpdatedNotification {
+                name: server,
+                status: McpServerStartupState::Cancelled,
+                error: None,
+            });
+
+    let mut state = thread_state.lock().await;
+    let notifications = terminal_notifications
+        .chain(failed_notifications)
+        .chain(cancelled_notifications)
+        .filter_map(|notification| {
+            if !state.should_emit_mcp_startup_status(&notification) {
+                return None;
+            }
+            state.apply_mcp_startup_status(notification.clone());
+            Some(ServerNotification::McpServerStatusUpdated(notification))
+        })
+        .collect();
+    state.clear_mcp_startup_statuses();
+    notifications
 }
 
 async fn handle_turn_diff(
@@ -3141,18 +3194,26 @@ mod tests {
     use tokio::sync::mpsc;
 
     #[test]
-    fn mcp_startup_complete_maps_to_terminal_status_notifications() {
-        let notifications =
-            mcp_startup_complete_notifications(codex_protocol::protocol::McpStartupCompleteEvent {
-                ready: vec!["ready-server".to_string()],
-                failed: vec![codex_protocol::protocol::McpStartupFailure {
-                    server: "failed-server".to_string(),
+    fn mcp_startup_update_maps_status_notifications() {
+        let ready =
+            mcp_startup_update_notification(codex_protocol::protocol::McpStartupUpdateEvent {
+                server: "ready-server".to_string(),
+                status: codex_protocol::protocol::McpStartupStatus::Ready,
+            });
+        let failed =
+            mcp_startup_update_notification(codex_protocol::protocol::McpStartupUpdateEvent {
+                server: "failed-server".to_string(),
+                status: codex_protocol::protocol::McpStartupStatus::Failed {
                     error: "handshake failed".to_string(),
-                }],
-                cancelled: vec!["cancelled-server".to_string()],
+                },
+            });
+        let cancelled =
+            mcp_startup_update_notification(codex_protocol::protocol::McpStartupUpdateEvent {
+                server: "cancelled-server".to_string(),
+                status: codex_protocol::protocol::McpStartupStatus::Cancelled,
             });
 
-        let statuses = notifications
+        let statuses = vec![ready, failed, cancelled]
             .into_iter()
             .map(|notification| match notification {
                 ServerNotification::McpServerStatusUpdated(status) => status,
@@ -3180,6 +3241,369 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn mcp_startup_complete_reconciles_missing_terminal_statuses_for_v2() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = load_default_config_for_test(&codex_home).await;
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider_and_home(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+                config.model_provider.clone(),
+                config.codex_home.to_path_buf(),
+                Arc::new(codex_exec_server::EnvironmentManager::new(
+                    /*exec_server_url*/ None,
+                )),
+            ),
+        );
+        let codex_core::NewThread {
+            thread_id: conversation_id,
+            thread: conversation,
+            ..
+        } = thread_manager.start_thread(config).await?;
+        let thread_state = new_thread_state();
+        let thread_watch_manager = ThreadWatchManager::new();
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            conversation_id,
+        );
+
+        apply_bespoke_event_handling(
+            Event {
+                id: "startup-complete".to_string(),
+                msg: EventMsg::McpStartupComplete(
+                    codex_protocol::protocol::McpStartupCompleteEvent {
+                        ready: vec!["ready-server".to_string()],
+                        failed: vec![codex_protocol::protocol::McpStartupFailure {
+                            server: "failed-server".to_string(),
+                            error: "handshake failed".to_string(),
+                        }],
+                        cancelled: vec!["cancelled-server".to_string()],
+                    },
+                ),
+            },
+            conversation_id,
+            conversation,
+            thread_manager,
+            /*analytics_events_client*/ None,
+            outgoing,
+            thread_state,
+            thread_watch_manager,
+            ApiVersion::V2,
+            "test-provider".to_string(),
+            codex_home.path(),
+        )
+        .await;
+
+        let mut notifications = Vec::new();
+        while let Ok(envelope) = rx.try_recv() {
+            let notification = match envelope {
+                OutgoingEnvelope::Broadcast {
+                    message: OutgoingMessage::AppServerNotification(notification),
+                }
+                | OutgoingEnvelope::ToConnection {
+                    message: OutgoingMessage::AppServerNotification(notification),
+                    ..
+                } => notification,
+                _ => panic!("unexpected message shape"),
+            };
+            notifications.push(notification);
+        }
+
+        let statuses = notifications
+            .into_iter()
+            .map(|notification| match notification {
+                ServerNotification::McpServerStatusUpdated(status) => status,
+                other => panic!("unexpected notification: {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            statuses,
+            vec![
+                McpServerStatusUpdatedNotification {
+                    name: "ready-server".to_string(),
+                    status: McpServerStartupState::Ready,
+                    error: None,
+                },
+                McpServerStatusUpdatedNotification {
+                    name: "failed-server".to_string(),
+                    status: McpServerStartupState::Failed,
+                    error: Some("handshake failed".to_string()),
+                },
+                McpServerStatusUpdatedNotification {
+                    name: "cancelled-server".to_string(),
+                    status: McpServerStartupState::Cancelled,
+                    error: None,
+                },
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mcp_startup_complete_skips_terminal_statuses_already_sent_for_v2() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = load_default_config_for_test(&codex_home).await;
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider_and_home(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+                config.model_provider.clone(),
+                config.codex_home.to_path_buf(),
+                Arc::new(codex_exec_server::EnvironmentManager::new(
+                    /*exec_server_url*/ None,
+                )),
+            ),
+        );
+        let codex_core::NewThread {
+            thread_id: conversation_id,
+            thread: conversation,
+            ..
+        } = thread_manager.start_thread(config).await?;
+        let thread_state = new_thread_state();
+        let thread_watch_manager = ThreadWatchManager::new();
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            conversation_id,
+        );
+
+        apply_bespoke_event_handling(
+            Event {
+                id: "startup-update".to_string(),
+                msg: EventMsg::McpStartupUpdate(codex_protocol::protocol::McpStartupUpdateEvent {
+                    server: "ready-server".to_string(),
+                    status: codex_protocol::protocol::McpStartupStatus::Ready,
+                }),
+            },
+            conversation_id,
+            Arc::clone(&conversation),
+            Arc::clone(&thread_manager),
+            /*analytics_events_client*/ None,
+            outgoing.clone(),
+            Arc::clone(&thread_state),
+            thread_watch_manager.clone(),
+            ApiVersion::V2,
+            "test-provider".to_string(),
+            codex_home.path(),
+        )
+        .await;
+        let _ = rx.try_recv().expect("update notification should be sent");
+
+        apply_bespoke_event_handling(
+            Event {
+                id: "startup-complete".to_string(),
+                msg: EventMsg::McpStartupComplete(
+                    codex_protocol::protocol::McpStartupCompleteEvent {
+                        ready: vec!["ready-server".to_string()],
+                        failed: Vec::new(),
+                        cancelled: Vec::new(),
+                    },
+                ),
+            },
+            conversation_id,
+            conversation,
+            thread_manager,
+            /*analytics_events_client*/ None,
+            outgoing,
+            thread_state,
+            thread_watch_manager,
+            ApiVersion::V2,
+            "test-provider".to_string(),
+            codex_home.path(),
+        )
+        .await;
+
+        assert!(rx.try_recv().is_err(), "no duplicate messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mcp_startup_complete_allows_same_terminal_statuses_in_later_rounds_for_v2()
+    -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = load_default_config_for_test(&codex_home).await;
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider_and_home(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+                config.model_provider.clone(),
+                config.codex_home.to_path_buf(),
+                Arc::new(codex_exec_server::EnvironmentManager::new(
+                    /*exec_server_url*/ None,
+                )),
+            ),
+        );
+        let codex_core::NewThread {
+            thread_id: conversation_id,
+            thread: conversation,
+            ..
+        } = thread_manager.start_thread(config).await?;
+        let thread_state = new_thread_state();
+        let thread_watch_manager = ThreadWatchManager::new();
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            conversation_id,
+        );
+
+        for event_id in ["startup-complete-1", "startup-complete-2"] {
+            apply_bespoke_event_handling(
+                Event {
+                    id: event_id.to_string(),
+                    msg: EventMsg::McpStartupComplete(
+                        codex_protocol::protocol::McpStartupCompleteEvent {
+                            ready: vec!["ready-server".to_string()],
+                            failed: Vec::new(),
+                            cancelled: Vec::new(),
+                        },
+                    ),
+                },
+                conversation_id,
+                Arc::clone(&conversation),
+                Arc::clone(&thread_manager),
+                /*analytics_events_client*/ None,
+                outgoing.clone(),
+                Arc::clone(&thread_state),
+                thread_watch_manager.clone(),
+                ApiVersion::V2,
+                "test-provider".to_string(),
+                codex_home.path(),
+            )
+            .await;
+            let envelope = rx
+                .recv()
+                .await
+                .expect("completion notification should be sent");
+            match envelope {
+                OutgoingEnvelope::Broadcast {
+                    message:
+                        OutgoingMessage::AppServerNotification(
+                            ServerNotification::McpServerStatusUpdated(notification),
+                        ),
+                }
+                | OutgoingEnvelope::ToConnection {
+                    message:
+                        OutgoingMessage::AppServerNotification(
+                            ServerNotification::McpServerStatusUpdated(notification),
+                        ),
+                    ..
+                } => {
+                    assert_eq!(notification.name, "ready-server");
+                    assert_eq!(notification.status, McpServerStartupState::Ready);
+                    assert_eq!(notification.error, None);
+                }
+                other => panic!("unexpected message shape: {other:?}"),
+            }
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mcp_startup_update_allows_same_terminal_status_for_later_lazy_rounds_for_v2()
+    -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = load_default_config_for_test(&codex_home).await;
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider_and_home(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+                config.model_provider.clone(),
+                config.codex_home.to_path_buf(),
+                Arc::new(codex_exec_server::EnvironmentManager::new(
+                    /*exec_server_url*/ None,
+                )),
+            ),
+        );
+        let codex_core::NewThread {
+            thread_id: conversation_id,
+            thread: conversation,
+            ..
+        } = thread_manager.start_thread(config).await?;
+        let thread_state = new_thread_state();
+        let thread_watch_manager = ThreadWatchManager::new();
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            conversation_id,
+        );
+
+        for event in [
+            EventMsg::McpStartupUpdate(codex_protocol::protocol::McpStartupUpdateEvent {
+                server: "lazy-server".to_string(),
+                status: codex_protocol::protocol::McpStartupStatus::Starting,
+            }),
+            EventMsg::McpStartupUpdate(codex_protocol::protocol::McpStartupUpdateEvent {
+                server: "lazy-server".to_string(),
+                status: codex_protocol::protocol::McpStartupStatus::Ready,
+            }),
+            EventMsg::McpStartupUpdate(codex_protocol::protocol::McpStartupUpdateEvent {
+                server: "lazy-server".to_string(),
+                status: codex_protocol::protocol::McpStartupStatus::Starting,
+            }),
+            EventMsg::McpStartupUpdate(codex_protocol::protocol::McpStartupUpdateEvent {
+                server: "lazy-server".to_string(),
+                status: codex_protocol::protocol::McpStartupStatus::Ready,
+            }),
+        ] {
+            apply_bespoke_event_handling(
+                Event {
+                    id: "lazy-round".to_string(),
+                    msg: event,
+                },
+                conversation_id,
+                Arc::clone(&conversation),
+                Arc::clone(&thread_manager),
+                /*analytics_events_client*/ None,
+                outgoing.clone(),
+                Arc::clone(&thread_state),
+                thread_watch_manager.clone(),
+                ApiVersion::V2,
+                "test-provider".to_string(),
+                codex_home.path(),
+            )
+            .await;
+        }
+
+        let mut statuses = Vec::new();
+        while let Ok(envelope) = rx.try_recv() {
+            match envelope {
+                OutgoingEnvelope::Broadcast {
+                    message:
+                        OutgoingMessage::AppServerNotification(
+                            ServerNotification::McpServerStatusUpdated(notification),
+                        ),
+                }
+                | OutgoingEnvelope::ToConnection {
+                    message:
+                        OutgoingMessage::AppServerNotification(
+                            ServerNotification::McpServerStatusUpdated(notification),
+                        ),
+                    ..
+                } => statuses.push(notification.status),
+                other => panic!("unexpected message shape: {other:?}"),
+            }
+        }
+
+        assert_eq!(
+            statuses,
+            vec![
+                McpServerStartupState::Starting,
+                McpServerStartupState::Ready,
+                McpServerStartupState::Starting,
+                McpServerStartupState::Ready,
+            ]
+        );
+
+        Ok(())
     }
 
     fn new_thread_state() -> Arc<Mutex<ThreadState>> {

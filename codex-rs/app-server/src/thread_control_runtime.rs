@@ -147,6 +147,20 @@ fn spawn_router_tick_task(
         let config_snapshot = conversation.config_snapshot().await;
         let (model, reasoning_effort, collaboration_mode) =
             conversation.resolve_router_turn_settings().await;
+        let latest_control = match state_db.get_active_thread_control(control.thread_id).await {
+            Ok(latest_control) => latest_control,
+            Err(err) => {
+                warn!(
+                    thread_id = %control.thread_id,
+                    "failed to revalidate orchestrator control after resolving wake-up settings: {err}"
+                );
+                conversation.active_thread_control().await
+            }
+        };
+        if latest_control != Some(control.clone()) || cancel_token.is_cancelled() {
+            return;
+        }
+
         let submit = conversation.submit(build_router_tick_turn(
             &control,
             &config_snapshot,
