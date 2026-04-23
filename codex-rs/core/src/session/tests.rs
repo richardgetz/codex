@@ -2807,6 +2807,212 @@ async fn session_update_settings_syncs_orchestrator_collaboration_mode_control()
 }
 
 #[tokio::test]
+async fn session_update_settings_applies_orchestrator_overrides_immediately() {
+    let (session, _turn_context) = make_session_and_context().await;
+    {
+        let mut state = session.state.lock().await;
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+        config.thread_control.orchestrator.model = Some("gpt-5.4".to_string());
+        config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+    }
+
+    let mut orchestrator_mode = session.collaboration_mode().await;
+    orchestrator_mode.mode = ModeKind::Orchestrator;
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(orchestrator_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("orchestrator mode update should succeed");
+
+    let updated = session.collaboration_mode().await;
+    assert_eq!(updated.mode, ModeKind::Orchestrator);
+    assert_eq!(updated.model(), "gpt-5.4");
+    assert_eq!(updated.reasoning_effort(), Some(ReasoningEffortConfig::Low));
+}
+
+#[tokio::test]
+async fn session_update_settings_preserves_manual_orchestrator_model_adjustments() {
+    let (session, _turn_context) = make_session_and_context().await;
+    {
+        let mut state = session.state.lock().await;
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+        config.thread_control.orchestrator.model = Some("gpt-5.4".to_string());
+        config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+    }
+
+    let mut orchestrator_mode = session.collaboration_mode().await;
+    orchestrator_mode.mode = ModeKind::Orchestrator;
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(orchestrator_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("orchestrator mode update should succeed");
+
+    let mut adjusted_mode = session.collaboration_mode().await;
+    adjusted_mode.settings.model = "gpt-5.3-codex".to_string();
+    adjusted_mode.settings.reasoning_effort = Some(ReasoningEffortConfig::High);
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(adjusted_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("manual model adjustment in orchestrator mode should succeed");
+
+    let updated = session.collaboration_mode().await;
+    assert_eq!(updated.mode, ModeKind::Orchestrator);
+    assert_eq!(updated.model(), "gpt-5.3-codex");
+    assert_eq!(
+        updated.reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+}
+
+#[tokio::test]
+async fn session_update_settings_applies_orchestrator_defaults_to_unspecified_entry_fields() {
+    let (session, _turn_context) = make_session_and_context().await;
+    {
+        let mut state = session.state.lock().await;
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+        config.thread_control.orchestrator.model = Some("gpt-5.4".to_string());
+        config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+    }
+
+    let mut orchestrator_mode = session.collaboration_mode().await;
+    orchestrator_mode.mode = ModeKind::Orchestrator;
+    orchestrator_mode.settings.model = "gpt-5.4-mini".to_string();
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(orchestrator_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("orchestrator mode update should succeed");
+
+    let updated = session.collaboration_mode().await;
+    assert_eq!(updated.mode, ModeKind::Orchestrator);
+    assert_eq!(updated.model(), "gpt-5.4-mini");
+    assert_eq!(updated.reasoning_effort(), Some(ReasoningEffortConfig::Low));
+}
+
+#[tokio::test]
+async fn interrupt_task_releases_orchestrator_collaboration_mode_control() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let mut orchestrator_mode = session.collaboration_mode().await;
+    orchestrator_mode.mode = ModeKind::Orchestrator;
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(orchestrator_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("orchestrator mode update should succeed");
+
+    assert!(
+        session.active_thread_control().await.is_some(),
+        "expected orchestrator mode to install router control"
+    );
+
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+
+    session.interrupt_task().await;
+
+    assert_eq!(session.active_thread_control().await, None);
+}
+
+#[tokio::test]
+async fn interrupt_task_without_active_turn_keeps_orchestrator_collaboration_mode_control() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let mut orchestrator_mode = session.collaboration_mode().await;
+    orchestrator_mode.mode = ModeKind::Orchestrator;
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(orchestrator_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("orchestrator mode update should succeed");
+
+    assert!(
+        session.active_thread_control().await.is_some(),
+        "expected orchestrator mode to install router control"
+    );
+
+    session.interrupt_task().await;
+
+    assert!(
+        session.active_thread_control().await.is_some(),
+        "interrupt without an active turn should not release orchestrator control"
+    );
+}
+
+#[tokio::test]
+async fn new_turn_with_sub_id_applies_orchestrator_overrides_only_when_entering_mode() {
+    let (session, _turn_context) = make_session_and_context().await;
+    {
+        let mut state = session.state.lock().await;
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+        config.thread_control.orchestrator.model = Some("gpt-5.4".to_string());
+        config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+    }
+
+    let mut orchestrator_mode = session.collaboration_mode().await;
+    orchestrator_mode.mode = ModeKind::Orchestrator;
+
+    let entered = session
+        .new_turn_with_sub_id(
+            "orchestrator-enter".to_string(),
+            SessionSettingsUpdate {
+                collaboration_mode: Some(orchestrator_mode),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("turn should enter orchestrator mode");
+    assert_eq!(entered.collaboration_mode.model(), "gpt-5.4");
+    assert_eq!(
+        entered.collaboration_mode.reasoning_effort(),
+        Some(ReasoningEffortConfig::Low)
+    );
+
+    let mut adjusted_mode = session.collaboration_mode().await;
+    adjusted_mode.settings.model = "gpt-5.3-codex".to_string();
+    adjusted_mode.settings.reasoning_effort = Some(ReasoningEffortConfig::High);
+
+    let adjusted = session
+        .new_turn_with_sub_id(
+            "orchestrator-adjust".to_string(),
+            SessionSettingsUpdate {
+                collaboration_mode: Some(adjusted_mode),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("turn should preserve manual orchestrator adjustments");
+    assert_eq!(adjusted.collaboration_mode.model(), "gpt-5.3-codex");
+    assert_eq!(
+        adjusted.collaboration_mode.reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+}
+
+#[tokio::test]
 async fn new_turn_rearms_continuous_control_when_mode_stays_active() {
     let (session, _turn_context) = make_session_and_context().await;
     let mut continuous_mode = session.collaboration_mode().await;

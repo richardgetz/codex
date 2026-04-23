@@ -459,52 +459,18 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<Arc<TurnContext>> {
-        let update_result = {
+        let (previous_collaboration_mode, applied) = {
             let state = self.state.lock().await;
-            match state.session_configuration.clone().apply(&updates) {
-                Ok(next) => {
-                    let previous_cwd = state.session_configuration.cwd.clone();
-                    let sandbox_policy_changed =
-                        state.session_configuration.sandbox_policy != next.sandbox_policy;
-                    let codex_home = next.codex_home.clone();
-                    let session_source = next.session_source.clone();
-                    drop(state);
-                    if let Err(err) = self
-                        .ensure_collaboration_mode_control(&next.collaboration_mode)
-                        .await
-                    {
-                        self.send_event_raw(Event {
-                            id: sub_id.clone(),
-                            msg: EventMsg::Error(ErrorEvent {
-                                message: err.to_string(),
-                                codex_error_info: Some(CodexErrorInfo::BadRequest),
-                            }),
-                        })
-                        .await;
-                        return Err(err);
-                    }
-                    let mut state = self.state.lock().await;
-                    state.session_configuration = next.clone();
-                    Ok((
-                        next,
-                        sandbox_policy_changed,
-                        previous_cwd,
-                        codex_home,
-                        session_source,
-                    ))
-                }
-                Err(err) => Err(err),
-            }
+            let previous_collaboration_mode =
+                state.session_configuration.collaboration_mode.clone();
+            let applied = state.session_configuration.clone().apply(&updates);
+            (previous_collaboration_mode, applied)
         };
-
-        let (
-            session_configuration,
-            sandbox_policy_changed,
-            previous_cwd,
-            codex_home,
-            session_source,
-        ) = match update_result {
-            Ok(update) => update,
+        let next = match applied {
+            Ok(next) => {
+                self.apply_orchestrator_mode_overrides(&previous_collaboration_mode, next)
+                    .await
+            }
             Err(err) => {
                 self.send_event_raw(Event {
                     id: sub_id.clone(),
@@ -517,6 +483,39 @@ impl Session {
                 return Err(err);
             }
         };
+        let (previous_cwd, sandbox_policy_changed, codex_home, session_source) = {
+            let state = self.state.lock().await;
+            let previous_cwd = state.session_configuration.cwd.clone();
+            let sandbox_policy_changed =
+                state.session_configuration.sandbox_policy != next.sandbox_policy;
+            let codex_home = next.codex_home.clone();
+            let session_source = next.session_source.clone();
+            (
+                previous_cwd,
+                sandbox_policy_changed,
+                codex_home,
+                session_source,
+            )
+        };
+        if let Err(err) = self
+            .ensure_collaboration_mode_control(&next.collaboration_mode)
+            .await
+        {
+            self.send_event_raw(Event {
+                id: sub_id.clone(),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: err.to_string(),
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                }),
+            })
+            .await;
+            return Err(err);
+        }
+        {
+            let mut state = self.state.lock().await;
+            state.session_configuration = next.clone();
+        }
+        let session_configuration = next;
 
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,

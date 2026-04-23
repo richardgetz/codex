@@ -32,6 +32,7 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::Turn;
 #[cfg(test)]
 use codex_app_server_protocol::TurnStatus;
+use codex_mcp::should_start_server_on_session_start;
 use codex_protocol::ThreadId;
 #[cfg(test)]
 use codex_protocol::config_types::ModeKind;
@@ -116,7 +117,13 @@ impl App {
             .mcp_servers
             .get()
             .iter()
-            .filter_map(|(name, server)| server.enabled.then_some(name.clone()))
+            .filter_map(|(name, server)| {
+                (server.enabled
+                    && should_start_server_on_session_start(
+                        name, server, /*lazy_mcp_servers_by_default*/ false,
+                    ))
+                .then_some(name.clone())
+            })
             .collect();
         self.chat_widget
             .set_mcp_startup_expected_servers(enabled_config_mcp_servers);
