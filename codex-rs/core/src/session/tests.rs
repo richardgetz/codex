@@ -2870,6 +2870,31 @@ async fn interrupt_task_without_active_turn_keeps_orchestrator_collaboration_mod
 }
 
 #[tokio::test]
+async fn interrupt_task_without_active_turn_releases_continuous_collaboration_mode_control() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let mut continuous_mode = session.collaboration_mode().await;
+    continuous_mode.mode = ModeKind::Continuous;
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(continuous_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("continuous mode update should succeed");
+
+    assert!(
+        session.active_thread_control().await.is_some(),
+        "expected continuous mode to install control"
+    );
+
+    session.interrupt_task().await;
+
+    assert_eq!(session.active_thread_control().await, None);
+}
+
+#[tokio::test]
 async fn new_turn_with_sub_id_applies_orchestrator_overrides_only_when_entering_mode() {
     let (session, _turn_context) = make_session_and_context().await;
     {

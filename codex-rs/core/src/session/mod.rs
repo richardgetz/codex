@@ -1295,6 +1295,33 @@ impl Session {
         self.set_active_thread_control(None).await;
     }
 
+    async fn release_active_continuous_control(&self) {
+        let active_thread_control = self.active_thread_control().await;
+        let Some(control) = active_thread_control else {
+            return;
+        };
+        if control.released_at.is_some()
+            || control.mode != StateThreadControlMode::Continuous
+            || control.reason != Self::CONTINUOUS_MODE_CONTROL_REASON
+        {
+            return;
+        }
+
+        if let Some(state_db) = self.state_db()
+            && let Err(err) = state_db
+                .release_thread_control(self.conversation_id, Utc::now())
+                .await
+        {
+            warn!(
+                error = %err,
+                thread_id = %self.conversation_id,
+                "failed to release continuous control during interrupt"
+            );
+            return;
+        }
+        self.set_active_thread_control(None).await;
+    }
+
     async fn enable_orchestrator_scoped_memories(&self) {
         let memories = {
             let state = self.state.lock().await;
@@ -3572,6 +3599,7 @@ impl Session {
         info!("interrupt received: abort current task, if any");
         let has_active_turn = { self.active_turn.lock().await.is_some() };
         self.cancel_mcp_startup().await;
+        self.release_active_continuous_control().await;
         if has_active_turn {
             self.release_active_orchestrator_control().await;
             self.abort_all_tasks(TurnAbortReason::Interrupted).await;

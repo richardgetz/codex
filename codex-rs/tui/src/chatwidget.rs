@@ -10171,6 +10171,30 @@ impl ChatWidget {
             .unwrap_or(ModeKind::Default)
     }
 
+    fn apply_configured_collaboration_mode_defaults(
+        &self,
+        mut mask: CollaborationModeMask,
+    ) -> CollaborationModeMask {
+        if mask.mode == Some(ModeKind::Plan)
+            && let Some(effort) = self.config.plan_mode_reasoning_effort
+        {
+            mask.reasoning_effort = Some(Some(effort));
+        }
+
+        if mask.mode == Some(ModeKind::Orchestrator) {
+            if mask.model.is_none() {
+                mask.model = self.config.thread_control.orchestrator.model.clone();
+            }
+            if mask.reasoning_effort.is_none()
+                && let Some(effort) = self.config.thread_control.orchestrator.reasoning_effort
+            {
+                mask.reasoning_effort = Some(Some(effort));
+            }
+        }
+
+        mask
+    }
+
     fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.reasoning_effort();
@@ -10291,11 +10315,7 @@ impl ChatWidget {
         let previous_mode = self.active_mode_kind();
         let previous_model = self.current_model().to_string();
         let previous_effort = self.effective_reasoning_effort();
-        if mask.mode == Some(ModeKind::Plan)
-            && let Some(effort) = self.config.plan_mode_reasoning_effort
-        {
-            mask.reasoning_effort = Some(Some(effort));
-        }
+        mask = self.apply_configured_collaboration_mode_defaults(mask);
         self.active_collaboration_mask = Some(mask);
         self.update_collaboration_mode_indicator();
         self.refresh_model_dependent_surfaces();

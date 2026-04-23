@@ -1456,6 +1456,54 @@ async fn set_reasoning_effort_does_not_override_active_plan_override() {
 }
 
 #[tokio::test]
+async fn orchestrator_mask_applies_configured_thread_control_defaults() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.thread_control.orchestrator.model = Some("gpt-5.3-codex-spark".to_string());
+    chat.config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
+
+    let orchestrator_mask =
+        collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Orchestrator)
+            .expect("expected orchestrator collaboration mask");
+    chat.set_collaboration_mask(orchestrator_mask);
+
+    assert_eq!(
+        chat.active_collaboration_mode_kind(),
+        ModeKind::Orchestrator
+    );
+    assert_eq!(chat.current_model(), "gpt-5.3-codex-spark");
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::Low)
+    );
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            model,
+            effort,
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Orchestrator,
+                    settings,
+                }),
+            ..
+        } => {
+            assert_eq!(model, "gpt-5.3-codex-spark");
+            assert_eq!(effort, Some(ReasoningEffortConfig::Low));
+            assert_eq!(settings.model, "gpt-5.3-codex-spark");
+            assert_eq!(settings.reasoning_effort, Some(ReasoningEffortConfig::Low));
+        }
+        other => {
+            panic!("expected Op::UserTurn with orchestrator collaboration_mode, got {other:?}")
+        }
+    }
+}
+
+#[tokio::test]
 async fn collab_mode_is_sent_after_enabling() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
