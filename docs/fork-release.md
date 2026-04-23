@@ -63,8 +63,21 @@ Merge or push to `stable` and the workflow will:
 2. Compute the next fork counter for that base release line.
 3. Build the macOS release binaries with the derived display version.
 4. Create the matching `rick-v<base>-rick.<n>` tag on the merge commit.
-5. Create a GitHub release.
-6. Publish the npm package.
+5. Generate GitHub release notes that separate fork changes from mainline
+   Codex refreshes.
+6. Create a GitHub release.
+7. Publish the npm package.
+
+## Release notes
+
+Fork release notes are generated from first-parent history since the previous
+`rick-v*` release tag:
+
+- `Fork changes` lists PR merges and direct commits that are specific to this
+  fork release line.
+- `Mainline Codex` lists detected `stable-refresh/*` merges, reports whether
+  the upstream base version changed, and links to the matching upstream Codex
+  release notes.
 
 Fork versions use prerelease semver suffixes like `-rick.3`, so npm requires
 explicit dist-tags at publish time. The root `@rickgetz/codex` package is
