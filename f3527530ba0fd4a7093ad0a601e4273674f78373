@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-04-23/thread-control-followups#f3527530ba0f"
+  change_type: "fix"
+  scope: "thread-control"
+  summary: "Apply configured orchestrator mode defaults in the TUI and let Esc release active continuous control."
+  decision: "Seed Orchestrator mode masks from thread_control.orchestrator config in the TUI, and release automatic Continuous control during interrupt handling so Esc can actually stop the run."
+  constraints:
+    - "Must preserve manual orchestrator adjustments after mode entry."
+    - "Must not change orchestrator interrupt behavior when there is no active turn."
+    - "Must keep the fix covered by focused core and TUI regression tests."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/chatwidget.rs::set_collaboration_mask"
+    - "codex-rs/tui/src/chatwidget/tests/plan_mode.rs::orchestrator_mask_applies_configured_thread_control_defaults"
+    - "codex-rs/core/src/session/mod.rs::interrupt_task"
+    - "codex-rs/core/src/session/tests.rs::interrupt_task_without_active_turn_releases_continuous_collaboration_mode_control"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "unknown"
