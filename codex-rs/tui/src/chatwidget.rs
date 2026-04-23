@@ -1809,6 +1809,9 @@ impl ChatWidget {
         self.bottom_pane
             .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
         self.refresh_status_surfaces();
+        self.bottom_pane
+            .set_slash_command_task_running(self.agent_turn_running || self.is_review_mode);
+        self.refresh_terminal_title();
     }
 
     fn restore_reasoning_status_header(&mut self) {
@@ -3607,6 +3610,9 @@ impl ChatWidget {
         if restored_task_running && !self.bottom_pane.is_task_running() {
             self.bottom_pane.set_task_running(/*running*/ true);
             self.refresh_status_surfaces();
+            self.bottom_pane
+                .set_slash_command_task_running(self.agent_turn_running || self.is_review_mode);
+            self.refresh_terminal_title();
         }
         self.refresh_pending_input_preview();
         self.request_redraw();

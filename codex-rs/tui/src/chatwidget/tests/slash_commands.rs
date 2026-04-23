@@ -760,6 +760,33 @@ async fn unavailable_slash_command_is_available_from_local_recall() {
 }
 
 #[tokio::test]
+async fn unavailable_slash_command_from_popup_reports_once() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.bottom_pane
+        .set_composer_text("/model".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        rendered
+            .matches("'/model' is disabled while a task is in progress.")
+            .count(),
+        1,
+        "expected exactly one disabled-command message, got: {rendered:?}"
+    );
+    assert!(rx.try_recv().is_err(), "expected no follow-up events");
+    assert_eq!(chat.bottom_pane.composer_text(), "/model");
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/model");
+}
+
+#[tokio::test]
 async fn no_op_stub_slash_command_is_available_from_local_recall() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

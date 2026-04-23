@@ -104,7 +104,7 @@ impl ChatWidget {
         if !self.ensure_side_command_allowed_outside_review(cmd) {
             return;
         }
-        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+        if !cmd.available_during_task() && self.bottom_pane.slash_command_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()
@@ -435,7 +435,7 @@ impl ChatWidget {
             self.dispatch_command(cmd);
             return;
         }
-        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+        if !cmd.available_during_task() && self.bottom_pane.slash_command_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()

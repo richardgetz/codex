@@ -187,6 +187,8 @@ pub(crate) struct BottomPane {
     enhanced_keys_supported: bool,
     disable_paste_burst: bool,
     is_task_running: bool,
+    /// Slash-command availability ignores background status work such as MCP startup.
+    slash_command_task_running: bool,
     esc_backtrack_hint: bool,
     animations_enabled: bool,
 
@@ -246,6 +248,7 @@ impl BottomPane {
             enhanced_keys_supported,
             disable_paste_burst,
             is_task_running: false,
+            slash_command_task_running: false,
             status: None,
             unified_exec_footer: UnifiedExecFooter::new(),
             pending_input_preview: PendingInputPreview::new(),
@@ -776,6 +779,7 @@ impl BottomPane {
     pub fn set_task_running(&mut self, running: bool) {
         let was_running = self.is_task_running;
         self.is_task_running = running;
+        self.slash_command_task_running = running;
         self.composer.set_task_running(running);
 
         if running {
@@ -797,6 +801,11 @@ impl BottomPane {
             // Hide the status indicator when a task completes, but keep other modal views.
             self.hide_status_indicator();
         }
+    }
+
+    pub(crate) fn set_slash_command_task_running(&mut self, running: bool) {
+        self.slash_command_task_running = running;
+        self.composer.set_slash_command_task_running(running);
     }
 
     /// Hide the status indicator while leaving task-running state untouched.
@@ -930,6 +939,10 @@ impl BottomPane {
 
     pub(crate) fn is_task_running(&self) -> bool {
         self.is_task_running
+    }
+
+    pub(crate) fn slash_command_task_running(&self) -> bool {
+        self.slash_command_task_running
     }
 
     #[cfg(test)]
