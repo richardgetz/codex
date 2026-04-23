@@ -703,6 +703,7 @@ async fn multi_agent_v2_spawn_fork_turns_all_inherits_parent_collaboration_mode(
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
+            permission_profile: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,

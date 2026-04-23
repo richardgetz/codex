@@ -87,7 +87,6 @@ pub(crate) fn latest_collaboration_mode_from_rollout_items(
     items.iter().rev().find_map(|item| match item {
         RolloutItem::TurnContext(context) => context.collaboration_mode.clone(),
         RolloutItem::ResponseItem(_)
-        | RolloutItem::SessionState(_)
         | RolloutItem::Compacted(_)
         | RolloutItem::EventMsg(_)
         | RolloutItem::SessionMeta(_) => None,

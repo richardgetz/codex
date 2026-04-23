@@ -48,6 +48,7 @@ use codex_analytics::SubAgentThreadStartedInput;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_config::types::MemoriesScope;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
@@ -865,6 +866,12 @@ async fn thread_title_from_state_db(
 }
 
 impl Session {
+    pub(crate) const CONTINUOUS_MODE_CONTROL_REASON: &str =
+        "Continuous collaboration mode is active for this thread.";
+    pub(crate) const ORCHESTRATOR_MODE_CONTROL_REASON: &str =
+        "Orchestrator collaboration mode is active for this thread.";
+    const ORCHESTRATOR_MODE_WATCH_INTERVAL_SECONDS: u32 = 60;
+
     pub(crate) async fn app_server_client_metadata(&self) -> AppServerClientMetadata {
         let state = self.state.lock().await;
         AppServerClientMetadata {
