@@ -3,7 +3,7 @@ use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
 use crate::session::Codex;
 use crate::session::SteerInputError;
-use crate::session::compatible_reasoning_effort_for_model;
+use crate::session::turn_context::compatible_reasoning_effort_for_model;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;

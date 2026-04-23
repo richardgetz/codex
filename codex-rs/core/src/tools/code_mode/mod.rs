@@ -260,6 +260,10 @@ pub(super) async fn build_enabled_tools(
     collect_code_mode_tool_definitions(&specs)
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "nested tool router construction reads through the session-owned manager guard"
+)]
 async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
     let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
     let mcp_connection_manager = exec.session.services.mcp_connection_manager.read().await;

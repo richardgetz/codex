@@ -1,10 +1,10 @@
 use codex_mcp::LazyMcpServerInfo;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_tools::ToolSearchOutputTool;
+use codex_tools::LoadableToolSpec;
 use codex_tools::ToolSearchResultSource;
-use codex_tools::dynamic_tool_to_responses_api_tool;
-use codex_tools::tool_search_result_source_to_output_tool;
+use codex_tools::dynamic_tool_to_loadable_tool_spec;
+use codex_tools::tool_search_result_source_to_loadable_tool_spec;
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -16,7 +16,7 @@ pub(crate) struct ToolSearchEntry {
 
 #[derive(Clone)]
 pub(crate) enum ToolSearchEntryOutput {
-    Tool(Box<ToolSearchOutputTool>),
+    Tool(LoadableToolSpec),
     LazyMcpServer { server_name: String },
 }
 
@@ -48,7 +48,7 @@ pub(crate) fn build_tool_search_entries(
     }
 
     let mut dynamic_tools = dynamic_tools.iter().collect::<Vec<_>>();
-    dynamic_tools.sort_by(|a, b| a.name.cmp(&b.name));
+    dynamic_tools.sort_by(|a, b| a.namespace.cmp(&b.namespace).then(a.name.cmp(&b.name)));
     for tool in dynamic_tools {
         match dynamic_tool_search_entry(tool) {
             Ok(entry) => entries.push(entry),
@@ -67,7 +67,7 @@ pub(crate) fn build_tool_search_entries(
 fn mcp_tool_search_entry(info: &ToolInfo) -> Result<ToolSearchEntry, serde_json::Error> {
     Ok(ToolSearchEntry {
         search_text: build_mcp_search_text(info),
-        output: ToolSearchEntryOutput::Tool(Box::new(tool_search_result_source_to_output_tool(
+        output: ToolSearchEntryOutput::Tool(tool_search_result_source_to_loadable_tool_spec(
             ToolSearchResultSource {
                 server_name: info.server_name.as_str(),
                 tool_namespace: info.callable_namespace.as_str(),
@@ -76,7 +76,7 @@ fn mcp_tool_search_entry(info: &ToolInfo) -> Result<ToolSearchEntry, serde_json:
                 connector_name: info.connector_name.as_deref(),
                 connector_description: info.connector_description.as_deref(),
             },
-        )?)),
+        )?),
         limit_bucket: Some(info.server_name.clone()),
     })
 }
@@ -98,9 +98,7 @@ fn lazy_mcp_server_search_entry(info: &LazyMcpServerInfo) -> ToolSearchEntry {
 fn dynamic_tool_search_entry(tool: &DynamicToolSpec) -> Result<ToolSearchEntry, serde_json::Error> {
     Ok(ToolSearchEntry {
         search_text: build_dynamic_search_text(tool),
-        output: ToolSearchEntryOutput::Tool(Box::new(ToolSearchOutputTool::Function(
-            dynamic_tool_to_responses_api_tool(tool)?,
-        ))),
+        output: ToolSearchEntryOutput::Tool(dynamic_tool_to_loadable_tool_spec(tool)?),
         limit_bucket: None,
     })
 }
@@ -164,6 +162,10 @@ fn build_dynamic_search_text(tool: &DynamicToolSpec) -> String {
         tool.name.replace('_', " "),
         tool.description.clone(),
     ];
+
+    if let Some(namespace) = &tool.namespace {
+        parts.push(namespace.clone());
+    }
 
     parts.extend(
         tool.input_schema

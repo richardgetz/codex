@@ -25,6 +25,7 @@ use codex_tools::ToolsConfig;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 pub use crate::tools::context::ToolCallSource;
@@ -276,6 +277,7 @@ impl ToolRouter {
         &self,
         session: Arc<Session>,
         turn: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
         source: ToolCallSource,
@@ -301,6 +303,7 @@ impl ToolRouter {
         let invocation = ToolInvocation {
             session,
             turn,
+            cancellation_token,
             tracker,
             call_id,
             tool_name,

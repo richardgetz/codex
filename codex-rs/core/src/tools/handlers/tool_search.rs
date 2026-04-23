@@ -10,9 +10,10 @@ use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngine;
 use bm25::SearchEngineBuilder;
+use codex_tools::LoadableToolSpec;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
-use codex_tools::ToolSearchOutputTool;
+use codex_tools::coalesce_loadable_tool_specs;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -101,7 +102,7 @@ impl ToolSearchHandler {
         limit: usize,
         use_default_limit: bool,
         session: &'a std::sync::Arc<crate::session::session::Session>,
-    ) -> BoxFuture<'a, Result<Vec<ToolSearchOutputTool>, FunctionCallError>> {
+    ) -> BoxFuture<'a, Result<Vec<LoadableToolSpec>, FunctionCallError>> {
         async move {
             let results = self.search_result_entries(query, limit, use_default_limit);
             self.search_output_tools(results, query, limit, use_default_limit, session)
@@ -151,31 +152,12 @@ impl ToolSearchHandler {
         limit: usize,
         use_default_limit: bool,
         session: &std::sync::Arc<crate::session::session::Session>,
-    ) -> Result<Vec<ToolSearchOutputTool>, FunctionCallError> {
+    ) -> Result<Vec<LoadableToolSpec>, FunctionCallError> {
         let mut tools = Vec::new();
         // Preserve search order: group namespace children, emit standalone tools directly.
         for entry in results {
             match &entry.output {
-                ToolSearchEntryOutput::Tool(tool) => match tool.as_ref() {
-                    ToolSearchOutputTool::Function(tool) => {
-                        tools.push(ToolSearchOutputTool::Function(tool.clone()));
-                    }
-                    ToolSearchOutputTool::Namespace(namespace) => {
-                        if let Some(output) = tools.iter_mut().find_map(|tool| match tool {
-                            ToolSearchOutputTool::Namespace(output)
-                                if output.name == namespace.name =>
-                            {
-                                Some(output)
-                            }
-                            ToolSearchOutputTool::Namespace(_)
-                            | ToolSearchOutputTool::Function(_) => None,
-                        }) {
-                            output.tools.extend(namespace.tools.clone());
-                        } else {
-                            tools.push(ToolSearchOutputTool::Namespace(namespace.clone()));
-                        }
-                    }
-                },
+                ToolSearchEntryOutput::Tool(tool) => tools.push(tool.clone()),
                 ToolSearchEntryOutput::LazyMcpServer { server_name } => {
                     let manager = session.services.mcp_connection_manager.read().await;
                     let mcp_tools = match manager.list_tools_for_server(server_name).await {
@@ -208,36 +190,17 @@ impl ToolSearchHandler {
             }
         }
 
-        Ok(tools)
+        Ok(coalesce_loadable_tool_specs(tools))
     }
 
     fn search_output_tools_without_lazy<'a>(
         &self,
         results: impl IntoIterator<Item = &'a ToolSearchEntry>,
-    ) -> Result<Vec<ToolSearchOutputTool>, FunctionCallError> {
+    ) -> Result<Vec<LoadableToolSpec>, FunctionCallError> {
         let mut tools = Vec::new();
         for entry in results {
             match &entry.output {
-                ToolSearchEntryOutput::Tool(tool) => match tool.as_ref() {
-                    ToolSearchOutputTool::Function(tool) => {
-                        tools.push(ToolSearchOutputTool::Function(tool.clone()));
-                    }
-                    ToolSearchOutputTool::Namespace(namespace) => {
-                        if let Some(output) = tools.iter_mut().find_map(|tool| match tool {
-                            ToolSearchOutputTool::Namespace(output)
-                                if output.name == namespace.name =>
-                            {
-                                Some(output)
-                            }
-                            ToolSearchOutputTool::Namespace(_)
-                            | ToolSearchOutputTool::Function(_) => None,
-                        }) {
-                            output.tools.extend(namespace.tools.clone());
-                        } else {
-                            tools.push(ToolSearchOutputTool::Namespace(namespace.clone()));
-                        }
-                    }
-                },
+                ToolSearchEntryOutput::Tool(tool) => tools.push(tool.clone()),
                 ToolSearchEntryOutput::LazyMcpServer { server_name } => {
                     return Err(FunctionCallError::Fatal(format!(
                         "test helper cannot resolve lazy MCP server `{server_name}`"
@@ -245,7 +208,7 @@ impl ToolSearchHandler {
                 }
             }
         }
-        Ok(tools)
+        Ok(coalesce_loadable_tool_specs(tools))
     }
 }
 
@@ -276,35 +239,32 @@ fn default_limit_for_bucket(bucket: &str) -> usize {
     }
 }
 
-fn count_output_tools(tools: &[ToolSearchOutputTool]) -> usize {
+fn count_output_tools(tools: &[LoadableToolSpec]) -> usize {
     tools
         .iter()
         .map(|tool| match tool {
-            ToolSearchOutputTool::Function(_) => 1,
-            ToolSearchOutputTool::Namespace(namespace) => namespace.tools.len(),
+            LoadableToolSpec::Function(_) => 1,
+            LoadableToolSpec::Namespace(namespace) => namespace.tools.len(),
         })
         .sum()
 }
 
-fn truncate_output_tools(
-    tools: Vec<ToolSearchOutputTool>,
-    mut limit: usize,
-) -> Vec<ToolSearchOutputTool> {
+fn truncate_output_tools(tools: Vec<LoadableToolSpec>, mut limit: usize) -> Vec<LoadableToolSpec> {
     let mut truncated = Vec::new();
     for tool in tools {
         if limit == 0 {
             break;
         }
         match tool {
-            ToolSearchOutputTool::Function(tool) => {
-                truncated.push(ToolSearchOutputTool::Function(tool));
+            LoadableToolSpec::Function(tool) => {
+                truncated.push(LoadableToolSpec::Function(tool));
                 limit = limit.saturating_sub(1);
             }
-            ToolSearchOutputTool::Namespace(mut namespace) => {
+            LoadableToolSpec::Namespace(mut namespace) => {
                 namespace.tools.truncate(limit);
                 limit = limit.saturating_sub(namespace.tools.len());
                 if !namespace.tools.is_empty() {
-                    truncated.push(ToolSearchOutputTool::Namespace(namespace));
+                    truncated.push(LoadableToolSpec::Namespace(namespace));
                 }
             }
         }
@@ -329,6 +289,7 @@ mod tests {
     #[test]
     fn mixed_search_results_coalesce_mcp_namespaces() {
         let dynamic_tools = vec![DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
             name: "automation_update".to_string(),
             description: "Create, update, view, or delete recurring automations.".to_string(),
             input_schema: serde_json::json!({
@@ -367,7 +328,7 @@ mod tests {
         assert_eq!(
             tools,
             vec![
-                ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+                LoadableToolSpec::Namespace(ResponsesApiNamespace {
                     name: "mcp__calendar__".to_string(),
                     description: "Tools in the mcp__calendar__ namespace.".to_string(),
                     tools: vec![
@@ -397,21 +358,25 @@ mod tests {
                         }),
                     ],
                 }),
-                ToolSearchOutputTool::Function(ResponsesApiTool {
-                    name: "automation_update".to_string(),
-                    description: "Create, update, view, or delete recurring automations."
-                        .to_string(),
-                    strict: false,
-                    defer_loading: Some(true),
-                    parameters: codex_tools::JsonSchema::object(
-                        std::collections::BTreeMap::from([(
-                            "mode".to_string(),
-                            codex_tools::JsonSchema::string(/*description*/ None),
-                        )]),
-                        Some(vec!["mode".to_string()]),
-                        Some(false.into()),
-                    ),
-                    output_schema: None,
+                LoadableToolSpec::Namespace(ResponsesApiNamespace {
+                    name: "codex_app".to_string(),
+                    description: "Tools in the codex_app namespace.".to_string(),
+                    tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                        name: "automation_update".to_string(),
+                        description: "Create, update, view, or delete recurring automations."
+                            .to_string(),
+                        strict: false,
+                        defer_loading: Some(true),
+                        parameters: codex_tools::JsonSchema::object(
+                            std::collections::BTreeMap::from([(
+                                "mode".to_string(),
+                                codex_tools::JsonSchema::string(/*description*/ None),
+                            )]),
+                            Some(vec!["mode".to_string()]),
+                            Some(false.into()),
+                        ),
+                        output_schema: None,
+                    })],
                 }),
             ],
         );
