@@ -338,6 +338,8 @@ pub(crate) struct ChatComposer {
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
     is_task_running: bool,
+    /// Slash-command availability ignores background status work such as MCP startup.
+    slash_command_task_running: bool,
     /// When false, the composer is temporarily read-only (e.g. during sandbox setup).
     input_enabled: bool,
     input_disabled_placeholder: Option<String>,
@@ -493,6 +495,7 @@ impl ChatComposer {
             attached_images: Vec::new(),
             placeholder_text,
             is_task_running: false,
+            slash_command_task_running: false,
             input_enabled: true,
             input_disabled_placeholder: None,
             paste_burst: PasteBurst::default(),
@@ -1557,10 +1560,16 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
                 ..
             } => {
                 if let Some(sel) = popup.selected_item() {
                     let CommandItem::Builtin(cmd) = sel;
+                    if self.reject_slash_command_if_unavailable(cmd) {
+                        self.stage_selected_slash_command_history(cmd);
+                        self.record_pending_slash_command_history();
+                        return (InputResult::None, true);
+                    }
                     self.stage_selected_slash_command_history(cmd);
                     self.textarea.set_text_clearing_elements("");
                     self.is_bash_mode = false;
@@ -2647,7 +2656,7 @@ impl ChatComposer {
     }
 
     fn reject_slash_command_if_unavailable(&self, cmd: SlashCommand) -> bool {
-        if !self.is_task_running || cmd.available_during_task() {
+        if !self.slash_command_task_running || cmd.available_during_task() {
             return false;
         }
         let message = format!(
@@ -3696,6 +3705,11 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+        self.slash_command_task_running = running;
+    }
+
+    pub fn set_slash_command_task_running(&mut self, running: bool) {
+        self.slash_command_task_running = running;
     }
 
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
