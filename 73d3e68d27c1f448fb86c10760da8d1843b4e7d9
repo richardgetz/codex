@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-04-23/tui-esc-interrupt-hidden-status#73d3e68d27c1"
+  change_type: "fix"
+  scope: "tui"
+  summary: "Keep Esc interrupt active while task output hides the status indicator."
+  decision: "Dispatch Esc interrupts from BottomPane when a task is running instead of requiring a visible StatusIndicatorWidget."
+  constraints:
+    - "Must preserve popup dismissal priority over task interruption."
+    - "Must keep /agent command composition from being interrupted by Esc."
+    - "Must not make StatusIndicatorWidget own interrupt dispatch when it can be hidden during streaming."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/bottom_pane/mod.rs::BottomPane::handle_key_event"
+    - "codex-rs/tui/src/status_indicator_widget.rs::StatusIndicatorWidget"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
