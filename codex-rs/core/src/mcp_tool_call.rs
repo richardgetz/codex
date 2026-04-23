@@ -73,6 +73,11 @@ use url::Url;
 
 const MCP_CALL_COUNT_METRIC: &str = "codex.mcp.call";
 const MCP_CALL_DURATION_METRIC: &str = "codex.mcp.call.duration_ms";
+const MCP_SMART_WAIT_META_KEY: &str = "codex/wait";
+const MCP_SMART_WAIT_META_VERSION: u64 = 1;
+const MCP_SMART_WAIT_NO_UPDATE_STATE: &str = "no_update";
+const MCP_SMART_WAIT_MAX_NO_UPDATE_RESULTS: usize = 12;
+const MCP_SMART_WAIT_MAX_RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
 
 /// Handles the specified tool call dispatches the appropriate
 /// `McpToolCallBegin` and `McpToolCallEnd` events to the `Session`.
@@ -483,17 +488,47 @@ async fn execute_mcp_tool_call(
         augment_mcp_tool_request_meta_with_sandbox_state(sess, turn_context, server, request_meta)
             .await
             .map_err(|e| format!("failed to build MCP tool request metadata: {e:#}"))?;
-    let result = sess
-        .call_tool(server, tool_name, rewritten_arguments, request_meta)
-        .await
-        .map_err(|e| format!("tool call error: {e:?}"))?;
-    sanitize_mcp_tool_result_for_model(
-        turn_context
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image),
-        Ok(result),
-    )
+    let supports_image_input = turn_context
+        .model_info
+        .input_modalities
+        .contains(&InputModality::Image);
+    let mut no_update_results = 0;
+
+    loop {
+        let result = sess
+            .call_tool(
+                server,
+                tool_name,
+                rewritten_arguments.clone(),
+                request_meta.clone(),
+            )
+            .await
+            .map_err(|e| format!("tool call error: {e:?}"))?;
+        let result = sanitize_mcp_tool_result_for_model(supports_image_input, Ok(result))?;
+        let Some(retry_after) = mcp_smart_wait_retry_after(&result) else {
+            return Ok(result);
+        };
+
+        no_update_results += 1;
+        if no_update_results >= MCP_SMART_WAIT_MAX_NO_UPDATE_RESULTS {
+            tracing::debug!(
+                server,
+                tool_name,
+                no_update_results,
+                "MCP smart wait retry cap reached"
+            );
+            return Ok(result);
+        }
+
+        tracing::debug!(
+            server,
+            tool_name,
+            no_update_results,
+            retry_after_ms = retry_after.as_millis(),
+            "MCP tool reported no update; waiting before retry"
+        );
+        tokio::time::sleep(retry_after).await;
+    }
 }
 
 #[expect(
@@ -587,6 +622,31 @@ fn sanitize_mcp_tool_result_for_model(
         is_error: call_tool_result.is_error,
         meta: call_tool_result.meta,
     })
+}
+
+fn mcp_smart_wait_retry_after(result: &CallToolResult) -> Option<Duration> {
+    if result.is_error.unwrap_or(false) {
+        return None;
+    }
+
+    let wait_meta = result
+        .meta
+        .as_ref()?
+        .get(MCP_SMART_WAIT_META_KEY)?
+        .as_object()?;
+    if wait_meta.get("v")?.as_u64()? != MCP_SMART_WAIT_META_VERSION {
+        return None;
+    }
+    if wait_meta.get("state")?.as_str()? != MCP_SMART_WAIT_NO_UPDATE_STATE {
+        return None;
+    }
+
+    let retry_after_ms = wait_meta.get("retry_after_ms")?.as_u64()?;
+    if retry_after_ms == 0 {
+        return None;
+    }
+
+    Some(Duration::from_millis(retry_after_ms).min(MCP_SMART_WAIT_MAX_RETRY_AFTER))
 }
 
 async fn notify_mcp_tool_call_event(sess: &Session, turn_context: &TurnContext, event: EventMsg) {

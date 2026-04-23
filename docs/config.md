@@ -26,6 +26,62 @@ Only enable parallel calls for MCP servers whose tools are safe to run at the
 same time. If tools read and write shared state, files, databases, or external
 resources, review those read/write race conditions before enabling this setting.
 
+MCP servers start eagerly by default, except for servers Codex can safely defer
+such as browser automation servers and sub-agent sessions. You can override that
+per server with `startup`:
+
+```toml
+[mcp_servers.playwright]
+command = "playwright-mcp"
+startup = "lazy"
+```
+
+`startup = "lazy"` keeps the server out of session startup and exposes it
+through `tool_search`; Codex starts it the first time a search or tool call needs
+its tools. `startup = "eager"` keeps the previous start-on-session behavior, and
+`startup = "auto"` lets Codex choose. Servers marked `required = true` always
+start eagerly so startup failures can still block the session.
+
+Some local stdio MCP servers are safe to reuse across sessions. Codex shares only
+known read-only stdio servers automatically, and falls back to a standalone
+server process for remote or HTTP transports:
+
+```toml
+[mcp_servers.docs]
+command = "aws-documentation-mcp-server"
+sharing = "shared"
+```
+
+Use `sharing = "standalone"` for servers with per-session state, prompts,
+browser profiles, writable resources, or credentials that should not cross
+session boundaries. `sharing = "auto"` is the default.
+
+### MCP smart wait metadata
+
+Poll or wait-style MCP tools can ask Codex to continue waiting without returning
+an intermediate "no update yet" result to the model. Return a successful tool
+result with this `_meta` shape:
+
+```json
+{
+  "_meta": {
+    "codex/wait": {
+      "v": 1,
+      "state": "no_update",
+      "retry_after_ms": 120000
+    }
+  }
+}
+```
+
+Codex treats `state = "no_update"` as a non-terminal result, waits for
+`retry_after_ms`, then calls the same MCP tool again with the same arguments and
+request metadata. Hidden polling is bounded: Codex returns the latest result
+after 12 consecutive no-update results, and caps each advised delay at 10
+minutes. Results without this exact metadata, invalid metadata, or error results
+are returned normally. MCP clients that do not understand this metadata can
+ignore it, so poll tools should still keep their normal
+`content`/`structuredContent` useful for dumb clients.
 ## MCP tool approvals
 
 Codex stores approval defaults and per-tool overrides for custom MCP servers

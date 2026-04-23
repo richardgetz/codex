@@ -365,13 +365,20 @@ impl App {
         app_server: &mut AppServerSession,
         op: AppCommand,
     ) -> Result<()> {
-        let Some(thread_id) = self.active_thread_id else {
+        let Some(thread_id) = self.thread_id_for_active_op(&op) else {
             self.chat_widget
                 .add_error_message("No active thread is available.".to_string());
             return Ok(());
         };
 
         self.submit_thread_op(app_server, thread_id, op).await
+    }
+
+    pub(super) fn thread_id_for_active_op(&self, op: &AppCommand) -> Option<ThreadId> {
+        match op.view() {
+            AppCommandView::Interrupt => self.current_displayed_thread_id(),
+            _ => self.active_thread_id,
+        }
     }
 
     pub(super) async fn submit_thread_op(
