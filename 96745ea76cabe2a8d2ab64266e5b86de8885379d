@@ -1,0 +1,1 @@
+Intent: make Orchestrator mode reliable by giving it built-in supervision state, better durable preference capture, configurable mode-scoped skill visibility, and clearer memory-helper naming while folding in the updated stable refresh skill guidance.
