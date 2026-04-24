@@ -16,6 +16,7 @@ use crate::config_loader::Sourced;
 use crate::config_loader::load_config_layers_state;
 use crate::config_loader::project_trust_key;
 use crate::memories::memory_root;
+use crate::orchestrator_memory::root as orchestrator_memory_root;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
@@ -40,6 +41,7 @@ use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_config::types::OrchestratorMemoryConfig;
 use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
@@ -439,6 +441,9 @@ pub struct Config {
 
     /// Memories subsystem settings.
     pub memories: MemoriesConfig,
+
+    /// Orchestrator-memory subsystem settings.
+    pub orchestrator_memory: OrchestratorMemoryConfig,
 
     /// Thread-control subsystem settings.
     pub thread_control: ThreadControlConfig,
@@ -1743,6 +1748,14 @@ impl Config {
         {
             additional_writable_roots.push(memories_root);
         }
+        let orchestrator_memory_root = orchestrator_memory_root(&codex_home);
+        std::fs::create_dir_all(&orchestrator_memory_root)?;
+        if !additional_writable_roots
+            .iter()
+            .any(|existing| existing == &orchestrator_memory_root)
+        {
+            additional_writable_roots.push(orchestrator_memory_root);
+        }
 
         let profiles_are_active = matches!(
             permission_config_syntax,
@@ -2356,6 +2369,7 @@ impl Config {
             agent_max_depth,
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
+            orchestrator_memory: cfg.orchestrator_memory.unwrap_or_default().into(),
             thread_control: cfg.thread_control.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,
             codex_home,

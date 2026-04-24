@@ -24,6 +24,7 @@ use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
+use crate::orchestrator_memory::maybe_learn_from_completed_turn;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
@@ -600,6 +601,7 @@ impl Session {
             .turn_timing_state
             .time_to_first_token_ms()
             .await;
+        let last_agent_message_for_memory = last_agent_message.clone();
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
             last_agent_message,
@@ -613,6 +615,7 @@ impl Session {
             .lock()
             .await
             .clear_turn(&turn_context.sub_id);
+        maybe_learn_from_completed_turn(self, &turn_context, last_agent_message_for_memory);
 
         if should_clear_active_turn {
             let session = Arc::clone(self);

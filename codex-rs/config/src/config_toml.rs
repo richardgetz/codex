@@ -18,6 +18,7 @@ use crate::types::McpServerConfig;
 use crate::types::MemoriesToml;
 use crate::types::Notice;
 use crate::types::OAuthCredentialsStoreMode;
+use crate::types::OrchestratorMemoryToml;
 use crate::types::OtelConfigToml;
 use crate::types::PluginConfig;
 use crate::types::SandboxWorkspaceWrite;
@@ -332,6 +333,9 @@ pub struct ConfigToml {
 
     /// Memories subsystem settings.
     pub memories: Option<MemoriesToml>,
+
+    /// Orchestrator-memory subsystem settings.
+    pub orchestrator_memory: Option<OrchestratorMemoryToml>,
 
     /// Thread-control subsystem settings.
     #[serde(default)]

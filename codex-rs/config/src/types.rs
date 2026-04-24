@@ -295,6 +295,77 @@ impl From<MemoriesToml> for MemoriesConfig {
     }
 }
 
+/// Orchestrator-memory settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct OrchestratorMemoryToml {
+    /// When `false`, skip injecting orchestrator-memory instructions into developer prompts.
+    pub enabled: Option<bool>,
+    /// Which collaboration modes may read orchestrator memory.
+    pub scope: Option<MemoriesScope>,
+    /// Seconds to wait after a newly observed preference before consolidating the summary.
+    pub debounce_seconds: Option<u64>,
+    /// Number of similar steering observations required before inferring a preference automatically.
+    #[schemars(range(min = 1, max = 8))]
+    pub min_observations: Option<usize>,
+    /// Number of recent user turns to inspect when looking for repeated steering patterns.
+    #[schemars(range(min = 1, max = 64))]
+    pub recent_turn_window: Option<usize>,
+    /// Maximum number of consolidated preference lines kept in the injected summary.
+    #[schemars(range(min = 1, max = 128))]
+    pub max_summary_items: Option<usize>,
+}
+
+/// Effective orchestrator-memory settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrchestratorMemoryConfig {
+    pub enabled: bool,
+    pub scope: MemoriesScope,
+    pub debounce_seconds: u64,
+    pub min_observations: usize,
+    pub recent_turn_window: usize,
+    pub max_summary_items: usize,
+}
+
+impl Default for OrchestratorMemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            scope: MemoriesScope::Orchestrator,
+            debounce_seconds: 60,
+            min_observations: 2,
+            recent_turn_window: 8,
+            max_summary_items: 24,
+        }
+    }
+}
+
+impl From<OrchestratorMemoryToml> for OrchestratorMemoryConfig {
+    fn from(toml: OrchestratorMemoryToml) -> Self {
+        let defaults = Self::default();
+        Self {
+            enabled: toml.enabled.unwrap_or(defaults.enabled),
+            scope: toml.scope.unwrap_or(defaults.scope),
+            debounce_seconds: toml
+                .debounce_seconds
+                .unwrap_or(defaults.debounce_seconds)
+                .clamp(5, 3600),
+            min_observations: toml
+                .min_observations
+                .unwrap_or(defaults.min_observations)
+                .clamp(1, 8),
+            recent_turn_window: toml
+                .recent_turn_window
+                .unwrap_or(defaults.recent_turn_window)
+                .clamp(1, 64),
+            max_summary_items: toml
+                .max_summary_items
+                .unwrap_or(defaults.max_summary_items)
+                .clamp(1, 128),
+        }
+    }
+}
+
 /// Orchestrator-specific thread-control settings loaded from config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]

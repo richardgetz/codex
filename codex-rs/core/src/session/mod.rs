@@ -4,7 +4,6 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -2952,6 +2951,15 @@ impl Session {
         {
             developer_sections.push(memory_prompt);
         }
+        if turn_context.config.orchestrator_memory.enabled
+            && (turn_context.config.orchestrator_memory.scope == MemoriesScope::All
+                || turn_context.collaboration_mode.mode == ModeKind::Orchestrator)
+            && let Some(orchestrator_memory_prompt) =
+                build_orchestrator_memory_developer_instructions(&turn_context.config.codex_home)
+                    .await
+        {
+            developer_sections.push(orchestrator_memory_prompt);
+        }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
             CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)
@@ -3727,6 +3735,7 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
 }
 
 use crate::memories::prompts::build_memory_tool_developer_instructions;
+use crate::orchestrator_memory::build_developer_instructions as build_orchestrator_memory_developer_instructions;
 
 #[cfg(test)]
 pub(crate) mod tests;

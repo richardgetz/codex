@@ -44,6 +44,7 @@ use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
+use std::sync::atomic::AtomicU64;
 use tracing::Span;
 
 use crate::RolloutRecorderParams;
@@ -3829,6 +3830,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.js_repl_node_path.clone(),
         ),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        orchestrator_memory_generation: AtomicU64::new(0),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -4987,6 +4989,232 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
         .expect("ephemeral guardian review should receive a shutdown op");
 }
 
+async fn make_session_and_context_with_auth_and_config_and_rx<F>(
+    auth: CodexAuth,
+    dynamic_tools: Vec<DynamicToolSpec>,
+    configure_config: F,
+) -> (
+    Arc<Session>,
+    Arc<TurnContext>,
+    async_channel::Receiver<Event>,
+)
+where
+    F: FnOnce(&mut Config),
+{
+    let (tx_event, rx_event) = async_channel::unbounded();
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let mut config = build_test_config(codex_home.path()).await;
+    configure_config(&mut config);
+    let config = Arc::new(config);
+    let conversation_id = ThreadId::default();
+    let auth_manager = AuthManager::from_auth_for_testing(auth);
+    let models_manager = Arc::new(ModelsManager::new(
+        config.codex_home.to_path_buf(),
+        auth_manager.clone(),
+        /*model_catalog*/ None,
+        CollaborationModesConfig::default(),
+    ));
+    let agent_control = AgentControl::default();
+    let exec_policy = Arc::new(ExecPolicyManager::default());
+    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+    let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
+    let model_info = ModelsManager::construct_model_info_offline_for_tests(
+        model.as_str(),
+        &config.to_models_manager_config(),
+    );
+    let reasoning_effort = config.model_reasoning_effort;
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model,
+            reasoning_effort,
+            developer_instructions: None,
+        },
+    };
+    let session_configuration = SessionConfiguration {
+        provider: config.model_provider.clone(),
+        collaboration_mode,
+        model_reasoning_summary: config.model_reasoning_summary,
+        developer_instructions: config.developer_instructions.clone(),
+        user_instructions: config.user_instructions.clone(),
+        service_tier: None,
+        personality: config.personality,
+        base_instructions: config
+            .base_instructions
+            .clone()
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+        compact_prompt: config.compact_prompt.clone(),
+        approval_policy: config.permissions.approval_policy.clone(),
+        approvals_reviewer: config.approvals_reviewer,
+        sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
+        windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        cwd: config.cwd.clone(),
+        codex_home: config.codex_home.clone(),
+        thread_name: None,
+        original_config_do_not_use: Arc::clone(&config),
+        metrics_service_name: None,
+        app_server_client_name: None,
+        app_server_client_version: None,
+        session_source: SessionSource::Exec,
+        dynamic_tools,
+        persist_extended_history: false,
+        inherited_shell_snapshot: None,
+        user_shell_override: None,
+    };
+    let per_turn_config =
+        Session::build_per_turn_config(&session_configuration, session_configuration.cwd.clone());
+    let model_info = ModelsManager::construct_model_info_offline_for_tests(
+        session_configuration.collaboration_mode.model(),
+        &per_turn_config.to_models_manager_config(),
+    );
+    let session_telemetry = session_telemetry(
+        conversation_id,
+        config.as_ref(),
+        &model_info,
+        session_configuration.session_source.clone(),
+    );
+
+    let state = SessionState::new(session_configuration.clone());
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
+    let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
+    let skills_manager = Arc::new(SkillsManager::new(
+        config.codex_home.clone(),
+        /*bundled_skills_enabled*/ true,
+    ));
+    let network_approval = Arc::new(NetworkApprovalService::default());
+    let environment = Arc::new(
+        codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)
+            .expect("create environment"),
+    );
+
+    let skills_watcher = Arc::new(SkillsWatcher::noop());
+    let services = SessionServices {
+        mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
+            &config.permissions.approval_policy,
+            &config.permissions.sandbox_policy,
+        ))),
+        mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
+        unified_exec_manager: UnifiedExecProcessManager::new(
+            config.background_terminal_max_timeout,
+        ),
+        shell_zsh_path: None,
+        main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
+        analytics_events_client: AnalyticsEventsClient::new(
+            Arc::clone(&auth_manager),
+            config.chatgpt_base_url.trim_end_matches('/').to_string(),
+            config.analytics_enabled,
+        ),
+        hooks: Hooks::new(HooksConfig {
+            legacy_notify_argv: config.notify.clone(),
+            ..HooksConfig::default()
+        }),
+        rollout: Mutex::new(None),
+        rollout_trace: RolloutTraceRecorder::disabled(),
+        user_shell: Arc::new(default_user_shell()),
+        shell_snapshot_tx: watch::channel(None).0,
+        show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+        exec_policy,
+        auth_manager: Arc::clone(&auth_manager),
+        session_telemetry: session_telemetry.clone(),
+        models_manager: Arc::clone(&models_manager),
+        tool_approvals: Mutex::new(ApprovalStore::default()),
+        guardian_rejections: Mutex::new(std::collections::HashMap::new()),
+        guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
+        runtime_handle: tokio::runtime::Handle::current(),
+        skills_manager,
+        plugins_manager,
+        mcp_manager,
+        skills_watcher,
+        agent_control,
+        network_proxy: None,
+        network_approval: Arc::clone(&network_approval),
+        state_db: None,
+        thread_store: codex_thread_store::LocalThreadStore::new(
+            codex_rollout::RolloutConfig::from_view(config.as_ref()),
+        ),
+        model_client: ModelClient::new(
+            Some(Arc::clone(&auth_manager)),
+            conversation_id,
+            /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+            session_configuration.provider.clone(),
+            session_configuration.session_source.clone(),
+            config.model_verbosity,
+            config.features.enabled(Feature::EnableRequestCompression),
+            config.features.enabled(Feature::RuntimeMetrics),
+            Session::build_model_client_beta_features_header(config.as_ref()),
+        ),
+        code_mode_service: crate::tools::code_mode::CodeModeService::new(
+            config.js_repl_node_path.clone(),
+        ),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        orchestrator_memory_generation: AtomicU64::new(0),
+    };
+    let js_repl = Arc::new(JsReplHandle::with_node_path(
+        config.js_repl_node_path.clone(),
+        config.js_repl_node_module_dirs.clone(),
+    ));
+
+    let plugin_outcome = services
+        .plugins_manager
+        .plugins_for_config(&per_turn_config)
+        .await;
+    let effective_skill_roots = plugin_outcome.effective_skill_roots();
+    let skills_input =
+        crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
+    let skill_fs = environment.get_filesystem();
+    let skills_outcome = Arc::new(
+        services
+            .skills_manager
+            .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+            .await,
+    );
+    let turn_context = Arc::new(Session::make_turn_context(
+        conversation_id,
+        Some(Arc::clone(&auth_manager)),
+        &session_telemetry,
+        session_configuration.provider.clone(),
+        &session_configuration,
+        services.user_shell.as_ref(),
+        services.shell_zsh_path.as_ref(),
+        services.main_execve_wrapper_exe.as_ref(),
+        per_turn_config,
+        model_info,
+        &models_manager,
+        /*network*/ None,
+        Some(environment),
+        /*environments*/ None,
+        session_configuration.cwd.clone(),
+        "turn_id".to_string(),
+        Arc::clone(&js_repl),
+        skills_outcome,
+    ));
+
+    let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
+    let session = Arc::new(Session {
+        conversation_id,
+        tx_event,
+        agent_status: agent_status_tx,
+        out_of_band_elicitation_paused: watch::channel(false).0,
+        state: Mutex::new(state),
+        managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
+        features: config.features.clone(),
+        pending_mcp_server_refresh_config: Mutex::new(None),
+        conversation: Arc::new(RealtimeConversationManager::new()),
+        active_turn: Mutex::new(None),
+        mailbox,
+        mailbox_rx: Mutex::new(mailbox_rx),
+        idle_pending_input: Mutex::new(Vec::new()),
+        guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
+        services,
+        js_repl,
+        next_internal_sub_id: AtomicU64::new(0),
+    });
+
+    (session, turn_context, rx_event)
+}
+
 pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     dynamic_tools: Vec<DynamicToolSpec>,
 ) -> (
@@ -5141,6 +5369,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             config.js_repl_node_path.clone(),
         ),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        orchestrator_memory_generation: AtomicU64::new(0),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -5905,6 +6134,81 @@ async fn build_initial_context_restates_realtime_start_when_reference_context_is
             .iter()
             .any(|text| text.contains("<realtime_conversation>")),
         "expected initial context to restate active realtime when the reference context is missing, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_injects_orchestrator_memory_only_in_orchestrator_mode() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.orchestrator_memory.enabled = true;
+        },
+    )
+    .await;
+    let mut turn_context = Arc::try_unwrap(turn_context)
+        .expect("turn context should not have additional strong references");
+    let orchestrator_memory_dir = turn_context.config.codex_home.join("orchestrator_memory");
+    std::fs::create_dir_all(&orchestrator_memory_dir).expect("create orchestrator memory dir");
+    std::fs::write(
+        orchestrator_memory_dir.join("summary.md"),
+        "Remember the user's delegation preferences.",
+    )
+    .expect("write orchestrator memory summary");
+
+    let default_context = session.build_initial_context(&turn_context).await;
+    let default_developer_texts = developer_input_texts(&default_context);
+    assert!(
+        !default_developer_texts
+            .iter()
+            .any(|text| text.contains("ORCHESTRATOR_MEMORY_SUMMARY")),
+        "did not expect orchestrator memory outside orchestrator mode, got {default_developer_texts:?}"
+    );
+
+    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
+    let orchestrator_context = session.build_initial_context(&turn_context).await;
+    let orchestrator_developer_texts = developer_input_texts(&orchestrator_context);
+    assert!(
+        orchestrator_developer_texts
+            .iter()
+            .any(|text| text.contains("ORCHESTRATOR_MEMORY_SUMMARY")),
+        "expected orchestrator memory in orchestrator mode, got {orchestrator_developer_texts:?}"
+    );
+    assert!(
+        orchestrator_developer_texts
+            .iter()
+            .any(|text| text.contains("Remember the user's delegation preferences.")),
+        "expected orchestrator memory summary in developer instructions, got {orchestrator_developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_injects_orchestrator_memory_in_default_mode_when_scoped_to_all() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.orchestrator_memory.enabled = true;
+            config.orchestrator_memory.scope = codex_config::types::MemoriesScope::All;
+        },
+    )
+    .await;
+    let orchestrator_memory_dir = turn_context.config.codex_home.join("orchestrator_memory");
+    std::fs::create_dir_all(&orchestrator_memory_dir).expect("create orchestrator memory dir");
+    std::fs::write(
+        orchestrator_memory_dir.join("summary.md"),
+        "Act as the user's orchestration layer.",
+    )
+    .expect("write orchestrator memory summary");
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+    let developer_texts = developer_input_texts(&initial_context);
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("ORCHESTRATOR_MEMORY_SUMMARY")),
+        "expected orchestrator memory in default mode when scoped to all, got {developer_texts:?}"
     );
 }
 
