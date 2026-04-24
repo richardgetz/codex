@@ -154,6 +154,8 @@ impl ToolHandler for Handler {
             .and_then(|snapshot| snapshot.reasoning_effort)
             .unwrap_or(args.reasoning_effort.unwrap_or_default());
         let nickname = new_agent_nickname.clone();
+        let supervision_role = new_agent_role.clone();
+        let supervision_prompt = prompt.clone();
         session
             .send_event(
                 &turn,
@@ -172,6 +174,34 @@ impl ToolHandler for Handler {
             )
             .await;
         let new_thread_id = result?.thread_id;
+        if let Ok(status_rx) = session
+            .services
+            .agent_control
+            .subscribe_status(new_thread_id)
+            .await
+        {
+            session
+                .services
+                .orchestrator_supervision
+                .register_worker(
+                    session.conversation_id,
+                    new_thread_id,
+                    nickname.clone(),
+                    supervision_role,
+                    supervision_prompt,
+                    args.collaboration_mode,
+                )
+                .await
+                .map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to record orchestrator supervision state: {err}"
+                    ))
+                })?;
+            session
+                .services
+                .orchestrator_supervision
+                .spawn_status_watcher(session.conversation_id, new_thread_id, status_rx);
+        }
         let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
         turn.session_telemetry.counter(
             "codex.multi_agent.spawn",

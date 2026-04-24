@@ -396,6 +396,9 @@
             "enable_fanout": {
               "type": "boolean"
             },
+            "enable_mcp_approvals": {
+              "type": "boolean"
+            },
             "enable_request_compression": {
               "type": "boolean"
             },
@@ -1570,6 +1573,38 @@
         }
       ]
     },
+    "OrchestratorEscalationMode": {
+      "description": "How Orchestrator mode should raise blockers that need user attention.",
+      "enum": [
+        "inline",
+        "mcp",
+        "both"
+      ],
+      "type": "string"
+    },
+    "OrchestratorEscalationToml": {
+      "additionalProperties": false,
+      "description": "Orchestrator escalation settings loaded from config.toml.",
+      "properties": {
+        "channel": {
+          "description": "Optional MCP server or communication channel name to use when `mode` includes `mcp`.",
+          "type": "string"
+        },
+        "mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/OrchestratorEscalationMode"
+            }
+          ],
+          "description": "Where blockers that need the user should be raised."
+        },
+        "tool": {
+          "description": "Optional MCP tool name to use when `mode` includes `mcp`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "OrchestratorMemoryToml": {
       "additionalProperties": false,
       "description": "Orchestrator-memory settings loaded from config.toml.",
@@ -1631,6 +1666,21 @@
             }
           ],
           "description": "Reasoning effort to use for orchestrator wake-up turns."
+        }
+      },
+      "type": "object"
+    },
+    "OrchestratorToml": {
+      "additionalProperties": false,
+      "description": "Orchestrator behavior settings loaded from config.toml.",
+      "properties": {
+        "escalation": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/OrchestratorEscalationToml"
+            }
+          ],
+          "default": null
         }
       },
       "type": "object"
@@ -2219,6 +2269,33 @@
       ],
       "type": "object"
     },
+    "SkillModeFilterConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SkillModeFilterMode"
+            }
+          ],
+          "default": "include"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "SkillModeFilterMode": {
+      "enum": [
+        "include",
+        "exclude"
+      ],
+      "type": "string"
+    },
     "SkillsConfig": {
       "additionalProperties": false,
       "properties": {
@@ -2234,6 +2311,12 @@
         "include_instructions": {
           "description": "Whether turns receive the automatic skills instructions block.",
           "type": "boolean"
+        },
+        "modes": {
+          "additionalProperties": {
+            "$ref": "#/definitions/SkillModeFilterConfig"
+          },
+          "type": "object"
         }
       },
       "type": "object"
@@ -2714,6 +2797,9 @@
         "enable_fanout": {
           "type": "boolean"
         },
+        "enable_mcp_approvals": {
+          "type": "boolean"
+        },
         "enable_request_compression": {
           "type": "boolean"
         },
@@ -3106,6 +3192,15 @@
     "openai_base_url": {
       "description": "Base URL override for the built-in `openai` model provider.",
       "type": "string"
+    },
+    "orchestrator": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/OrchestratorToml"
+        }
+      ],
+      "default": null,
+      "description": "Orchestrator supervision and escalation settings."
     },
     "orchestrator_memory": {
       "allOf": [

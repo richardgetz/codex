@@ -66,6 +66,8 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::AppInfo;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
+use codex_config::types::SkillModeFilterConfig;
+use codex_config::types::SkillModeFilterMode;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
@@ -3831,6 +3833,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         ),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         orchestrator_memory_generation: AtomicU64::new(0),
+        orchestrator_supervision:
+            crate::orchestrator_supervision::OrchestratorSupervisionStore::new(
+                config.codex_home.clone(),
+            ),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -5150,6 +5156,10 @@ where
         ),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         orchestrator_memory_generation: AtomicU64::new(0),
+        orchestrator_supervision:
+            crate::orchestrator_supervision::OrchestratorSupervisionStore::new(
+                config.codex_home.clone(),
+            ),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -5370,6 +5380,10 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         ),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         orchestrator_memory_generation: AtomicU64::new(0),
+        orchestrator_supervision:
+            crate::orchestrator_supervision::OrchestratorSupervisionStore::new(
+                config.codex_home.clone(),
+            ),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -5860,6 +5874,58 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
     );
 }
 
+#[tokio::test]
+async fn build_initial_context_filters_skills_by_collaboration_mode() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.skills.modes.insert(
+                ModeKind::Orchestrator,
+                SkillModeFilterConfig {
+                    mode: SkillModeFilterMode::Include,
+                    skills: vec!["agent-state".to_string()],
+                },
+            );
+        },
+    )
+    .await;
+    let mut turn_context = Arc::try_unwrap(turn_context)
+        .expect("turn context should not have additional strong references");
+    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
+
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills = vec![
+        SkillMetadata {
+            name: "agent-state".to_string(),
+            description: "Track supervised work.".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/agent-state/SKILL.md").abs(),
+            scope: SkillScope::Repo,
+        },
+        SkillMetadata {
+            name: "scratchpad".to_string(),
+            description: "Keep active notes.".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/scratchpad/SKILL.md").abs(),
+            scope: SkillScope::Repo,
+        },
+    ];
+    turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+
+    assert!(developer_texts.contains("agent-state"));
+    assert!(!developer_texts.contains("scratchpad"));
+}
+
 #[test]
 fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
     let session_telemetry = test_session_telemetry_without_metadata();
@@ -6209,6 +6275,53 @@ async fn build_initial_context_injects_orchestrator_memory_in_default_mode_when_
             .iter()
             .any(|text| text.contains("ORCHESTRATOR_MEMORY_SUMMARY")),
         "expected orchestrator memory in default mode when scoped to all, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_injects_orchestrator_supervision_in_orchestrator_mode() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |_config| {},
+    )
+    .await;
+    session
+        .services
+        .orchestrator_supervision
+        .register_worker(
+            session.conversation_id,
+            ThreadId::from_string("019dbfd0-6c49-7623-bcd3-6d43a46d5916").expect("thread id"),
+            Some("Arendt".to_string()),
+            Some("worker".to_string()),
+            "Patch the target repo".to_string(),
+            Some(ModeKind::Default),
+        )
+        .await
+        .expect("register supervised worker");
+
+    let mut turn_context = Arc::try_unwrap(turn_context)
+        .expect("turn context should not have additional strong references");
+    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context);
+
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("<orchestrator_supervision>")),
+        "expected orchestrator supervision developer instructions, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts.iter().any(|text| text.contains("Arendt")),
+        "expected supervised worker summary in developer instructions, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("mode: inline")),
+        "expected escalation mode in developer instructions, got {developer_texts:?}"
     );
 }
 

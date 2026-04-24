@@ -10,6 +10,8 @@ use codex_utils_template::Template;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use tokio::fs;
+use tokio::fs::OpenOptions;
+use tokio::io::AsyncWriteExt;
 use tracing::warn;
 
 #[path = "orchestrator_memory/live.rs"]
@@ -43,6 +45,10 @@ pub(crate) fn profile_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
 
 pub(crate) fn preferences_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
     root(codex_home).join("preferences.jsonl")
+}
+
+pub(crate) fn diagnostics_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+    root(codex_home).join("diagnostics.jsonl")
 }
 
 pub(crate) async fn ensure_layout(
@@ -90,6 +96,17 @@ pub(crate) fn maybe_learn_from_completed_turn(
         turn_context.config.as_ref(),
         turn_context.collaboration_mode.mode,
     ) {
+        let codex_home = turn_context.config.codex_home.clone();
+        let turn_id = turn_context.sub_id.clone();
+        tokio::spawn(async move {
+            let _ = append_diagnostic_event(
+                &codex_home,
+                "skipped_gate",
+                &turn_id,
+                Some("orchestrator memory disabled for current mode/config"),
+            )
+            .await;
+        });
         return;
     }
 
@@ -121,6 +138,31 @@ pub(crate) async fn remove_generated_memory_files(
     }
 
     Ok(())
+}
+
+pub(crate) async fn append_diagnostic_event(
+    codex_home: &AbsolutePathBuf,
+    stage: &str,
+    turn_id: &str,
+    details: Option<&str>,
+) -> std::io::Result<()> {
+    ensure_layout(codex_home).await?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(diagnostics_path(codex_home))
+        .await?;
+    let payload = serde_json::json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "stage": stage,
+        "turn_id": turn_id,
+        "details": details.unwrap_or_default(),
+    });
+    let mut line = serde_json::to_string(&payload)
+        .map_err(|err| std::io::Error::other(format!("serialize diagnostics event: {err}")))?;
+    line.push('\n');
+    file.write_all(line.as_bytes()).await?;
+    file.flush().await
 }
 
 #[cfg(test)]

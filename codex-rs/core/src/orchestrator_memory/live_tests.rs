@@ -35,6 +35,23 @@ fn infers_repeated_steering_from_recent_turns() {
     );
 }
 
+#[test]
+fn extracts_acknowledged_preferences_from_assistant_summary() {
+    let candidates = extract_acknowledged_preferences(
+        "Yes—good rule, and I'll treat it as a hard constraint going forward.\n- always branch off the branch you are merging into",
+    );
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(
+        candidates[0].signal,
+        PreferenceSignal::AssistantAcknowledged
+    );
+    assert_eq!(
+        candidates[0].candidate,
+        "Always branch off the branch you are merging into"
+    );
+}
+
 #[tokio::test]
 async fn consolidates_events_into_summary_and_profile_files() {
     let temp = tempdir().expect("tempdir");

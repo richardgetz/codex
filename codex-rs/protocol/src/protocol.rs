@@ -2832,7 +2832,7 @@ impl SessionSource {
                 agent_nickname.clone()
             }
             SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
-                Some("Morpheus".to_string())
+                Some("Memory".to_string())
             }
             _ => None,
         }
@@ -5410,5 +5410,13 @@ mod tests {
                 .expect("new_or_append should return info");
 
         assert_eq!(info.model_context_window, Some(258_400));
+    }
+
+    #[test]
+    fn memory_consolidation_source_has_human_readable_agent_metadata() {
+        let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
+
+        assert_eq!(source.get_nickname(), Some("Memory".to_string()));
+        assert_eq!(source.get_agent_role(), Some("memory builder".to_string()));
     }
 }

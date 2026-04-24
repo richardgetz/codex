@@ -44,10 +44,16 @@ use codex_config::types::Notice;
 use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
+use codex_config::types::OrchestratorConfig;
+use codex_config::types::OrchestratorEscalationMode;
+use codex_config::types::OrchestratorEscalationToml;
 use codex_config::types::OrchestratorMemoryConfig;
 use codex_config::types::OrchestratorMemoryToml;
 use codex_config::types::OrchestratorThreadControlToml;
+use codex_config::types::OrchestratorToml;
 use codex_config::types::SandboxWorkspaceWrite;
+use codex_config::types::SkillModeFilterConfig;
+use codex_config::types::SkillModeFilterMode;
 use codex_config::types::SkillsConfig;
 use codex_config::types::ThreadControlConfig;
 use codex_config::types::ThreadControlToml;
@@ -61,6 +67,7 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -385,6 +392,74 @@ enabled = false
             bundled: Some(BundledSkillsConfig { enabled: false }),
             include_instructions: Some(false),
             config: Vec::new(),
+            modes: Default::default(),
+        })
+    );
+}
+
+#[test]
+fn parses_mode_scoped_skills_config() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[skills.modes.orchestrator]
+mode = "include"
+skills = ["agent-state", "scratchpad"]
+
+[skills.modes.default]
+mode = "exclude"
+skills = ["skill-recorder"]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.skills,
+        Some(SkillsConfig {
+            bundled: None,
+            include_instructions: None,
+            config: Vec::new(),
+            modes: [
+                (
+                    ModeKind::Orchestrator,
+                    SkillModeFilterConfig {
+                        mode: SkillModeFilterMode::Include,
+                        skills: vec!["agent-state".to_string(), "scratchpad".to_string()],
+                    },
+                ),
+                (
+                    ModeKind::Default,
+                    SkillModeFilterConfig {
+                        mode: SkillModeFilterMode::Exclude,
+                        skills: vec!["skill-recorder".to_string()],
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        })
+    );
+}
+
+#[test]
+fn parses_orchestrator_escalation_config() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[orchestrator.escalation]
+mode = "mcp"
+channel = "imessage"
+tool = "imessage_send_message"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.orchestrator,
+        Some(OrchestratorToml {
+            escalation: Some(OrchestratorEscalationToml {
+                mode: Some(OrchestratorEscalationMode::Mcp),
+                channel: Some("imessage".to_string()),
+                tool: Some("imessage_send_message".to_string()),
+            }),
         })
     );
 }
@@ -5330,6 +5405,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             orchestrator_memory: OrchestratorMemoryConfig::default(),
+            orchestrator: OrchestratorConfig::default(),
             thread_control: ThreadControlConfig::default(),
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             codex_home: fixture.codex_home(),
@@ -5370,6 +5446,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             include_permissions_instructions: true,
             include_apps_instructions: true,
             include_skill_instructions: true,
+            skills: SkillsConfig::default(),
             include_environment_context: true,
             compact_prompt: None,
             commit_attribution: None,
@@ -5528,6 +5605,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         orchestrator_memory: OrchestratorMemoryConfig::default(),
+        orchestrator: OrchestratorConfig::default(),
         thread_control: ThreadControlConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
         codex_home: fixture.codex_home(),
@@ -5568,6 +5646,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         include_permissions_instructions: true,
         include_apps_instructions: true,
         include_skill_instructions: true,
+        skills: SkillsConfig::default(),
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
@@ -5680,6 +5759,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         orchestrator_memory: OrchestratorMemoryConfig::default(),
+        orchestrator: OrchestratorConfig::default(),
         thread_control: ThreadControlConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
         codex_home: fixture.codex_home(),
@@ -5720,6 +5800,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         include_permissions_instructions: true,
         include_apps_instructions: true,
         include_skill_instructions: true,
+        skills: SkillsConfig::default(),
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
@@ -5817,6 +5898,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         orchestrator_memory: OrchestratorMemoryConfig::default(),
+        orchestrator: OrchestratorConfig::default(),
         thread_control: ThreadControlConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
         codex_home: fixture.codex_home(),
@@ -5857,6 +5939,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         include_permissions_instructions: true,
         include_apps_instructions: true,
         include_skill_instructions: true,
+        skills: SkillsConfig::default(),
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,

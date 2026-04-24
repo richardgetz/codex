@@ -218,9 +218,17 @@ pub(crate) async fn run_turn(
             build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
         });
     let mentioned_skills = skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
+        let filtered_skills = crate::skills::filter_skills_for_mode(
+            &turn_context.config,
+            turn_context.collaboration_mode.mode,
+            &outcome.skills,
+        )
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
         collect_explicit_skill_mentions(
             &input,
-            &outcome.skills,
+            &filtered_skills,
             &outcome.disabled_paths,
             &connector_slug_counts,
         )

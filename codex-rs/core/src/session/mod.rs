@@ -2965,6 +2965,18 @@ impl Session {
         {
             developer_sections.push(orchestrator_memory_prompt);
         }
+        if turn_context.collaboration_mode.mode == ModeKind::Orchestrator
+            && let Some(orchestrator_supervision_prompt) = self
+                .services
+                .orchestrator_supervision
+                .build_developer_instructions(
+                    self.conversation_id,
+                    &turn_context.config.orchestrator.escalation,
+                )
+                .await
+        {
+            developer_sections.push(orchestrator_supervision_prompt);
+        }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
             CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)
@@ -3014,6 +3026,14 @@ impl Session {
                 .turn_skills
                 .outcome
                 .allowed_skills_for_implicit_invocation();
+            let implicit_skills = crate::skills::filter_skills_for_mode(
+                &turn_context.config,
+                turn_context.collaboration_mode.mode,
+                &implicit_skills,
+            )
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
             let available_skills = build_available_skills(
                 &implicit_skills,
                 default_skill_metadata_budget(turn_context.model_info.context_window),

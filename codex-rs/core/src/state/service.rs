@@ -11,6 +11,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
 use crate::guardian::GuardianRejectionCircuitBreaker;
 use crate::mcp::McpManager;
+use crate::orchestrator_supervision::OrchestratorSupervisionStore;
 use crate::plugins::PluginsManager;
 use crate::skills_watcher::SkillsWatcher;
 use crate::tools::code_mode::CodeModeService;
@@ -73,4 +74,5 @@ pub(crate) struct SessionServices {
     /// the same manager through child-thread spawn paths without reconstructing it.
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) orchestrator_memory_generation: AtomicU64,
+    pub(crate) orchestrator_supervision: OrchestratorSupervisionStore,
 }

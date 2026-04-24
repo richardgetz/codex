@@ -78,6 +78,16 @@ impl ToolHandler for Handler {
             )
             .await;
         let submission_id = result?;
+        session
+            .services
+            .orchestrator_supervision
+            .note_instruction(session.conversation_id, receiver_thread_id)
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to update orchestrator supervision instruction timestamp: {err}"
+                ))
+            })?;
 
         Ok(SendInputResult { submission_id })
     }

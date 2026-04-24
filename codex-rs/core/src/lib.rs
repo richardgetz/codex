@@ -52,6 +52,7 @@ pub use network_proxy_loader::MtimeConfigReloader;
 pub use network_proxy_loader::build_network_proxy_state;
 pub use network_proxy_loader::build_network_proxy_state_and_reloader;
 mod orchestrator_memory;
+mod orchestrator_supervision;
 mod original_image_detail;
 pub use codex_mcp::SandboxState;
 mod mcp_openai_file;

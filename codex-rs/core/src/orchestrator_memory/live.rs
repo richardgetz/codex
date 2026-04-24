@@ -6,6 +6,7 @@ use super::remove_generated_memory_files;
 use super::summary_path;
 use crate::content_items_to_text;
 use crate::context_manager::is_user_turn_boundary;
+use crate::orchestrator_memory::append_diagnostic_event;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use chrono::DateTime;
@@ -29,6 +30,7 @@ use tracing::warn;
 
 const EXPLICIT_CONFIDENCE: f32 = 0.95;
 const REPEATED_STEERING_CONFIDENCE: f32 = 0.65;
+const ASSISTANT_ACKNOWLEDGED_CONFIDENCE: f32 = 0.85;
 const STOPWORDS: &[&str] = &[
     "a", "an", "and", "as", "at", "be", "but", "by", "for", "from", "i", "if", "in", "into", "is",
     "it", "me", "my", "of", "on", "or", "so", "that", "the", "things", "to", "we", "when", "with",
@@ -76,6 +78,7 @@ const WORKFLOW_TERMS: &[&str] = &[
 enum PreferenceSignal {
     Explicit,
     RepeatedSteering,
+    AssistantAcknowledged,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -111,7 +114,7 @@ struct AggregatedPreference {
 pub(super) fn schedule_learning(
     session: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    _last_agent_message: Option<String>,
+    last_agent_message: Option<String>,
 ) {
     if matches!(turn_context.session_source, SessionSource::SubAgent(_)) {
         return;
@@ -123,7 +126,13 @@ pub(super) fn schedule_learning(
         let Some(session) = weak_session.upgrade() else {
             return;
         };
-        if let Err(err) = process_completed_turn(&session, turn_context.as_ref()).await {
+        if let Err(err) = process_completed_turn(
+            &session,
+            turn_context.as_ref(),
+            last_agent_message.as_deref(),
+        )
+        .await
+        {
             warn!("failed learning orchestrator memory from completed turn: {err}");
         }
     });
@@ -132,10 +141,26 @@ pub(super) fn schedule_learning(
 async fn process_completed_turn(
     session: &Arc<Session>,
     turn_context: &TurnContext,
+    last_agent_message: Option<&str>,
 ) -> std::io::Result<()> {
     let history = session.clone_history().await;
+    append_diagnostic_event(
+        &turn_context.config.codex_home,
+        "turn_hook_fired",
+        &turn_context.sub_id,
+        Some("processing completed turn"),
+    )
+    .await?;
+
     let current_turn_user_texts = collect_current_turn_user_texts(history.raw_items());
     if current_turn_user_texts.is_empty() {
+        append_diagnostic_event(
+            &turn_context.config.codex_home,
+            "skipped_no_user_text",
+            &turn_context.sub_id,
+            Some("no current-turn user text found"),
+        )
+        .await?;
         return Ok(());
     }
 
@@ -145,7 +170,17 @@ async fn process_completed_turn(
             .next()
             .is_some()
     });
-    if !has_current_turn_directives {
+    let has_assistant_ack = last_agent_message
+        .map(extract_acknowledged_preferences)
+        .is_some_and(|candidates| !candidates.is_empty());
+    if !has_current_turn_directives && !has_assistant_ack {
+        append_diagnostic_event(
+            &turn_context.config.codex_home,
+            "skipped_no_signal",
+            &turn_context.sub_id,
+            Some("no directive text or assistant acknowledgement detected"),
+        )
+        .await?;
         return Ok(());
     }
 
@@ -156,17 +191,39 @@ async fn process_completed_turn(
     let candidates = extract_candidate_preferences(
         &current_turn_user_texts,
         &recent_user_turns,
+        last_agent_message,
         &turn_context.config.orchestrator_memory,
     );
     if candidates.is_empty() {
+        append_diagnostic_event(
+            &turn_context.config.codex_home,
+            "extracted_zero_candidates",
+            &turn_context.sub_id,
+            Some("signal seen but no durable preference candidate produced"),
+        )
+        .await?;
         return Ok(());
     }
+    append_diagnostic_event(
+        &turn_context.config.codex_home,
+        "extracted_candidates",
+        &turn_context.sub_id,
+        Some(&format!("candidate_count={}", candidates.len())),
+    )
+    .await?;
 
     append_preference_events(
         &turn_context.config.codex_home,
         session.conversation_id.to_string(),
         turn_context.sub_id.clone(),
         &candidates,
+    )
+    .await?;
+    append_diagnostic_event(
+        &turn_context.config.codex_home,
+        "wrote_events",
+        &turn_context.sub_id,
+        Some(&format!("event_count={}", candidates.len())),
     )
     .await?;
 
@@ -178,6 +235,13 @@ async fn process_completed_turn(
     let debounce = turn_context.config.orchestrator_memory.debounce_seconds;
     let config = Arc::clone(&turn_context.config);
     let weak_session = Arc::downgrade(session);
+    append_diagnostic_event(
+        &turn_context.config.codex_home,
+        "scheduled_consolidation",
+        &turn_context.sub_id,
+        Some(&format!("debounce_seconds={debounce}")),
+    )
+    .await?;
     tokio::spawn(async move {
         sleep(Duration::from_secs(debounce)).await;
         let Some(session) = weak_session.upgrade() else {
@@ -193,6 +257,21 @@ async fn process_completed_turn(
         }
         if let Err(err) = model::consolidate_with_fallback(&session, &config, generation).await {
             warn!("failed consolidating orchestrator memory: {err}");
+            let _ = append_diagnostic_event(
+                &config.codex_home,
+                "consolidation_failed",
+                "background",
+                Some(&err.to_string()),
+            )
+            .await;
+        } else {
+            let _ = append_diagnostic_event(
+                &config.codex_home,
+                "consolidation_completed",
+                "background",
+                Some("consolidation finished"),
+            )
+            .await;
         }
     });
 
@@ -331,12 +410,16 @@ fn render_profile(preferences: &[AggregatedPreference]) -> String {
 fn extract_candidate_preferences(
     current_turn_user_texts: &[String],
     recent_user_turns: &[String],
+    last_agent_message: Option<&str>,
     config: &OrchestratorMemoryConfig,
 ) -> Vec<CandidatePreference> {
     let mut candidates = current_turn_user_texts
         .iter()
         .flat_map(|text| extract_explicit_preferences(text))
         .collect::<Vec<_>>();
+    if let Some(last_agent_message) = last_agent_message {
+        candidates.extend(extract_acknowledged_preferences(last_agent_message));
+    }
 
     let repeated =
         extract_repeated_steering_preferences(recent_user_turns, config.min_observations);
@@ -371,6 +454,49 @@ fn extract_candidate_preferences(
     }
 
     deduped
+}
+
+fn extract_acknowledged_preferences(text: &str) -> Vec<CandidatePreference> {
+    let lowered = text.to_ascii_lowercase();
+    let acknowledgement_markers = [
+        "i'll treat",
+        "i will treat",
+        "i'll apply",
+        "i will apply",
+        "going forward",
+        "hard rule",
+        "policy going forward",
+        "i'll use this",
+        "i will use this",
+    ];
+    if !acknowledgement_markers
+        .iter()
+        .any(|marker| lowered.contains(marker))
+    {
+        return Vec::new();
+    }
+
+    text.lines()
+        .filter_map(|line| {
+            let trimmed = line.trim().trim_start_matches(|ch: char| {
+                matches!(ch, '-' | '*' | '•' | ' ' | '\t')
+                    || ch.is_ascii_digit()
+                    || matches!(ch, '.' | ')')
+            });
+            if trimmed.is_empty() || !looks_like_preference_sentence(trimmed) {
+                return None;
+            }
+            let candidate = candidate_text_from_sentence(trimmed);
+            let key = normalized_key(&candidate);
+            (!key.is_empty()).then_some(CandidatePreference {
+                signal: PreferenceSignal::AssistantAcknowledged,
+                key,
+                candidate,
+                source_excerpt: normalize_sentence(trimmed),
+                confidence: ASSISTANT_ACKNOWLEDGED_CONFIDENCE,
+            })
+        })
+        .collect()
 }
 
 fn extract_explicit_preferences(text: &str) -> Vec<CandidatePreference> {

@@ -83,9 +83,7 @@ pub(super) async fn consolidate_with_model(
     );
 
     let agent_config = build_consolidation_agent_config(config)?;
-    let source = SessionSource::SubAgent(SubAgentSource::Other(
-        "orchestrator_memory_consolidation".to_string(),
-    ));
+    let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
     let agent_control = session.services.agent_control.detached_registry();
     let thread_id = agent_control
         .spawn_agent(

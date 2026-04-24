@@ -102,6 +102,8 @@ pub use requirements_exec_policy::RequirementsExecPolicyPrefixRuleToml;
 pub use requirements_exec_policy::RequirementsExecPolicyToml;
 pub use skills_config::BundledSkillsConfig;
 pub use skills_config::SkillConfig;
+pub use skills_config::SkillModeFilterConfig;
+pub use skills_config::SkillModeFilterMode;
 pub use skills_config::SkillsConfig;
 pub use state::ConfigLayerEntry;
 pub use state::ConfigLayerStack;

@@ -764,6 +764,10 @@ impl Session {
             ),
             environment_manager,
             orchestrator_memory_generation: AtomicU64::new(0),
+            orchestrator_supervision:
+                crate::orchestrator_supervision::OrchestratorSupervisionStore::new(
+                    config.codex_home.clone(),
+                ),
         };
         services
             .model_client

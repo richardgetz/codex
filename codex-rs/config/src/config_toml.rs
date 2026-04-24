@@ -19,6 +19,7 @@ use crate::types::MemoriesToml;
 use crate::types::Notice;
 use crate::types::OAuthCredentialsStoreMode;
 use crate::types::OrchestratorMemoryToml;
+use crate::types::OrchestratorToml;
 use crate::types::OtelConfigToml;
 use crate::types::PluginConfig;
 use crate::types::SandboxWorkspaceWrite;
@@ -336,6 +337,10 @@ pub struct ConfigToml {
 
     /// Orchestrator-memory subsystem settings.
     pub orchestrator_memory: Option<OrchestratorMemoryToml>,
+
+    /// Orchestrator supervision and escalation settings.
+    #[serde(default)]
+    pub orchestrator: Option<OrchestratorToml>,
 
     /// Thread-control subsystem settings.
     #[serde(default)]

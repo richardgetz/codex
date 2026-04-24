@@ -17,6 +17,7 @@ use crate::config_loader::load_config_layers_state;
 use crate::config_loader::project_trust_key;
 use crate::memories::memory_root;
 use crate::orchestrator_memory::root as orchestrator_memory_root;
+use crate::orchestrator_supervision::root as orchestrator_supervision_root;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
@@ -41,11 +42,13 @@ use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_config::types::OrchestratorConfig;
 use codex_config::types::OrchestratorMemoryConfig;
 use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
 use codex_config::types::ShellEnvironmentPolicy;
+use codex_config::types::SkillsConfig;
 use codex_config::types::ThreadControlConfig;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDiscoverable;
@@ -311,6 +314,9 @@ pub struct Config {
     /// Whether to inject the `<skills_instructions>` developer block.
     pub include_skill_instructions: bool,
 
+    /// Raw skills configuration for mode-scoped filtering and instruction policy.
+    pub skills: SkillsConfig,
+
     /// Whether to inject the `<environment_context>` user block.
     pub include_environment_context: bool,
 
@@ -444,6 +450,9 @@ pub struct Config {
 
     /// Orchestrator-memory subsystem settings.
     pub orchestrator_memory: OrchestratorMemoryConfig,
+
+    /// Orchestrator supervision and escalation settings.
+    pub orchestrator: OrchestratorConfig,
 
     /// Thread-control subsystem settings.
     pub thread_control: ThreadControlConfig,
@@ -1756,6 +1765,14 @@ impl Config {
         {
             additional_writable_roots.push(orchestrator_memory_root);
         }
+        let orchestrator_supervision_root = orchestrator_supervision_root(&codex_home);
+        std::fs::create_dir_all(&orchestrator_supervision_root)?;
+        if !additional_writable_roots
+            .iter()
+            .any(|existing| existing == &orchestrator_supervision_root)
+        {
+            additional_writable_roots.push(orchestrator_supervision_root);
+        }
 
         let profiles_are_active = matches!(
             permission_config_syntax,
@@ -2333,6 +2350,7 @@ impl Config {
             include_permissions_instructions,
             include_apps_instructions,
             include_skill_instructions,
+            skills: cfg.skills.clone().unwrap_or_default(),
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
@@ -2370,6 +2388,7 @@ impl Config {
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
             orchestrator_memory: cfg.orchestrator_memory.unwrap_or_default().into(),
+            orchestrator: cfg.orchestrator.unwrap_or_default().into(),
             thread_control: cfg.thread_control.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,
             codex_home,
