@@ -13,11 +13,17 @@ use crate::config::Config;
 
 fn selector_matches(selector: &str, candidates: &[&str]) -> bool {
     let selector = selector.trim();
-    !selector.is_empty()
-        && candidates.iter().any(|candidate| {
-            let candidate = candidate.trim();
-            !candidate.is_empty() && (candidate == selector || candidate.ends_with(selector))
-        })
+    if selector.is_empty() {
+        return false;
+    }
+    if selector == "*" {
+        return candidates.iter().any(|candidate| !candidate.trim().is_empty());
+    }
+
+    candidates.iter().any(|candidate| {
+        let candidate = candidate.trim();
+        !candidate.is_empty() && (candidate == selector || candidate.ends_with(selector))
+    })
 }
 
 fn filter_allows(filter: &EnablementFilterConfig, candidates: &[&str]) -> bool {
@@ -301,6 +307,72 @@ mod tests {
                 "mcp__scratchpad__get".to_string(),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn include_wildcard_keeps_all_mcp_tools() {
+        let mut config = test_config().await;
+        config.enablement.modes.insert(
+            ModeKind::Orchestrator,
+            codex_config::ModeEnablementConfig {
+                mcps: Some(EnablementFilterConfig {
+                    mode: EnablementFilterMode::Include,
+                    items: vec!["*".to_string()],
+                }),
+                ..Default::default()
+            },
+        );
+
+        let tools = HashMap::from([
+            (
+                "mcp__scratchpad__get".to_string(),
+                make_mcp_tool("scratchpad", "get", None),
+            ),
+            (
+                "mcp__other__run".to_string(),
+                make_mcp_tool("other", "run", None),
+            ),
+        ]);
+
+        let filtered = filter_mcp_tools_for_mode(&config, ModeKind::Orchestrator, &tools);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn exclude_wildcard_hides_all_plugins() {
+        let mut config = test_config().await;
+        config.enablement.modes.insert(
+            ModeKind::Orchestrator,
+            codex_config::ModeEnablementConfig {
+                plugins: Some(EnablementFilterConfig {
+                    mode: EnablementFilterMode::Exclude,
+                    items: vec!["*".to_string()],
+                }),
+                ..Default::default()
+            },
+        );
+
+        let plugins = vec![
+            PluginCapabilitySummary {
+                config_name: "gmail@openai-curated".to_string(),
+                display_name: "Gmail".to_string(),
+                description: None,
+                has_skills: true,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: vec![AppConnectorId("gmail".to_string())],
+            },
+            PluginCapabilitySummary {
+                config_name: "slack@openai-curated".to_string(),
+                display_name: "Slack".to_string(),
+                description: None,
+                has_skills: true,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: vec![AppConnectorId("slack".to_string())],
+            },
+        ];
+
+        let filtered = filter_plugins_for_mode(&config, ModeKind::Orchestrator, &plugins);
+        assert!(filtered.is_empty());
     }
 
     #[tokio::test]
