@@ -3301,9 +3301,7 @@ mod tests {
                 CodexAuth::create_dummy_chatgpt_auth_for_testing(),
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
-                Arc::new(codex_exec_server::EnvironmentManager::new(
-                    /*exec_server_url*/ None,
-                )),
+                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
             ),
         );
         let codex_core::NewThread {
@@ -3402,9 +3400,7 @@ mod tests {
                 CodexAuth::create_dummy_chatgpt_auth_for_testing(),
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
-                Arc::new(codex_exec_server::EnvironmentManager::new(
-                    /*exec_server_url*/ None,
-                )),
+                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
             ),
         );
         let codex_core::NewThread {
@@ -3482,9 +3478,7 @@ mod tests {
                 CodexAuth::create_dummy_chatgpt_auth_for_testing(),
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
-                Arc::new(codex_exec_server::EnvironmentManager::new(
-                    /*exec_server_url*/ None,
-                )),
+                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
             ),
         );
         let codex_core::NewThread {
@@ -3565,9 +3559,7 @@ mod tests {
                 CodexAuth::create_dummy_chatgpt_auth_for_testing(),
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
-                Arc::new(codex_exec_server::EnvironmentManager::new(
-                    /*exec_server_url*/ None,
-                )),
+                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
             ),
         );
         let codex_core::NewThread {

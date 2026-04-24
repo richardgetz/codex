@@ -670,7 +670,6 @@ impl ManagedClientStartupState {
             Self::Retryable(startup) => startup.clear_if_current(generation),
         }
     }
-
     fn clear(&self) {
         match self {
             #[cfg(test)]
@@ -738,10 +737,13 @@ impl AsyncManagedClient {
         };
         let startup_complete_for_factory = Arc::clone(&startup_complete);
         let startup_factory: ManagedClientStartupFactory = Arc::new({
+            let tool_filter = tool_filter.clone();
+            let shared_key = shared_key.clone();
             move || {
                 startup_complete_for_factory.store(false, Ordering::Release);
                 let server_name = server_name.clone();
                 let config = config.clone();
+                let store_mode = store_mode.clone();
                 let startup_complete = Arc::clone(&startup_complete_for_factory);
                 let startup_tool_filter = tool_filter.clone();
                 let tx_event = tx_event.clone();
@@ -760,7 +762,7 @@ impl AsyncManagedClient {
                             make_rmcp_client(
                                 &server_name,
                                 config.clone(),
-                                store_mode,
+                                store_mode.clone(),
                                 runtime_environment,
                             )
                             .await?,
@@ -855,6 +857,8 @@ impl AsyncManagedClient {
         };
         if result.is_err() && !self.start_on_startup {
             self.start_requested.store(false, Ordering::Release);
+            self.client.clear_if_current(generation);
+        } else if matches!(result, Err(StartupOutcomeError::Cancelled)) {
             self.client.clear_if_current(generation);
         }
         if let Ok(client) = &result {
@@ -2381,7 +2385,6 @@ fn shared_mcp_client_key(
         sha1_hex(&config_json)
     ))
 }
-
 async fn list_tools_for_client_uncached(
     server_name: &str,
     client: &Arc<RmcpClient>,

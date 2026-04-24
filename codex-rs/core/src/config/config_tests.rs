@@ -44,6 +44,8 @@ use codex_config::types::Notice;
 use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
+use codex_config::types::OrchestratorMemoryConfig;
+use codex_config::types::OrchestratorMemoryToml;
 use codex_config::types::OrchestratorThreadControlToml;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SkillsConfig;
@@ -289,6 +291,48 @@ consolidation_model = "gpt-5.2"
             min_rollout_idle_hours: 24,
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5.2".to_string()),
+        }
+    );
+
+    let orchestrator_memory = r#"
+[orchestrator_memory]
+enabled = true
+scope = "orchestrator"
+debounce_seconds = 15
+min_observations = 3
+recent_turn_window = 6
+max_summary_items = 10
+"#;
+    let orchestrator_memory_cfg = toml::from_str::<ConfigToml>(orchestrator_memory)
+        .expect("TOML deserialization should succeed");
+    assert_eq!(
+        Some(OrchestratorMemoryToml {
+            enabled: Some(true),
+            scope: Some(MemoriesScope::Orchestrator),
+            debounce_seconds: Some(15),
+            min_observations: Some(3),
+            recent_turn_window: Some(6),
+            max_summary_items: Some(10),
+        }),
+        orchestrator_memory_cfg.orchestrator_memory
+    );
+
+    let config = Config::load_from_base_config_with_overrides(
+        orchestrator_memory_cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config from orchestrator memory settings");
+    assert_eq!(
+        config.orchestrator_memory,
+        OrchestratorMemoryConfig {
+            enabled: true,
+            scope: MemoriesScope::Orchestrator,
+            debounce_seconds: 15,
+            min_observations: 3,
+            recent_turn_window: 6,
+            max_summary_items: 10,
         }
     );
 
@@ -785,6 +829,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
     .await?;
 
     let memories_root = codex_home.path().join("memories").abs();
+    let orchestrator_memory_root = codex_home.path().join("orchestrator_memory").abs();
     assert_eq!(
         config.permissions.file_system_sandbox_policy,
         FileSystemSandboxPolicy::restricted(vec![
@@ -812,12 +857,18 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                 },
                 access: FileSystemAccessMode::Write,
             },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: orchestrator_memory_root.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
         ]),
     );
     assert_eq!(
         config.permissions.sandbox_policy.get(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![memories_root],
+            writable_roots: vec![memories_root, orchestrator_memory_root],
             read_only_access: ReadOnlyAccess::Restricted {
                 include_platform_defaults: true,
                 readable_roots: vec![cwd.path().join("docs").abs(),],
@@ -1865,6 +1916,7 @@ async fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Re
 async fn workspace_write_always_includes_memories_root_once() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let memories_root = codex_home.path().join("memories");
+    let orchestrator_memory_root = codex_home.path().join("orchestrator_memory");
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
             sandbox_workspace_write: Some(SandboxWorkspaceWrite {
@@ -1892,7 +1944,13 @@ async fn workspace_write_always_includes_memories_root_once() -> std::io::Result
             "expected memories root directory to exist at {}",
             memories_root.display()
         );
+        assert!(
+            orchestrator_memory_root.is_dir(),
+            "expected orchestrator memory root directory to exist at {}",
+            orchestrator_memory_root.display()
+        );
         let expected_memories_root = memories_root.abs();
+        let expected_orchestrator_memory_root = orchestrator_memory_root.abs();
         match config.permissions.sandbox_policy.get() {
             SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
                 assert_eq!(
@@ -1903,6 +1961,15 @@ async fn workspace_write_always_includes_memories_root_once() -> std::io::Result
                     1,
                     "expected single writable root entry for {}",
                     expected_memories_root.display()
+                );
+                assert_eq!(
+                    writable_roots
+                        .iter()
+                        .filter(|root| **root == expected_orchestrator_memory_root)
+                        .count(),
+                    1,
+                    "expected single writable root entry for {}",
+                    expected_orchestrator_memory_root.display()
                 );
             }
             other => panic!("expected workspace-write policy, got {other:?}"),
@@ -5262,6 +5329,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
+            orchestrator_memory: OrchestratorMemoryConfig::default(),
             thread_control: ThreadControlConfig::default(),
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             codex_home: fixture.codex_home(),
@@ -5459,6 +5527,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
+        orchestrator_memory: OrchestratorMemoryConfig::default(),
         thread_control: ThreadControlConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
         codex_home: fixture.codex_home(),
@@ -5610,6 +5679,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
+        orchestrator_memory: OrchestratorMemoryConfig::default(),
         thread_control: ThreadControlConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
         codex_home: fixture.codex_home(),
@@ -5746,6 +5816,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
+        orchestrator_memory: OrchestratorMemoryConfig::default(),
         thread_control: ThreadControlConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
         codex_home: fixture.codex_home(),

@@ -143,9 +143,6 @@ Example with notification opt-out:
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/turns/list` — page through a stored thread’s turn history without resuming it; supports cursor-based pagination with `sortDirection`, `nextCursor`, and `backwardsCursor`.
-- `thread/control/read` — read the persisted active control-plane contract for a thread. Returns `null` when no contract is active.
-- `thread/control/set` — set or replace a persisted control-plane contract for a thread. `continuous` mode prevents the thread from stopping until explicitly released. `orchestrator` mode allows turns to complete, then re-wakes the same loaded thread on the requested `watchIntervalSeconds` cadence with the stored supervision reason and target thread ids.
-- `thread/control/release` — release a persisted thread control contract so continuous-mode threads may stop and orchestrator-mode wake timers are cancelled.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
@@ -453,6 +450,16 @@ reasoning_effort = "low"
 
 When a thread enters orchestrator mode, Codex immediately applies these model and reasoning overrides to the thread's active collaboration mode. Subsequent orchestrator wake-up turns reuse that resolved model/reasoning pair unless a later settings update changes them. Orchestrator-launched agents can still request their own model, reasoning effort, and collaboration mode through the normal agent spawn fields, so the orchestrator can run on a cheaper coordination model while delegating implementation work to a stronger model or a different execution mode.
 
+If you want router wake-up turns to use a faster or cheaper model by default, set it in `config.toml`:
+
+```toml
+[thread_control.router]
+model = "gpt-5.3-codex-spark"
+reasoning_effort = "low"
+```
+
+Router mode re-wakes the same thread, preserving its current collaboration mode while applying these model and reasoning overrides to the next router tick turn. Because router ticks submit a normal turn on that same thread, the override becomes the thread's active model and reasoning setting until another turn explicitly changes them. Router-launched agents can still request their own model and reasoning effort through the normal agent spawn fields, so the router can run on a cheaper coordination model while delegating implementation work to a stronger model.
+
 ```json
 { "method": "thread/control/set", "id": 26, "params": {
     "threadId": "thr_123",
@@ -637,11 +644,10 @@ MCPs that cannot push notifications should expose a polling tool with the same r
 ```
 
 App-server should treat MCP wake events as untrusted wake candidates. Before submitting an orchestrator turn it should re-check that the thread exists, orchestrator control is still active, the subscription is still registered, the event was not already consumed, and the channel is allowed by config or user approval.
-
 Experimental: use `thread/memoryMode/set` to change whether a thread remains eligible for future memory generation.
 
 ```json
-{ "method": "thread/memoryMode/set", "id": 30, "params": {
+{ "method": "thread/memoryMode/set", "id": 26, "params": {
     "threadId": "thr_123",
     "mode": "disabled"
 } }

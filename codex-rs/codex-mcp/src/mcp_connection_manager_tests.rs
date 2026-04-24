@@ -8,6 +8,8 @@ use rmcp::model::Meta;
 use rmcp::model::NumberOrString;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use tempfile::tempdir;
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
@@ -1029,6 +1031,117 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
         .expect("tool from startup cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
     assert_eq!(tool.callable_name, "calendar_create_event");
+}
+
+#[tokio::test]
+async fn startup_started_client_retries_after_cancelled_startup() {
+    let attempts = Arc::new(AtomicU64::new(0));
+    let startup_factory: ManagedClientStartupFactory = Arc::new({
+        let attempts = Arc::clone(&attempts);
+        move || {
+            let attempt = attempts.fetch_add(1, Ordering::AcqRel);
+            futures::future::ready::<Result<ManagedClient, StartupOutcomeError>>(Err(
+                if attempt == 0 {
+                    StartupOutcomeError::Cancelled
+                } else {
+                    StartupOutcomeError::Failed {
+                        error: "retry reached startup factory".to_string(),
+                    }
+                },
+            ))
+            .boxed()
+            .shared()
+        }
+    });
+    let client = test_async_managed_client(
+        ManagedClientStartupState::Retryable(RetryableManagedClientStartup::new(startup_factory)),
+        /*start_requested*/ true,
+        /*start_on_startup*/ true,
+        CancellationToken::new(),
+    );
+
+    assert!(matches!(
+        client.client().await,
+        Err(StartupOutcomeError::Cancelled)
+    ));
+    assert!(matches!(
+        client.client().await,
+        Err(StartupOutcomeError::Failed { error }) if error == "retry reached startup factory"
+    ));
+    assert_eq!(attempts.load(Ordering::Acquire), 2);
+}
+
+#[test]
+fn startup_mode_required_and_explicit_values_override_auto_lazy_defaults() {
+    let mut config = test_stdio_server_config("playwright");
+    assert!(!should_start_server_on_session_start(
+        "playwright",
+        &config,
+        /*lazy_mcp_servers_by_default*/ false,
+    ));
+
+    config.required = true;
+    assert!(should_start_server_on_session_start(
+        "playwright",
+        &config,
+        /*lazy_mcp_servers_by_default*/ true,
+    ));
+
+    config.required = false;
+    config.startup = codex_config::McpServerStartupMode::Eager;
+    assert!(should_start_server_on_session_start(
+        "playwright",
+        &config,
+        /*lazy_mcp_servers_by_default*/ true,
+    ));
+
+    config.startup = codex_config::McpServerStartupMode::Lazy;
+    assert!(!should_start_server_on_session_start(
+        "docs", &config, /*lazy_mcp_servers_by_default*/ false,
+    ));
+}
+
+#[test]
+fn lazy_mcp_server_description_includes_auto_lazy_terms() {
+    let config = test_stdio_server_config("chrome-driver");
+
+    assert_eq!(
+        lazy_mcp_server_description("pinchtab", &config),
+        "Configured lazy MCP server for chrome, browser automation tools; Codex will start it only if a search or tool call needs it."
+    );
+}
+
+#[test]
+fn auto_sharing_is_conservative_for_known_read_only_stdio_servers() {
+    let docs_config = test_stdio_server_config("npx");
+    let context7_config = McpServerConfig {
+        transport: McpServerTransportConfig::Stdio {
+            command: "npx".to_string(),
+            args: vec!["@upstash/context7-mcp".to_string()],
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        },
+        ..docs_config.clone()
+    };
+    assert!(auto_shared_server("context7", &context7_config));
+
+    let renamed_stateful_config = test_stdio_server_config("stateful-server");
+    assert!(!auto_shared_server("context7", &renamed_stateful_config));
+
+    let playwright_config = test_stdio_server_config("playwright");
+    assert!(!auto_shared_server("playwright", &playwright_config));
+
+    let http_config = McpServerConfig {
+        transport: McpServerTransportConfig::StreamableHttp {
+            url: "https://example.com/mcp".to_string(),
+            bearer_token_env_var: None,
+            http_headers: None,
+            env_http_headers: None,
+        },
+        ..docs_config
+    };
+    assert!(!auto_shared_server("context7", &http_config));
 }
 
 #[test]

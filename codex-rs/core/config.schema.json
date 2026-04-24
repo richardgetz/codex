@@ -396,9 +396,6 @@
             "enable_fanout": {
               "type": "boolean"
             },
-            "enable_mcp_approvals": {
-              "type": "boolean"
-            },
             "enable_request_compression": {
               "type": "boolean"
             },
@@ -1573,6 +1570,52 @@
         }
       ]
     },
+    "OrchestratorMemoryToml": {
+      "additionalProperties": false,
+      "description": "Orchestrator-memory settings loaded from config.toml.",
+      "properties": {
+        "debounce_seconds": {
+          "description": "Seconds to wait after a newly observed preference before consolidating the summary.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "enabled": {
+          "description": "When `false`, skip injecting orchestrator-memory instructions into developer prompts.",
+          "type": "boolean"
+        },
+        "max_summary_items": {
+          "description": "Maximum number of consolidated preference lines kept in the injected summary.",
+          "format": "uint",
+          "maximum": 128.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "min_observations": {
+          "description": "Number of similar steering observations required before inferring a preference automatically.",
+          "format": "uint",
+          "maximum": 8.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "recent_turn_window": {
+          "description": "Number of recent user turns to inspect when looking for repeated steering patterns.",
+          "format": "uint",
+          "maximum": 64.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "scope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MemoriesScope"
+            }
+          ],
+          "description": "Which collaboration modes may read orchestrator memory."
+        }
+      },
+      "type": "object"
+    },
     "OrchestratorThreadControlToml": {
       "additionalProperties": false,
       "description": "Orchestrator-specific thread-control settings loaded from config.toml.",
@@ -2671,9 +2714,6 @@
         "enable_fanout": {
           "type": "boolean"
         },
-        "enable_mcp_approvals": {
-          "type": "boolean"
-        },
         "enable_request_compression": {
           "type": "boolean"
         },
@@ -3066,6 +3106,14 @@
     "openai_base_url": {
       "description": "Base URL override for the built-in `openai` model provider.",
       "type": "string"
+    },
+    "orchestrator_memory": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/OrchestratorMemoryToml"
+        }
+      ],
+      "description": "Orchestrator-memory subsystem settings."
     },
     "oss_provider": {
       "description": "Preferred OSS provider for local models, e.g. \"lmstudio\" or \"ollama\".",

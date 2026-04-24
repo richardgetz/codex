@@ -160,7 +160,6 @@ fn spawn_router_tick_task(
         if latest_control != Some(control.clone()) || cancel_token.is_cancelled() {
             return;
         }
-
         let submit = conversation.submit(build_router_tick_turn(
             &control,
             &config_snapshot,
@@ -236,6 +235,7 @@ fn build_router_tick_turn(
         final_output_json_schema: None,
         collaboration_mode: Some(collaboration_mode.clone()),
         personality: None,
+        environments: None,
     }
 }
 
@@ -316,6 +316,7 @@ Check supervised sessions for new progress, blockers, or operator instructions a
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: codex_protocol::models::PermissionProfile::default(),
             cwd: codex_utils_absolute_path::AbsolutePathBuf::try_from(std::path::PathBuf::from(
                 "/tmp/router",
             ))

@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::ConstraintError;
+use std::sync::atomic::AtomicU64;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -762,6 +763,7 @@ impl Session {
                 config.js_repl_node_path.clone(),
             ),
             environment_manager,
+            orchestrator_memory_generation: AtomicU64::new(0),
         };
         services
             .model_client

@@ -703,6 +703,7 @@ async fn multi_agent_v2_spawn_fork_turns_all_inherits_parent_collaboration_mode(
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
+            permission_profile: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -1144,8 +1145,7 @@ async fn multi_agent_v2_spawn_can_select_child_collaboration_mode() {
             function_payload(json!({
                 "message": "build continuously until the stop condition",
                 "task_name": "runner",
-                "collaboration_mode": "continuous",
-                "fork_turns": "none"
+                "collaboration_mode": "continuous"
             })),
         ))
         .await
