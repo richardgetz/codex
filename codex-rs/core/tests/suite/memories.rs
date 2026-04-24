@@ -558,6 +558,7 @@ async fn set_collaboration_mode(test: &TestCodex, mode: ModeKind) -> Result<()> 
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
+            permission_profile: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,

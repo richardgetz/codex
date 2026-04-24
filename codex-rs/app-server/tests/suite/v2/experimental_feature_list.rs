@@ -51,11 +51,15 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
         .iter()
         .map(|spec| {
             let (stage, display_name, description, announcement) = match spec.stage {
-                Stage::Experimental { .. } => (
+                Stage::Experimental {
+                    name,
+                    menu_description,
+                    announcement,
+                } => (
                     ExperimentalFeatureStage::Beta,
-                    spec.user_facing_experimental_name(),
-                    spec.user_facing_experimental_description(),
-                    spec.user_facing_experimental_announcement(),
+                    Some(name.to_string()),
+                    Some(menu_description.to_string()),
+                    Some(announcement.to_string()),
                 ),
                 Stage::UnderDevelopment => {
                     (ExperimentalFeatureStage::UnderDevelopment, None, None, None)
@@ -125,18 +129,20 @@ async fn experimental_feature_enablement_set_does_not_override_user_config() -> 
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("config.toml"),
-        "[features]\napps = false\n",
+        "[features]\nmemories = false\n",
     )?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    let actual =
-        set_experimental_feature_enablement(&mut mcp, BTreeMap::from([("apps".to_string(), true)]))
-            .await?;
+    let actual = set_experimental_feature_enablement(
+        &mut mcp,
+        BTreeMap::from([("memories".to_string(), true)]),
+    )
+    .await?;
     assert_eq!(
         actual,
         ExperimentalFeatureEnablementSetResponse {
-            enablement: BTreeMap::from([("apps".to_string(), true)]),
+            enablement: BTreeMap::from([("memories".to_string(), true)]),
         }
     );
 
@@ -146,7 +152,7 @@ async fn experimental_feature_enablement_set_does_not_override_user_config() -> 
         config
             .additional
             .get("features")
-            .and_then(|features| features.get("apps")),
+            .and_then(|features| features.get("memories")),
         Some(&json!(false))
     );
 
@@ -164,10 +170,10 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
     let actual = set_experimental_feature_enablement(
         &mut mcp,
         BTreeMap::from([
+            ("memories".to_string(), true),
             ("plugins".to_string(), true),
             ("tool_search".to_string(), true),
             ("tool_suggest".to_string(), true),
-            ("enable_mcp_approvals".to_string(), false),
             ("tool_call_mcp_elicitation".to_string(), false),
         ]),
     )
@@ -177,10 +183,10 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
         actual,
         ExperimentalFeatureEnablementSetResponse {
             enablement: BTreeMap::from([
+                ("memories".to_string(), true),
                 ("plugins".to_string(), true),
                 ("tool_search".to_string(), true),
                 ("tool_suggest".to_string(), true),
-                ("enable_mcp_approvals".to_string(), false),
                 ("tool_call_mcp_elicitation".to_string(), false),
             ]),
         }
@@ -193,6 +199,13 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
             .additional
             .get("features")
             .and_then(|features| features.get("apps")),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        config
+            .additional
+            .get("features")
+            .and_then(|features| features.get("memories")),
         Some(&json!(true))
     );
     assert_eq!(
@@ -215,13 +228,6 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
             .get("features")
             .and_then(|features| features.get("tool_suggest")),
         Some(&json!(true))
-    );
-    assert_eq!(
-        config
-            .additional
-            .get("features")
-            .and_then(|features| features.get("enable_mcp_approvals")),
-        Some(&json!(false))
     );
     assert_eq!(
         config
@@ -290,11 +296,9 @@ async fn experimental_feature_enablement_set_rejects_non_allowlisted_feature() -
         error.message
     );
     assert!(
-        error
-            .message
-            .contains(
-                "apps, plugins, tool_search, tool_suggest, enable_mcp_approvals, tool_call_mcp_elicitation"
-            ),
+        error.message.contains(
+            "apps, memories, plugins, tool_search, tool_suggest, tool_call_mcp_elicitation"
+        ),
         "{}",
         error.message
     );

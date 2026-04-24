@@ -5,7 +5,6 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
-mod agent_identity;
 mod apply_patch;
 mod apps;
 mod arc_monitor;
@@ -19,6 +18,7 @@ pub use session::SteerInputError;
 mod codex_thread;
 mod compact_remote;
 pub use codex_thread::CodexThread;
+pub use codex_thread::CodexThreadTurnContextOverrides;
 pub use codex_thread::ThreadConfigSnapshot;
 mod agent;
 mod codex_delegate;
@@ -51,6 +51,7 @@ pub use mcp::McpManager;
 pub use network_proxy_loader::MtimeConfigReloader;
 pub use network_proxy_loader::build_network_proxy_state;
 pub use network_proxy_loader::build_network_proxy_state_and_reloader;
+mod orchestrator_memory;
 mod original_image_detail;
 pub use codex_mcp::SandboxState;
 mod mcp_openai_file;

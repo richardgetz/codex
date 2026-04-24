@@ -24,6 +24,7 @@ use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
+use crate::orchestrator_memory::maybe_learn_from_completed_turn;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
@@ -269,6 +270,12 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
+        self.services
+            .guardian_rejection_circuit_breaker
+            .lock()
+            .await
+            .clear_turn(&turn_context.sub_id);
+
         let queued_response_items = self.take_queued_response_items_for_next_turn().await;
         let mailbox_items = self.get_pending_input().await;
         let turn_state = {
@@ -408,6 +415,40 @@ impl Session {
         if reason == TurnAbortReason::Interrupted {
             self.maybe_start_turn_for_pending_work().await;
         }
+    }
+
+    pub(crate) async fn abort_turn_if_active(
+        self: &Arc<Self>,
+        turn_id: &str,
+        reason: TurnAbortReason,
+    ) -> bool {
+        let active_turn = {
+            let mut active = self.active_turn.lock().await;
+            if active
+                .as_ref()
+                .is_some_and(|active_turn| active_turn.tasks.contains_key(turn_id))
+            {
+                active.take()
+            } else {
+                None
+            }
+        };
+        let Some(mut active_turn) = active_turn else {
+            return false;
+        };
+
+        for task in active_turn.drain_tasks() {
+            self.handle_task_abort(task, reason.clone()).await;
+        }
+        // Let interrupted tasks observe cancellation before dropping pending approvals, or an
+        // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
+        active_turn.clear_pending().await;
+
+        if reason == TurnAbortReason::Interrupted {
+            self.maybe_start_turn_for_pending_work().await;
+        }
+
+        true
     }
 
     pub async fn on_task_finished(
@@ -556,13 +597,25 @@ impl Session {
             .turn_timing_state
             .completed_at_and_duration_ms()
             .await;
+        let time_to_first_token_ms = turn_context
+            .turn_timing_state
+            .time_to_first_token_ms()
+            .await;
+        let last_agent_message_for_memory = last_agent_message.clone();
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
             last_agent_message,
             completed_at,
             duration_ms,
+            time_to_first_token_ms,
         });
         self.send_event(turn_context.as_ref(), event).await;
+        self.services
+            .guardian_rejection_circuit_breaker
+            .lock()
+            .await
+            .clear_turn(&turn_context.sub_id);
+        maybe_learn_from_completed_turn(self, &turn_context, last_agent_message_for_memory);
 
         if should_clear_active_turn {
             let session = Arc::clone(self);
@@ -649,6 +702,11 @@ impl Session {
             duration_ms,
         });
         self.send_event(task.turn_context.as_ref(), event).await;
+        self.services
+            .guardian_rejection_circuit_breaker
+            .lock()
+            .await
+            .clear_turn(&task.turn_context.sub_id);
     }
 }
 

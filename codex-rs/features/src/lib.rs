@@ -27,7 +27,6 @@ pub enum Stage {
     UnderDevelopment,
     /// Experimental features made available to users through the `/experimental` menu
     Experimental {
-        owner: FeatureOwner,
         name: &'static str,
         menu_description: &'static str,
         announcement: &'static str,
@@ -40,33 +39,10 @@ pub enum Stage {
     Removed,
 }
 
-/// Indicates whether user-facing feature help text comes from upstream or this fork.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FeatureOwner {
-    Upstream,
-    Rick,
-}
-
-impl FeatureOwner {
-    fn help_text_prefix(self) -> &'static str {
-        match self {
-            Self::Upstream => "",
-            Self::Rick => "(rick) ",
-        }
-    }
-}
-
 impl Stage {
     pub fn experimental_menu_name(self) -> Option<&'static str> {
         match self {
             Stage::Experimental { name, .. } => Some(name),
-            Stage::UnderDevelopment | Stage::Stable | Stage::Deprecated | Stage::Removed => None,
-        }
-    }
-
-    pub fn experimental_owner(self) -> Option<FeatureOwner> {
-        match self {
-            Stage::Experimental { owner, .. } => Some(owner),
             Stage::UnderDevelopment | Stage::Stable | Stage::Deprecated | Stage::Removed => None,
         }
     }
@@ -99,6 +75,8 @@ pub enum Feature {
     GhostCommit,
     /// Enable the default shell tool.
     ShellTool,
+    /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
+    CodexHooks,
 
     // Experimental
     /// Enable JavaScript REPL tools backed by a persistent Node kernel.
@@ -119,8 +97,6 @@ pub enum Feature {
     ApplyPatchStreamingEvents,
     /// Allow exec tools to request additional permissions while staying sandboxed.
     ExecPermissionApprovals,
-    /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
-    CodexHooks,
     /// Expose the built-in request_permissions tool.
     RequestPermissionsTool,
     /// Allow the model to request web searches that fetch live content.
@@ -180,6 +156,20 @@ pub enum Feature {
     ToolSuggest,
     /// Enable plugins.
     Plugins,
+    /// Allow the in-app browser pane in desktop apps.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    InAppBrowser,
+    /// Allow Browser Use agent integration in desktop apps.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    BrowserUse,
+    /// Allow Codex Computer Use.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    ComputerUse,
+    /// Temporary internal-only flag for PS-backed remote plugin catalog development.
+    RemotePlugin,
     /// Show the startup prompt for migrating external agent config into Codex.
     ExternalMigration,
     /// Allow the model to invoke the built-in image generation tool.
@@ -225,8 +215,6 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
     ResponsesWebsocketsV2,
-    /// Use the agent identity registration flow for ChatGPT-authenticated sessions.
-    UseAgentIdentity,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
 }
@@ -242,13 +230,6 @@ impl Feature {
 
     pub fn default_enabled(self) -> bool {
         self.info().default_enabled
-    }
-
-    pub fn owner(self) -> FeatureOwner {
-        match self {
-            Self::EnableMcpApprovals => FeatureOwner::Rick,
-            _ => FeatureOwner::Upstream,
-        }
     }
 
     fn info(self) -> &'static FeatureSpec {
@@ -630,34 +611,6 @@ pub struct FeatureSpec {
     pub default_enabled: bool,
 }
 
-impl FeatureSpec {
-    pub fn owner(self) -> FeatureOwner {
-        self.stage
-            .experimental_owner()
-            .unwrap_or_else(|| self.id.owner())
-    }
-
-    pub fn user_facing_experimental_name(self) -> Option<String> {
-        self.stage.experimental_menu_name().map(str::to_owned)
-    }
-
-    pub fn user_facing_experimental_description(self) -> Option<String> {
-        self.stage
-            .experimental_menu_description()
-            .map(|description| {
-                let prefix = self.owner().help_text_prefix();
-                format!("{prefix}{description}")
-            })
-    }
-
-    pub fn user_facing_experimental_announcement(self) -> Option<String> {
-        self.stage.experimental_announcement().map(|announcement| {
-            let prefix = self.owner().help_text_prefix();
-            format!("{prefix}{announcement}")
-        })
-    }
-}
-
 pub const FEATURES: &[FeatureSpec] = &[
     // Stable features.
     FeatureSpec {
@@ -694,7 +647,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::JsRepl,
         key: "js_repl",
         stage: Stage::Experimental {
-            owner: FeatureOwner::Upstream,
             name: "JavaScript REPL",
             menu_description: "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities. Requires Node >= v22.22.0 installed.",
             announcement: "NEW: JavaScript REPL is now available in /experimental. Enable it, then start a new chat or restart Codex to use it.",
@@ -766,7 +718,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::MemoryTool,
         key: "memories",
         stage: Stage::Experimental {
-            owner: FeatureOwner::Upstream,
             name: "Memories",
             menu_description: "Allow Codex to create new memories from conversations and bring relevant memories into new conversations.",
             announcement: "NEW: Codex can now generate and uses memories. Try is now with `/memories`",
@@ -806,8 +757,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CodexHooks,
         key: "codex_hooks",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::RequestPermissionsTool,
@@ -912,10 +863,33 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::InAppBrowser,
+        key: "in_app_browser",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::BrowserUse,
+        key: "browser_use",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ComputerUse,
+        key: "computer_use",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::RemotePlugin,
+        key: "remote_plugin",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ExternalMigration,
         key: "external_migration",
         stage: Stage::Experimental {
-            owner: FeatureOwner::Upstream,
             name: "External migration",
             menu_description: "Show a startup prompt when Codex detects migratable external agent config for this machine or project.",
             announcement: "",
@@ -955,13 +929,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GuardianApproval,
         key: "guardian_approval",
-        stage: Stage::Experimental {
-            owner: FeatureOwner::Upstream,
-            name: "Auto-review",
-            menu_description: "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to a carefully-prompted security reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.",
-            announcement: "",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::CollaborationModes,
@@ -1032,7 +1001,6 @@ pub const FEATURES: &[FeatureSpec] = &[
             target_os = "windows"
         )) {
             Stage::Experimental {
-                owner: FeatureOwner::Upstream,
                 name: "Prevent sleep while running",
                 menu_description: "Keep your computer awake while Codex is running a thread.",
                 announcement: "NEW: Prevent sleep while running is now available in /experimental.",
@@ -1058,12 +1026,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ResponsesWebsocketsV2,
         key: "responses_websockets_v2",
         stage: Stage::Removed,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::UseAgentIdentity,
-        key: "use_agent_identity",
-        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

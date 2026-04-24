@@ -1,8 +1,6 @@
 use crate::Feature;
 use crate::FeatureConfigSource;
 use crate::FeatureOverrides;
-use crate::FeatureOwner;
-use crate::FeatureSpec;
 use crate::FeatureToml;
 use crate::Features;
 use crate::FeaturesToml;
@@ -70,7 +68,7 @@ fn js_repl_is_experimental_and_user_toggleable() {
     assert!(matches!(stage, Stage::Experimental { .. }));
     assert_eq!(stage.experimental_menu_name(), Some("JavaScript REPL"));
     assert_eq!(
-        spec.user_facing_experimental_description(),
+        stage.experimental_menu_description().map(str::to_owned),
         Some(format!(
             "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities. Requires Node >= v{expected_node_version} installed."
         ))
@@ -89,20 +87,11 @@ fn code_mode_only_requires_code_mode() {
 }
 
 #[test]
-fn guardian_approval_is_experimental_and_user_toggleable() {
+fn guardian_approval_is_stable_and_enabled_by_default() {
     let spec = Feature::GuardianApproval.info();
-    let stage = spec.stage;
 
-    assert!(matches!(stage, Stage::Experimental { .. }));
-    assert_eq!(stage.experimental_menu_name(), Some("Auto-review"));
-    assert_eq!(
-        spec.user_facing_experimental_description(),
-        Some(
-            "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to a carefully-prompted security reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.".to_string()
-        )
-    );
-    assert_eq!(stage.experimental_announcement(), None);
-    assert_eq!(Feature::GuardianApproval.default_enabled(), false);
+    assert_eq!(spec.stage, Stage::Stable);
+    assert_eq!(Feature::GuardianApproval.default_enabled(), true);
 }
 
 #[test]
@@ -120,41 +109,6 @@ fn external_migration_is_experimental_and_disabled_by_default() {
     );
     assert_eq!(stage.experimental_announcement(), None);
     assert_eq!(Feature::ExternalMigration.default_enabled(), false);
-}
-
-#[test]
-fn fork_owned_experimental_help_text_is_labeled() {
-    let spec = FeatureSpec {
-        id: Feature::JsRepl,
-        key: "fork_only_test_feature",
-        stage: Stage::Experimental {
-            owner: FeatureOwner::Rick,
-            name: "Fork-only test feature",
-            menu_description: "Enable a fork-only capability.",
-            announcement: "NEW: Fork-only capability is available.",
-        },
-        default_enabled: false,
-    };
-
-    assert_eq!(
-        spec.user_facing_experimental_name(),
-        Some("Fork-only test feature".to_string())
-    );
-    assert_eq!(
-        spec.user_facing_experimental_description(),
-        Some("(rick) Enable a fork-only capability.".to_string())
-    );
-    assert_eq!(
-        spec.user_facing_experimental_announcement(),
-        Some("(rick) NEW: Fork-only capability is available.".to_string())
-    );
-}
-
-#[test]
-fn enable_mcp_approvals_is_marked_as_rick_owned() {
-    let spec = Feature::EnableMcpApprovals.info();
-
-    assert_eq!(spec.owner(), FeatureOwner::Rick);
 }
 
 #[test]
@@ -185,6 +139,24 @@ fn tool_suggest_is_stable_and_enabled_by_default() {
 fn tool_search_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ToolSearch.stage(), Stage::Stable);
     assert_eq!(Feature::ToolSearch.default_enabled(), true);
+}
+
+#[test]
+fn browser_controls_are_stable_and_enabled_by_default() {
+    assert_eq!(Feature::InAppBrowser.stage(), Stage::Stable);
+    assert_eq!(Feature::InAppBrowser.default_enabled(), true);
+    assert_eq!(
+        feature_for_key("in_app_browser"),
+        Some(Feature::InAppBrowser)
+    );
+
+    assert_eq!(Feature::BrowserUse.stage(), Stage::Stable);
+    assert_eq!(Feature::BrowserUse.default_enabled(), true);
+    assert_eq!(feature_for_key("browser_use"), Some(Feature::BrowserUse));
+
+    assert_eq!(Feature::ComputerUse.stage(), Stage::Stable);
+    assert_eq!(Feature::ComputerUse.default_enabled(), true);
+    assert_eq!(feature_for_key("computer_use"), Some(Feature::ComputerUse));
 }
 
 #[test]
@@ -257,21 +229,9 @@ fn tool_call_mcp_elicitation_is_stable_and_enabled_by_default() {
 }
 
 #[test]
-fn enable_mcp_approvals_is_stable_and_enabled_by_default() {
-    assert_eq!(Feature::EnableMcpApprovals.stage(), Stage::Stable);
-    assert_eq!(Feature::EnableMcpApprovals.default_enabled(), true);
-}
-
-#[test]
 fn remote_control_is_under_development() {
     assert_eq!(Feature::RemoteControl.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::RemoteControl.default_enabled(), false);
-}
-
-#[test]
-fn use_agent_identity_is_under_development() {
-    assert_eq!(Feature::UseAgentIdentity.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::UseAgentIdentity.default_enabled(), false);
 }
 
 #[test]

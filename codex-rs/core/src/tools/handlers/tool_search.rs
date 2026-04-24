@@ -154,7 +154,6 @@ impl ToolSearchHandler {
         session: &std::sync::Arc<crate::session::session::Session>,
     ) -> Result<Vec<LoadableToolSpec>, FunctionCallError> {
         let mut tools = Vec::new();
-        // Preserve search order: group namespace children, emit standalone tools directly.
         for entry in results {
             match &entry.output {
                 ToolSearchEntryOutput::Tool(tool) => tools.push(tool.clone()),
@@ -183,7 +182,7 @@ impl ToolSearchHandler {
                         started_tools =
                             handler.search_output_tools_without_lazy(handler.entries.iter())?;
                     }
-                    let remaining_limit = limit.saturating_sub(count_output_tools(&tools));
+                    let remaining_limit = limit.saturating_sub(count_loadable_tools(&tools));
                     started_tools = truncate_output_tools(started_tools, remaining_limit);
                     tools.extend(started_tools);
                 }
@@ -239,7 +238,7 @@ fn default_limit_for_bucket(bucket: &str) -> usize {
     }
 }
 
-fn count_output_tools(tools: &[LoadableToolSpec]) -> usize {
+fn count_loadable_tools(tools: &[LoadableToolSpec]) -> usize {
     tools
         .iter()
         .map(|tool| match tool {

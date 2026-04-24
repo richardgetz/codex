@@ -87,7 +87,6 @@ pub(crate) fn latest_collaboration_mode_from_rollout_items(
     items.iter().rev().find_map(|item| match item {
         RolloutItem::TurnContext(context) => context.collaboration_mode.clone(),
         RolloutItem::ResponseItem(_)
-        | RolloutItem::SessionState(_)
         | RolloutItem::Compacted(_)
         | RolloutItem::EventMsg(_)
         | RolloutItem::SessionMeta(_) => None,
@@ -315,7 +314,7 @@ impl ThreadManager {
             auth,
             provider,
             codex_home.clone(),
-            Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+            Arc::new(EnvironmentManager::default_for_tests()),
         );
         manager._test_codex_home_guard = Some(TempCodexHomeGuard { path: codex_home });
         manager
@@ -958,11 +957,7 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
-        let environment = self
-            .environment_manager
-            .current()
-            .await
-            .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
+        let environment = self.environment_manager.default_environment();
         let watch_registration = match environment.as_ref() {
             Some(environment) if !environment.is_remote() => {
                 self.skills_watcher
@@ -996,6 +991,7 @@ impl ThreadManagerState {
             metrics_service_name,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            inherited_rollout_trace: codex_rollout_trace::RolloutTraceRecorder::disabled(),
             user_shell_override,
             parent_trace,
             analytics_events_client: self.analytics_events_client.clone(),

@@ -8,6 +8,8 @@ use rmcp::model::Meta;
 use rmcp::model::NumberOrString;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use tempfile::tempdir;
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
@@ -1029,6 +1031,44 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
         .expect("tool from startup cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
     assert_eq!(tool.callable_name, "calendar_create_event");
+}
+
+#[tokio::test]
+async fn startup_started_client_retries_after_cancelled_startup() {
+    let attempts = Arc::new(AtomicU64::new(0));
+    let startup_factory: ManagedClientStartupFactory = Arc::new({
+        let attempts = Arc::clone(&attempts);
+        move || {
+            let attempt = attempts.fetch_add(1, Ordering::AcqRel);
+            futures::future::ready::<Result<ManagedClient, StartupOutcomeError>>(Err(
+                if attempt == 0 {
+                    StartupOutcomeError::Cancelled
+                } else {
+                    StartupOutcomeError::Failed {
+                        error: "retry reached startup factory".to_string(),
+                    }
+                },
+            ))
+            .boxed()
+            .shared()
+        }
+    });
+    let client = test_async_managed_client(
+        ManagedClientStartupState::Retryable(RetryableManagedClientStartup::new(startup_factory)),
+        /*start_requested*/ true,
+        /*start_on_startup*/ true,
+        CancellationToken::new(),
+    );
+
+    assert!(matches!(
+        client.client().await,
+        Err(StartupOutcomeError::Cancelled)
+    ));
+    assert!(matches!(
+        client.client().await,
+        Err(StartupOutcomeError::Failed { error }) if error == "retry reached startup factory"
+    ));
+    assert_eq!(attempts.load(Ordering::Acquire), 2);
 }
 
 #[test]

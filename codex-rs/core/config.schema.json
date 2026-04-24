@@ -169,9 +169,10 @@
       "type": "object"
     },
     "ApprovalsReviewer": {
-      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
+      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
       "enum": [
         "user",
+        "auto_review",
         "guardian_subagent"
       ],
       "type": "string"
@@ -292,6 +293,15 @@
         }
       ]
     },
+    "AutoReviewToml": {
+      "properties": {
+        "policy": {
+          "description": "Additional policy instructions inserted into the guardian prompt.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "BundledSkillsConfig": {
       "additionalProperties": false,
       "properties": {
@@ -341,6 +351,9 @@
             "apps": {
               "type": "boolean"
             },
+            "browser_use": {
+              "type": "boolean"
+            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -365,6 +378,9 @@
             "collaboration_modes": {
               "type": "boolean"
             },
+            "computer_use": {
+              "type": "boolean"
+            },
             "connectors": {
               "type": "boolean"
             },
@@ -378,9 +394,6 @@
               "type": "boolean"
             },
             "enable_fanout": {
-              "type": "boolean"
-            },
-            "enable_mcp_approvals": {
               "type": "boolean"
             },
             "enable_request_compression": {
@@ -414,6 +427,9 @@
               "type": "boolean"
             },
             "image_generation": {
+              "type": "boolean"
+            },
+            "in_app_browser": {
               "type": "boolean"
             },
             "include_apply_patch_tool": {
@@ -453,6 +469,9 @@
               "type": "boolean"
             },
             "remote_models": {
+              "type": "boolean"
+            },
+            "remote_plugin": {
               "type": "boolean"
             },
             "request_permissions": {
@@ -522,9 +541,6 @@
               "type": "boolean"
             },
             "unified_exec": {
-              "type": "boolean"
-            },
-            "use_agent_identity": {
               "type": "boolean"
             },
             "use_legacy_landlock": {
@@ -618,7 +634,12 @@
           "$ref": "#/definitions/SandboxMode"
         },
         "service_tier": {
-          "$ref": "#/definitions/ServiceTier"
+          "allOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            }
+          ],
+          "description": "Optional explicit service tier preference for new turns (`fast` or `flex`)."
         },
         "tools": {
           "$ref": "#/definitions/ToolsToml"
@@ -835,6 +856,117 @@
         }
       ]
     },
+    "HookEventsToml": {
+      "properties": {
+        "PermissionRequest": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "PostToolUse": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "PreToolUse": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "SessionStart": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "Stop": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "UserPromptSubmit": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "HookHandlerConfig": {
+      "oneOf": [
+        {
+          "properties": {
+            "async": {
+              "default": false,
+              "type": "boolean"
+            },
+            "command": {
+              "type": "string"
+            },
+            "statusMessage": {
+              "default": null,
+              "type": "string"
+            },
+            "timeout": {
+              "default": null,
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "type": {
+              "enum": [
+                "command"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "command",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "prompt"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "agent"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "MarketplaceConfig": {
       "additionalProperties": false,
       "properties": {
@@ -884,6 +1016,22 @@
         "local"
       ],
       "type": "string"
+    },
+    "MatcherGroup": {
+      "properties": {
+        "hooks": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/HookHandlerConfig"
+          },
+          "type": "array"
+        },
+        "matcher": {
+          "default": null,
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "McpServerEnvVar": {
       "anyOf": [
@@ -1102,6 +1250,10 @@
         "profile": {
           "description": "AWS profile name to use. When unset, the AWS SDK default chain decides.",
           "type": "string"
+        },
+        "region": {
+          "description": "AWS region to use for provider-specific endpoints.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -1318,6 +1470,10 @@
           },
           "description": "Tracks scopes where external config migration prompts should be suppressed."
         },
+        "fast_default_opt_out": {
+          "description": "Tracks whether the user opted out of Codex-managed fast defaults.",
+          "type": "boolean"
+        },
         "hide_full_access_warning": {
           "description": "Tracks whether the user has acknowledged the full access warning prompt.",
           "type": "boolean"
@@ -1413,6 +1569,52 @@
           "type": "string"
         }
       ]
+    },
+    "OrchestratorMemoryToml": {
+      "additionalProperties": false,
+      "description": "Orchestrator-memory settings loaded from config.toml.",
+      "properties": {
+        "debounce_seconds": {
+          "description": "Seconds to wait after a newly observed preference before consolidating the summary.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "enabled": {
+          "description": "When `false`, skip injecting orchestrator-memory instructions into developer prompts.",
+          "type": "boolean"
+        },
+        "max_summary_items": {
+          "description": "Maximum number of consolidated preference lines kept in the injected summary.",
+          "format": "uint",
+          "maximum": 128.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "min_observations": {
+          "description": "Number of similar steering observations required before inferring a preference automatically.",
+          "format": "uint",
+          "maximum": 8.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "recent_turn_window": {
+          "description": "Number of recent user turns to inspect when looking for repeated steering patterns.",
+          "format": "uint",
+          "maximum": 64.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "scope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MemoriesScope"
+            }
+          ],
+          "description": "Which collaboration modes may read orchestrator memory."
+        }
+      },
+      "type": "object"
     },
     "OrchestratorThreadControlToml": {
       "additionalProperties": false,
@@ -2367,6 +2569,15 @@
       "default": null,
       "description": "Machine-local realtime audio device preferences used by realtime voice."
     },
+    "auto_review": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AutoReviewToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional policy instructions for the guardian auto-reviewer."
+    },
     "background_terminal_max_timeout": {
       "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
       "format": "uint64",
@@ -2458,6 +2669,9 @@
         "apps": {
           "type": "boolean"
         },
+        "browser_use": {
+          "type": "boolean"
+        },
         "child_agents_md": {
           "type": "boolean"
         },
@@ -2482,6 +2696,9 @@
         "collaboration_modes": {
           "type": "boolean"
         },
+        "computer_use": {
+          "type": "boolean"
+        },
         "connectors": {
           "type": "boolean"
         },
@@ -2495,9 +2712,6 @@
           "type": "boolean"
         },
         "enable_fanout": {
-          "type": "boolean"
-        },
-        "enable_mcp_approvals": {
           "type": "boolean"
         },
         "enable_request_compression": {
@@ -2531,6 +2745,9 @@
           "type": "boolean"
         },
         "image_generation": {
+          "type": "boolean"
+        },
+        "in_app_browser": {
           "type": "boolean"
         },
         "include_apply_patch_tool": {
@@ -2570,6 +2787,9 @@
           "type": "boolean"
         },
         "remote_models": {
+          "type": "boolean"
+        },
+        "remote_plugin": {
           "type": "boolean"
         },
         "request_permissions": {
@@ -2639,9 +2859,6 @@
           "type": "boolean"
         },
         "unified_exec": {
-          "type": "boolean"
-        },
-        "use_agent_identity": {
           "type": "boolean"
         },
         "use_legacy_landlock": {
@@ -2719,6 +2936,14 @@
       ],
       "default": null,
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
+    },
+    "hooks": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookEventsToml"
+        }
+      ],
+      "description": "Lifecycle hooks configured inline in TOML."
     },
     "include_apps_instructions": {
       "description": "Whether to inject the `<apps_instructions>` developer block.",
@@ -2881,6 +3106,14 @@
     "openai_base_url": {
       "description": "Base URL override for the built-in `openai` model provider.",
       "type": "string"
+    },
+    "orchestrator_memory": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/OrchestratorMemoryToml"
+        }
+      ],
+      "description": "Orchestrator-memory subsystem settings."
     },
     "oss_provider": {
       "description": "Preferred OSS provider for local models, e.g. \"lmstudio\" or \"ollama\".",

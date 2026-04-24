@@ -82,7 +82,6 @@ minutes. Results without this exact metadata, invalid metadata, or error results
 are returned normally. MCP clients that do not understand this metadata can
 ignore it, so poll tools should still keep their normal
 `content`/`structuredContent` useful for dumb clients.
-
 ## MCP tool approvals
 
 Codex stores approval defaults and per-tool overrides for custom MCP servers

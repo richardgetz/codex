@@ -59,3 +59,42 @@ fn memories_config_clamps_count_limits_to_nonzero_values() {
         }
     );
 }
+
+#[test]
+fn orchestrator_memory_config_defaults_to_disabled_orchestrator_scope() {
+    assert_eq!(
+        OrchestratorMemoryConfig::default(),
+        OrchestratorMemoryConfig {
+            enabled: false,
+            scope: MemoriesScope::Orchestrator,
+            debounce_seconds: 60,
+            min_observations: 2,
+            recent_turn_window: 8,
+            max_summary_items: 24,
+        }
+    );
+}
+
+#[test]
+fn orchestrator_memory_config_uses_explicit_values() {
+    let config = OrchestratorMemoryConfig::from(OrchestratorMemoryToml {
+        enabled: Some(true),
+        scope: Some(MemoriesScope::All),
+        debounce_seconds: Some(15),
+        min_observations: Some(3),
+        recent_turn_window: Some(6),
+        max_summary_items: Some(10),
+    });
+
+    assert_eq!(
+        config,
+        OrchestratorMemoryConfig {
+            enabled: true,
+            scope: MemoriesScope::All,
+            debounce_seconds: 15,
+            min_observations: 3,
+            recent_turn_window: 6,
+            max_summary_items: 10,
+        }
+    );
+}
