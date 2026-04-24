@@ -5929,6 +5929,61 @@ async fn build_initial_context_filters_skills_by_collaboration_mode() {
     assert!(!developer_texts.contains("scratchpad"));
 }
 
+#[tokio::test]
+async fn build_initial_context_filters_skills_by_unified_mode_enablement() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.enablement.modes.insert(
+                ModeKind::Orchestrator,
+                codex_config::ModeEnablementConfig {
+                    skills: Some(codex_config::EnablementFilterConfig {
+                        mode: codex_config::EnablementFilterMode::Include,
+                        items: vec!["agent-state".to_string()],
+                    }),
+                    ..Default::default()
+                },
+            );
+        },
+    )
+    .await;
+    let mut turn_context = Arc::try_unwrap(turn_context)
+        .expect("turn context should not have additional strong references");
+    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
+
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills = vec![
+        SkillMetadata {
+            name: "agent-state".to_string(),
+            description: "Track supervised work.".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/agent-state/SKILL.md").abs(),
+            scope: SkillScope::Repo,
+        },
+        SkillMetadata {
+            name: "scratchpad".to_string(),
+            description: "Keep active notes.".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/scratchpad/SKILL.md").abs(),
+            scope: SkillScope::Repo,
+        },
+    ];
+    turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+
+    assert!(developer_texts.contains("agent-state"));
+    assert!(!developer_texts.contains("scratchpad"));
+}
+
 #[test]
 fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
     let session_telemetry = test_session_telemetry_without_metadata();

@@ -11,6 +11,7 @@ use crate::types::AnalyticsConfigToml;
 use crate::types::ApprovalsReviewer;
 use crate::types::AppsConfigToml;
 use crate::types::AuthCredentialsStoreMode;
+use crate::types::EnablementConfig;
 use crate::types::FeedbackConfigToml;
 use crate::types::History;
 use crate::types::MarketplaceConfig;
@@ -348,6 +349,9 @@ pub struct ConfigToml {
 
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
+
+    /// Mode-scoped visibility rules for skills, MCPs/apps, and plugins.
+    pub enablement: Option<EnablementConfig>,
 
     /// Lifecycle hooks configured inline in TOML.
     pub hooks: Option<HookEventsToml>,

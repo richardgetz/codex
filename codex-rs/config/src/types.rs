@@ -857,6 +857,10 @@ pub struct Notice {
     pub external_config_migration_prompts: ExternalConfigMigrationPrompts,
 }
 
+pub use crate::enablement_config::EnablementConfig;
+pub use crate::enablement_config::EnablementFilterConfig;
+pub use crate::enablement_config::EnablementFilterMode;
+pub use crate::enablement_config::ModeEnablementConfig;
 pub use crate::skills_config::BundledSkillsConfig;
 pub use crate::skills_config::SkillConfig;
 pub use crate::skills_config::SkillModeFilterConfig;

@@ -672,6 +672,45 @@
       },
       "type": "object"
     },
+    "EnablementConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "modes": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ModeEnablementConfig"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "EnablementFilterConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/EnablementFilterMode"
+            }
+          ],
+          "default": "include"
+        }
+      },
+      "type": "object"
+    },
+    "EnablementFilterMode": {
+      "enum": [
+        "include",
+        "exclude"
+      ],
+      "type": "string"
+    },
     "ExternalConfigMigrationPrompts": {
       "additionalProperties": false,
       "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
@@ -1190,6 +1229,21 @@
         "use_memories": {
           "description": "When `false`, skip injecting memory usage instructions into developer prompts.",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ModeEnablementConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "mcps": {
+          "$ref": "#/definitions/EnablementFilterConfig"
+        },
+        "plugins": {
+          "$ref": "#/definitions/EnablementFilterConfig"
+        },
+        "skills": {
+          "$ref": "#/definitions/EnablementFilterConfig"
         }
       },
       "type": "object"
@@ -2710,6 +2764,14 @@
     "disable_paste_burst": {
       "description": "When true, disables burst-paste detection for typed input entirely. All characters are inserted as they are received, and no buffering or placeholder replacement will occur for fast keypress bursts.",
       "type": "boolean"
+    },
+    "enablement": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/EnablementConfig"
+        }
+      ],
+      "description": "Mode-scoped visibility rules for skills, MCPs/apps, and plugins."
     },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"

@@ -28,6 +28,8 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
+use crate::enablement::filter_connectors_for_mode;
+use crate::enablement::filter_plugins_for_mode;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
@@ -3015,6 +3017,11 @@ impl Session {
                     &turn_context.config,
                 )
                 .await;
+            let accessible_and_enabled_connectors = filter_connectors_for_mode(
+                &turn_context.config,
+                turn_context.collaboration_mode.mode,
+                &accessible_and_enabled_connectors,
+            );
             if let Some(apps_instructions) =
                 AppsInstructions::from_connectors(&accessible_and_enabled_connectors)
             {
@@ -3061,8 +3068,16 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&turn_context.config)
             .await;
+        let filtered_plugins = filter_plugins_for_mode(
+            &turn_context.config,
+            turn_context.collaboration_mode.mode,
+            loaded_plugins.capability_summaries(),
+        )
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
         if let Some(plugin_instructions) =
-            AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
+            AvailablePluginsInstructions::from_plugins(&filtered_plugins)
         {
             developer_sections.push(plugin_instructions.render());
         }

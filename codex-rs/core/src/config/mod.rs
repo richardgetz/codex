@@ -317,6 +317,9 @@ pub struct Config {
     /// Raw skills configuration for mode-scoped filtering and instruction policy.
     pub skills: SkillsConfig,
 
+    /// Unified mode-scoped capability visibility rules.
+    pub enablement: codex_config::EnablementConfig,
+
     /// Whether to inject the `<environment_context>` user block.
     pub include_environment_context: bool,
 
@@ -2351,6 +2354,7 @@ impl Config {
             include_apps_instructions,
             include_skill_instructions,
             skills: cfg.skills.clone().unwrap_or_default(),
+            enablement: cfg.enablement.clone().unwrap_or_default(),
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.

@@ -31,6 +31,9 @@ use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::BundledSkillsConfig;
+use codex_config::types::EnablementConfig;
+use codex_config::types::EnablementFilterConfig;
+use codex_config::types::EnablementFilterMode;
 use codex_config::types::FeedbackConfigToml;
 use codex_config::types::HistoryPersistence;
 use codex_config::types::McpServerEnvVar;
@@ -39,6 +42,7 @@ use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::MemoriesScope;
 use codex_config::types::MemoriesToml;
+use codex_config::types::ModeEnablementConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::NotificationCondition;
@@ -431,6 +435,61 @@ skills = ["skill-recorder"]
                     SkillModeFilterConfig {
                         mode: SkillModeFilterMode::Exclude,
                         skills: vec!["skill-recorder".to_string()],
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        })
+    );
+}
+
+#[test]
+fn parses_unified_mode_enablement_config() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[enablement.modes.orchestrator.skills]
+mode = "include"
+items = ["agent-state", "scratchpad"]
+
+[enablement.modes.orchestrator.mcps]
+mode = "include"
+items = ["scratchpad", "imessage"]
+
+[enablement.modes.default.plugins]
+mode = "exclude"
+items = ["canva@openai-curated"]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.enablement,
+        Some(EnablementConfig {
+            modes: [
+                (
+                    ModeKind::Orchestrator,
+                    ModeEnablementConfig {
+                        skills: Some(EnablementFilterConfig {
+                            mode: EnablementFilterMode::Include,
+                            items: vec!["agent-state".to_string(), "scratchpad".to_string()],
+                        }),
+                        mcps: Some(EnablementFilterConfig {
+                            mode: EnablementFilterMode::Include,
+                            items: vec!["scratchpad".to_string(), "imessage".to_string()],
+                        }),
+                        plugins: None,
+                    },
+                ),
+                (
+                    ModeKind::Default,
+                    ModeEnablementConfig {
+                        skills: None,
+                        mcps: None,
+                        plugins: Some(EnablementFilterConfig {
+                            mode: EnablementFilterMode::Exclude,
+                            items: vec!["canva@openai-curated".to_string()],
+                        }),
                     },
                 ),
             ]
@@ -5451,6 +5510,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             include_apps_instructions: true,
             include_skill_instructions: true,
             skills: SkillsConfig::default(),
+            enablement: EnablementConfig::default(),
             include_environment_context: true,
             compact_prompt: None,
             commit_attribution: None,
@@ -5651,6 +5711,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         include_apps_instructions: true,
         include_skill_instructions: true,
         skills: SkillsConfig::default(),
+        enablement: EnablementConfig::default(),
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
@@ -5805,6 +5866,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         include_apps_instructions: true,
         include_skill_instructions: true,
         skills: SkillsConfig::default(),
+        enablement: EnablementConfig::default(),
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
@@ -5944,6 +6006,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         include_apps_instructions: true,
         include_skill_instructions: true,
         skills: SkillsConfig::default(),
+        enablement: EnablementConfig::default(),
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,

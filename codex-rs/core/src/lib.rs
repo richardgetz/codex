@@ -29,6 +29,7 @@ pub mod config_loader;
 pub mod connectors;
 pub mod context;
 mod context_manager;
+mod enablement;
 pub mod exec;
 pub mod exec_env;
 mod exec_policy;

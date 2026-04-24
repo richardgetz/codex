@@ -49,6 +49,23 @@ pub(crate) fn skill_allowed_in_mode(
     mode: ModeKind,
     skill: &SkillMetadata,
 ) -> bool {
+    if let Some(filter) = crate::enablement::skill_enablement_filter(config, mode) {
+        if filter.items.is_empty() {
+            return true;
+        }
+        let path = skill.path_to_skills_md.as_path().to_string_lossy();
+        let matches = filter.items.iter().any(|selector| {
+            let selector = selector.trim();
+            !selector.is_empty()
+                && (skill.name == selector || path == selector || path.ends_with(selector))
+        });
+
+        return match filter.mode {
+            codex_config::EnablementFilterMode::Include => matches,
+            codex_config::EnablementFilterMode::Exclude => !matches,
+        };
+    }
+
     let Some(filter) = config.skills.modes.get(&mode) else {
         return true;
     };
@@ -56,16 +73,11 @@ pub(crate) fn skill_allowed_in_mode(
         return true;
     }
 
+    let path = skill.path_to_skills_md.as_path().to_string_lossy();
     let matches = filter.skills.iter().any(|selector| {
         let selector = selector.trim();
         !selector.is_empty()
-            && (skill.name == selector
-                || skill.path_to_skills_md.as_path().to_string_lossy() == selector
-                || skill
-                    .path_to_skills_md
-                    .as_path()
-                    .to_string_lossy()
-                    .ends_with(selector))
+            && (skill.name == selector || path == selector || path.ends_with(selector))
     });
 
     match filter.mode {
