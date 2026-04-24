@@ -1030,6 +1030,7 @@ pub(crate) fn build_prompt(
             .filter_map(|spec| filter_deferred_dynamic_tool_spec(spec, &deferred_dynamic_tools))
             .collect()
     };
+    let tools = filter_tools_for_collaboration_mode(tools, turn_context);
 
     Prompt {
         input,
@@ -1042,6 +1043,115 @@ pub(crate) fn build_prompt(
             &turn_context.session_source,
         ),
     }
+}
+
+fn filter_tools_for_collaboration_mode(
+    tools: Vec<ToolSpec>,
+    turn_context: &TurnContext,
+) -> Vec<ToolSpec> {
+    if turn_context.collaboration_mode.mode != ModeKind::Orchestrator {
+        return tools;
+    }
+
+    tools
+        .into_iter()
+        .filter_map(|spec| filter_orchestrator_tool_spec(spec, turn_context))
+        .collect()
+}
+
+fn filter_orchestrator_tool_spec(spec: ToolSpec, turn_context: &TurnContext) -> Option<ToolSpec> {
+    match spec {
+        ToolSpec::Function(tool) => {
+            coordination_tool_allowed_in_orchestrator(None, tool.name.as_str(), turn_context)
+                .then_some(ToolSpec::Function(tool))
+        }
+        ToolSpec::Namespace(mut namespace) => {
+            let namespace_name = namespace.name.clone();
+            namespace.tools.retain(|tool| match tool {
+                ResponsesApiNamespaceTool::Function(tool) => {
+                    coordination_tool_allowed_in_orchestrator(
+                        Some(namespace_name.as_str()),
+                        tool.name.as_str(),
+                        turn_context,
+                    )
+                }
+            });
+            (!namespace.tools.is_empty()).then_some(ToolSpec::Namespace(namespace))
+        }
+        ToolSpec::Freeform(tool) => {
+            coordination_tool_allowed_in_orchestrator(None, tool.name.as_str(), turn_context)
+                .then_some(ToolSpec::Freeform(tool))
+        }
+        ToolSpec::ToolSearch { .. }
+        | ToolSpec::LocalShell {}
+        | ToolSpec::ImageGeneration { .. }
+        | ToolSpec::WebSearch { .. } => None,
+    }
+}
+
+fn coordination_tool_allowed_in_orchestrator(
+    namespace: Option<&str>,
+    tool_name: &str,
+    turn_context: &TurnContext,
+) -> bool {
+    const ORCHESTRATOR_COORDINATION_TOOLS: &[&str] = &[
+        "update_plan",
+        "request_user_input",
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+        "followup_task",
+        "list_agents",
+    ];
+
+    ORCHESTRATOR_COORDINATION_TOOLS.contains(&tool_name)
+        || escalation_tool_allowed_in_orchestrator(namespace, tool_name, turn_context)
+}
+
+fn escalation_tool_allowed_in_orchestrator(
+    namespace: Option<&str>,
+    tool_name: &str,
+    turn_context: &TurnContext,
+) -> bool {
+    use codex_config::types::OrchestratorEscalationMode;
+
+    let escalation = &turn_context.config.orchestrator.escalation;
+    if !matches!(
+        escalation.mode,
+        OrchestratorEscalationMode::Mcp | OrchestratorEscalationMode::Both
+    ) {
+        return false;
+    }
+
+    let namespace = namespace.map(normalize_orchestrator_tool_segment);
+    let tool_name = normalize_orchestrator_tool_segment(tool_name);
+    let qualified_name = namespace
+        .as_ref()
+        .map(|namespace| format!("{namespace}/{tool_name}"));
+
+    escalation.tool.as_deref().is_some_and(|configured_tool| {
+        let configured_tool = normalize_orchestrator_tool_segment(configured_tool);
+        configured_tool == tool_name
+            || qualified_name
+                .as_deref()
+                .is_some_and(|qualified_name| configured_tool == qualified_name)
+    }) || escalation.channel.as_deref().is_some_and(|channel| {
+        let channel = normalize_orchestrator_tool_segment(channel);
+        namespace
+            .as_deref()
+            .is_some_and(|namespace| namespace == channel)
+    })
+}
+
+fn normalize_orchestrator_tool_segment(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches("mcp__")
+        .trim_end_matches("__")
+        .replace('.', "/")
+        .to_ascii_lowercase()
 }
 
 fn filter_deferred_dynamic_tool_spec(

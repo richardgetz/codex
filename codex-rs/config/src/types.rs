@@ -405,6 +405,10 @@ pub struct OrchestratorEscalationToml {
 pub struct OrchestratorToml {
     #[serde(default)]
     pub escalation: Option<OrchestratorEscalationToml>,
+    /// How often Orchestrator mode should proactively re-check active workers
+    /// when supervision state has not otherwise changed. `0` disables
+    /// proactive model check-ins and relies only on mechanical state changes.
+    pub active_agent_checkin_seconds: Option<u32>,
 }
 
 /// Thread-control settings loaded from config.toml.
@@ -451,15 +455,28 @@ impl From<OrchestratorEscalationToml> for OrchestratorEscalationConfig {
 }
 
 /// Effective orchestrator behavior settings after defaults are applied.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrchestratorConfig {
     pub escalation: OrchestratorEscalationConfig,
+    pub active_agent_checkin_seconds: u32,
+}
+
+impl Default for OrchestratorConfig {
+    fn default() -> Self {
+        Self {
+            escalation: OrchestratorEscalationConfig::default(),
+            active_agent_checkin_seconds: 600,
+        }
+    }
 }
 
 impl From<OrchestratorToml> for OrchestratorConfig {
     fn from(toml: OrchestratorToml) -> Self {
         Self {
             escalation: toml.escalation.unwrap_or_default().into(),
+            active_agent_checkin_seconds: toml
+                .active_agent_checkin_seconds
+                .unwrap_or_else(|| Self::default().active_agent_checkin_seconds),
         }
     }
 }

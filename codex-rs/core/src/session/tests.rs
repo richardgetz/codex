@@ -14,6 +14,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
+use crate::session::turn::build_prompt;
 use crate::shell::default_user_shell;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
@@ -113,6 +114,7 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_tools::ToolSpec;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::context_snapshot;
@@ -134,6 +136,7 @@ use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::Metric;
 use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 use tokio::sync::Semaphore;
@@ -7634,6 +7637,43 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         }
         other => panic!("expected FunctionCallError::Fatal, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn build_prompt_limits_orchestrator_to_coordination_tools() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
+
+    let router = ToolRouter::from_config(
+        &turn_context.tools_config,
+        crate::tools::router::ToolRouterParams {
+            deferred_mcp_tools: None,
+            lazy_mcp_servers: Vec::new(),
+            mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
+            discoverable_tools: None,
+            dynamic_tools: turn_context.dynamic_tools.as_slice(),
+        },
+    );
+
+    let prompt = build_prompt(
+        Vec::new(),
+        &router,
+        &turn_context,
+        session.get_base_instructions().await,
+    );
+    let tool_names = prompt.tools.iter().map(ToolSpec::name).collect::<Vec<_>>();
+
+    assert!(tool_names.contains(&"spawn_agent"));
+    assert!(tool_names.contains(&"wait_agent"));
+    assert!(tool_names.contains(&"close_agent"));
+    assert!(tool_names.contains(&"update_plan"));
+    assert!(!tool_names.contains(&"shell"));
+    assert!(!tool_names.contains(&"exec_command"));
+    assert!(!tool_names.contains(&"apply_patch"));
+    assert!(!tool_names.contains(&"view_image"));
+    assert!(!tool_names.contains(&"web_search"));
 }
 
 async fn sample_rollout(

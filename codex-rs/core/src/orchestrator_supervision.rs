@@ -33,6 +33,13 @@ pub(crate) struct OrchestratorSupervisionStore {
     write_lock: Arc<Mutex<()>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrchestratorSupervisionPollState {
+    pub last_updated_at: Option<String>,
+    pub has_supervised_workers: bool,
+    pub has_nonterminal_workers: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 struct SupervisionLedger {
     threads: Vec<SupervisedThreadState>,
@@ -235,6 +242,33 @@ impl OrchestratorSupervisionStore {
             .ok()
     }
 
+    pub async fn poll_state(
+        &self,
+        thread_id: ThreadId,
+    ) -> std::io::Result<OrchestratorSupervisionPollState> {
+        let ledger = self.read_ledger().await?;
+        let Some(thread) = ledger
+            .threads
+            .iter()
+            .find(|thread| thread.thread_id == thread_id.to_string())
+        else {
+            return Ok(OrchestratorSupervisionPollState {
+                last_updated_at: None,
+                has_supervised_workers: false,
+                has_nonterminal_workers: false,
+            });
+        };
+
+        Ok(OrchestratorSupervisionPollState {
+            last_updated_at: Some(thread.updated_at.clone()),
+            has_supervised_workers: !thread.workers.is_empty(),
+            has_nonterminal_workers: thread
+                .workers
+                .iter()
+                .any(|worker| !worker.status.is_terminal()),
+        })
+    }
+
     pub(crate) fn spawn_status_watcher(
         &self,
         parent_thread_id: ThreadId,
@@ -398,6 +432,13 @@ impl SupervisedWorkerStatus {
             Self::Shutdown => "shutdown",
             Self::NotFound => "not_found",
         }
+    }
+
+    fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Interrupted | Self::Errored | Self::Shutdown | Self::NotFound
+        )
     }
 }
 

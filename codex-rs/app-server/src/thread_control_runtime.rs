@@ -1,5 +1,6 @@
 use crate::thread_state::ThreadState;
 use codex_core::CodexThread;
+use codex_core::OrchestratorSupervisionPollState;
 use codex_core::ThreadConfigSnapshot;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::protocol::AgentStatus;
@@ -9,6 +10,7 @@ use codex_state::StateRuntime;
 use codex_state::ThreadControlMode;
 use codex_state::ThreadControlRecord;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -143,6 +145,30 @@ fn spawn_router_tick_task(
         if cancel_token.is_cancelled() {
             return;
         }
+        let poll_state = match conversation.orchestrator_supervision_poll_state().await {
+            Ok(poll_state) => poll_state,
+            Err(err) => {
+                warn!(
+                    thread_id = %control.thread_id,
+                    "failed to inspect orchestrator supervision state before wake-up: {err}"
+                );
+                arm_router_tick(Arc::clone(&conversation), thread_state, state_db, control).await;
+                return;
+            }
+        };
+        let active_agent_checkin_interval = Duration::from_secs(u64::from(
+            conversation
+                .orchestrator_active_agent_checkin_seconds()
+                .await,
+        ));
+        let should_submit = {
+            let mut state = thread_state.lock().await;
+            should_submit_router_tick(&mut state, &poll_state, active_agent_checkin_interval)
+        };
+        if !should_submit {
+            arm_router_tick(Arc::clone(&conversation), thread_state, state_db, control).await;
+            return;
+        }
 
         let config_snapshot = conversation.config_snapshot().await;
         let (model, reasoning_effort, collaboration_mode) =
@@ -182,6 +208,36 @@ fn spawn_router_tick_task(
             }
         }
     });
+}
+
+fn should_submit_router_tick(
+    thread_state: &mut ThreadState,
+    poll_state: &OrchestratorSupervisionPollState,
+    active_agent_checkin_interval: Duration,
+) -> bool {
+    if !poll_state.has_supervised_workers {
+        return false;
+    }
+
+    let supervision_changed =
+        thread_state.last_router_supervision_updated_at != poll_state.last_updated_at;
+    if supervision_changed {
+        thread_state.last_router_supervision_updated_at = poll_state.last_updated_at.clone();
+        thread_state.last_router_model_check_at = Some(Instant::now());
+        return true;
+    }
+
+    if !poll_state.has_nonterminal_workers || active_agent_checkin_interval.is_zero() {
+        return false;
+    }
+
+    let due = thread_state
+        .last_router_model_check_at
+        .is_none_or(|last_check| last_check.elapsed() >= active_agent_checkin_interval);
+    if due {
+        thread_state.last_router_model_check_at = Some(Instant::now());
+    }
+    due
 }
 
 fn build_router_tick_message(control: &ThreadControlRecord) -> String {
@@ -243,8 +299,11 @@ fn build_router_tick_turn(
 mod tests {
     use super::build_router_tick_message;
     use super::build_router_tick_turn;
+    use super::should_submit_router_tick;
+    use crate::thread_state::ThreadState;
     use chrono::TimeZone;
     use chrono::Utc;
+    use codex_core::OrchestratorSupervisionPollState;
     use codex_core::ThreadConfigSnapshot;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::ApprovalsReviewer;
@@ -260,6 +319,8 @@ mod tests {
     use codex_state::ThreadControlMode;
     use codex_state::ThreadControlRecord;
     use pretty_assertions::assert_eq;
+    use std::time::Duration;
+    use std::time::Instant;
 
     #[test]
     fn router_tick_message_includes_release_channel_and_targets() {
@@ -371,5 +432,73 @@ Check supervised sessions for new progress, blockers, or operator instructions a
         assert_eq!(approvals_reviewer, Some(ApprovalsReviewer::User));
         assert_eq!(sandbox_policy, SandboxPolicy::DangerFullAccess);
         assert_eq!(cwd, std::path::PathBuf::from("/tmp/router"));
+    }
+
+    #[test]
+    fn router_tick_skips_when_no_supervised_workers_exist() {
+        let mut thread_state = ThreadState::default();
+        let poll_state = OrchestratorSupervisionPollState {
+            last_updated_at: None,
+            has_supervised_workers: false,
+            has_nonterminal_workers: false,
+        };
+
+        assert!(!should_submit_router_tick(
+            &mut thread_state,
+            &poll_state,
+            Duration::from_secs(600),
+        ));
+    }
+
+    #[test]
+    fn router_tick_skips_when_supervision_is_unchanged_and_no_active_workers_remain() {
+        let mut thread_state = ThreadState::default();
+        let poll_state = OrchestratorSupervisionPollState {
+            last_updated_at: Some("2026-04-24T12:00:00Z".to_string()),
+            has_supervised_workers: true,
+            has_nonterminal_workers: false,
+        };
+
+        assert!(should_submit_router_tick(
+            &mut thread_state,
+            &poll_state,
+            Duration::from_secs(600),
+        ));
+        assert!(!should_submit_router_tick(
+            &mut thread_state,
+            &poll_state,
+            Duration::from_secs(600),
+        ));
+    }
+
+    #[test]
+    fn router_tick_allows_periodic_checkins_for_unchanged_active_workers() {
+        let mut thread_state = ThreadState::default();
+        let poll_state = OrchestratorSupervisionPollState {
+            last_updated_at: Some("2026-04-24T12:00:00Z".to_string()),
+            has_supervised_workers: true,
+            has_nonterminal_workers: true,
+        };
+
+        assert!(should_submit_router_tick(
+            &mut thread_state,
+            &poll_state,
+            Duration::from_secs(600),
+        ));
+        assert!(!should_submit_router_tick(
+            &mut thread_state,
+            &poll_state,
+            Duration::from_secs(600),
+        ));
+        thread_state.last_router_model_check_at = Some(
+            Instant::now()
+                .checked_sub(Duration::from_secs(601))
+                .expect("subtract duration"),
+        );
+        assert!(should_submit_router_tick(
+            &mut thread_state,
+            &poll_state,
+            Duration::from_secs(600),
+        ));
     }
 }

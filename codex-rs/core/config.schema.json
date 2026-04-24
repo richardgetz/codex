@@ -1674,6 +1674,12 @@
       "additionalProperties": false,
       "description": "Orchestrator behavior settings loaded from config.toml.",
       "properties": {
+        "active_agent_checkin_seconds": {
+          "description": "How often Orchestrator mode should proactively re-check active workers when supervision state has not otherwise changed. `0` disables proactive model check-ins and relies only on mechanical state changes.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "escalation": {
           "allOf": [
             {

@@ -448,6 +448,9 @@ fn parses_orchestrator_escalation_config() {
 mode = "mcp"
 channel = "imessage"
 tool = "imessage_send_message"
+
+[orchestrator]
+active_agent_checkin_seconds = 900
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -460,6 +463,7 @@ tool = "imessage_send_message"
                 channel: Some("imessage".to_string()),
                 tool: Some("imessage_send_message".to_string()),
             }),
+            active_agent_checkin_seconds: Some(900),
         })
     );
 }
