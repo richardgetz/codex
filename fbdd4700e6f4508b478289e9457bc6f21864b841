@@ -1,0 +1,1 @@
+Intent: make Orchestrator mode a strict supervisor by hiding execution tools from its prompt, only allowing coordination plus configured escalation tools, and mechanically suppressing no-op router wake-ups unless supervision changed or an active-worker check-in is due.
