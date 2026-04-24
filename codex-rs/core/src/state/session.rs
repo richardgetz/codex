@@ -36,7 +36,6 @@ pub(crate) struct SessionState {
     active_thread_control: Option<ThreadControlRecord>,
     granted_permissions: Option<PermissionProfile>,
     next_turn_is_first: bool,
-    active_thread_control: Option<ThreadControlRecord>,
 }
 
 impl SessionState {
@@ -57,7 +56,6 @@ impl SessionState {
             active_thread_control: None,
             granted_permissions: None,
             next_turn_is_first: true,
-            active_thread_control: None,
         }
     }
 

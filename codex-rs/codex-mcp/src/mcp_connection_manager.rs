@@ -737,13 +737,13 @@ impl AsyncManagedClient {
         };
         let startup_complete_for_factory = Arc::clone(&startup_complete);
         let startup_factory: ManagedClientStartupFactory = Arc::new({
-            let tool_filter = tool_filter.clone();
-            let shared_key = shared_key.clone();
+            let tool_filter = tool_filter;
+            let shared_key = shared_key;
             move || {
                 startup_complete_for_factory.store(false, Ordering::Release);
                 let server_name = server_name.clone();
                 let config = config.clone();
-                let store_mode = store_mode.clone();
+                let store_mode = store_mode;
                 let startup_complete = Arc::clone(&startup_complete_for_factory);
                 let startup_tool_filter = tool_filter.clone();
                 let tx_event = tx_event.clone();
@@ -762,7 +762,7 @@ impl AsyncManagedClient {
                             make_rmcp_client(
                                 &server_name,
                                 config.clone(),
-                                store_mode.clone(),
+                                store_mode,
                                 runtime_environment,
                             )
                             .await?,

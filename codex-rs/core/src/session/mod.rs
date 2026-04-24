@@ -1336,7 +1336,9 @@ impl Session {
         if let Some(state_db) = self.state_db() {
             match state_db.get_thread_memory_mode(self.conversation_id).await {
                 Ok(Some(memory_mode)) if memory_mode == "enabled" => return,
-                Ok(Some(_)) => {}
+                Ok(Some(memory_mode))
+                    if memory_mode == crate::rollout::ORCHESTRATOR_SCOPED_MEMORY_MODE => {}
+                Ok(Some(_)) => return,
                 Ok(None) => {}
                 Err(err) => {
                     warn!(
@@ -1415,7 +1417,10 @@ impl Session {
         }
         if let Some(state_db) = self.state_db()
             && let Err(err) = state_db
-                .set_thread_memory_mode(self.conversation_id, "disabled")
+                .set_thread_memory_mode(
+                    self.conversation_id,
+                    crate::rollout::ORCHESTRATOR_SCOPED_MEMORY_MODE,
+                )
                 .await
         {
             warn!(
