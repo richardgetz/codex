@@ -1,6 +1,8 @@
 use crate::Feature;
 use crate::FeatureConfigSource;
 use crate::FeatureOverrides;
+use crate::FeatureOwner;
+use crate::FeatureSpec;
 use crate::FeatureToml;
 use crate::Features;
 use crate::FeaturesToml;
@@ -68,7 +70,7 @@ fn js_repl_is_experimental_and_user_toggleable() {
     assert!(matches!(stage, Stage::Experimental { .. }));
     assert_eq!(stage.experimental_menu_name(), Some("JavaScript REPL"));
     assert_eq!(
-        stage.experimental_menu_description().map(str::to_owned),
+        spec.user_facing_experimental_description(),
         Some(format!(
             "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities. Requires Node >= v{expected_node_version} installed."
         ))
@@ -109,6 +111,41 @@ fn external_migration_is_experimental_and_disabled_by_default() {
     );
     assert_eq!(stage.experimental_announcement(), None);
     assert_eq!(Feature::ExternalMigration.default_enabled(), false);
+}
+
+#[test]
+fn fork_owned_experimental_help_text_is_labeled() {
+    let spec = FeatureSpec {
+        id: Feature::JsRepl,
+        key: "fork_only_test_feature",
+        stage: Stage::Experimental {
+            owner: FeatureOwner::Rick,
+            name: "Fork-only test feature",
+            menu_description: "Enable a fork-only capability.",
+            announcement: "NEW: Fork-only capability is available.",
+        },
+        default_enabled: false,
+    };
+
+    assert_eq!(
+        spec.user_facing_experimental_name(),
+        Some("Fork-only test feature".to_string())
+    );
+    assert_eq!(
+        spec.user_facing_experimental_description(),
+        Some("(rick) Enable a fork-only capability.".to_string())
+    );
+    assert_eq!(
+        spec.user_facing_experimental_announcement(),
+        Some("(rick) NEW: Fork-only capability is available.".to_string())
+    );
+}
+
+#[test]
+fn enable_mcp_approvals_is_marked_as_rick_owned() {
+    let spec = Feature::EnableMcpApprovals.info();
+
+    assert_eq!(spec.owner(), FeatureOwner::Rick);
 }
 
 #[test]
@@ -226,6 +263,12 @@ fn image_detail_original_is_a_removed_feature_key() {
 fn tool_call_mcp_elicitation_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ToolCallMcpElicitation.stage(), Stage::Stable);
     assert_eq!(Feature::ToolCallMcpElicitation.default_enabled(), true);
+}
+
+#[test]
+fn enable_mcp_approvals_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::EnableMcpApprovals.stage(), Stage::Stable);
+    assert_eq!(Feature::EnableMcpApprovals.default_enabled(), true);
 }
 
 #[test]

@@ -1730,7 +1730,7 @@ async fn experimental_popup_shows_js_repl_node_requirement() {
     let js_repl_description = FEATURES
         .iter()
         .find(|spec| spec.id == Feature::JsRepl)
-        .and_then(|spec| spec.stage.experimental_menu_description())
+        .and_then(|spec| spec.user_facing_experimental_description())
         .expect("expected js_repl experimental description");
     let node_requirement = js_repl_description
         .split(". ")
