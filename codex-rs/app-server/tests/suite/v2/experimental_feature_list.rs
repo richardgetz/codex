@@ -51,15 +51,11 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
         .iter()
         .map(|spec| {
             let (stage, display_name, description, announcement) = match spec.stage {
-                Stage::Experimental {
-                    name,
-                    menu_description,
-                    announcement,
-                } => (
+                Stage::Experimental { .. } => (
                     ExperimentalFeatureStage::Beta,
-                    Some(name.to_string()),
-                    Some(menu_description.to_string()),
-                    Some(announcement.to_string()),
+                    spec.user_facing_experimental_name(),
+                    spec.user_facing_experimental_description(),
+                    spec.user_facing_experimental_announcement(),
                 ),
                 Stage::UnderDevelopment => {
                     (ExperimentalFeatureStage::UnderDevelopment, None, None, None)
@@ -297,7 +293,7 @@ async fn experimental_feature_enablement_set_rejects_non_allowlisted_feature() -
     );
     assert!(
         error.message.contains(
-            "apps, memories, plugins, tool_search, tool_suggest, tool_call_mcp_elicitation"
+            "apps, memories, plugins, tool_search, tool_suggest, enable_mcp_approvals, tool_call_mcp_elicitation"
         ),
         "{}",
         error.message

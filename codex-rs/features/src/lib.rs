@@ -27,6 +27,7 @@ pub enum Stage {
     UnderDevelopment,
     /// Experimental features made available to users through the `/experimental` menu
     Experimental {
+        owner: FeatureOwner,
         name: &'static str,
         menu_description: &'static str,
         announcement: &'static str,
@@ -39,10 +40,33 @@ pub enum Stage {
     Removed,
 }
 
+/// Indicates whether user-facing feature help text comes from upstream or this fork.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeatureOwner {
+    Upstream,
+    Rick,
+}
+
+impl FeatureOwner {
+    fn help_text_prefix(self) -> &'static str {
+        match self {
+            Self::Upstream => "",
+            Self::Rick => "(rick) ",
+        }
+    }
+}
+
 impl Stage {
     pub fn experimental_menu_name(self) -> Option<&'static str> {
         match self {
             Stage::Experimental { name, .. } => Some(name),
+            Stage::UnderDevelopment | Stage::Stable | Stage::Deprecated | Stage::Removed => None,
+        }
+    }
+
+    pub fn experimental_owner(self) -> Option<FeatureOwner> {
+        match self {
+            Stage::Experimental { owner, .. } => Some(owner),
             Stage::UnderDevelopment | Stage::Stable | Stage::Deprecated | Stage::Removed => None,
         }
     }
@@ -230,6 +254,13 @@ impl Feature {
 
     pub fn default_enabled(self) -> bool {
         self.info().default_enabled
+    }
+
+    pub fn owner(self) -> FeatureOwner {
+        match self {
+            Self::EnableMcpApprovals => FeatureOwner::Rick,
+            _ => FeatureOwner::Upstream,
+        }
     }
 
     fn info(self) -> &'static FeatureSpec {
@@ -611,6 +642,34 @@ pub struct FeatureSpec {
     pub default_enabled: bool,
 }
 
+impl FeatureSpec {
+    pub fn owner(self) -> FeatureOwner {
+        self.stage
+            .experimental_owner()
+            .unwrap_or_else(|| self.id.owner())
+    }
+
+    pub fn user_facing_experimental_name(self) -> Option<String> {
+        self.stage.experimental_menu_name().map(str::to_owned)
+    }
+
+    pub fn user_facing_experimental_description(self) -> Option<String> {
+        self.stage
+            .experimental_menu_description()
+            .map(|description| {
+                let prefix = self.owner().help_text_prefix();
+                format!("{prefix}{description}")
+            })
+    }
+
+    pub fn user_facing_experimental_announcement(self) -> Option<String> {
+        self.stage.experimental_announcement().map(|announcement| {
+            let prefix = self.owner().help_text_prefix();
+            format!("{prefix}{announcement}")
+        })
+    }
+}
+
 pub const FEATURES: &[FeatureSpec] = &[
     // Stable features.
     FeatureSpec {
@@ -647,6 +706,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::JsRepl,
         key: "js_repl",
         stage: Stage::Experimental {
+            owner: FeatureOwner::Upstream,
             name: "JavaScript REPL",
             menu_description: "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities. Requires Node >= v22.22.0 installed.",
             announcement: "NEW: JavaScript REPL is now available in /experimental. Enable it, then start a new chat or restart Codex to use it.",
@@ -718,6 +778,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::MemoryTool,
         key: "memories",
         stage: Stage::Experimental {
+            owner: FeatureOwner::Upstream,
             name: "Memories",
             menu_description: "Allow Codex to create new memories from conversations and bring relevant memories into new conversations.",
             announcement: "NEW: Codex can now generate and uses memories. Try is now with `/memories`",
@@ -890,6 +951,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ExternalMigration,
         key: "external_migration",
         stage: Stage::Experimental {
+            owner: FeatureOwner::Upstream,
             name: "External migration",
             menu_description: "Show a startup prompt when Codex detects migratable external agent config for this machine or project.",
             announcement: "",
@@ -1001,6 +1063,7 @@ pub const FEATURES: &[FeatureSpec] = &[
             target_os = "windows"
         )) {
             Stage::Experimental {
+                owner: FeatureOwner::Upstream,
                 name: "Prevent sleep while running",
                 menu_description: "Keep your computer awake while Codex is running a thread.",
                 announcement: "NEW: Prevent sleep while running is now available in /experimental.",

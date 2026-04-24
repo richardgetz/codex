@@ -33,18 +33,18 @@ lazy_static! {
             true
         })
         .collect();
-    static ref ALL_TOOLTIPS: Vec<&'static str> = {
+    static ref ALL_TOOLTIPS: Vec<String> = {
         let mut tips = Vec::new();
-        tips.extend(TOOLTIPS.iter().copied());
+        tips.extend(TOOLTIPS.iter().copied().map(str::to_owned));
         tips.extend(experimental_tooltips());
         tips
     };
 }
 
-fn experimental_tooltips() -> Vec<&'static str> {
+fn experimental_tooltips() -> Vec<String> {
     FEATURES
         .iter()
-        .filter_map(|spec| spec.stage.experimental_announcement())
+        .filter_map(|spec| spec.user_facing_experimental_announcement())
         .collect()
 }
 
@@ -84,7 +84,7 @@ pub(crate) fn get_tooltip(plan: Option<PlanType>, fast_mode_enabled: bool) -> Op
         }
     }
 
-    pick_tooltip(&mut rng).map(str::to_string)
+    pick_tooltip(&mut rng)
 }
 
 fn paid_app_tooltip() -> Option<&'static str> {
@@ -110,13 +110,13 @@ fn pick_paid_tooltip<R: Rng + ?Sized>(
     }
 }
 
-fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R) -> Option<&'static str> {
+fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R) -> Option<String> {
     if ALL_TOOLTIPS.is_empty() {
         None
     } else {
         ALL_TOOLTIPS
             .get(rng.random_range(0..ALL_TOOLTIPS.len()))
-            .copied()
+            .cloned()
     }
 }
 
