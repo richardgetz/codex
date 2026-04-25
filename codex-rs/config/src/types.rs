@@ -409,6 +409,9 @@ pub struct OrchestratorToml {
     /// when supervision state has not otherwise changed. `0` disables
     /// proactive model check-ins and relies only on mechanical state changes.
     pub active_agent_checkin_seconds: Option<u32>,
+    /// Collaboration modes Orchestrator mode is allowed to launch for child
+    /// agents. Defaults to `["default"]`.
+    pub allowed_spawn_modes: Option<Vec<ModeKind>>,
 }
 
 /// Thread-control settings loaded from config.toml.
@@ -459,6 +462,7 @@ impl From<OrchestratorEscalationToml> for OrchestratorEscalationConfig {
 pub struct OrchestratorConfig {
     pub escalation: OrchestratorEscalationConfig,
     pub active_agent_checkin_seconds: u32,
+    pub allowed_spawn_modes: Vec<ModeKind>,
 }
 
 impl Default for OrchestratorConfig {
@@ -466,6 +470,7 @@ impl Default for OrchestratorConfig {
         Self {
             escalation: OrchestratorEscalationConfig::default(),
             active_agent_checkin_seconds: 600,
+            allowed_spawn_modes: vec![ModeKind::Default],
         }
     }
 }
@@ -477,6 +482,10 @@ impl From<OrchestratorToml> for OrchestratorConfig {
             active_agent_checkin_seconds: toml
                 .active_agent_checkin_seconds
                 .unwrap_or_else(|| Self::default().active_agent_checkin_seconds),
+            allowed_spawn_modes: toml
+                .allowed_spawn_modes
+                .filter(|modes| !modes.is_empty())
+                .unwrap_or_else(|| Self::default().allowed_spawn_modes),
         }
     }
 }

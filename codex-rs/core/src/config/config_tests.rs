@@ -510,6 +510,7 @@ tool = "imessage_send_message"
 
 [orchestrator]
 active_agent_checkin_seconds = 900
+allowed_spawn_modes = ["default", "continuous"]
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -523,6 +524,7 @@ active_agent_checkin_seconds = 900
                 tool: Some("imessage_send_message".to_string()),
             }),
             active_agent_checkin_seconds: Some(900),
+            allowed_spawn_modes: Some(vec![ModeKind::Default, ModeKind::Continuous]),
         })
     );
 }

@@ -173,6 +173,37 @@ async fn requested_spawn_agent_collaboration_mode_applies_explicit_overrides() {
     );
 }
 
+#[tokio::test]
+async fn requested_spawn_agent_collaboration_mode_blocks_disallowed_orchestrator_child_mode() {
+    let (_session, mut turn) = make_session_and_context().await;
+    turn.collaboration_mode.mode = ModeKind::Orchestrator;
+    let config = (*turn.config).clone();
+    let mode_masks = vec![CollaborationModeMask {
+        name: "Plan".to_string(),
+        mode: Some(ModeKind::Plan),
+        model: Some("gpt-plan".to_string()),
+        reasoning_effort: Some(Some(ReasoningEffort::Medium)),
+        developer_instructions: Some(Some("plan mode".to_string())),
+    }];
+
+    let err = requested_spawn_agent_collaboration_mode(
+        &turn,
+        &config,
+        Some(ModeKind::Plan),
+        None,
+        None,
+        &mode_masks,
+    )
+    .expect_err("orchestrator should reject non-default child modes by default");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "Orchestrator mode can only spawn child collaboration modes allowed by `orchestrator.allowed_spawn_modes` (currently: default); `plan` is blocked.".to_string(),
+        )
+    );
+}
+
 async fn install_role_with_model_override(turn: &mut TurnContext) -> String {
     let role_name = "fork-context-role".to_string();
     tokio::fs::create_dir_all(&turn.config.codex_home)
@@ -756,6 +787,96 @@ async fn multi_agent_v2_spawn_fork_turns_all_inherits_parent_collaboration_mode(
     assert_eq!(
         child_thread.codex.session.collaboration_mode().await,
         parent_mode
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_fork_turns_all_downgrades_orchestrator_parent_to_default_child_mode()
+{
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config);
+    let parent_mode = CollaborationMode {
+        mode: ModeKind::Orchestrator,
+        settings: Settings {
+            model: turn.model_info.slug.clone(),
+            reasoning_effort: Some(ReasoningEffort::Low),
+            developer_instructions: Some("orchestrator mode".to_string()),
+        },
+    };
+    root.thread
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            permission_profile: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: Some(parent_mode.clone()),
+            personality: None,
+        })
+        .await
+        .expect("parent mode override should submit");
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if root.thread.codex.session.collaboration_mode().await == parent_mode {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("parent collaboration mode should be updated");
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "continue with the forked context",
+                "task_name": "forked_default",
+                "fork_turns": "all"
+            })),
+        ))
+        .await
+        .expect("forked spawn should fall back to default child mode");
+
+    let child_thread_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(
+            session.conversation_id,
+            &turn.session_source,
+            "forked_default",
+        )
+        .await
+        .expect("relative path should resolve");
+    let child_thread = manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be tracked");
+
+    assert_eq!(
+        child_thread.codex.session.collaboration_mode().await.mode,
+        ModeKind::Default
     );
 }
 

@@ -1,24 +1,30 @@
-## Orchestrator Memory Consolidation
+## Orchestrator Continuity Memory Consolidation
 
-You are maintaining user-level Orchestrator memory in `{{ memory_root }}`.
+You are maintaining user-level Orchestrator continuity memory in `{{ memory_root }}`.
 
-This memory is not project memory. Keep only durable interaction and methodology
-preferences such as:
-- delegation style
-- clarification expectations
-- communication preferences
-- workflow guardrails
-- stable instructions about how to manage sessions or other agents
+This memory is not project memory. It exists to help the user feel understood,
+remembered, adapted to, and carried forward across sessions.
+
+Preserve continuity when the user signals future relevance, identity,
+preference, relationship context, or a desire for follow-through.
+
+Keep and organize:
+- durable workflow and communication preferences
+- stable guardrails for how to help the user
+- meaningful personal context that would help future interaction feel more
+  understanding or considerate
+- deferred follow-up state the user clearly expects the assistant to revisit
 
 Do not keep:
 - repo-specific implementation facts
-- temporary task details
-- one-off requests that do not look durable
-- restatements that add no long-term operating value
+- disposable one-off implementation details
+- temporary chatter with no continuity value
+- restatements that add no future operating value
 
 Use the existing memory only as prior context, not as gospel. Prefer newer,
 clearer, and more repeated user guidance. Merge duplicates, resolve conflicts,
-and prune stale or weak items.
+prune stale or weak items, and honor explicit forget/delete instructions by
+removing items from the relevant section when the target is clear.
 
 Existing summary:
 {{ existing_summary }}
@@ -26,7 +32,7 @@ Existing summary:
 Existing profile:
 {{ existing_profile }}
 
-Recent preference events from `preferences.jsonl`:
+Recent continuity events from `preferences.jsonl`:
 {{ selected_events }}
 
 Return strict JSON only, with this exact shape:
@@ -39,5 +45,9 @@ Return strict JSON only, with this exact shape:
 Rules:
 - `summary_markdown` should be concise markdown beginning with `# Orchestrator Memory Summary`
 - `profile_markdown` should be fuller markdown beginning with `# Orchestrator Memory Profile`
+- Use sections when helpful, especially:
+  - `## Working Preferences`
+  - `## Personal Context`
+  - `## Follow-Up State`
 - If nothing durable should remain, return empty strings for both markdown fields and set `should_clear` to true
 - If durable preferences remain, set `should_clear` to false

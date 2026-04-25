@@ -1594,6 +1594,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         shared,
         approval_policy,
         web_search,
+        startup_collaboration_mode,
         prompt,
         config_overrides,
         ..
@@ -1606,6 +1607,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     }
     if web_search {
         interactive.web_search = true;
+    }
+    if let Some(mode) = startup_collaboration_mode {
+        interactive.startup_collaboration_mode = Some(mode);
     }
     if let Some(prompt) = prompt {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
@@ -1779,6 +1783,37 @@ mod tests {
         assert_eq!(
             cmd.images,
             vec![PathBuf::from("/tmp/a.png"), PathBuf::from("/tmp/b.png")]
+        );
+    }
+
+    #[test]
+    fn interactive_collab_flag_parses_case_insensitively() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "--collab", "OrChEsTrAtOr"]).expect("parse");
+
+        assert_eq!(
+            cli.interactive.startup_collaboration_mode,
+            Some(codex_protocol::config_types::ModeKind::Orchestrator)
+        );
+    }
+
+    #[test]
+    fn interactive_collab_flag_accepts_one_letter_shorthand() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--collab", "o"]).expect("parse");
+
+        assert_eq!(
+            cli.interactive.startup_collaboration_mode,
+            Some(codex_protocol::config_types::ModeKind::Orchestrator)
+        );
+    }
+
+    #[test]
+    fn resume_collab_flag_is_merged_into_interactive_cli() {
+        let interactive = finalize_resume_from_args(["codex", "resume", "--collab", "P"].as_ref());
+
+        assert_eq!(
+            interactive.startup_collaboration_mode,
+            Some(codex_protocol::config_types::ModeKind::Plan)
         );
     }
 

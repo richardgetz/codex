@@ -587,6 +587,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) is_first_run: bool,
     pub(crate) status_account_display: Option<StatusAccountDisplay>,
     pub(crate) initial_plan_type: Option<PlanType>,
+    pub(crate) initial_collaboration_mode: Option<ModeKind>,
     pub(crate) model: Option<String>,
     pub(crate) startup_tooltip_override: Option<String>,
     // Shared latch so we only warn once about invalid status-line item IDs.
@@ -5117,6 +5118,7 @@ impl ChatWidget {
             is_first_run,
             status_account_display,
             initial_plan_type,
+            initial_collaboration_mode,
             model,
             startup_tooltip_override,
             status_line_invalid_items_warned,
@@ -5136,8 +5138,12 @@ impl ChatWidget {
         let model_for_header = model
             .clone()
             .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
-        let active_collaboration_mask =
-            Self::initial_collaboration_mask(&config, model_catalog.as_ref(), model_override);
+        let active_collaboration_mask = Self::initial_collaboration_mask(
+            &config,
+            model_catalog.as_ref(),
+            model_override,
+            initial_collaboration_mode,
+        );
         let header_model = active_collaboration_mask
             .as_ref()
             .and_then(|mask| mask.model.clone())
@@ -10139,7 +10145,6 @@ impl ChatWidget {
         self.effective_reasoning_effort()
     }
 
-    #[cfg(test)]
     pub(crate) fn active_collaboration_mode_kind(&self) -> ModeKind {
         self.active_mode_kind()
     }
@@ -10153,12 +10158,35 @@ impl ChatWidget {
     }
 
     fn initial_collaboration_mask(
-        _config: &Config,
+        config: &Config,
         model_catalog: &ModelCatalog,
         model_override: Option<&str>,
+        initial_mode: Option<ModeKind>,
     ) -> Option<CollaborationModeMask> {
-        let mut mask = collaboration_modes::default_mask(model_catalog)?;
-        if let Some(model_override) = model_override {
+        let mut mask = initial_mode
+            .and_then(|mode| collaboration_modes::mask_for_kind(model_catalog, mode))
+            .or_else(|| collaboration_modes::default_mask(model_catalog))?;
+        if mask.mode == Some(ModeKind::Plan)
+            && let Some(effort) = config.plan_mode_reasoning_effort
+        {
+            mask.reasoning_effort = Some(Some(effort));
+        }
+
+        if mask.mode == Some(ModeKind::Orchestrator) {
+            if mask.model.is_none() {
+                mask.model = config.thread_control.orchestrator.model.clone();
+            }
+            if mask.reasoning_effort.is_none()
+                && let Some(effort) = config.thread_control.orchestrator.reasoning_effort
+            {
+                mask.reasoning_effort = Some(Some(effort));
+            }
+        }
+        let should_apply_model_override = !matches!(
+            initial_mode,
+            Some(ModeKind::Orchestrator) if config.thread_control.orchestrator.model.is_some()
+        );
+        if should_apply_model_override && let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
         }
         Some(mask)

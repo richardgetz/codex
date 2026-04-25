@@ -1248,6 +1248,16 @@
       },
       "type": "object"
     },
+    "ModeKind": {
+      "description": "Initial collaboration mode to use when the TUI starts.",
+      "enum": [
+        "plan",
+        "continuous",
+        "orchestrator",
+        "default"
+      ],
+      "type": "string"
+    },
     "ModelAvailabilityNuxConfig": {
       "additionalProperties": {
         "format": "uint32",
@@ -1733,6 +1743,13 @@
           "format": "uint32",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "allowed_spawn_modes": {
+          "description": "Collaboration modes Orchestrator mode is allowed to launch for child agents. Defaults to `[\"default\"]`.",
+          "items": {
+            "$ref": "#/definitions/ModeKind"
+          },
+          "type": "array"
         },
         "escalation": {
           "allOf": [

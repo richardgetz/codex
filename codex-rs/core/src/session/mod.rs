@@ -2962,8 +2962,11 @@ impl Session {
             && (turn_context.config.orchestrator_memory.scope == MemoriesScope::All
                 || turn_context.collaboration_mode.mode == ModeKind::Orchestrator)
             && let Some(orchestrator_memory_prompt) =
-                build_orchestrator_memory_developer_instructions(&turn_context.config.codex_home)
-                    .await
+                build_orchestrator_memory_developer_instructions(
+                    &turn_context.config.codex_home,
+                    &turn_context.config.orchestrator_memory,
+                )
+                .await
         {
             developer_sections.push(orchestrator_memory_prompt);
         }

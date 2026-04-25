@@ -1395,6 +1395,7 @@ async fn run_ratatui_app(
         prompt,
         shared,
         no_alt_screen,
+        startup_collaboration_mode,
         ..
     } = cli;
     let images = shared.into_inner().images;
@@ -1435,6 +1436,7 @@ async fn run_ratatui_app(
         active_profile,
         prompt,
         images,
+        startup_collaboration_mode,
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?

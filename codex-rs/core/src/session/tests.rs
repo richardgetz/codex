@@ -6337,6 +6337,42 @@ async fn build_initial_context_injects_orchestrator_memory_in_default_mode_when_
 }
 
 #[tokio::test]
+async fn build_initial_context_surfaces_recent_orchestrator_memory_when_summary_is_stale() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.orchestrator_memory.enabled = true;
+        },
+    )
+    .await;
+    let mut turn_context = Arc::try_unwrap(turn_context)
+        .expect("turn context should not have additional strong references");
+    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
+    let orchestrator_memory_dir = turn_context.config.codex_home.join("orchestrator_memory");
+    std::fs::create_dir_all(&orchestrator_memory_dir).expect("create orchestrator memory dir");
+    std::fs::write(
+        orchestrator_memory_dir.join("summary.md"),
+        "# Orchestrator Memory Summary\n\n## Follow-Up State\n- Older orchestration note.\n",
+    )
+    .expect("write orchestrator memory summary");
+    std::fs::write(
+        orchestrator_memory_dir.join("preferences.jsonl"),
+        "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"personal_context\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"calendar\",\"candidate\":\"User's meeting scheduling link: https://calendar.app.google/example-booking-link\",\"source_excerpt\":\"remember this link\",\"confidence\":0.8}\n",
+    )
+    .expect("write orchestrator memory events");
+
+    let orchestrator_context = session.build_initial_context(&turn_context).await;
+    let orchestrator_developer_texts = developer_input_texts(&orchestrator_context);
+    assert!(
+        orchestrator_developer_texts
+            .iter()
+            .any(|text| text.contains("https://calendar.app.google/example-booking-link")),
+        "expected recent raw orchestrator memory item in developer instructions, got {orchestrator_developer_texts:?}"
+    );
+}
+
+#[tokio::test]
 async fn build_initial_context_injects_orchestrator_supervision_in_orchestrator_mode() {
     let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),

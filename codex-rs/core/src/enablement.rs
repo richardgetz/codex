@@ -17,7 +17,9 @@ fn selector_matches(selector: &str, candidates: &[&str]) -> bool {
         return false;
     }
     if selector == "*" {
-        return candidates.iter().any(|candidate| !candidate.trim().is_empty());
+        return candidates
+            .iter()
+            .any(|candidate| !candidate.trim().is_empty());
     }
 
     candidates.iter().any(|candidate| {

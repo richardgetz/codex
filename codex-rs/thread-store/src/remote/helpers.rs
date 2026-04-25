@@ -74,6 +74,11 @@ pub(super) fn proto_session_source(source: &SessionSource) -> proto::SessionSour
             sub_agent_role: agent_role.clone(),
             ..Default::default()
         },
+        SessionSource::SubAgent(SubAgentSource::MemoryExtraction) => proto::SessionSource {
+            kind: proto::SessionSourceKind::SubAgentOther.into(),
+            sub_agent_other: Some("memory_extraction".to_string()),
+            ..Default::default()
+        },
         SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
             proto_source(proto::SessionSourceKind::SubAgentMemoryConsolidation)
         }
@@ -225,9 +230,14 @@ fn session_source_from_proto(source: &proto::SessionSource) -> ThreadStoreResult
         proto::SessionSourceKind::SubAgentMemoryConsolidation => {
             SessionSource::SubAgent(SubAgentSource::MemoryConsolidation)
         }
-        proto::SessionSourceKind::SubAgentOther => SessionSource::SubAgent(SubAgentSource::Other(
-            source.sub_agent_other.clone().unwrap_or_default(),
-        )),
+        proto::SessionSourceKind::SubAgentOther => {
+            let label = source.sub_agent_other.clone().unwrap_or_default();
+            if label == "memory_extraction" {
+                SessionSource::SubAgent(SubAgentSource::MemoryExtraction)
+            } else {
+                SessionSource::SubAgent(SubAgentSource::Other(label))
+            }
+        }
     })
 }
 

@@ -1,8 +1,9 @@
 ## Orchestrator Memory
 
 You have access to a user-level Orchestrator memory folder. It is separate from
-project memories and should be used for durable interaction, delegation, and
-methodology preferences.
+project memories and should be used for continuity: durable interaction,
+delegation, personal context, and methodology preferences, plus lightweight
+follow-up state the user expects you to carry forward.
 
 Never update Orchestrator memory. You can only read it.
 
@@ -11,9 +12,13 @@ Use it when any of these are true:
 - you are in Orchestrator mode and need to decide how to interpret the user's
   request,
 - you are choosing how to delegate to subagents,
-- you need stable preferences about clarification, communication, or execution
-  style,
+- you need stable preferences or personal context about clarification,
+  communication, execution style, or how to adapt to this user,
+- you need to pick up a previously deferred thread or revisit-later item,
 - the user asks what you should remember about working with them.
+- the user asks a direct recall question such as what something was, to share a
+  saved link or fact, to get a remembered item, or to remember/forget
+  something.
 
 Orchestrator memory layout:
 
@@ -26,8 +31,12 @@ Quick pass:
 1. Read the summary below.
 2. If that is enough, continue.
 3. Only if you need higher-fidelity guidance, open `profile.md`.
-4. Ignore project/task facts here; those belong in project memories or rollout
-   history, not Orchestrator memory.
+4. Treat this as continuity memory: preferences, personal context, and
+   lightweight follow-up state.
+5. For direct recall-style asks, treat the remembered content below as a
+   first-class source before improvising or asking the user to restate it.
+6. Ignore repo implementation details here; those belong in project memories or
+   rollout history, not Orchestrator memory.
 
 ========= ORCHESTRATOR_MEMORY_SUMMARY BEGINS =========
 {{ summary }}
