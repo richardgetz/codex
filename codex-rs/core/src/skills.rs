@@ -9,6 +9,7 @@ use crate::session::turn_context::TurnContext;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::build_track_events_context;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
@@ -42,6 +43,59 @@ pub use codex_core_skills::remote;
 pub use codex_core_skills::render;
 pub use codex_core_skills::render::SkillRenderSideEffects;
 pub use codex_core_skills::system;
+
+pub(crate) fn skill_allowed_in_mode(
+    config: &Config,
+    mode: ModeKind,
+    skill: &SkillMetadata,
+) -> bool {
+    if let Some(filter) = crate::enablement::skill_enablement_filter(config, mode) {
+        if filter.items.is_empty() {
+            return true;
+        }
+        let path = skill.path_to_skills_md.as_path().to_string_lossy();
+        let matches = filter.items.iter().any(|selector| {
+            let selector = selector.trim();
+            !selector.is_empty()
+                && (skill.name == selector || path == selector || path.ends_with(selector))
+        });
+
+        return match filter.mode {
+            codex_config::EnablementFilterMode::Include => matches,
+            codex_config::EnablementFilterMode::Exclude => !matches,
+        };
+    }
+
+    let Some(filter) = config.skills.modes.get(&mode) else {
+        return true;
+    };
+    if filter.skills.is_empty() {
+        return true;
+    }
+
+    let path = skill.path_to_skills_md.as_path().to_string_lossy();
+    let matches = filter.skills.iter().any(|selector| {
+        let selector = selector.trim();
+        !selector.is_empty()
+            && (skill.name == selector || path == selector || path.ends_with(selector))
+    });
+
+    match filter.mode {
+        codex_config::types::SkillModeFilterMode::Include => matches,
+        codex_config::types::SkillModeFilterMode::Exclude => !matches,
+    }
+}
+
+pub(crate) fn filter_skills_for_mode<'a>(
+    config: &Config,
+    mode: ModeKind,
+    skills: &'a [SkillMetadata],
+) -> Vec<&'a SkillMetadata> {
+    skills
+        .iter()
+        .filter(|skill| skill_allowed_in_mode(config, mode, skill))
+        .collect()
+}
 
 pub(crate) fn skills_load_input_from_config(
     config: &Config,
@@ -183,6 +237,13 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     ) else {
         return;
     };
+    if !skill_allowed_in_mode(
+        &turn_context.config,
+        turn_context.collaboration_mode.mode,
+        &candidate,
+    ) {
+        return;
+    }
     let invocation = SkillInvocation {
         skill_name: candidate.name,
         skill_scope: candidate.scope,

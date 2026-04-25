@@ -15,6 +15,7 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_manager::latest_collaboration_mode_from_rollout_items;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
+use crate::tools::handlers::multi_agents_common::inherited_spawn_agent_collaboration_mode;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -453,6 +454,13 @@ impl AgentControl {
                 )
             });
         }
+        initial_collaboration_mode = initial_collaboration_mode.and_then(|collaboration_mode| {
+            inherited_spawn_agent_collaboration_mode(
+                collaboration_mode.mode,
+                &config,
+                collaboration_mode,
+            )
+        });
         forked_rollout_items.retain(keep_forked_rollout_item);
 
         state

@@ -85,6 +85,16 @@ impl ToolHandler for Handler {
             )
             .await;
         result?;
+        session
+            .services
+            .orchestrator_supervision
+            .note_status(session.conversation_id, agent_id, &AgentStatus::Shutdown)
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to update orchestrator supervision close status: {err}"
+                ))
+            })?;
 
         Ok(CloseAgentResult {
             previous_status: status,

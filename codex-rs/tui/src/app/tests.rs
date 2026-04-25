@@ -92,6 +92,24 @@ use std::sync::atomic::AtomicBool;
 use tempfile::tempdir;
 use tokio::time;
 
+#[tokio::test]
+async fn startup_orchestrator_mode_applies_thread_control_model_to_session_config() {
+    let mut config = ConfigBuilder::default()
+        .build()
+        .await
+        .expect("config should build");
+    config.thread_control.orchestrator.model = Some("gpt-5.3-codex-spark".to_string());
+    config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
+
+    let startup = config_for_startup_collaboration_mode(&config, Some(ModeKind::Orchestrator));
+
+    assert_eq!(startup.model.as_deref(), Some("gpt-5.3-codex-spark"));
+    assert_eq!(
+        startup.model_reasoning_effort,
+        Some(ReasoningEffortConfig::Low)
+    );
+}
+
 macro_rules! assert_app_snapshot {
     ($name:expr, $value:expr $(,)?) => {
         insta::with_settings!({snapshot_path => "../snapshots"}, {
@@ -404,6 +422,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
         is_first_run: false,
         status_account_display: None,
         initial_plan_type: None,
+        initial_collaboration_mode: None,
         model: Some(model),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
@@ -4512,6 +4531,7 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         is_first_run: false,
         status_account_display: app.chat_widget.status_account_display().cloned(),
         initial_plan_type: app.chat_widget.current_plan_type(),
+        initial_collaboration_mode: None,
         model: Some(app.chat_widget.current_model().to_string()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),

@@ -125,6 +125,7 @@ use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecApprovalRequestEvent;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -228,6 +229,20 @@ fn app_server_request_id_to_mcp_request_id(
             codex_protocol::mcp::RequestId::Integer(*value)
         }
     }
+}
+
+fn config_for_startup_collaboration_mode(config: &Config, mode: Option<ModeKind>) -> Config {
+    let mut startup_config = config.clone();
+    if mode == Some(ModeKind::Orchestrator) {
+        if let Some(model) = startup_config.thread_control.orchestrator.model.clone() {
+            startup_config.model = Some(model);
+        }
+        if let Some(reasoning_effort) = startup_config.thread_control.orchestrator.reasoning_effort
+        {
+            startup_config.model_reasoning_effort = Some(reasoning_effort);
+        }
+    }
+    startup_config
 }
 
 fn command_execution_decision_to_review_decision(
@@ -624,6 +639,7 @@ impl App {
             is_first_run: false,
             status_account_display: self.chat_widget.status_account_display().cloned(),
             initial_plan_type: self.chat_widget.current_plan_type(),
+            initial_collaboration_mode: Some(self.chat_widget.active_collaboration_mode_kind()),
             model: Some(self.chat_widget.current_model().to_string()),
             startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
@@ -642,6 +658,7 @@ impl App {
         active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
+        initial_collaboration_mode: Option<ModeKind>,
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
@@ -733,10 +750,16 @@ impl App {
         let requires_openai_auth = bootstrap.requires_openai_auth;
         let status_account_display = bootstrap.status_account_display.clone();
         let initial_plan_type = bootstrap.plan_type;
+        let session_bootstrap_config =
+            config_for_startup_collaboration_mode(&config, initial_collaboration_mode);
+        let session_bootstrap_model = session_bootstrap_config
+            .model
+            .clone()
+            .unwrap_or_else(|| model.clone());
         let session_telemetry = SessionTelemetry::new(
             ThreadId::new(),
-            model.as_str(),
-            model.as_str(),
+            session_bootstrap_model.as_str(),
+            session_bootstrap_model.as_str(),
             /*account_id*/ None,
             bootstrap.account_email.clone(),
             auth_mode,
@@ -761,12 +784,12 @@ impl App {
             Self::should_wait_for_initial_session(&session_selection);
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
-                let started = app_server.start_thread(&config).await?;
+                let started = app_server.start_thread(&session_bootstrap_config).await?;
                 let startup_tooltip_override =
                     prepare_startup_tooltip_override(&mut config, &available_models, is_first_run)
                         .await;
                 let init = crate::chatwidget::ChatWidgetInit {
-                    config: config.clone(),
+                    config: session_bootstrap_config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
@@ -782,7 +805,8 @@ impl App {
                     is_first_run,
                     status_account_display: status_account_display.clone(),
                     initial_plan_type,
-                    model: Some(model.clone()),
+                    initial_collaboration_mode,
+                    model: Some(session_bootstrap_model.clone()),
                     startup_tooltip_override,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
@@ -793,14 +817,14 @@ impl App {
             }
             SessionSelection::Resume(target_session) => {
                 let resumed = app_server
-                    .resume_thread(config.clone(), target_session.thread_id)
+                    .resume_thread(session_bootstrap_config.clone(), target_session.thread_id)
                     .await
                     .wrap_err_with(|| {
                         let target_label = target_session.display_label();
                         format!("Failed to resume session from {target_label}")
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
-                    config: config.clone(),
+                    config: session_bootstrap_config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
@@ -816,7 +840,8 @@ impl App {
                     is_first_run,
                     status_account_display: status_account_display.clone(),
                     initial_plan_type,
-                    model: config.model.clone(),
+                    initial_collaboration_mode,
+                    model: session_bootstrap_config.model.clone(),
                     startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
@@ -832,14 +857,14 @@ impl App {
                     &[("source", "cli_subcommand")],
                 );
                 let forked = app_server
-                    .fork_thread(config.clone(), target_session.thread_id)
+                    .fork_thread(session_bootstrap_config.clone(), target_session.thread_id)
                     .await
                     .wrap_err_with(|| {
                         let target_label = target_session.display_label();
                         format!("Failed to fork session from {target_label}")
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
-                    config: config.clone(),
+                    config: session_bootstrap_config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
@@ -855,7 +880,8 @@ impl App {
                     is_first_run,
                     status_account_display: status_account_display.clone(),
                     initial_plan_type,
-                    model: config.model.clone(),
+                    initial_collaboration_mode,
+                    model: session_bootstrap_config.model.clone(),
                     startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     terminal_title_invalid_items_warned: terminal_title_invalid_items_warned

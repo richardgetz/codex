@@ -11,6 +11,7 @@ use crate::types::AnalyticsConfigToml;
 use crate::types::ApprovalsReviewer;
 use crate::types::AppsConfigToml;
 use crate::types::AuthCredentialsStoreMode;
+use crate::types::EnablementConfig;
 use crate::types::FeedbackConfigToml;
 use crate::types::History;
 use crate::types::MarketplaceConfig;
@@ -19,6 +20,7 @@ use crate::types::MemoriesToml;
 use crate::types::Notice;
 use crate::types::OAuthCredentialsStoreMode;
 use crate::types::OrchestratorMemoryToml;
+use crate::types::OrchestratorToml;
 use crate::types::OtelConfigToml;
 use crate::types::PluginConfig;
 use crate::types::SandboxWorkspaceWrite;
@@ -337,12 +339,19 @@ pub struct ConfigToml {
     /// Orchestrator-memory subsystem settings.
     pub orchestrator_memory: Option<OrchestratorMemoryToml>,
 
+    /// Orchestrator supervision and escalation settings.
+    #[serde(default)]
+    pub orchestrator: Option<OrchestratorToml>,
+
     /// Thread-control subsystem settings.
     #[serde(default)]
     pub thread_control: Option<ThreadControlToml>,
 
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
+
+    /// Mode-scoped visibility rules for skills, MCPs/apps, and plugins.
+    pub enablement: Option<EnablementConfig>,
 
     /// Lifecycle hooks configured inline in TOML.
     pub hooks: Option<HookEventsToml>,

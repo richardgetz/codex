@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -64,6 +65,8 @@ pub(crate) struct ThreadState {
     pub(crate) turn_summary: TurnSummary,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     router_tick: Option<CancellationToken>,
+    pub(crate) last_router_supervision_updated_at: Option<String>,
+    pub(crate) last_router_model_check_at: Option<Instant>,
     pub(crate) experimental_raw_events: bool,
     pub(crate) listener_generation: u64,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,

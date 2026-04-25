@@ -274,6 +274,41 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::OrchestratorMemoryForgetResult { needle, result } => match result {
+                Ok(pruned) => {
+                    let total_removed = pruned.removed_preference_events
+                        + pruned.removed_summary_lines
+                        + pruned.removed_profile_lines;
+                    if total_removed == 0 {
+                        self.chat_widget.add_info_message(
+                            format!(
+                                "No orchestrator-memory entries matched \"{needle}\"."
+                            ),
+                            Some(
+                                "Try a broader phrase or an exact URL/token from the stored memory."
+                                    .to_string(),
+                            ),
+                        );
+                    } else {
+                        self.chat_widget.add_info_message(
+                            format!(
+                                "Pruned orchestrator memory for \"{needle}\"."
+                            ),
+                            Some(format!(
+                                "Removed {} preference events, {} summary lines, and {} profile lines.",
+                                pruned.removed_preference_events,
+                                pruned.removed_summary_lines,
+                                pruned.removed_profile_lines,
+                            )),
+                        );
+                    }
+                }
+                Err(err) => {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed pruning orchestrator memory for \"{needle}\": {err}"
+                    ));
+                }
+            },
             AppEvent::OpenAppLink {
                 app_id,
                 title,

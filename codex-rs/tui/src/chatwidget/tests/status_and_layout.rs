@@ -170,6 +170,7 @@ async fn helpers_are_available_and_do_not_panic() {
         is_first_run: true,
         status_account_display: None,
         initial_plan_type: None,
+        initial_collaboration_mode: None,
         model: Some(resolved_model),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),

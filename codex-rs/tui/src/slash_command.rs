@@ -44,6 +44,8 @@ pub enum SlashCommand {
     Statusline,
     Theme,
     Mcp,
+    #[strum(serialize = "orchestrator-memory-forget")]
+    OrchestratorMemoryForget,
     Apps,
     Plugins,
     Logout,
@@ -116,6 +118,9 @@ impl SlashCommand {
             SlashCommand::Experimental => "toggle experimental features",
             SlashCommand::Memories => "configure memory use and generation",
             SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
+            SlashCommand::OrchestratorMemoryForget => {
+                "remove matching entries from orchestrator memory and reconsolidate"
+            }
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
             SlashCommand::Logout => "log out of Codex",
@@ -142,6 +147,7 @@ impl SlashCommand {
                 | SlashCommand::Side
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::OrchestratorMemoryForget
         )
     }
 
@@ -187,6 +193,7 @@ impl SlashCommand {
             | SlashCommand::Ps
             | SlashCommand::Stop
             | SlashCommand::Mcp
+            | SlashCommand::OrchestratorMemoryForget
             | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Feedback

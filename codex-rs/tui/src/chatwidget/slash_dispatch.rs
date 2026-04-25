@@ -361,6 +361,9 @@ impl ChatWidget {
             SlashCommand::Mcp => {
                 self.add_mcp_output(McpServerStatusDetail::ToolsAndAuthOnly);
             }
+            SlashCommand::OrchestratorMemoryForget => {
+                self.add_error_message("Usage: /orchestrator-memory-forget <needle>".to_string());
+            }
             SlashCommand::Apps => {
                 self.add_connectors_output();
             }
@@ -547,6 +550,23 @@ impl ChatWidget {
                 "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
                 _ => self.add_error_message("Usage: /mcp [verbose]".to_string()),
             },
+            SlashCommand::OrchestratorMemoryForget if !trimmed.is_empty() => {
+                let tx = self.app_event_tx.clone();
+                let needle = args.clone();
+                let codex_home = self.config.codex_home.clone();
+                let memory_config = self.config.orchestrator_memory.clone();
+                tokio::spawn(async move {
+                    let result =
+                        crate::legacy_core::prune_orchestrator_memory_entries_matching_needle(
+                            &codex_home,
+                            &memory_config,
+                            &needle,
+                        )
+                        .await
+                        .map_err(|err| err.to_string());
+                    tx.send(AppEvent::OrchestratorMemoryForgetResult { needle, result });
+                });
+            }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
                     return;
@@ -725,6 +745,7 @@ impl ChatWidget {
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate
             | SlashCommand::Mcp
+            | SlashCommand::OrchestratorMemoryForget
             | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Rollout

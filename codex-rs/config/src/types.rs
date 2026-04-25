@@ -376,12 +376,118 @@ pub struct OrchestratorThreadControlToml {
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
+/// How Orchestrator mode should raise blockers that need user attention.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OrchestratorEscalationMode {
+    #[default]
+    Inline,
+    Mcp,
+    Both,
+}
+
+/// Orchestrator escalation settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct OrchestratorEscalationToml {
+    /// Where blockers that need the user should be raised.
+    pub mode: Option<OrchestratorEscalationMode>,
+    /// Optional MCP server or communication channel name to use when `mode`
+    /// includes `mcp`.
+    pub channel: Option<String>,
+    /// Optional MCP tool name to use when `mode` includes `mcp`.
+    pub tool: Option<String>,
+}
+
+/// Orchestrator behavior settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct OrchestratorToml {
+    #[serde(default)]
+    pub escalation: Option<OrchestratorEscalationToml>,
+    /// How often Orchestrator mode should proactively re-check active workers
+    /// when supervision state has not otherwise changed. `0` disables
+    /// proactive model check-ins and relies only on mechanical state changes.
+    pub active_agent_checkin_seconds: Option<u32>,
+    /// Collaboration modes Orchestrator mode is allowed to launch for child
+    /// agents. Defaults to `["default"]`.
+    pub allowed_spawn_modes: Option<Vec<ModeKind>>,
+}
+
 /// Thread-control settings loaded from config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ThreadControlToml {
     #[serde(default)]
     pub orchestrator: Option<OrchestratorThreadControlToml>,
+}
+
+/// Effective orchestrator escalation settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrchestratorEscalationConfig {
+    pub mode: OrchestratorEscalationMode,
+    pub channel: Option<String>,
+    pub tool: Option<String>,
+}
+
+impl Default for OrchestratorEscalationConfig {
+    fn default() -> Self {
+        Self {
+            mode: OrchestratorEscalationMode::Inline,
+            channel: None,
+            tool: None,
+        }
+    }
+}
+
+impl From<OrchestratorEscalationToml> for OrchestratorEscalationConfig {
+    fn from(toml: OrchestratorEscalationToml) -> Self {
+        let defaults = Self::default();
+        Self {
+            mode: toml.mode.unwrap_or(defaults.mode),
+            channel: toml.channel.and_then(|value| {
+                let value = value.trim().to_string();
+                (!value.is_empty()).then_some(value)
+            }),
+            tool: toml.tool.and_then(|value| {
+                let value = value.trim().to_string();
+                (!value.is_empty()).then_some(value)
+            }),
+        }
+    }
+}
+
+/// Effective orchestrator behavior settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrchestratorConfig {
+    pub escalation: OrchestratorEscalationConfig,
+    pub active_agent_checkin_seconds: u32,
+    pub allowed_spawn_modes: Vec<ModeKind>,
+}
+
+impl Default for OrchestratorConfig {
+    fn default() -> Self {
+        Self {
+            escalation: OrchestratorEscalationConfig::default(),
+            active_agent_checkin_seconds: 600,
+            allowed_spawn_modes: vec![ModeKind::Default],
+        }
+    }
+}
+
+impl From<OrchestratorToml> for OrchestratorConfig {
+    fn from(toml: OrchestratorToml) -> Self {
+        Self {
+            escalation: toml.escalation.unwrap_or_default().into(),
+            active_agent_checkin_seconds: toml
+                .active_agent_checkin_seconds
+                .unwrap_or_else(|| Self::default().active_agent_checkin_seconds),
+            allowed_spawn_modes: toml
+                .allowed_spawn_modes
+                .filter(|modes| !modes.is_empty())
+                .unwrap_or_else(|| Self::default().allowed_spawn_modes),
+        }
+    }
 }
 
 /// Effective orchestrator-specific thread-control settings after defaults are applied.
@@ -760,8 +866,14 @@ pub struct Notice {
     pub external_config_migration_prompts: ExternalConfigMigrationPrompts,
 }
 
+pub use crate::enablement_config::EnablementConfig;
+pub use crate::enablement_config::EnablementFilterConfig;
+pub use crate::enablement_config::EnablementFilterMode;
+pub use crate::enablement_config::ModeEnablementConfig;
 pub use crate::skills_config::BundledSkillsConfig;
 pub use crate::skills_config::SkillConfig;
+pub use crate::skills_config::SkillModeFilterConfig;
+pub use crate::skills_config::SkillModeFilterMode;
 pub use crate::skills_config::SkillsConfig;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]

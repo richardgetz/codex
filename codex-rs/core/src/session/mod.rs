@@ -28,6 +28,8 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
+use crate::enablement::filter_connectors_for_mode;
+use crate::enablement::filter_plugins_for_mode;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
@@ -2960,10 +2962,25 @@ impl Session {
             && (turn_context.config.orchestrator_memory.scope == MemoriesScope::All
                 || turn_context.collaboration_mode.mode == ModeKind::Orchestrator)
             && let Some(orchestrator_memory_prompt) =
-                build_orchestrator_memory_developer_instructions(&turn_context.config.codex_home)
-                    .await
+                build_orchestrator_memory_developer_instructions(
+                    &turn_context.config.codex_home,
+                    &turn_context.config.orchestrator_memory,
+                )
+                .await
         {
             developer_sections.push(orchestrator_memory_prompt);
+        }
+        if turn_context.collaboration_mode.mode == ModeKind::Orchestrator
+            && let Some(orchestrator_supervision_prompt) = self
+                .services
+                .orchestrator_supervision
+                .build_developer_instructions(
+                    self.conversation_id,
+                    &turn_context.config.orchestrator.escalation,
+                )
+                .await
+        {
+            developer_sections.push(orchestrator_supervision_prompt);
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
@@ -3003,6 +3020,11 @@ impl Session {
                     &turn_context.config,
                 )
                 .await;
+            let accessible_and_enabled_connectors = filter_connectors_for_mode(
+                &turn_context.config,
+                turn_context.collaboration_mode.mode,
+                &accessible_and_enabled_connectors,
+            );
             if let Some(apps_instructions) =
                 AppsInstructions::from_connectors(&accessible_and_enabled_connectors)
             {
@@ -3014,6 +3036,14 @@ impl Session {
                 .turn_skills
                 .outcome
                 .allowed_skills_for_implicit_invocation();
+            let implicit_skills = crate::skills::filter_skills_for_mode(
+                &turn_context.config,
+                turn_context.collaboration_mode.mode,
+                &implicit_skills,
+            )
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
             let available_skills = build_available_skills(
                 &implicit_skills,
                 default_skill_metadata_budget(turn_context.model_info.context_window),
@@ -3041,8 +3071,16 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&turn_context.config)
             .await;
+        let filtered_plugins = filter_plugins_for_mode(
+            &turn_context.config,
+            turn_context.collaboration_mode.mode,
+            loaded_plugins.capability_summaries(),
+        )
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
         if let Some(plugin_instructions) =
-            AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
+            AvailablePluginsInstructions::from_plugins(&filtered_plugins)
         {
             developer_sections.push(plugin_instructions.render());
         }

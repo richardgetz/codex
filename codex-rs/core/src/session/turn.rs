@@ -18,6 +18,12 @@ use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::connectors;
 use crate::context::ContextualUserFragment;
+use crate::enablement::filter_connectors_for_mode;
+use crate::enablement::filter_discoverable_tools_for_mode;
+use crate::enablement::filter_lazy_mcp_servers_for_mode;
+use crate::enablement::filter_mcp_tools_for_mode;
+use crate::enablement::filter_plugins_for_mode;
+use crate::enablement::lazy_mcp_server_allowed_in_mode;
 use crate::feedback_tags;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::emit_hook_completed_events;
@@ -175,10 +181,17 @@ pub(crate) async fn run_turn(
         .plugins_manager
         .plugins_for_config(&turn_context.config)
         .await;
+    let filtered_plugins = filter_plugins_for_mode(
+        &turn_context.config,
+        turn_context.collaboration_mode.mode,
+        loaded_plugins.capability_summaries(),
+    )
+    .into_iter()
+    .cloned()
+    .collect::<Vec<_>>();
     // Structured plugin:// mentions are resolved from the current session's
     // enabled plugins, then converted into turn-scoped guidance below.
-    let mentioned_plugins =
-        collect_explicit_plugin_mentions(&input, loaded_plugins.capability_summaries());
+    let mentioned_plugins = collect_explicit_plugin_mentions(&input, &filtered_plugins);
     let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
@@ -207,7 +220,11 @@ pub(crate) async fn run_turn(
                 .map(|connector_id| connector_id.0),
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
         );
-        connectors::with_app_enabled_state(connectors, &turn_context.config)
+        filter_connectors_for_mode(
+            &turn_context.config,
+            turn_context.collaboration_mode.mode,
+            &connectors::with_app_enabled_state(connectors, &turn_context.config),
+        )
     } else {
         Vec::new()
     };
@@ -218,9 +235,17 @@ pub(crate) async fn run_turn(
             build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
         });
     let mentioned_skills = skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
+        let filtered_skills = crate::skills::filter_skills_for_mode(
+            &turn_context.config,
+            turn_context.collaboration_mode.mode,
+            &outcome.skills,
+        )
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
         collect_explicit_skill_mentions(
             &input,
-            &outcome.skills,
+            &filtered_skills,
             &outcome.disabled_paths,
             &connector_slug_counts,
         )
@@ -1022,6 +1047,7 @@ pub(crate) fn build_prompt(
             .filter_map(|spec| filter_deferred_dynamic_tool_spec(spec, &deferred_dynamic_tools))
             .collect()
     };
+    let tools = filter_tools_for_collaboration_mode(tools, turn_context);
 
     Prompt {
         input,
@@ -1034,6 +1060,115 @@ pub(crate) fn build_prompt(
             &turn_context.session_source,
         ),
     }
+}
+
+fn filter_tools_for_collaboration_mode(
+    tools: Vec<ToolSpec>,
+    turn_context: &TurnContext,
+) -> Vec<ToolSpec> {
+    if turn_context.collaboration_mode.mode != ModeKind::Orchestrator {
+        return tools;
+    }
+
+    tools
+        .into_iter()
+        .filter_map(|spec| filter_orchestrator_tool_spec(spec, turn_context))
+        .collect()
+}
+
+fn filter_orchestrator_tool_spec(spec: ToolSpec, turn_context: &TurnContext) -> Option<ToolSpec> {
+    match spec {
+        ToolSpec::Function(tool) => {
+            coordination_tool_allowed_in_orchestrator(None, tool.name.as_str(), turn_context)
+                .then_some(ToolSpec::Function(tool))
+        }
+        ToolSpec::Namespace(mut namespace) => {
+            let namespace_name = namespace.name.clone();
+            namespace.tools.retain(|tool| match tool {
+                ResponsesApiNamespaceTool::Function(tool) => {
+                    coordination_tool_allowed_in_orchestrator(
+                        Some(namespace_name.as_str()),
+                        tool.name.as_str(),
+                        turn_context,
+                    )
+                }
+            });
+            (!namespace.tools.is_empty()).then_some(ToolSpec::Namespace(namespace))
+        }
+        ToolSpec::Freeform(tool) => {
+            coordination_tool_allowed_in_orchestrator(None, tool.name.as_str(), turn_context)
+                .then_some(ToolSpec::Freeform(tool))
+        }
+        ToolSpec::ToolSearch { .. }
+        | ToolSpec::LocalShell {}
+        | ToolSpec::ImageGeneration { .. }
+        | ToolSpec::WebSearch { .. } => None,
+    }
+}
+
+fn coordination_tool_allowed_in_orchestrator(
+    namespace: Option<&str>,
+    tool_name: &str,
+    turn_context: &TurnContext,
+) -> bool {
+    const ORCHESTRATOR_COORDINATION_TOOLS: &[&str] = &[
+        "update_plan",
+        "request_user_input",
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+        "followup_task",
+        "list_agents",
+    ];
+
+    ORCHESTRATOR_COORDINATION_TOOLS.contains(&tool_name)
+        || escalation_tool_allowed_in_orchestrator(namespace, tool_name, turn_context)
+}
+
+fn escalation_tool_allowed_in_orchestrator(
+    namespace: Option<&str>,
+    tool_name: &str,
+    turn_context: &TurnContext,
+) -> bool {
+    use codex_config::types::OrchestratorEscalationMode;
+
+    let escalation = &turn_context.config.orchestrator.escalation;
+    if !matches!(
+        escalation.mode,
+        OrchestratorEscalationMode::Mcp | OrchestratorEscalationMode::Both
+    ) {
+        return false;
+    }
+
+    let namespace = namespace.map(normalize_orchestrator_tool_segment);
+    let tool_name = normalize_orchestrator_tool_segment(tool_name);
+    let qualified_name = namespace
+        .as_ref()
+        .map(|namespace| format!("{namespace}/{tool_name}"));
+
+    escalation.tool.as_deref().is_some_and(|configured_tool| {
+        let configured_tool = normalize_orchestrator_tool_segment(configured_tool);
+        configured_tool == tool_name
+            || qualified_name
+                .as_deref()
+                .is_some_and(|qualified_name| configured_tool == qualified_name)
+    }) || escalation.channel.as_deref().is_some_and(|channel| {
+        let channel = normalize_orchestrator_tool_segment(channel);
+        namespace
+            .as_deref()
+            .is_some_and(|namespace| namespace == channel)
+    })
+}
+
+fn normalize_orchestrator_tool_segment(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches("mcp__")
+        .trim_end_matches("__")
+        .replace('.', "/")
+        .to_ascii_lowercase()
 }
 
 fn filter_deferred_dynamic_tool_spec(
@@ -1233,7 +1368,11 @@ pub(crate) async fn built_tools(
         .list_all_tools()
         .or_cancel(cancellation_token)
         .await?;
-    let lazy_mcp_servers = mcp_connection_manager.lazy_server_infos();
+    let lazy_mcp_servers = filter_lazy_mcp_servers_for_mode(
+        &turn_context.config,
+        turn_context.collaboration_mode.mode,
+        &mcp_connection_manager.lazy_server_infos(),
+    );
     drop(mcp_connection_manager);
     let loaded_plugins = sess
         .services
@@ -1245,11 +1384,20 @@ pub(crate) async fn built_tools(
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
 
     let apps_enabled = turn_context.apps_enabled();
-    let accessible_connectors =
-        apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(&all_mcp_tools));
+    let accessible_connectors = apps_enabled.then(|| {
+        filter_connectors_for_mode(
+            &turn_context.config,
+            turn_context.collaboration_mode.mode,
+            &connectors::accessible_connectors_from_mcp_tools(&all_mcp_tools),
+        )
+    });
     let accessible_connectors_with_enabled_state =
         accessible_connectors.as_ref().map(|connectors| {
-            connectors::with_app_enabled_state(connectors.clone(), &turn_context.config)
+            filter_connectors_for_mode(
+                &turn_context.config,
+                turn_context.collaboration_mode.mode,
+                &connectors::with_app_enabled_state(connectors.clone(), &turn_context.config),
+            )
         });
     let connectors = if apps_enabled {
         let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
@@ -1259,9 +1407,10 @@ pub(crate) async fn built_tools(
                 .map(|connector_id| connector_id.0),
             accessible_connectors.clone().unwrap_or_default(),
         );
-        Some(connectors::with_app_enabled_state(
-            connectors,
+        Some(filter_connectors_for_mode(
             &turn_context.config,
+            turn_context.collaboration_mode.mode,
+            &connectors::with_app_enabled_state(connectors, &turn_context.config),
         ))
     } else {
         None
@@ -1276,9 +1425,14 @@ pub(crate) async fn built_tools(
             )
             .await
             .map(|discoverable_tools| {
-                filter_tool_suggest_discoverable_tools_for_client(
+                let discoverable_tools = filter_tool_suggest_discoverable_tools_for_client(
                     discoverable_tools,
                     turn_context.app_server_client_name.as_deref(),
+                );
+                filter_discoverable_tools_for_mode(
+                    &turn_context.config,
+                    turn_context.collaboration_mode.mode,
+                    discoverable_tools,
                 )
             }) {
                 Ok(discoverable_tools) if discoverable_tools.is_empty() => None,
@@ -1309,8 +1463,13 @@ pub(crate) async fn built_tools(
     } else {
         Vec::new()
     };
-    let mcp_tool_exposure = build_mcp_tool_exposure(
+    let filtered_all_mcp_tools = filter_mcp_tools_for_mode(
+        &turn_context.config,
+        turn_context.collaboration_mode.mode,
         &all_mcp_tools,
+    );
+    let mcp_tool_exposure = build_mcp_tool_exposure(
+        &filtered_all_mcp_tools,
         connectors.as_deref(),
         explicitly_enabled.as_slice(),
         &turn_context.config,
@@ -1342,6 +1501,16 @@ pub(crate) async fn built_tools(
             server_config
                 .supports_parallel_tool_calls
                 .then_some(server_name.clone())
+                .filter(|server_name| {
+                    lazy_mcp_server_allowed_in_mode(
+                        &turn_context.config,
+                        turn_context.collaboration_mode.mode,
+                        &codex_mcp::LazyMcpServerInfo {
+                            server_name: server_name.clone(),
+                            description: None,
+                        },
+                    )
+                })
         })
         .collect::<HashSet<_>>();
 

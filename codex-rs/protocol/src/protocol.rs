@@ -2781,6 +2781,7 @@ pub enum SubAgentSource {
         #[serde(default, alias = "agent_type")]
         agent_role: Option<String>,
     },
+    MemoryExtraction,
     MemoryConsolidation,
     Other(String),
 }
@@ -2831,8 +2832,9 @@ impl SessionSource {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) => {
                 agent_nickname.clone()
             }
+            SessionSource::SubAgent(SubAgentSource::MemoryExtraction) => Some("Memory".to_string()),
             SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
-                Some("Morpheus".to_string())
+                Some("Memory".to_string())
             }
             _ => None,
         }
@@ -2842,6 +2844,9 @@ impl SessionSource {
         match self {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_role, .. }) => {
                 agent_role.clone()
+            }
+            SessionSource::SubAgent(SubAgentSource::MemoryExtraction) => {
+                Some("extractor".to_string())
             }
             SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
                 Some("memory builder".to_string())
@@ -2854,6 +2859,9 @@ impl SessionSource {
         match self {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
                 agent_path.clone()
+            }
+            SessionSource::SubAgent(SubAgentSource::MemoryExtraction) => {
+                Some(AgentPath::morpheus())
             }
             SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
                 Some(AgentPath::morpheus())
@@ -2887,6 +2895,7 @@ impl fmt::Display for SubAgentSource {
         match self {
             SubAgentSource::Review => f.write_str("review"),
             SubAgentSource::Compact => f.write_str("compact"),
+            SubAgentSource::MemoryExtraction => f.write_str("memory_extraction"),
             SubAgentSource::MemoryConsolidation => f.write_str("memory_consolidation"),
             SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -5410,5 +5419,18 @@ mod tests {
                 .expect("new_or_append should return info");
 
         assert_eq!(info.model_context_window, Some(258_400));
+    }
+
+    #[test]
+    fn memory_consolidation_source_has_human_readable_agent_metadata() {
+        let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
+
+        assert_eq!(source.get_nickname(), Some("Memory".to_string()));
+        assert_eq!(source.get_agent_role(), Some("memory builder".to_string()));
+
+        let source = SessionSource::SubAgent(SubAgentSource::MemoryExtraction);
+
+        assert_eq!(source.get_nickname(), Some("Memory".to_string()));
+        assert_eq!(source.get_agent_role(), Some("extractor".to_string()));
     }
 }

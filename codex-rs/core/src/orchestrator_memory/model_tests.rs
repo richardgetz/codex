@@ -1,4 +1,8 @@
 use super::*;
+use crate::orchestrator_memory::types::AggregatedMemoryItem;
+use crate::orchestrator_memory::types::AggregatedMemorySnapshot;
+use crate::orchestrator_memory::types::MemoryBucket;
+use chrono::Utc;
 use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::PathExt;
 use tempfile::tempdir;
@@ -70,4 +74,44 @@ async fn write_consolidation_payload_clears_generated_files_when_requested() {
 
     assert!(!summary_path(&codex_home).exists());
     assert!(!profile_path(&codex_home).exists());
+}
+
+#[test]
+fn apply_heuristic_guarantees_preserves_direct_items_missing_from_model_payload() {
+    let payload = apply_heuristic_guarantees(
+        ConsolidationPayload {
+            summary_markdown:
+                "# Orchestrator Memory Summary\n\n## Follow-Up State\n- Older orchestration note"
+                    .to_string(),
+            profile_markdown:
+                "# Orchestrator Memory Profile\n\n## Follow-Up State\n- Older orchestration note"
+                    .to_string(),
+            should_clear: false,
+        },
+        &AggregatedMemorySnapshot {
+            preferences: Vec::new(),
+            personal_context: vec![AggregatedMemoryItem {
+                bucket: MemoryBucket::PersonalContext,
+                candidate:
+                    "User's meeting scheduling link: https://calendar.app.google/example-booking-link"
+                        .to_string(),
+                observations: 1,
+                direct_observations: 1,
+                last_seen: Utc::now(),
+                confidence_sum: 0.8,
+            }],
+            followups: Vec::new(),
+        },
+    );
+
+    assert!(
+        payload
+            .summary_markdown
+            .contains("https://calendar.app.google/example-booking-link")
+    );
+    assert!(
+        payload
+            .profile_markdown
+            .contains("https://calendar.app.google/example-booking-link")
+    );
 }

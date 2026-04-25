@@ -1,8 +1,11 @@
 use super::ensure_layout;
+use super::live::aggregate_memory_items;
 use super::preferences_path;
 use super::profile_path;
 use super::remove_generated_memory_files;
 use super::summary_path;
+use super::types::AggregatedMemoryItem;
+use super::types::AggregatedMemorySnapshot;
 use crate::agent::AgentStatus;
 use crate::config::Config;
 use crate::orchestrator_memory::live::consolidate_preferences;
@@ -83,9 +86,7 @@ pub(super) async fn consolidate_with_model(
     );
 
     let agent_config = build_consolidation_agent_config(config)?;
-    let source = SessionSource::SubAgent(SubAgentSource::Other(
-        "orchestrator_memory_consolidation".to_string(),
-    ));
+    let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
     let agent_control = session.services.agent_control.detached_registry();
     let thread_id = agent_control
         .spawn_agent(
@@ -125,6 +126,10 @@ pub(super) async fn consolidate_with_model(
     match final_status {
         AgentStatus::Completed(message) => {
             let payload = parse_consolidation_payload(message.as_deref())?;
+            let payload = apply_heuristic_guarantees(
+                payload,
+                &aggregate_memory_items(&raw_events, &config.orchestrator_memory),
+            );
             write_consolidation_payload(codex_home, payload).await?;
             Ok(())
         }
@@ -299,6 +304,110 @@ fn parse_consolidation_payload(text: Option<&str>) -> anyhow::Result<Consolidati
         return Ok(serde_json::from_str::<ConsolidationPayload>(slice)?);
     }
     anyhow::bail!("orchestrator memory consolidation payload was not valid JSON")
+}
+
+fn apply_heuristic_guarantees(
+    mut payload: ConsolidationPayload,
+    snapshot: &AggregatedMemorySnapshot,
+) -> ConsolidationPayload {
+    let has_guaranteed_items = snapshot
+        .preferences
+        .iter()
+        .chain(snapshot.personal_context.iter())
+        .chain(snapshot.followups.iter())
+        .any(|item| item.direct_observations > 0);
+
+    if !has_guaranteed_items {
+        return payload;
+    }
+
+    if payload.summary_markdown.trim().is_empty() {
+        payload.summary_markdown = "# Orchestrator Memory Summary\n".to_string();
+    }
+    if payload.profile_markdown.trim().is_empty() {
+        payload.profile_markdown = "# Orchestrator Memory Profile\n".to_string();
+    }
+
+    append_missing_summary_items(
+        &mut payload.summary_markdown,
+        "Working Preferences",
+        &snapshot.preferences,
+    );
+    append_missing_summary_items(
+        &mut payload.summary_markdown,
+        "Personal Context",
+        &snapshot.personal_context,
+    );
+    append_missing_summary_items(
+        &mut payload.summary_markdown,
+        "Follow-Up State",
+        &snapshot.followups,
+    );
+
+    append_missing_profile_items(
+        &mut payload.profile_markdown,
+        "Working Preferences",
+        &snapshot.preferences,
+    );
+    append_missing_profile_items(
+        &mut payload.profile_markdown,
+        "Personal Context",
+        &snapshot.personal_context,
+    );
+    append_missing_profile_items(
+        &mut payload.profile_markdown,
+        "Follow-Up State",
+        &snapshot.followups,
+    );
+
+    payload.should_clear = false;
+    payload
+}
+
+fn append_missing_summary_items(body: &mut String, title: &str, items: &[AggregatedMemoryItem]) {
+    let missing = items
+        .iter()
+        .filter(|item| item.direct_observations > 0)
+        .filter(|item| !body.contains(&item.candidate))
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return;
+    }
+
+    body.push_str("\n\n## ");
+    body.push_str(title);
+    body.push('\n');
+    for item in missing {
+        body.push_str("- ");
+        body.push_str(&item.candidate);
+        body.push('\n');
+    }
+}
+
+fn append_missing_profile_items(body: &mut String, title: &str, items: &[AggregatedMemoryItem]) {
+    let missing = items
+        .iter()
+        .filter(|item| item.direct_observations > 0)
+        .filter(|item| !body.contains(&item.candidate))
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return;
+    }
+
+    body.push_str("\n\n## ");
+    body.push_str(title);
+    body.push_str("\n\n");
+    for item in missing {
+        body.push_str("### ");
+        body.push_str(&item.candidate);
+        body.push_str("\n\n");
+        body.push_str(&format!(
+            "- observations: {}\n- direct_observations: {}\n- last_seen: {}\n\n",
+            item.observations,
+            item.direct_observations,
+            item.last_seen.to_rfc3339(),
+        ));
+    }
 }
 
 async fn write_consolidation_payload(

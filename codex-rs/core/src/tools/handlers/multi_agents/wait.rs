@@ -167,6 +167,19 @@ impl ToolHandler for Handler {
             timed_out,
         };
 
+        for receiver_thread_id in &receiver_thread_ids {
+            session
+                .services
+                .orchestrator_supervision
+                .note_check(session.conversation_id, *receiver_thread_id)
+                .await
+                .map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to update orchestrator supervision wait timestamp: {err}"
+                    ))
+                })?;
+        }
+
         session
             .send_event(
                 &turn,

@@ -357,6 +357,11 @@ pub(crate) fn requested_spawn_agent_collaboration_mode(
     let Some(requested_mode) = requested_mode else {
         return Ok(None);
     };
+    enforce_orchestrator_child_mode_allowlist(
+        turn.collaboration_mode.mode,
+        config,
+        requested_mode,
+    )?;
     if !requested_mode.is_tui_visible() {
         return Err(FunctionCallError::RespondToModel(format!(
             "collaboration_mode `{requested_mode:?}` is not supported for spawned agents"
@@ -391,6 +396,47 @@ pub(crate) fn requested_spawn_agent_collaboration_mode(
     );
 
     Ok(Some(collaboration_mode))
+}
+
+pub(crate) fn inherited_spawn_agent_collaboration_mode(
+    parent_mode: ModeKind,
+    config: &Config,
+    inherited_mode: CollaborationMode,
+) -> Option<CollaborationMode> {
+    if enforce_orchestrator_child_mode_allowlist(parent_mode, config, inherited_mode.mode).is_ok() {
+        Some(inherited_mode)
+    } else {
+        None
+    }
+}
+
+fn enforce_orchestrator_child_mode_allowlist(
+    parent_mode: ModeKind,
+    config: &Config,
+    requested_mode: ModeKind,
+) -> Result<(), FunctionCallError> {
+    if parent_mode != ModeKind::Orchestrator {
+        return Ok(());
+    }
+    if config
+        .orchestrator
+        .allowed_spawn_modes
+        .contains(&requested_mode)
+    {
+        return Ok(());
+    }
+
+    let allowed = config
+        .orchestrator
+        .allowed_spawn_modes
+        .iter()
+        .map(|mode| mode.display_name().to_lowercase())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(FunctionCallError::RespondToModel(format!(
+        "Orchestrator mode can only spawn child collaboration modes allowed by `orchestrator.allowed_spawn_modes` (currently: {allowed}); `{}` is blocked.",
+        requested_mode.display_name().to_lowercase()
+    )))
 }
 
 fn find_spawn_agent_model_name(

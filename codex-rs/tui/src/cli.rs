@@ -1,6 +1,7 @@
 use clap::Args;
 use clap::FromArgMatches;
 use clap::Parser;
+use codex_protocol::config_types::ModeKind;
 use codex_utils_cli::ApprovalModeCliArg;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::SharedCliOptions;
@@ -56,6 +57,10 @@ pub struct Cli {
     /// Configure when the model requires human approval before executing a command.
     #[arg(long = "ask-for-approval", short = 'a')]
     pub approval_policy: Option<ApprovalModeCliArg>,
+
+    /// Start the interactive session in the specified collaboration mode.
+    #[arg(long = "collab", value_name = "MODE", value_parser = parse_collaboration_mode_cli)]
+    pub startup_collaboration_mode: Option<ModeKind>,
 
     /// Enable live web search. When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval).
     #[arg(long = "search", default_value_t = false)]
@@ -134,4 +139,19 @@ fn mark_tui_args(cmd: clap::Command) -> clap::Command {
     cmd.mut_arg("dangerously_bypass_approvals_and_sandbox", |arg| {
         arg.conflicts_with("approval_policy")
     })
+}
+
+fn parse_collaboration_mode_cli(input: &str) -> Result<ModeKind, String> {
+    let normalized = input.trim().to_ascii_lowercase().replace('-', "_");
+    match normalized.as_str() {
+        "default" | "code" | "custom" | "d" => Ok(ModeKind::Default),
+        "plan" | "p" => Ok(ModeKind::Plan),
+        "continuous" | "c" => Ok(ModeKind::Continuous),
+        "orchestrator" | "o" => Ok(ModeKind::Orchestrator),
+        "pair_programming" | "pair" | "pp" => Ok(ModeKind::PairProgramming),
+        "execute" | "e" => Ok(ModeKind::Execute),
+        _ => Err(format!(
+            "unknown collaboration mode `{input}`; expected one of: default (d), plan (p), continuous (c), orchestrator (o), pair_programming (pp), execute (e)"
+        )),
+    }
 }

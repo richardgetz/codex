@@ -1,6 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
+use crate::orchestrator_supervision::OrchestratorSupervisionPollState;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
@@ -321,6 +322,17 @@ impl CodexThread {
         self.codex.session.active_thread_control().await
     }
 
+    pub async fn orchestrator_supervision_poll_state(
+        &self,
+    ) -> std::io::Result<OrchestratorSupervisionPollState> {
+        self.codex
+            .session
+            .services
+            .orchestrator_supervision
+            .poll_state(self.id())
+            .await
+    }
+
     pub async fn set_active_thread_control(&self, control: Option<ThreadControlRecord>) {
         self.codex.session.set_active_thread_control(control).await;
     }
@@ -331,6 +343,15 @@ impl CodexThread {
 
     pub async fn collaboration_mode(&self) -> CollaborationMode {
         self.codex.session.collaboration_mode().await
+    }
+
+    pub async fn orchestrator_active_agent_checkin_seconds(&self) -> u32 {
+        self.codex
+            .session
+            .get_config()
+            .await
+            .orchestrator
+            .active_agent_checkin_seconds
     }
 
     #[doc(hidden)]
