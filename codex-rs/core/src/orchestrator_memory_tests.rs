@@ -112,6 +112,12 @@ async fn prune_entries_matching_needle_rewrites_preferences_and_generated_artifa
         .await
         .unwrap();
     assert!(!preferences.contains("alpha needle"));
+    let followup_bucket =
+        tokio_fs::read_to_string(orchestrator_memory_dir.join("buckets/followup_state.jsonl"))
+            .await
+            .unwrap();
+    assert!(!followup_bucket.contains("alpha needle"));
+    assert!(followup_bucket.contains("keep beta"));
 }
 
 #[tokio::test]

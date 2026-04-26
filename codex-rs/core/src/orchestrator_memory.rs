@@ -21,6 +21,8 @@ mod classifier;
 mod heuristics;
 #[path = "orchestrator_memory/live.rs"]
 mod live;
+#[path = "orchestrator_memory/migration.rs"]
+mod migration;
 #[path = "orchestrator_memory/model.rs"]
 mod model;
 #[path = "orchestrator_memory/types.rs"]
@@ -61,6 +63,17 @@ pub(crate) fn preferences_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf 
     root(codex_home).join("preferences.jsonl")
 }
 
+fn bucket_dir_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+    root(codex_home).join("buckets")
+}
+
+fn bucket_events_path(
+    codex_home: &AbsolutePathBuf,
+    bucket: types::MemoryBucket,
+) -> AbsolutePathBuf {
+    bucket_dir_path(codex_home).join(format!("{}.jsonl", bucket.as_str()))
+}
+
 pub(crate) fn diagnostics_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
     root(codex_home).join("diagnostics.jsonl")
 }
@@ -70,6 +83,7 @@ pub(crate) async fn ensure_layout(
 ) -> std::io::Result<AbsolutePathBuf> {
     let root = root(codex_home);
     fs::create_dir_all(&root).await?;
+    fs::create_dir_all(bucket_dir_path(codex_home)).await?;
     Ok(root)
 }
 
@@ -83,6 +97,9 @@ pub(crate) async fn build_developer_instructions(
     codex_home: &AbsolutePathBuf,
     config: &OrchestratorMemoryConfig,
 ) -> Option<String> {
+    if let Err(err) = migration::migrate_if_needed(codex_home).await {
+        warn!("failed migrating orchestrator memory before read: {err}");
+    }
     let base_path = root(codex_home);
     let (summary_source, summary) = read_summary_source(codex_home).await?;
     let summary = with_recent_memory_supplement(codex_home, config, &summary).await;
@@ -242,6 +259,9 @@ pub async fn prune_entries_matching_needle(
 
     if removed_preference_events > 0 {
         live::consolidate_preferences(codex_home, config).await?;
+        if !preferences_path(codex_home).as_path().exists() {
+            migration::clear_bucket_files(codex_home).await?;
+        }
     } else if removed_summary_lines > 0 || removed_profile_lines > 0 {
         let summary = summary_path(codex_home);
         let profile = profile_path(codex_home);

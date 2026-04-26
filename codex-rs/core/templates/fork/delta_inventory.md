@@ -30,6 +30,10 @@ stable/mainline is pulled in.
   - `scope = "orchestrator"`
 - Orchestrator memory maintenance:
   - Slash command: `/orchestrator-memory-forget <needle>`
+  - Bucket-specific mirror files live under
+    `<codex_home>/orchestrator_memory/buckets/`.
+  - Legacy unbucketed memory events are migrated on next read/consolidation with
+    a `preferences.jsonl.pre-bucket-migration` backup.
 - Mode-scoped enablement filters:
   - `[enablement.modes.<mode>]`
   - Supports `skills`, `mcps`, and `plugins`
@@ -46,6 +50,8 @@ stable/mainline is pulled in.
   - Startup override: `--primary-contact <mcp>` or `--primary-contact off`
   - Harness-only polling uses `check_messages_every_seconds`, default `900`,
     and only calls the model when a new user message is found.
+  - Armed idle polling uses a static terminal-title waiting marker so the
+    window still appears alive without model calls.
 - Built-in scratchpad fallback:
   - Namespace: `scratchpad`
   - Stores JSON scratchpads under `<codex_home>/scratchpad/entries` unless a
@@ -83,7 +89,7 @@ stable/mainline is pulled in.
 - Verify `codex --account ...` and `/account ...` still switch auth stores
   without breaking the default root auth location.
 - Verify `/orchestrator-memory-forget <needle>` still prunes and reconsolidates
-  orchestrator memory.
+  orchestrator memory, including bucket mirror files.
 - Verify `[enablement.modes.<mode>]` still filters `skills`, `mcps`, and
   `plugins` correctly.
 - Verify Orchestrator child spawns still respect
@@ -91,7 +97,8 @@ stable/mainline is pulled in.
 - Verify explicitly enabled Orchestrator MCPs remain callable inline for
   communication/state workflows.
 - Verify configured primary contact polling starts in Orchestrator mode and does
-  not wake the model for empty status responses.
+  not wake the model for empty status responses, while the terminal title shows
+  the waiting marker when idle.
 - Verify built-in `scratchpad` remains available in Orchestrator mode and
   `open_scratchpad` uses the thread id when no id is provided.
 - Verify built-in `resume_scratchpad` refuses to create a new scratchpad and

@@ -71,6 +71,9 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   ```
 
 - `check_messages_every_seconds = 0` disables the harness-level poller.
+- When the poller is armed and no model turn is active, the terminal title uses
+  a static waiting braille marker so a headless or background window still looks
+  alive without spending model calls.
 
 ### Orchestrator memory
 
@@ -89,6 +92,11 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   entries without touching mainline memory stores.
 - Explicit forget requests such as `forget this: ...` are treated as memory
   removal requests.
+- Memory events are mirrored into bucket-specific files under
+  `<codex_home>/orchestrator_memory/buckets/` for easier inspection while
+  preserving `preferences.jsonl` as the compatibility event log.
+- Legacy memory events that predate bucketed schemas are migrated on the next
+  read or consolidation, with a `preferences.jsonl.pre-bucket-migration` backup.
 
 ### Scratchpad recovery
 

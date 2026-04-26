@@ -26,6 +26,9 @@ Orchestrator memory layout:
 - {{ summary_source }} (already provided below; do NOT open again)
 - {{ base_path }}/profile.md (full preference profile; open only if needed)
 - {{ base_path }}/preferences.jsonl (optional structured preference history)
+- {{ base_path }}/buckets/*.jsonl (optional bucket-specific event mirrors for
+  durable_preference, personal_context, relational_attunement,
+  operator_playbook, ongoing_threads, and followup_state)
 
 Quick pass:
 

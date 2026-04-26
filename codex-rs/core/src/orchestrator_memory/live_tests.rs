@@ -1,7 +1,9 @@
+use super::super::bucket_events_path;
 use super::super::heuristics;
 use super::super::types::CandidateMemoryItem;
 use super::super::types::EXPLICIT_CONFIDENCE;
 use super::super::types::MemoryBucket;
+use super::super::types::MemoryEvent;
 use super::super::types::MemoryOperation;
 use super::super::types::MemorySignal;
 use super::*;
@@ -138,6 +140,104 @@ async fn consolidates_events_into_summary_and_profile_files() {
     assert!(summary.contains("## Working Preferences"));
     assert!(summary.contains("Prefer clarification before delegation"));
     assert!(profile.contains("observations: 1"));
+}
+
+#[tokio::test]
+async fn append_writes_bucket_specific_event_mirrors() {
+    let temp = tempdir().expect("tempdir");
+    let codex_home = temp.path().abs();
+    append_preference_events(
+        &codex_home,
+        "thread-1".to_string(),
+        "turn-1".to_string(),
+        &[CandidateMemoryItem {
+            bucket: MemoryBucket::OperatorPlaybook,
+            operation: MemoryOperation::Upsert,
+            signal: MemorySignal::ModelClassified,
+            key: "when auth guard stalls try warming endpoint".to_string(),
+            candidate: "When auth guard stalls, try the warming endpoint".to_string(),
+            source_excerpt: "The warming endpoint unblocked auth".to_string(),
+            confidence: 0.8,
+        }],
+    )
+    .await
+    .expect("append operator playbook event");
+
+    let bucket_raw = fs::read_to_string(bucket_events_path(
+        &codex_home,
+        MemoryBucket::OperatorPlaybook,
+    ))
+    .await
+    .expect("read operator playbook bucket file");
+    let events = bucket_raw
+        .lines()
+        .map(|line| serde_json::from_str::<MemoryEvent>(line).expect("bucket event"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].bucket, MemoryBucket::OperatorPlaybook);
+    assert_eq!(
+        events[0].candidate,
+        "When auth guard stalls, try the warming endpoint"
+    );
+}
+
+#[tokio::test]
+async fn consolidation_migrates_legacy_events_into_buckets() {
+    let temp = tempdir().expect("tempdir");
+    let codex_home = temp.path().abs();
+    ensure_layout(&codex_home).await.expect("layout");
+    let legacy = serde_json::json!({
+        "observed_at": "2026-04-26T12:00:00Z",
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "operation": "upsert",
+        "signal": "model_classified",
+        "key": "when aws auth guard stalls try warming endpoint",
+        "candidate": "When aws-auth-guard authentication stalls, try the warming endpoint to unblock it",
+        "source_excerpt": "The user suggested the warming endpoint and it worked",
+        "confidence": 0.8
+    });
+    fs::write(preferences_path(&codex_home), format!("{legacy}\n"))
+        .await
+        .expect("write legacy event");
+
+    consolidate_preferences(
+        &codex_home,
+        &OrchestratorMemoryConfig {
+            enabled: true,
+            ..OrchestratorMemoryConfig::default()
+        },
+    )
+    .await
+    .expect("consolidate preferences");
+
+    let migrated_raw = fs::read_to_string(preferences_path(&codex_home))
+        .await
+        .expect("read migrated preferences");
+    let migrated =
+        serde_json::from_str::<MemoryEvent>(migrated_raw.lines().next().expect("migrated event"))
+            .expect("parse migrated event");
+    let bucket_raw = fs::read_to_string(bucket_events_path(
+        &codex_home,
+        MemoryBucket::OperatorPlaybook,
+    ))
+    .await
+    .expect("read operator playbook bucket file");
+    let summary = fs::read_to_string(summary_path(&codex_home))
+        .await
+        .expect("read summary");
+
+    assert_eq!(migrated.bucket, MemoryBucket::OperatorPlaybook);
+    assert!(bucket_raw.contains("warming endpoint"));
+    assert!(summary.contains("## Operator Playbook"));
+    assert!(summary.contains("warming endpoint to unblock it"));
+    assert!(
+        codex_home
+            .join("orchestrator_memory")
+            .join("preferences.jsonl.pre-bucket-migration")
+            .exists()
+    );
 }
 
 #[tokio::test]

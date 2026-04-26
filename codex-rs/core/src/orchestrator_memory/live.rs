@@ -2,6 +2,7 @@ use super::append_diagnostic_event;
 use super::classifier;
 use super::ensure_layout;
 use super::heuristics;
+use super::migration;
 use super::preferences_path;
 use super::profile_path;
 use super::remove_generated_memory_files;
@@ -242,6 +243,7 @@ pub(super) async fn append_preference_events(
     turn_id: String,
     candidates: &[CandidateMemoryItem],
 ) -> std::io::Result<()> {
+    migration::migrate_if_needed(codex_home).await?;
     ensure_layout(codex_home).await?;
     let mut file = OpenOptions::new()
         .create(true)
@@ -268,13 +270,18 @@ pub(super) async fn append_preference_events(
         line.push('\n');
         file.write_all(line.as_bytes()).await?;
     }
-    file.flush().await
+    file.flush().await?;
+
+    let raw = fs::read_to_string(preferences_path(codex_home)).await?;
+    migration::sync_bucket_files_from_raw(codex_home, &raw).await?;
+    Ok(())
 }
 
 pub(crate) async fn consolidate_preferences(
     codex_home: &codex_utils_absolute_path::AbsolutePathBuf,
     config: &OrchestratorMemoryConfig,
 ) -> std::io::Result<()> {
+    migration::migrate_if_needed(codex_home).await?;
     ensure_layout(codex_home).await?;
     let raw = match fs::read_to_string(preferences_path(codex_home)).await {
         Ok(raw) => raw,
