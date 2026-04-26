@@ -209,6 +209,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     }
     for tool_name in [
         "open_scratchpad",
+        "resume_scratchpad",
         "get_scratchpad",
         "get_scratchpad_summary",
         "append_scratchpad_note",

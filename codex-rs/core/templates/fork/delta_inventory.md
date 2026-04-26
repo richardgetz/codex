@@ -51,6 +51,8 @@ stable/mainline is pulled in.
   - Stores JSON scratchpads under `<codex_home>/scratchpad/entries` unless a
     tool call provides `state_home`.
   - `open_scratchpad` defaults `scratchpad_id` to the current thread/session id.
+  - `resume_scratchpad` strictly reopens an existing scratchpad by id without
+    creating a replacement; archived pads require `include_archived = true`.
   - Supports active/archived lookup plus archive/unarchive.
 - Post-compaction recovery:
   - Config: `[orchestrator].recover_scratchpad_after_compaction`
@@ -92,6 +94,8 @@ stable/mainline is pulled in.
   not wake the model for empty status responses.
 - Verify built-in `scratchpad` remains available in Orchestrator mode and
   `open_scratchpad` uses the thread id when no id is provided.
+- Verify built-in `resume_scratchpad` refuses to create a new scratchpad and
+  requires explicit `include_archived = true` for archived pads.
 - Verify live compaction events trigger scratchpad recovery while replayed
   compaction history does not.
 - Verify memory helper naming still shows `Memory [extractor]` and

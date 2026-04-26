@@ -24,6 +24,7 @@ use crate::tools::registry::ToolKind;
 
 const SCRATCHPAD_NAMESPACE: &str = "scratchpad";
 const TOOL_OPEN: &str = "open_scratchpad";
+const TOOL_RESUME: &str = "resume_scratchpad";
 const TOOL_GET: &str = "get_scratchpad";
 const TOOL_SUMMARY: &str = "get_scratchpad_summary";
 const TOOL_APPEND_NOTE: &str = "append_scratchpad_note";
@@ -41,6 +42,10 @@ pub(crate) fn scratchpad_namespace_spec() -> ToolSpec {
         (
             TOOL_OPEN,
             "Open an existing active scratchpad for the same objective/session, or create one.",
+        ),
+        (
+            TOOL_RESUME,
+            "Resume an existing scratchpad by id without creating a new one.",
         ),
         (TOOL_GET, "Fetch one scratchpad by id."),
         (
@@ -123,7 +128,7 @@ impl ToolHandler for BuiltinScratchpadHandler {
     async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
         !matches!(
             invocation.tool_name.name.as_str(),
-            TOOL_GET | TOOL_SUMMARY | TOOL_LOOKUP | TOOL_SCHEMA | TOOL_CHECK_ACTION
+            TOOL_RESUME | TOOL_GET | TOOL_SUMMARY | TOOL_LOOKUP | TOOL_SCHEMA | TOOL_CHECK_ACTION
         )
     }
 
@@ -146,6 +151,7 @@ impl ToolHandler for BuiltinScratchpadHandler {
 
         let result = match invocation.tool_name.name.as_str() {
             TOOL_OPEN => open_scratchpad(&store, &args, &default_scratchpad_id),
+            TOOL_RESUME => resume_scratchpad(&store, &args),
             TOOL_GET => get_scratchpad(&store, &args),
             TOOL_SUMMARY => get_scratchpad_summary(&store, &args),
             TOOL_APPEND_NOTE => append_scratchpad_note(&store, &args),
@@ -351,6 +357,22 @@ fn get_scratchpad(store: &ScratchpadStore, args: &Value) -> Result<Value, Functi
     Ok(serde_json::json!({ "scratchpad": store.read(&scratchpad_id)? }))
 }
 
+fn resume_scratchpad(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+    let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    let scratchpad = store.read(&scratchpad_id)?;
+    let include_archived = bool_arg(args, "include_archived");
+    if scratchpad.archived_at.is_some() && !include_archived {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "scratchpad `{scratchpad_id}` is archived; pass include_archived=true to inspect it or unarchive_scratchpad to reactivate it"
+        )));
+    }
+    Ok(serde_json::json!({
+        "scratchpad": scratchpad,
+        "summary": summary(&scratchpad),
+        "resumed": true,
+    }))
+}
+
 fn get_scratchpad_summary(
     store: &ScratchpadStore,
     args: &Value,
@@ -521,6 +543,7 @@ fn schema_payload() -> Value {
         "thread_id_default": "open_scratchpad defaults scratchpad_id to the current Codex thread/session id when scratchpad_id is omitted.",
         "tools": [
             TOOL_OPEN,
+            TOOL_RESUME,
             TOOL_GET,
             TOOL_SUMMARY,
             TOOL_APPEND_NOTE,
@@ -754,5 +777,38 @@ mod tests {
         let active_lookup =
             lookup_scratchpads(&store, &serde_json::json!({ "query": "recover" })).unwrap();
         assert_eq!(active_lookup["matches"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn resume_requires_existing_pad_and_rejects_archived_by_default() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(Some(tmp.path().to_str().unwrap()), tmp.path()).unwrap();
+        let args = serde_json::json!({
+            "objective": "resume me",
+            "scratchpad_id": "sp-resume",
+            "next_steps": ["continue"]
+        });
+        open_scratchpad(&store, &args, "thread-123").unwrap();
+
+        let resumed =
+            resume_scratchpad(&store, &serde_json::json!({ "scratchpad_id": "sp-resume" }))
+                .unwrap();
+        assert_eq!(
+            resumed["summary"]["next_steps"],
+            serde_json::json!(["continue"])
+        );
+        assert_eq!(resumed["resumed"], serde_json::json!(true));
+
+        archive_scratchpad(&store, &serde_json::json!({ "scratchpad_id": "sp-resume" })).unwrap();
+        let archived_default =
+            resume_scratchpad(&store, &serde_json::json!({ "scratchpad_id": "sp-resume" }));
+        assert!(archived_default.is_err());
+
+        let archived_explicit = resume_scratchpad(
+            &store,
+            &serde_json::json!({ "scratchpad_id": "sp-resume", "include_archived": true }),
+        )
+        .unwrap();
+        assert!(archived_explicit["summary"]["archived_at"].is_string());
     }
 }

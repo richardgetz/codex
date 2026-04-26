@@ -99,6 +99,8 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   unless a tool call provides `state_home`.
 - `open_scratchpad` defaults `scratchpad_id` to the current Codex
   thread/session id when no explicit id is provided.
+- `resume_scratchpad` strictly reopens an existing scratchpad by id without
+  creating a replacement; archived pads require `include_archived = true`.
 - Built-in scratchpad supports active and archived lookup plus
   archive/unarchive operations.
 - After a context compaction item is observed in Orchestrator mode, the fork can
