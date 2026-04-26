@@ -370,19 +370,18 @@ else
   # --noexperimental_remote_repo_contents_cache:
   #   disable remote repo contents cache enabled in .bazelrc startup options.
   #   https://bazel.build/reference/command-line-reference#startup_options-flag--experimental_remote_repo_contents_cache
-  # --remote_cache= and --remote_executor=:
-  #   clear remote cache/execution endpoints configured in .bazelrc.
-  #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_cache
+  # --remote_executor=:
+  #   clear remote execution endpoints configured in .bazelrc.
   #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_executor
-  # --experimental_remote_downloader=:
-  #   clear the remote downloader endpoint configured in .bazelrc. Bazel rejects
-  #   a remote downloader unless gRPC caching remains configured, so local/no-key
-  #   CI must clear this alongside the remote cache.
+  # --remote_upload_local_results=false:
+  #   keep the unauthenticated remote cache/downloader endpoints from .bazelrc
+  #   available for public read-through downloads, but do not attempt writes.
+  #   The remote downloader requires a gRPC remote cache, and macOS SDK fetches
+  #   can fail directly with Apple 403s when the downloader is disabled.
   bazel_run_args=(
     "${bazel_args[@]}"
-    --remote_cache=
     --remote_executor=
-    --experimental_remote_downloader=
+    --remote_upload_local_results=false
   )
   if (( ${#post_config_bazel_args[@]} > 0 )); then
     bazel_run_args+=("${post_config_bazel_args[@]}")
