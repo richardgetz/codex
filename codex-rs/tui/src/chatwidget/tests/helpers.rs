@@ -214,6 +214,7 @@ pub(super) async fn make_chatwidget_manual(
         clipboard_lease: None,
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
+        primary_contact_waiting: false,
         last_agent_markdown: None,
         agent_turn_markdowns: Vec::new(),
         visible_user_turn_count: 0,

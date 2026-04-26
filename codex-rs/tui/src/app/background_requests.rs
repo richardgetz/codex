@@ -16,13 +16,11 @@ impl App {
             return;
         };
 
+        self.chat_widget.set_primary_contact_waiting(true);
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(u64::from(poll_config.interval_seconds)))
-                    .await;
-
                 match poll_primary_contact_once(&request_handle, thread_id, &poll_config).await {
                     Ok(Some(text)) => {
                         app_event_tx.send(AppEvent::PrimaryContactMessageReceived { text });
@@ -36,6 +34,9 @@ impl App {
                         );
                     }
                 }
+
+                tokio::time::sleep(Duration::from_secs(u64::from(poll_config.interval_seconds)))
+                    .await;
             }
         });
     }

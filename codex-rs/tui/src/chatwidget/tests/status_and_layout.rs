@@ -1520,6 +1520,41 @@ async fn terminal_title_model_updates_on_model_change_without_manual_refresh() {
 }
 
 #[tokio::test]
+async fn primary_contact_waiting_uses_static_terminal_title_marker_between_turns() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_primary_contact_waiting(/*waiting*/ true);
+
+    assert!(!chat.bottom_pane.is_task_running());
+    assert_eq!(chat.terminal_title_status_text(), "Waiting for messages");
+    assert_eq!(
+        chat.terminal_title_spinner_text_at(chat.terminal_title_animation_origin)
+            .as_deref(),
+        Some("⠞")
+    );
+
+    chat.on_task_started();
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(chat.terminal_title_status_text(), "Working");
+    assert_eq!(
+        chat.terminal_title_spinner_text_at(chat.terminal_title_animation_origin)
+            .as_deref(),
+        Some("⠋")
+    );
+
+    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
+
+    assert!(!chat.bottom_pane.is_task_running());
+    assert_eq!(chat.terminal_title_status_text(), "Waiting for messages");
+    assert_eq!(
+        chat.terminal_title_spinner_text_at(chat.terminal_title_animation_origin)
+            .as_deref(),
+        Some("⠞")
+    );
+}
+
+#[tokio::test]
 async fn status_line_model_with_reasoning_updates_on_mode_switch_without_manual_refresh() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);

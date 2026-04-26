@@ -904,6 +904,8 @@ pub(crate) struct ChatWidget {
     active_hook_cell: Option<HookCell>,
     // Semantic status used for terminal-title status rendering.
     terminal_title_status_kind: TerminalTitleStatusKind,
+    // Model-less primary-contact polling is armed while the app waits for user messages.
+    primary_contact_waiting: bool,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     // Set when commentary output completes; once stream queues go idle we restore the status row.
@@ -1814,11 +1816,29 @@ impl ChatWidget {
         self.bottom_pane.set_task_running(
             self.agent_turn_running || self.mcp_startup_status.is_some() || waiting_on_agents,
         );
+        if waiting_on_agents {
+            self.terminal_title_status_kind = TerminalTitleStatusKind::WaitingForAgents;
+        } else if self.bottom_pane.is_task_running() {
+            self.terminal_title_status_kind = TerminalTitleStatusKind::Working;
+        } else if self.primary_contact_waiting {
+            self.terminal_title_status_kind = TerminalTitleStatusKind::WaitingForPrimaryContact;
+        }
         self.refresh_status_surfaces();
         self.bottom_pane
             .set_slash_command_task_running(self.agent_turn_running || self.is_review_mode);
-        if waiting_on_agents {
-            self.terminal_title_status_kind = TerminalTitleStatusKind::WaitingForAgents;
+        self.refresh_terminal_title();
+    }
+
+    pub(crate) fn set_primary_contact_waiting(&mut self, waiting: bool) {
+        self.primary_contact_waiting = waiting;
+        if waiting && !self.bottom_pane.is_task_running() {
+            self.terminal_title_status_kind = TerminalTitleStatusKind::WaitingForPrimaryContact;
+            self.refresh_status_surfaces();
+        } else if !waiting
+            && self.terminal_title_status_kind == TerminalTitleStatusKind::WaitingForPrimaryContact
+        {
+            self.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
+            self.refresh_status_surfaces();
         }
         self.refresh_terminal_title();
     }
@@ -5336,6 +5356,7 @@ impl ChatWidget {
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             active_hook_cell: None,
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
+            primary_contact_waiting: false,
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
