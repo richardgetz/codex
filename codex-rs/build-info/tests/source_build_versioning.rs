@@ -36,10 +36,10 @@ fn source_release_build_prefers_mainline_version_and_suffix() {
     let derived = derive_version(
         LOCAL_DEV_BUILD_VERSION,
         Some("release"),
-        false,
-        None,
+        /*source_build_from_release_branch*/ false,
+        /*source_base_override*/ None,
         Some("rust-v0.120.0"),
-        None,
+        /*git_release_version*/ None,
         Some("codex-cli 0.0.0-rick"),
         Some(DEFAULT_SOURCE_VERSION_SUFFIX),
     );
@@ -59,9 +59,9 @@ fn source_release_build_uses_git_release_when_network_and_installed_fallbacks_fa
     let derived = derive_version(
         LOCAL_DEV_BUILD_VERSION,
         Some("release"),
-        false,
-        None,
-        None,
+        /*source_build_from_release_branch*/ false,
+        /*source_base_override*/ None,
+        /*official_release_version*/ None,
         Some("rust-v0.119.0"),
         Some("codex-cli 0.0.0-rick"),
         Some(DEFAULT_SOURCE_VERSION_SUFFIX),
@@ -82,10 +82,10 @@ fn source_release_build_uses_installed_mainline_version_for_wrapped_installs() {
     let derived = derive_version(
         LOCAL_DEV_BUILD_VERSION,
         Some("release"),
-        false,
-        None,
-        None,
-        None,
+        /*source_build_from_release_branch*/ false,
+        /*source_base_override*/ None,
+        /*official_release_version*/ None,
+        /*git_release_version*/ None,
         Some("codex-cli 0.118.0"),
         Some(DEFAULT_SOURCE_VERSION_SUFFIX),
     );
@@ -105,11 +105,11 @@ fn release_line_source_branch_build_appends_suffix() {
     let derived = derive_version(
         "0.122.0",
         Some("release"),
-        true,
-        None,
-        None,
-        None,
-        None,
+        /*source_build_from_release_branch*/ true,
+        /*source_base_override*/ None,
+        /*official_release_version*/ None,
+        /*git_release_version*/ None,
+        /*installed_release_version*/ None,
         Some(DEFAULT_SOURCE_VERSION_SUFFIX),
     );
 
@@ -128,11 +128,11 @@ fn release_line_source_branch_build_supports_numeric_fork_suffix() {
     let derived = derive_version(
         "0.122.0",
         Some("release"),
-        true,
-        None,
-        None,
-        None,
-        None,
+        /*source_build_from_release_branch*/ true,
+        /*source_base_override*/ None,
+        /*official_release_version*/ None,
+        /*git_release_version*/ None,
+        /*installed_release_version*/ None,
         Some("rick.2"),
     );
 
@@ -151,11 +151,11 @@ fn exact_release_tag_build_keeps_plain_version() {
     let derived = derive_version(
         "0.122.0",
         Some("release"),
-        false,
-        None,
-        None,
-        None,
-        None,
+        /*source_build_from_release_branch*/ false,
+        /*source_base_override*/ None,
+        /*official_release_version*/ None,
+        /*git_release_version*/ None,
+        /*installed_release_version*/ None,
         Some(DEFAULT_SOURCE_VERSION_SUFFIX),
     );
 

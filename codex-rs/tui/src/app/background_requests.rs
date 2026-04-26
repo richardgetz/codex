@@ -16,7 +16,8 @@ impl App {
             return;
         };
 
-        self.chat_widget.set_primary_contact_waiting(true);
+        self.chat_widget
+            .set_primary_contact_waiting(/*waiting*/ true);
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {

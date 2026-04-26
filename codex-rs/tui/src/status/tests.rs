@@ -55,17 +55,17 @@ async fn status_renders_alias_email_and_plan_for_managed_account() {
     let output = new_status_output(
         &config,
         account_display.as_ref(),
-        None,
+        /*token_info*/ None,
         &usage,
         &None,
-        None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
         None,
         Local::now(),
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
     let rendered = sanitize_directory(render_lines(&output.display_lines(/*width*/ 90)));
     let joined = rendered.join("\n");
@@ -92,17 +92,17 @@ async fn status_renders_email_and_plan_without_alias() {
     let output = new_status_output(
         &config,
         account_display.as_ref(),
-        None,
+        /*token_info*/ None,
         &usage,
         &None,
-        None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
         None,
         Local::now(),
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
     let rendered = sanitize_directory(render_lines(&output.display_lines(/*width*/ 90)));
     let joined = rendered.join("\n");
