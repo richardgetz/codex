@@ -92,10 +92,7 @@ jobs:
           - name: macOS
             runner: macos-15-xlarge
           - name: Windows
-            runner: windows-x64
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+            runner: windows-2025
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-bazel-ci
