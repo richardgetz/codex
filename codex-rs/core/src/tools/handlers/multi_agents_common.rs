@@ -392,7 +392,7 @@ pub(crate) fn requested_spawn_agent_collaboration_mode(
     let collaboration_mode = base_mode.apply_mask(mode_mask).with_updates(
         requested_model.map(str::to_string),
         requested_reasoning_effort.map(Some),
-        None,
+        /*developer_instructions*/ None,
     );
 
     Ok(Some(collaboration_mode))

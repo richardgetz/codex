@@ -283,11 +283,11 @@ mod tests {
         let tools = HashMap::from([
             (
                 "mcp__scratchpad__get".to_string(),
-                make_mcp_tool("scratchpad", "get", None),
+                make_mcp_tool("scratchpad", "get", /*connector_id*/ None),
             ),
             (
                 "mcp__other__run".to_string(),
-                make_mcp_tool("other", "run", None),
+                make_mcp_tool("other", "run", /*connector_id*/ None),
             ),
             (
                 "mcp__codex_apps__calendar_list".to_string(),
@@ -328,11 +328,11 @@ mod tests {
         let tools = HashMap::from([
             (
                 "mcp__scratchpad__get".to_string(),
-                make_mcp_tool("scratchpad", "get", None),
+                make_mcp_tool("scratchpad", "get", /*connector_id*/ None),
             ),
             (
                 "mcp__other__run".to_string(),
-                make_mcp_tool("other", "run", None),
+                make_mcp_tool("other", "run", /*connector_id*/ None),
             ),
         ]);
 

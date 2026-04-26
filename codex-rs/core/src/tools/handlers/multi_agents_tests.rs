@@ -115,8 +115,8 @@ async fn requested_spawn_agent_collaboration_mode_preserves_mask_model() {
         &turn,
         &config,
         Some(ModeKind::Orchestrator),
-        None,
-        None,
+        /*requested_model*/ None,
+        /*requested_reasoning_effort*/ None,
         &mode_masks,
     )
     .expect("mode should be available")
@@ -190,8 +190,8 @@ async fn requested_spawn_agent_collaboration_mode_blocks_disallowed_orchestrator
         &turn,
         &config,
         Some(ModeKind::Plan),
-        None,
-        None,
+        /*requested_model*/ None,
+        /*requested_reasoning_effort*/ None,
         &mode_masks,
     )
     .expect_err("orchestrator should reject non-default child modes by default");
@@ -818,7 +818,7 @@ async fn multi_agent_v2_spawn_fork_turns_all_downgrades_orchestrator_parent_to_d
     let expected_parent_mode = parent_mode.with_updates(
         Some(turn.config.effective_orchestrator_model().to_string()),
         Some(turn.config.effective_orchestrator_reasoning_effort()),
-        None,
+        /*developer_instructions*/ None,
     );
     root.thread
         .submit(Op::OverrideTurnContext {

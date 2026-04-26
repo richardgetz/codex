@@ -73,7 +73,7 @@ fn infers_repeated_steering_from_recent_turns() {
             "When things are unclear, clarify before delegating.".to_string(),
             "Clarify first before delegating to other agents.".to_string(),
         ],
-        2,
+        /*min_observations*/ 2,
     );
 
     assert!(

@@ -1225,8 +1225,12 @@ fn filter_orchestrator_tool_spec(spec: ToolSpec, turn_context: &TurnContext) -> 
             (!namespace.tools.is_empty()).then_some(ToolSpec::Namespace(namespace))
         }
         ToolSpec::Freeform(tool) => {
-            coordination_tool_allowed_in_orchestrator(None, tool.name.as_str(), turn_context)
-                .then_some(ToolSpec::Freeform(tool))
+            coordination_tool_allowed_in_orchestrator(
+                /*namespace*/ None,
+                tool.name.as_str(),
+                turn_context,
+            )
+            .then_some(ToolSpec::Freeform(tool))
         }
         ToolSpec::ToolSearch { .. }
         | ToolSpec::LocalShell {}

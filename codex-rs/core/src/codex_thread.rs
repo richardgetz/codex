@@ -405,7 +405,7 @@ impl CodexThread {
             collaboration_mode.with_updates(
                 Some(selected_model.to_string()),
                 Some(reasoning_effort),
-                None,
+                /*developer_instructions*/ None,
             ),
         )
     }

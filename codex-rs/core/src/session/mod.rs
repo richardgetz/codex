@@ -1122,7 +1122,7 @@ impl Session {
                     }
                 }
                 self.disable_orchestrator_scoped_memories().await;
-                self.set_active_thread_control(None).await;
+                self.set_active_thread_control(/*control*/ None).await;
                 return Ok(());
             }
         };
@@ -1261,7 +1261,7 @@ impl Session {
         session_configuration.collaboration_mode = collaboration_mode.with_updates(
             Some(selected_model.to_string()),
             Some(reasoning_effort),
-            None,
+            /*developer_instructions*/ None,
         );
         session_configuration
     }
@@ -1291,7 +1291,7 @@ impl Session {
             return;
         }
         self.disable_orchestrator_scoped_memories().await;
-        self.set_active_thread_control(None).await;
+        self.set_active_thread_control(/*control*/ None).await;
     }
 
     async fn release_active_continuous_control(&self) {
@@ -1318,7 +1318,7 @@ impl Session {
             );
             return;
         }
-        self.set_active_thread_control(None).await;
+        self.set_active_thread_control(/*control*/ None).await;
     }
 
     async fn enable_orchestrator_scoped_memories(&self) {

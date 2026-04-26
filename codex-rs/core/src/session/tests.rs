@@ -2521,7 +2521,11 @@ fn test_codex_thread(session: Session) -> CodexThread {
     };
     let file_watcher = Arc::new(crate::file_watcher::FileWatcher::noop());
     let (subscriber, _receiver) = file_watcher.add_subscriber();
-    CodexThread::new(codex, None, subscriber.register_paths(Vec::new()))
+    CodexThread::new(
+        codex,
+        /*rollout_path*/ None,
+        subscriber.register_paths(Vec::new()),
+    )
 }
 
 #[tokio::test]
@@ -2987,7 +2991,7 @@ async fn new_turn_rearms_continuous_control_when_mode_stays_active() {
         .await
         .expect("continuous mode update should succeed");
 
-    session.set_active_thread_control(None).await;
+    session.set_active_thread_control(/*control*/ None).await;
 
     let _ = session.new_default_turn().await;
 
