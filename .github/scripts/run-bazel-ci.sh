@@ -378,10 +378,16 @@ else
   #   available for public read-through downloads, but do not attempt writes.
   #   The remote downloader requires a gRPC remote cache, and macOS SDK fetches
   #   can fail directly with Apple 403s when the downloader is disabled.
+  # --bes_backend= / --bes_results_url=:
+  #   clear Build Event Protocol upload settings from .bazelrc. Anonymous
+  #   BuildBuddy invocation uploads are rejected even when the build itself
+  #   succeeds, so no-key jobs must not try to stream results.
   bazel_run_args=(
     "${bazel_args[@]}"
     --remote_executor=
     --remote_upload_local_results=false
+    --bes_backend=
+    --bes_results_url=
   )
   if (( ${#post_config_bazel_args[@]} > 0 )); then
     bazel_run_args+=("${post_config_bazel_args[@]}")
