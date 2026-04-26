@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-04-26/orchestrator-memory-bucket-migration#3e7a9a91f"
+  change_type: "feat"
+  scope: "orchestrator-memory"
+  summary: "Upgrade existing orchestrator memory into the bucketed layout without starting over."
+  decision: "Keep preferences.jsonl as the compatibility event log, mirror parsed events into bucket-specific files, and migrate legacy unbucketed events on read/consolidation with a backup."
+  constraints:
+    - "Must preserve old memory before rewriting legacy events."
+    - "Must keep the existing preferences.jsonl path for compatibility and pruning workflows."
+    - "Must keep /orchestrator-memory-forget synchronized with generated summary/profile and bucket mirror files."
+    - "Must not include private user links, aliases, or email addresses in public tests or docs."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/orchestrator_memory/migration.rs"
+    - "codex-rs/core/src/orchestrator_memory/live.rs::consolidate_preferences"
+    - "codex-rs/core/src/orchestrator_memory.rs::build_developer_instructions"
+    - "codex-rs/core/src/orchestrator_memory_tests.rs::prune_entries_matching_needle_rewrites_preferences_and_generated_artifacts"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"
