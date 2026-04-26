@@ -1539,6 +1539,7 @@ mod tests {
                     serde_json::from_value(
                         serde_json::to_value(ServerNotification::AccountUpdated(
                             AccountUpdatedNotification {
+                                account: None,
                                 auth_mode: None,
                                 plan_type: None,
                             },

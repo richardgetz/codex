@@ -766,7 +766,7 @@ async fn maybe_apply_orchestrator_model_fallback(
                 .config
                 .effective_orchestrator_reasoning_effort(),
         ),
-        None,
+        /*developer_instructions*/ None,
     );
     if let Err(update_err) = sess
         .update_settings(SessionSettingsUpdate {
@@ -1205,8 +1205,12 @@ fn filter_tools_for_collaboration_mode(
 fn filter_orchestrator_tool_spec(spec: ToolSpec, turn_context: &TurnContext) -> Option<ToolSpec> {
     match spec {
         ToolSpec::Function(tool) => {
-            coordination_tool_allowed_in_orchestrator(None, tool.name.as_str(), turn_context)
-                .then_some(ToolSpec::Function(tool))
+            coordination_tool_allowed_in_orchestrator(
+                /*namespace*/ None,
+                tool.name.as_str(),
+                turn_context,
+            )
+            .then_some(ToolSpec::Function(tool))
         }
         ToolSpec::Namespace(mut namespace) => {
             let namespace_name = namespace.name.clone();

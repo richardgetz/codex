@@ -259,7 +259,9 @@ impl CodexMessageProcessor {
             }
         };
         if let Some(loaded_thread) = loaded_thread.as_ref() {
-            loaded_thread.set_active_thread_control(None).await;
+            loaded_thread
+                .set_active_thread_control(/*control*/ None)
+                .await;
         }
 
         let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
