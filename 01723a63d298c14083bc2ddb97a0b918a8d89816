@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-04-26/primary-contact-waiting-title#01723a63d"
+  change_type: "feat"
+  scope: "orchestrator"
+  summary: "Keep primary-contact mode visibly alive while it waits for user messages."
+  decision: "Arm primary-contact waiting as soon as polling starts, poll once before the interval sleep, and render an idle waiting braille marker that active work temporarily overrides."
+  constraints:
+    - "Primary-contact polling must stay model-less until a real user message is detected."
+    - "Active work must keep using the normal running spinner instead of the idle waiting marker."
+    - "The waiting state must remain armed after received messages so the session is walk-away ready between turns."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/app/background_requests.rs::start_primary_contact_polling"
+    - "codex-rs/tui/src/chatwidget.rs::set_primary_contact_waiting"
+    - "codex-rs/tui/src/chatwidget/status_surfaces.rs::terminal_title_spinner_text_at"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"
