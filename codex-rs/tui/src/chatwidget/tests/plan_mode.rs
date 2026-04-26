@@ -1410,7 +1410,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
 #[tokio::test]
 async fn collaboration_modes_can_start_in_orchestrator_mode() {
     let codex_home = tempdir().expect("tempdir");
-    let mut cfg = ConfigBuilder::default()
+    let cfg = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .cli_overrides(vec![(
             "features.collaboration_modes".to_string(),
@@ -1419,8 +1419,6 @@ async fn collaboration_modes_can_start_in_orchestrator_mode() {
         .build()
         .await
         .expect("config");
-    cfg.thread_control.orchestrator.model = Some("gpt-5.3-codex-spark".to_string());
-    cfg.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
     let resolved_model = crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref());
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
@@ -1508,8 +1506,6 @@ async fn set_reasoning_effort_does_not_override_active_plan_override() {
 async fn orchestrator_mask_applies_configured_thread_control_defaults() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.config.thread_control.orchestrator.model = Some("gpt-5.3-codex-spark".to_string());
-    chat.config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
 
     let orchestrator_mask =
         collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Orchestrator)

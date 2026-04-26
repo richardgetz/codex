@@ -22,6 +22,9 @@ pub(super) enum MemorySignal {
 pub(super) enum MemoryBucket {
     DurablePreference,
     PersonalContext,
+    RelationalAttunement,
+    OperatorPlaybook,
+    OngoingThreads,
     FollowupState,
 }
 
@@ -71,6 +74,9 @@ pub(super) struct AggregatedMemoryItem {
 pub(super) struct AggregatedMemorySnapshot {
     pub preferences: Vec<AggregatedMemoryItem>,
     pub personal_context: Vec<AggregatedMemoryItem>,
+    pub relational_attunement: Vec<AggregatedMemoryItem>,
+    pub operator_playbook: Vec<AggregatedMemoryItem>,
+    pub ongoing_threads: Vec<AggregatedMemoryItem>,
     pub followups: Vec<AggregatedMemoryItem>,
 }
 

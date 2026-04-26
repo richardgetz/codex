@@ -473,6 +473,59 @@ async fn rate_limit_switch_prompt_skips_non_codex_limit() {
 }
 
 #[tokio::test]
+async fn exhausted_usage_auto_rotates_to_next_configured_account() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.accounts.active = Some("work".to_string());
+    chat.config.accounts.rotation = vec!["work".to_string(), "personal".to_string()];
+
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 100.0)));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::SwitchAccount {
+            alias: Some(alias),
+            reason: crate::app_event::AccountSwitchReason::AutoRotation,
+        }) if alias == "personal"
+    );
+}
+
+#[tokio::test]
+async fn exhausted_usage_auto_rotation_can_switch_to_default_auth_store() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.accounts.active = Some("work".to_string());
+    chat.config.accounts.rotation = vec!["work".to_string(), "default".to_string()];
+
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 100.0)));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::SwitchAccount {
+            alias: None,
+            reason: crate::app_event::AccountSwitchReason::AutoRotation,
+        })
+    );
+}
+
+#[tokio::test]
+async fn exhausted_usage_does_not_auto_rotate_without_configured_sequence() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.accounts.active = Some("work".to_string());
+
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 100.0)));
+
+    assert!(
+        !matches!(
+            rx.try_recv(),
+            Ok(AppEvent::SwitchAccount {
+                reason: crate::app_event::AccountSwitchReason::AutoRotation,
+                ..
+            })
+        ),
+        "unexpected auto account rotation"
+    );
+}
+
+#[tokio::test]
 async fn rate_limit_switch_prompt_shows_once_per_session() {
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.has_chatgpt_account = true;

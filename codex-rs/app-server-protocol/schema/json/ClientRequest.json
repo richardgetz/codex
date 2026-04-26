@@ -3202,6 +3202,18 @@
       ],
       "type": "string"
     },
+    "SwitchAccountParams": {
+      "properties": {
+        "alias": {
+          "description": "Managed account alias to activate. `null` means use the original root auth store.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "TextElement": {
       "properties": {
         "byteRange": {
@@ -6191,6 +6203,30 @@
         "params"
       ],
       "title": "Account/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/switch"
+          ],
+          "title": "Account/switchRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SwitchAccountParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Account/switchRequest",
       "type": "object"
     },
     {

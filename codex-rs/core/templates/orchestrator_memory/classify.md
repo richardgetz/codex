@@ -20,7 +20,8 @@ Expectation means:
 - this may shape how I should help them
 - forgetting this may feel like a break in continuity
 - I should consider whether this belongs in durable memory, personal context,
-  follow-up state, or nowhere
+  relational attunement, operator playbook, an ongoing thread, follow-up
+  state, or nowhere
 
 Do not limit yourself to literal phrases like "remember this".
 Also detect anything that resembles the same intention in natural language,
@@ -53,16 +54,34 @@ Look for signals like:
 - future relevance
 - recurring usefulness
 - emotional importance
+- emotional tone or sensitivity the assistant should adapt to
 - user identity or biography
 - important people in the user's life
 - durable tastes, dislikes, sensitivities, or habits
 - workflow preferences
 - communication preferences
+- interaction preferences about pacing, reassurance, directness, or how the
+  user best feels understood
 - recurring guardrails
+- reusable troubleshooting moves, workaround patterns, escalation paths, or
+  operator guidance the user teaches the assistant
 - unresolved threads the user clearly expects to revisit
+- recurring initiatives, ideas, or themes the user is likely to return to
 - repeated corrections that show how the user wants to be helped
 - facts that would make future interaction feel more personal, accurate, or
   considerate
+
+Project and repo context is not automatically continuity memory.
+Only store project-shaped information when it is one of:
+- a reusable operator lesson the user taught you, such as "when this tool
+  fails, try this workaround"
+- a high-level user-owned initiative, idea, or recurring thread they expect to
+  revisit
+- a durable preference or guardrail about how they want project work handled
+
+Do not store ordinary file names, branches, implementation details, transient
+debug state, ticket minutiae, or one-off code facts just because they appeared
+in a conversation.
 
 If the user explicitly says to forget something, remove it from the relevant
 memory or follow-up state.
@@ -104,6 +123,24 @@ Classify each continuity-worthy item into one or more of these buckets:
   Important enduring facts about the user, their life, the people they care
   about, recurring priorities, meaningful personal context, and identity-shaped
   details that would help the assistant understand them better later.
+- `relational_attunement`
+  Emotional, tonal, or interpersonal understanding that helps the assistant
+  respond in a way that feels more attuned to this user. This includes clearly
+  signaled sensitivities, what tends to make the user feel understood, and
+  stable interaction cues. Do not invent diagnoses or unstable emotional
+  inferences.
+- `operator_playbook`
+  Reusable user-supplied interventions, workaround patterns, escalation paths,
+  troubleshooting moves, or operating guidance that the assistant should try
+  again in similar future situations. Store these as normalized “when X, try Y”
+  lessons rather than as repo-specific implementation minutiae. Example:
+  "When aws-auth-guard auth fails for AWS work, try the warming endpoint before
+  giving up."
+- `ongoing_threads`
+  High-level user-owned threads, projects, aspirations, recurring ideas, or
+  conceptual lines the user is likely to revisit across sessions. Keep these at
+  the continuity layer; do not store repo-specific implementation facts, ticket
+  minutiae, or temporary code details here.
 - `followup_state`
   Deferred or revisit-later state: things to return to later, checks to rerun
   when some external condition changes, unresolved threads the user expects to
@@ -123,7 +160,7 @@ Return strict JSON only:
 {
   "actions": [
     {
-      "bucket": "durable_preference" | "personal_context" | "followup_state",
+      "bucket": "durable_preference" | "personal_context" | "relational_attunement" | "operator_playbook" | "ongoing_threads" | "followup_state",
       "operation": "upsert" | "forget",
       "text": string
     }

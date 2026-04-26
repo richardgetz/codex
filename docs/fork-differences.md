@@ -37,6 +37,106 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   - `codex --disable enable_mcp_approvals`
 - `codex features list` marks Rick-owned features with `(rick)`.
 
+### Orchestrator mode defaults
+
+- Orchestrator mode can be selected at launch with `--collab orchestrator`.
+- One-letter, case-insensitive collaboration-mode shorthands are supported; for
+  example `--collab o` starts Orchestrator mode.
+- Orchestrator mode uses fork-specific model defaults when the config does not
+  specify `[thread_control.orchestrator]`.
+- Child agents launched by Orchestrator mode are restricted by
+  `[orchestrator].allowed_spawn_modes`; the fork default is `["default"]` to
+  avoid recursive orchestrator loops.
+- Orchestrator active-agent check-ins are patient supervision wake-ups. They are
+  intended to clarify, redirect, unblock, or keep waiting; they are not urgency
+  prompts to tell workers to move faster.
+
+### Primary contact channel
+
+- Orchestrator mode can start a configured communication MCP at session boot:
+
+  ```toml
+  [orchestrator]
+  primary_contact = { enabled = true, mcp = "imessage" }
+  ```
+
+- `--primary-contact <mcp>` overrides the configured primary contact for one
+  launch; `--primary-contact off` disables it for that launch.
+- The primary-contact poller can check for new user messages without calling the
+  model unless a new message is found:
+
+  ```toml
+  [orchestrator]
+  primary_contact = { enabled = true, mcp = "imessage", check_messages_every_seconds = 900 }
+  ```
+
+- `check_messages_every_seconds = 0` disables the harness-level poller.
+
+### Orchestrator memory
+
+- Orchestrator memory defaults to enabled for this fork:
+
+  ```toml
+  [orchestrator_memory]
+  enabled = true
+  scope = "orchestrator"
+  ```
+
+- The memory classifier is broader than task reminders: it should retain durable
+  user preferences, working style, follow-up intent, operator playbooks, and
+  other continuity notes when the user signals they matter later.
+- `/orchestrator-memory-forget <needle>` removes matching orchestrator-memory
+  entries without touching mainline memory stores.
+- Explicit forget requests such as `forget this: ...` are treated as memory
+  removal requests.
+
+### Scratchpad recovery
+
+- Orchestrator mode treats scratchpad as a first-class recovery ledger.
+- The fork has an additive built-in `scratchpad` tool namespace so recovery
+  notes still work when the scratchpad MCP is missing or hidden by a mode filter.
+- Built-in scratchpads are JSON-backed under `<codex_home>/scratchpad/entries`
+  unless a tool call provides `state_home`.
+- `open_scratchpad` defaults `scratchpad_id` to the current Codex
+  thread/session id when no explicit id is provided.
+- Built-in scratchpad supports active and archived lookup plus
+  archive/unarchive operations.
+- After a context compaction item is observed in Orchestrator mode, the fork can
+  mechanically submit a recovery instruction so the orchestrator checks and
+  updates scratchpad before continuing.
+- This hook is enabled by default and can be disabled with:
+
+  ```toml
+  [orchestrator]
+  recover_scratchpad_after_compaction = false
+  ```
+
+### Account aliases
+
+- `--account <alias>` starts a session using a managed account alias.
+- `/account <alias>` switches the current session to a managed alias.
+- `/account default` returns the session to the original root auth store.
+- `/status` displays managed aliases as `<alias> - <email> (<account type>)`
+  when an alias is active.
+- Account alias selection is session-scoped so multiple Codex sessions can spend
+  against different accounts concurrently.
+
+### MCP visibility and inventory
+
+- `/mcp` includes mode-aware visibility in this fork so Orchestrator mode can
+  distinguish configured/available MCPs from MCPs hidden by the current mode.
+- The prompt includes current MCP availability context so agents can answer
+  questions about which MCPs are usable in the exact running harness instead of
+  relying on stale docs.
+
+### Fork-aware help
+
+- The fork exposes repo-local fork help context so agents can answer questions
+  like "what's available in Rick's fork?" or "what's new in this fork version?"
+  from checked-in fork documentation rather than from upstream OpenAI docs.
+- Keep this page updated whenever a fork-only behavior changes user-visible
+  commands, flags, config, defaults, or recovery behavior.
+
 ## Fork-only feature labeling
 
 If this fork adds an experimental feature that surfaces its own help text in the

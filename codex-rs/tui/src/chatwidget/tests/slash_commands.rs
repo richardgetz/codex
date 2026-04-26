@@ -1359,6 +1359,61 @@ async fn slash_orchestrator_memory_forget_prunes_matching_entries() {
 }
 
 #[tokio::test]
+async fn slash_account_reports_current_alias() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.accounts.active = Some("work".to_string());
+
+    chat.dispatch_command(SlashCommand::Account);
+
+    let event = rx.try_recv().expect("expected account status message");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(rendered.contains("Current session account alias: work"));
+            assert!(rendered.contains("/account <alias>"));
+        }
+        other => panic!("expected InsertHistoryCell, got {other:?}"),
+    }
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn slash_account_with_alias_requests_switch() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/account work");
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::SwitchAccount {
+            alias: Some(alias),
+            reason: crate::app_event::AccountSwitchReason::User,
+        }) if alias == "work"
+    );
+    assert_matches!(
+        op_rx.try_recv(),
+        Err(TryRecvError::Empty),
+        "expected no core op to be sent"
+    );
+}
+
+#[tokio::test]
+async fn slash_account_default_requests_root_auth_store() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/account default");
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::SwitchAccount {
+            alias: None,
+            reason: crate::app_event::AccountSwitchReason::User,
+        })
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn slash_resume_opens_picker() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

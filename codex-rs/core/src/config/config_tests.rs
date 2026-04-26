@@ -53,6 +53,7 @@ use codex_config::types::OrchestratorEscalationMode;
 use codex_config::types::OrchestratorEscalationToml;
 use codex_config::types::OrchestratorMemoryConfig;
 use codex_config::types::OrchestratorMemoryToml;
+use codex_config::types::OrchestratorPrimaryContactToml;
 use codex_config::types::OrchestratorThreadControlToml;
 use codex_config::types::OrchestratorToml;
 use codex_config::types::SandboxWorkspaceWrite;
@@ -511,6 +512,8 @@ tool = "imessage_send_message"
 [orchestrator]
 active_agent_checkin_seconds = 900
 allowed_spawn_modes = ["default", "continuous"]
+recover_scratchpad_after_compaction = false
+primary_contact = { enabled = true, mcp = "imessage", check_messages_every_seconds = 300 }
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -523,6 +526,15 @@ allowed_spawn_modes = ["default", "continuous"]
                 channel: Some("imessage".to_string()),
                 tool: Some("imessage_send_message".to_string()),
             }),
+            primary_contact: Some(OrchestratorPrimaryContactToml {
+                enabled: Some(true),
+                mcp: Some("imessage".to_string()),
+                tool: None,
+                check_tool: None,
+                check_messages_every_seconds: Some(300),
+                startup_prompt: None,
+            }),
+            recover_scratchpad_after_compaction: Some(false),
             active_agent_checkin_seconds: Some(900),
             allowed_spawn_modes: Some(vec![ModeKind::Default, ModeKind::Continuous]),
         })
@@ -970,6 +982,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
 
     let memories_root = codex_home.path().join("memories").abs();
     let orchestrator_memory_root = codex_home.path().join("orchestrator_memory").abs();
+    let orchestrator_supervision_root = codex_home.path().join("orchestrator_supervision").abs();
     assert_eq!(
         config.permissions.file_system_sandbox_policy,
         FileSystemSandboxPolicy::restricted(vec![
@@ -1003,12 +1016,22 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                 },
                 access: FileSystemAccessMode::Write,
             },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: orchestrator_supervision_root.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
         ]),
     );
     assert_eq!(
         config.permissions.sandbox_policy.get(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![memories_root, orchestrator_memory_root],
+            writable_roots: vec![
+                memories_root,
+                orchestrator_memory_root,
+                orchestrator_supervision_root
+            ],
             read_only_access: ReadOnlyAccess::Restricted {
                 include_platform_defaults: true,
                 readable_roots: vec![cwd.path().join("docs").abs(),],
@@ -2162,6 +2185,53 @@ async fn config_resolves_explicit_keyring_auth_store_mode() -> std::io::Result<(
         ),
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_account_alias_defaults_cli_auth_store_to_auto() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        accounts: Some(codex_config::types::AccountsToml {
+            active: Some("work".to_string()),
+            rotation: None,
+        }),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.effective_cli_auth_credentials_store_mode(),
+        resolve_cli_auth_credentials_store_mode(
+            AuthCredentialsStoreMode::Auto,
+            env!("CARGO_PKG_VERSION"),
+        ),
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_account_keeps_file_cli_auth_store_for_mainline_compat() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml::default();
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.effective_cli_auth_credentials_store_mode(),
+        AuthCredentialsStoreMode::File,
+    );
     Ok(())
 }
 
@@ -5450,6 +5520,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             },
             approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(/*initial_value*/ None),
+            accounts: Default::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -5651,6 +5722,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         },
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
+        accounts: Default::default(),
         user_instructions: None,
         notify: None,
         cwd: fixture.cwd(),
@@ -5806,6 +5878,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         },
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
+        accounts: Default::default(),
         user_instructions: None,
         notify: None,
         cwd: fixture.cwd(),
@@ -5946,6 +6019,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         },
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
+        accounts: Default::default(),
         user_instructions: None,
         notify: None,
         cwd: fixture.cwd(),

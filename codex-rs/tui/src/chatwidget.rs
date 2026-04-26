@@ -46,6 +46,7 @@ use std::time::Instant;
 use self::realtime::PendingSteerCompareKey;
 use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_command::AppCommand;
+use crate::app_event::AccountSwitchReason;
 use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_server_approval_conversions::network_approval_context_to_core;
 use crate::app_server_session::ThreadSessionState;
@@ -812,6 +813,7 @@ pub(crate) struct ChatWidget {
     codex_rate_limit_reached_type: Option<RateLimitReachedType>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
+    exhausted_account_rotation_aliases: BTreeSet<String>,
     add_credits_nudge_email_in_flight: Option<AddCreditsNudgeCreditType>,
     adaptive_chunking: AdaptiveChunkingPolicy,
     // Stream lifecycle controller
@@ -846,6 +848,7 @@ pub(crate) struct ChatWidget {
     running_commands: HashMap<String, RunningCommand>,
     collab_agent_metadata: HashMap<ThreadId, CollabAgentMetadata>,
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
+    active_collab_wait_calls: HashSet<String>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<ProtocolSkillMetadata>,
     skills_initial_state: Option<HashMap<AbsolutePathBuf, bool>>,
@@ -1805,14 +1808,41 @@ impl ChatWidget {
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
-    /// both the agent turn lifecycle and MCP startup lifecycle.
+    /// the agent turn, MCP startup, and mechanical collab-wait lifecycles.
     fn update_task_running_state(&mut self) {
-        self.bottom_pane
-            .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+        let waiting_on_agents = !self.active_collab_wait_calls.is_empty();
+        self.bottom_pane.set_task_running(
+            self.agent_turn_running || self.mcp_startup_status.is_some() || waiting_on_agents,
+        );
         self.refresh_status_surfaces();
         self.bottom_pane
             .set_slash_command_task_running(self.agent_turn_running || self.is_review_mode);
+        if waiting_on_agents {
+            self.terminal_title_status_kind = TerminalTitleStatusKind::WaitingForAgents;
+        }
         self.refresh_terminal_title();
+    }
+
+    fn begin_collab_waiting(&mut self, call_id: &str) {
+        self.active_collab_wait_calls.insert(call_id.to_string());
+        self.update_task_running_state();
+        self.bottom_pane.ensure_status_indicator();
+        self.bottom_pane
+            .set_interrupt_hint_visible(/*visible*/ false);
+        self.set_status_header(String::from("Waiting on agents"));
+    }
+
+    fn end_collab_waiting(&mut self, call_id: &str) {
+        self.active_collab_wait_calls.remove(call_id);
+        self.update_task_running_state();
+        if self.active_collab_wait_calls.is_empty() && self.bottom_pane.is_task_running() {
+            self.bottom_pane
+                .set_interrupt_hint_visible(/*visible*/ self.agent_turn_running);
+            if self.agent_turn_running {
+                self.terminal_title_status_kind = TerminalTitleStatusKind::Working;
+                self.set_status_header(String::from("Working"));
+            }
+        }
     }
 
     fn restore_reasoning_status_header(&mut self) {
@@ -2940,6 +2970,9 @@ impl ChatWidget {
             {
                 self.codex_rate_limit_reached_type = Some(rate_limit_reached_type);
             }
+            if is_codex_limit {
+                self.maybe_rotate_account_for_exhausted_usage(&snapshot);
+            }
             let warnings = if is_codex_limit {
                 self.rate_limit_warnings.take_warnings(
                     snapshot
@@ -3007,6 +3040,62 @@ impl ChatWidget {
         }
         self.refresh_status_line();
     }
+
+    fn maybe_rotate_account_for_exhausted_usage(&mut self, snapshot: &RateLimitSnapshot) {
+        if !Self::rate_limit_snapshot_is_exhausted(snapshot) {
+            return;
+        }
+
+        let current_alias = self.current_rotation_alias();
+        if !self
+            .exhausted_account_rotation_aliases
+            .insert(current_alias.clone())
+        {
+            return;
+        }
+
+        let Some(next_alias) = self.next_account_rotation_alias(&current_alias) else {
+            return;
+        };
+
+        let alias = (!next_alias.eq_ignore_ascii_case("default")).then_some(next_alias);
+        self.app_event_tx.send(AppEvent::SwitchAccount {
+            alias,
+            reason: AccountSwitchReason::AutoRotation,
+        });
+    }
+
+    fn rate_limit_snapshot_is_exhausted(snapshot: &RateLimitSnapshot) -> bool {
+        snapshot.rate_limit_reached_type.is_some()
+            || snapshot
+                .primary
+                .as_ref()
+                .is_some_and(|window| window.used_percent >= 100.0)
+            || snapshot
+                .secondary
+                .as_ref()
+                .is_some_and(|window| window.used_percent >= 100.0)
+    }
+
+    fn current_rotation_alias(&self) -> String {
+        self.config
+            .active_account_alias()
+            .unwrap_or("default")
+            .to_string()
+    }
+
+    fn next_account_rotation_alias(&self, current_alias: &str) -> Option<String> {
+        let rotation = &self.config.accounts.rotation;
+        let current_index = rotation
+            .iter()
+            .position(|alias| alias.eq_ignore_ascii_case(current_alias))?;
+        rotation
+            .iter()
+            .skip(current_index + 1)
+            .find(|alias| !self.exhausted_account_rotation_aliases.contains(*alias))
+            .cloned()
+    }
+
     /// Finalize any active exec as failed and stop/clear agent-turn UI state.
     ///
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
@@ -4306,6 +4395,7 @@ impl ChatWidget {
             }
             CollabAgentTool::Wait => {
                 if matches!(status, CollabAgentToolCallStatus::InProgress) {
+                    self.begin_collab_waiting(&id);
                     self.on_collab_event(multi_agents::waiting_begin(
                         codex_protocol::protocol::CollabWaitingBeginEvent {
                             sender_thread_id,
@@ -4323,6 +4413,7 @@ impl ChatWidget {
                         },
                     ));
                 } else {
+                    self.end_collab_waiting(&id);
                     let (agent_statuses, statuses) = app_server_collab_agent_statuses_to_core(
                         &receiver_thread_ids,
                         &agents_states,
@@ -5200,6 +5291,7 @@ impl ChatWidget {
             codex_rate_limit_reached_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+            exhausted_account_rotation_aliases: BTreeSet::new(),
             add_credits_nudge_email_in_flight: None,
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
@@ -5208,6 +5300,7 @@ impl ChatWidget {
             running_commands: HashMap::new(),
             collab_agent_metadata: HashMap::new(),
             pending_collab_spawn_requests: HashMap::new(),
+            active_collab_wait_calls: HashSet::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
             unified_exec_wait_streak: None,
@@ -5790,6 +5883,30 @@ impl ChatWidget {
     fn submit_user_message(&mut self, user_message: UserMessage) {
         let _ = self
             .submit_user_message_with_shell_escape_policy(user_message, ShellEscapePolicy::Allow);
+    }
+
+    pub(crate) fn submit_external_user_message(&mut self, text: String) {
+        let _ = self.submit_user_message_with_shell_escape_policy(
+            UserMessage {
+                text,
+                local_images: Vec::new(),
+                remote_image_urls: Vec::new(),
+                text_elements: Vec::new(),
+                mention_bindings: Vec::new(),
+            },
+            ShellEscapePolicy::Disallow,
+        );
+    }
+
+    fn maybe_submit_scratchpad_recovery_after_compaction(&mut self) {
+        if !self.config.orchestrator.recover_scratchpad_after_compaction
+            || self.active_mode_kind() != ModeKind::Orchestrator
+        {
+            return;
+        }
+        self.submit_external_user_message(
+            "Context was compacted. Before continuing, recover the active scratchpad for this objective/session, confirm the current status/next step from it, and update it if compaction changed what future recovery needs. If scratchpad is unavailable, say that explicitly and preserve the recovery state in the best available durable channel.".to_string(),
+        );
     }
 
     fn submit_user_message_with_shell_escape_policy(
@@ -6416,6 +6533,9 @@ impl ChatWidget {
             }
             ThreadItem::ContextCompaction { .. } => {
                 self.add_info_message("Context compacted".to_string(), /*hint*/ None);
+                if !from_replay {
+                    self.maybe_submit_scratchpad_recovery_after_compaction();
+                }
             }
             ThreadItem::HookPrompt { .. } => {}
             ThreadItem::CollabAgentToolCall {
@@ -7274,9 +7394,13 @@ impl ChatWidget {
                 self.on_collab_event(multi_agents::interaction_end(ev))
             }
             EventMsg::CollabWaitingBegin(ev) => {
+                self.begin_collab_waiting(&ev.call_id);
                 self.on_collab_event(multi_agents::waiting_begin(ev))
             }
-            EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(multi_agents::waiting_end(ev)),
+            EventMsg::CollabWaitingEnd(ev) => {
+                self.end_collab_waiting(&ev.call_id);
+                self.on_collab_event(multi_agents::waiting_end(ev));
+            }
             EventMsg::CollabCloseBegin(_) => {}
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(multi_agents::close_end(ev)),
             EventMsg::CollabResumeBegin(ev) => self.on_collab_event(multi_agents::resume_begin(ev)),
@@ -10174,18 +10298,13 @@ impl ChatWidget {
 
         if mask.mode == Some(ModeKind::Orchestrator) {
             if mask.model.is_none() {
-                mask.model = config.thread_control.orchestrator.model.clone();
+                mask.model = Some(config.effective_orchestrator_model().to_string());
             }
-            if mask.reasoning_effort.is_none()
-                && let Some(effort) = config.thread_control.orchestrator.reasoning_effort
-            {
-                mask.reasoning_effort = Some(Some(effort));
+            if mask.reasoning_effort.is_none() {
+                mask.reasoning_effort = Some(config.effective_orchestrator_reasoning_effort());
             }
         }
-        let should_apply_model_override = !matches!(
-            initial_mode,
-            Some(ModeKind::Orchestrator) if config.thread_control.orchestrator.model.is_some()
-        );
+        let should_apply_model_override = initial_mode != Some(ModeKind::Orchestrator);
         if should_apply_model_override && let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
         }
@@ -10211,12 +10330,10 @@ impl ChatWidget {
 
         if mask.mode == Some(ModeKind::Orchestrator) {
             if mask.model.is_none() {
-                mask.model = self.config.thread_control.orchestrator.model.clone();
+                mask.model = Some(self.config.effective_orchestrator_model().to_string());
             }
-            if mask.reasoning_effort.is_none()
-                && let Some(effort) = self.config.thread_control.orchestrator.reasoning_effort
-            {
-                mask.reasoning_effort = Some(Some(effort));
+            if mask.reasoning_effort.is_none() {
+                mask.reasoning_effort = Some(self.config.effective_orchestrator_reasoning_effort());
             }
         }
 
@@ -11379,6 +11496,10 @@ impl ChatWidget {
     /// runtime overrides applied via TUI, e.g., model or approval policy).
     pub(crate) fn config_ref(&self) -> &Config {
         &self.config
+    }
+
+    pub(crate) fn set_active_account_alias(&mut self, alias: Option<String>) {
+        self.config.accounts.active = alias;
     }
 
     #[cfg(test)]

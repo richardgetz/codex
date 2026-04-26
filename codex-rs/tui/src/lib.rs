@@ -845,12 +845,19 @@ pub async fn run_main(
         ..Default::default()
     };
 
-    let config = load_config_or_exit(
+    let mut config = load_config_or_exit(
         cli_kv_overrides.clone(),
         overrides.clone(),
         cloud_requirements.clone(),
     )
     .await;
+
+    config = crate::app::config_for_startup_session(
+        &config,
+        cli.startup_account_alias.as_deref(),
+        cli.startup_collaboration_mode,
+        cli.startup_primary_contact_mcp.as_deref(),
+    );
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
@@ -880,7 +887,8 @@ pub async fn run_main(
         #[allow(clippy::print_stderr)]
         if let Err(err) = enforce_login_restrictions(&AuthConfig {
             codex_home: config.codex_home.to_path_buf(),
-            auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
+            auth_storage_home: config.auth_storage_home(),
+            auth_credentials_store_mode: config.effective_cli_auth_credentials_store_mode(),
             forced_login_method: config.forced_login_method,
             forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
         }) {
@@ -1150,9 +1158,9 @@ async fn run_ratatui_app(
         // status detection edge cases.
         if show_login_screen && !remote_mode {
             cloud_requirements = cloud_requirements_loader_for_storage(
-                initial_config.codex_home.to_path_buf(),
+                initial_config.auth_storage_home(),
                 /*enable_codex_api_key_env*/ false,
-                initial_config.cli_auth_credentials_store_mode,
+                initial_config.effective_cli_auth_credentials_store_mode(),
                 initial_config.chatgpt_base_url.clone(),
             );
         }
@@ -1396,9 +1404,18 @@ async fn run_ratatui_app(
         shared,
         no_alt_screen,
         startup_collaboration_mode,
+        startup_account_alias,
+        startup_primary_contact_mcp,
         ..
     } = cli;
     let images = shared.into_inner().images;
+
+    config = crate::app::config_for_startup_session(
+        &config,
+        startup_account_alias.as_deref(),
+        startup_collaboration_mode,
+        startup_primary_contact_mcp.as_deref(),
+    );
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
@@ -1750,6 +1767,8 @@ mod tests {
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_config::config_toml::ProjectConfig;
     use codex_features::Feature;
+    use codex_login::AuthCredentialsStoreMode;
+    use codex_login::login_with_api_key;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
@@ -2056,6 +2075,57 @@ mod tests {
             .await
             .expect("thread/start should succeed");
         assert!(!response.thread.id.is_empty());
+
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn startup_account_alias_uses_alias_auth_store_for_login_status() -> color_eyre::Result<()>
+    {
+        let temp_dir = TempDir::new()?;
+        login_with_api_key(temp_dir.path(), "sk-root", AuthCredentialsStoreMode::File)?;
+        let base_config = build_config(&temp_dir).await?;
+        let config = crate::app::config_for_startup_account_alias(&base_config, Some("work"));
+        let mut app_server =
+            AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
+                start_test_embedded_app_server(config.clone()).await?,
+            ));
+
+        let login_status = get_login_status(&mut app_server, &config).await?;
+        assert_eq!(login_status, LoginStatus::NotAuthenticated);
+
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn startup_second_account_alias_does_not_inherit_first_alias_auth()
+    -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let first_alias_home = temp_dir.path().join("accounts/personal");
+        std::fs::create_dir_all(&first_alias_home)?;
+        login_with_api_key(
+            &first_alias_home,
+            "sk-personal",
+            AuthCredentialsStoreMode::File,
+        )?;
+
+        let mut base_config = build_config(&temp_dir).await?;
+        base_config.accounts.active = Some("personal".to_string());
+        let config = crate::app::config_for_startup_session(
+            &base_config,
+            Some("work"),
+            /*mode*/ None,
+            /*primary_contact_mcp*/ None,
+        );
+        let mut app_server =
+            AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
+                start_test_embedded_app_server(config.clone()).await?,
+            ));
+
+        let login_status = get_login_status(&mut app_server, &config).await?;
+        assert_eq!(login_status, LoginStatus::NotAuthenticated);
 
         app_server.shutdown().await?;
         Ok(())

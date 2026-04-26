@@ -91,6 +91,8 @@ use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
+use codex_app_server_protocol::McpServerToolCallParams;
+use codex_app_server_protocol::McpServerToolCallResponse;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
@@ -231,18 +233,115 @@ fn app_server_request_id_to_mcp_request_id(
     }
 }
 
-fn config_for_startup_collaboration_mode(config: &Config, mode: Option<ModeKind>) -> Config {
+pub(crate) fn config_for_startup_collaboration_mode(
+    config: &Config,
+    mode: Option<ModeKind>,
+) -> Config {
     let mut startup_config = config.clone();
     if mode == Some(ModeKind::Orchestrator) {
-        if let Some(model) = startup_config.thread_control.orchestrator.model.clone() {
-            startup_config.model = Some(model);
-        }
-        if let Some(reasoning_effort) = startup_config.thread_control.orchestrator.reasoning_effort
-        {
-            startup_config.model_reasoning_effort = Some(reasoning_effort);
-        }
+        startup_config.model = Some(startup_config.effective_orchestrator_model().to_string());
+        startup_config.model_reasoning_effort =
+            startup_config.effective_orchestrator_reasoning_effort();
     }
     startup_config
+}
+
+pub(crate) fn config_for_startup_session(
+    config: &Config,
+    alias: Option<&str>,
+    mode: Option<ModeKind>,
+    primary_contact_mcp: Option<&str>,
+) -> Config {
+    let startup_config = config_for_startup_account_alias(config, alias);
+    let startup_config = config_for_startup_primary_contact(&startup_config, primary_contact_mcp);
+    config_for_startup_collaboration_mode(&startup_config, mode)
+}
+
+pub(crate) fn config_for_startup_account_alias(config: &Config, alias: Option<&str>) -> Config {
+    let mut startup_config = config.clone();
+    startup_config.accounts.active = alias.and_then(|value| {
+        let value = value.trim().to_string();
+        if value.is_empty() || value.eq_ignore_ascii_case("default") {
+            None
+        } else {
+            Some(value)
+        }
+    });
+    startup_config
+}
+
+pub(crate) fn config_for_startup_primary_contact(config: &Config, mcp: Option<&str>) -> Config {
+    let mut startup_config = config.clone();
+    let Some(mcp) = mcp else {
+        return startup_config;
+    };
+    let mcp = mcp.trim();
+    if mcp.eq_ignore_ascii_case("off")
+        || mcp.eq_ignore_ascii_case("none")
+        || mcp.eq_ignore_ascii_case("disabled")
+    {
+        startup_config.orchestrator.primary_contact.enabled = false;
+        return startup_config;
+    }
+    if !mcp.is_empty() {
+        startup_config.orchestrator.primary_contact.enabled = true;
+        startup_config.orchestrator.primary_contact.mcp = Some(mcp.to_string());
+    }
+    startup_config
+}
+
+fn initial_prompt_with_primary_contact(
+    config: &Config,
+    initial_collaboration_mode: Option<ModeKind>,
+    initial_prompt: Option<String>,
+) -> Option<String> {
+    if initial_collaboration_mode != Some(ModeKind::Orchestrator) {
+        return initial_prompt;
+    }
+    let primary_contact = &config.orchestrator.primary_contact;
+    if !primary_contact.enabled {
+        return initial_prompt;
+    }
+    let Some(mcp) = primary_contact.mcp.as_deref() else {
+        return initial_prompt;
+    };
+    let contact_prompt = primary_contact.startup_prompt.clone().unwrap_or_else(|| {
+        default_primary_contact_startup_prompt(
+            mcp,
+            primary_contact.tool.as_deref(),
+            primary_contact.check_messages_every_seconds,
+        )
+    });
+    match initial_prompt {
+        Some(initial_prompt) if !initial_prompt.trim().is_empty() => {
+            Some(format!("{initial_prompt}\n\n{contact_prompt}"))
+        }
+        _ => Some(contact_prompt),
+    }
+}
+
+fn default_primary_contact_startup_prompt(
+    mcp: &str,
+    tool: Option<&str>,
+    check_messages_every_seconds: u32,
+) -> String {
+    let tool = tool
+        .map(str::to_string)
+        .or_else(|| {
+            mcp.eq_ignore_ascii_case("imessage")
+                .then(|| "imessage_followup_start".to_string())
+        })
+        .unwrap_or_else(|| format!("{mcp} follow-up start tool"));
+    let check_note = if check_messages_every_seconds == 0 {
+        "Harness-level primary-contact message polling is disabled.".to_string()
+    } else {
+        format!(
+            "The harness will also check this channel for new user messages every {check_messages_every_seconds} seconds without calling the model unless a new user message is found."
+        )
+    };
+    format!(
+        "Start the configured primary communication channel now. Use the `{mcp}` MCP and `{tool}` if available, then keep this Orchestrator session reachable through that channel for future user replies. {check_note} Do not delegate this communication setup to a sub-agent."
+    )
 }
 
 fn command_execution_decision_to_review_decision(
@@ -782,6 +881,11 @@ impl App {
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
             Self::should_wait_for_initial_session(&session_selection);
+        let startup_initial_prompt = initial_prompt_with_primary_contact(
+            &session_bootstrap_config,
+            initial_collaboration_mode,
+            initial_prompt.clone(),
+        );
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let started = app_server.start_thread(&session_bootstrap_config).await?;
@@ -793,7 +897,7 @@ impl App {
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
-                        initial_prompt.clone(),
+                        startup_initial_prompt.clone(),
                         initial_images.clone(),
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
@@ -828,7 +932,7 @@ impl App {
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
-                        initial_prompt.clone(),
+                        startup_initial_prompt.clone(),
                         initial_images.clone(),
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
@@ -868,7 +972,7 @@ impl App {
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
-                        initial_prompt.clone(),
+                        startup_initial_prompt.clone(),
                         initial_images.clone(),
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
@@ -948,6 +1052,11 @@ impl App {
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
+        }
+        if initial_collaboration_mode == Some(ModeKind::Orchestrator)
+            && let Some(thread_id) = app.primary_thread_id
+        {
+            app.start_primary_contact_polling(&app_server, thread_id);
         }
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.

@@ -25,6 +25,7 @@ pub(super) const TERMINAL_TITLE_SPINNER_INTERVAL: Duration = Duration::from_mill
 pub(super) enum TerminalTitleStatusKind {
     Working,
     WaitingForBackgroundTerminal,
+    WaitingForAgents,
     Undoing,
     #[default]
     Thinking,
@@ -629,11 +630,15 @@ impl ChatWidget {
             {
                 "Ready".to_string()
             }
+            TerminalTitleStatusKind::WaitingForAgents if !self.bottom_pane.is_task_running() => {
+                "Ready".to_string()
+            }
             TerminalTitleStatusKind::Thinking if !self.bottom_pane.is_task_running() => {
                 "Ready".to_string()
             }
             TerminalTitleStatusKind::Working => "Working".to_string(),
             TerminalTitleStatusKind::WaitingForBackgroundTerminal => "Waiting".to_string(),
+            TerminalTitleStatusKind::WaitingForAgents => "Waiting on agents".to_string(),
             TerminalTitleStatusKind::Undoing => "Undoing".to_string(),
             TerminalTitleStatusKind::Thinking => "Thinking".to_string(),
         }

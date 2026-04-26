@@ -410,6 +410,21 @@ async fn live_app_server_collab_wait_items_render_history() {
         /*replay_kind*/ None,
     );
 
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(!chat.bottom_pane.slash_command_task_running());
+    assert_eq!(chat.terminal_title_status_text(), "Waiting on agents");
+    assert_eq!(
+        chat.terminal_title_spinner_text_at(chat.terminal_title_animation_origin)
+            .as_deref(),
+        Some("⠋")
+    );
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("waiting status indicator");
+    assert_eq!(status.header(), "Waiting on agents");
+    assert!(!status.interrupt_hint_visible());
+
     chat.handle_server_notification(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: "thread-1".to_string(),
@@ -446,6 +461,9 @@ async fn live_app_server_collab_wait_items_render_history() {
         }),
         /*replay_kind*/ None,
     );
+
+    assert!(!chat.bottom_pane.is_task_running());
+    assert_eq!(chat.terminal_title_status_text(), "Ready");
 
     let combined = drain_insert_history(&mut rx)
         .into_iter()

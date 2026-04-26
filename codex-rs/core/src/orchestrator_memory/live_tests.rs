@@ -183,6 +183,135 @@ async fn consolidates_followup_state_into_dedicated_section() {
 }
 
 #[tokio::test]
+async fn consolidates_relational_attunement_into_dedicated_section() {
+    let temp = tempdir().expect("tempdir");
+    let codex_home = temp.path().abs();
+    append_preference_events(
+        &codex_home,
+        "thread-1".to_string(),
+        "turn-1".to_string(),
+        &[CandidateMemoryItem {
+            bucket: MemoryBucket::RelationalAttunement,
+            operation: MemoryOperation::Upsert,
+            signal: MemorySignal::ModelClassified,
+            key: "direct but clarify when ambiguity could trigger the wrong thing".to_string(),
+            candidate:
+                "Respond directly, but slow down and clarify when ambiguity could trigger the wrong thing"
+                    .to_string(),
+            source_excerpt:
+                "When things are unclear you will clarify to ensure nothing incorrect is triggered"
+                    .to_string(),
+            confidence: 0.8,
+        }],
+    )
+    .await
+    .expect("append relational attunement event");
+
+    consolidate_preferences(
+        &codex_home,
+        &OrchestratorMemoryConfig {
+            enabled: true,
+            ..OrchestratorMemoryConfig::default()
+        },
+    )
+    .await
+    .expect("consolidate preferences");
+
+    let summary = fs::read_to_string(summary_path(&codex_home))
+        .await
+        .expect("read summary");
+
+    assert!(summary.contains("## Relational Attunement"));
+    assert!(summary.contains("Respond directly, but slow down and clarify"));
+}
+
+#[tokio::test]
+async fn consolidates_ongoing_threads_into_dedicated_section() {
+    let temp = tempdir().expect("tempdir");
+    let codex_home = temp.path().abs();
+    append_preference_events(
+        &codex_home,
+        "thread-1".to_string(),
+        "turn-1".to_string(),
+        &[CandidateMemoryItem {
+            bucket: MemoryBucket::OngoingThreads,
+            operation: MemoryOperation::Upsert,
+            signal: MemorySignal::ModelClassified,
+            key: "designing orchestrator memory around emotional continuity".to_string(),
+            candidate:
+                "The user is actively shaping orchestrator memory around emotional continuity and attunement"
+                    .to_string(),
+            source_excerpt:
+                "Memory is very important. We want to evoke understanding and the emotion or tone of conversations"
+                    .to_string(),
+            confidence: 0.8,
+        }],
+    )
+    .await
+    .expect("append ongoing thread event");
+
+    consolidate_preferences(
+        &codex_home,
+        &OrchestratorMemoryConfig {
+            enabled: true,
+            ..OrchestratorMemoryConfig::default()
+        },
+    )
+    .await
+    .expect("consolidate preferences");
+
+    let summary = fs::read_to_string(summary_path(&codex_home))
+        .await
+        .expect("read summary");
+
+    assert!(summary.contains("## Ongoing Threads"));
+    assert!(summary.contains("orchestrator memory around emotional continuity"));
+}
+
+#[tokio::test]
+async fn consolidates_operator_playbook_into_dedicated_section() {
+    let temp = tempdir().expect("tempdir");
+    let codex_home = temp.path().abs();
+    append_preference_events(
+        &codex_home,
+        "thread-1".to_string(),
+        "turn-1".to_string(),
+        &[CandidateMemoryItem {
+            bucket: MemoryBucket::OperatorPlaybook,
+            operation: MemoryOperation::Upsert,
+            signal: MemorySignal::ModelClassified,
+            key: "when aws auth guard auth stalls try the warming endpoint".to_string(),
+            candidate:
+                "When aws-auth-guard authentication stalls, try the warming endpoint to unblock it"
+                    .to_string(),
+            source_excerpt:
+                "agent was blocked on aws-auth-guard auth; the user suggested the warming endpoint and it worked"
+                    .to_string(),
+            confidence: 0.8,
+        }],
+    )
+    .await
+    .expect("append operator playbook event");
+
+    consolidate_preferences(
+        &codex_home,
+        &OrchestratorMemoryConfig {
+            enabled: true,
+            ..OrchestratorMemoryConfig::default()
+        },
+    )
+    .await
+    .expect("consolidate preferences");
+
+    let summary = fs::read_to_string(summary_path(&codex_home))
+        .await
+        .expect("read summary");
+
+    assert!(summary.contains("## Operator Playbook"));
+    assert!(summary.contains("warming endpoint to unblock it"));
+}
+
+#[tokio::test]
 async fn forget_event_removes_existing_memory_item() {
     let temp = tempdir().expect("tempdir");
     let codex_home = temp.path().abs();

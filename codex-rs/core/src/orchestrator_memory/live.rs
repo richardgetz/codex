@@ -289,6 +289,9 @@ pub(crate) async fn consolidate_preferences(
 
     if snapshot.preferences.is_empty()
         && snapshot.personal_context.is_empty()
+        && snapshot.relational_attunement.is_empty()
+        && snapshot.operator_playbook.is_empty()
+        && snapshot.ongoing_threads.is_empty()
         && snapshot.followups.is_empty()
     {
         remove_generated_memory_files(codex_home).await?;
@@ -298,11 +301,17 @@ pub(crate) async fn consolidate_preferences(
     let summary = render_summary(
         &snapshot.preferences,
         &snapshot.personal_context,
+        &snapshot.relational_attunement,
+        &snapshot.operator_playbook,
+        &snapshot.ongoing_threads,
         &snapshot.followups,
     );
     let profile = render_profile(
         &snapshot.preferences,
         &snapshot.personal_context,
+        &snapshot.relational_attunement,
+        &snapshot.operator_playbook,
+        &snapshot.ongoing_threads,
         &snapshot.followups,
     );
     fs::write(summary_path(codex_home), summary).await?;
@@ -368,6 +377,30 @@ pub(super) fn aggregate_memory_items(
         })
         .cloned()
         .collect::<Vec<_>>();
+    let mut relational_attunement = aggregated
+        .values()
+        .filter(|entry| entry.bucket == MemoryBucket::RelationalAttunement)
+        .filter(|entry| {
+            entry.direct_observations > 0 || entry.observations >= config.min_observations
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut ongoing_threads = aggregated
+        .values()
+        .filter(|entry| entry.bucket == MemoryBucket::OngoingThreads)
+        .filter(|entry| {
+            entry.direct_observations > 0 || entry.observations >= config.min_observations
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut operator_playbook = aggregated
+        .values()
+        .filter(|entry| entry.bucket == MemoryBucket::OperatorPlaybook)
+        .filter(|entry| {
+            entry.direct_observations > 0 || entry.observations >= config.min_observations
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     let mut followups = aggregated
         .values()
         .filter(|entry| entry.bucket == MemoryBucket::FollowupState)
@@ -379,15 +412,24 @@ pub(super) fn aggregate_memory_items(
 
     sort_entries(&mut preferences);
     sort_entries(&mut personal_context);
+    sort_entries(&mut relational_attunement);
+    sort_entries(&mut operator_playbook);
+    sort_entries(&mut ongoing_threads);
     sort_entries(&mut followups);
 
     preferences.truncate(config.max_summary_items);
     personal_context.truncate(config.max_summary_items);
+    relational_attunement.truncate(config.max_summary_items);
+    operator_playbook.truncate(config.max_summary_items);
+    ongoing_threads.truncate(config.max_summary_items);
     followups.truncate(config.max_summary_items);
 
     AggregatedMemorySnapshot {
         preferences,
         personal_context,
+        relational_attunement,
+        operator_playbook,
+        ongoing_threads,
         followups,
     }
 }
@@ -405,11 +447,17 @@ fn sort_entries(entries: &mut [AggregatedMemoryItem]) {
 fn render_summary(
     preferences: &[AggregatedMemoryItem],
     personal_context: &[AggregatedMemoryItem],
+    relational_attunement: &[AggregatedMemoryItem],
+    operator_playbook: &[AggregatedMemoryItem],
+    ongoing_threads: &[AggregatedMemoryItem],
     followups: &[AggregatedMemoryItem],
 ) -> String {
     let mut body = String::from("# Orchestrator Memory Summary\n\n");
     append_summary_section(&mut body, "Working Preferences", preferences);
     append_summary_section(&mut body, "Personal Context", personal_context);
+    append_summary_section(&mut body, "Relational Attunement", relational_attunement);
+    append_summary_section(&mut body, "Operator Playbook", operator_playbook);
+    append_summary_section(&mut body, "Ongoing Threads", ongoing_threads);
     append_summary_section(&mut body, "Follow-Up State", followups);
     body
 }
@@ -432,11 +480,17 @@ fn append_summary_section(body: &mut String, title: &str, items: &[AggregatedMem
 fn render_profile(
     preferences: &[AggregatedMemoryItem],
     personal_context: &[AggregatedMemoryItem],
+    relational_attunement: &[AggregatedMemoryItem],
+    operator_playbook: &[AggregatedMemoryItem],
+    ongoing_threads: &[AggregatedMemoryItem],
     followups: &[AggregatedMemoryItem],
 ) -> String {
     let mut body = String::from("# Orchestrator Memory Profile\n\n");
     append_profile_section(&mut body, "Working Preferences", preferences);
     append_profile_section(&mut body, "Personal Context", personal_context);
+    append_profile_section(&mut body, "Relational Attunement", relational_attunement);
+    append_profile_section(&mut body, "Operator Playbook", operator_playbook);
+    append_profile_section(&mut body, "Ongoing Threads", ongoing_threads);
     append_profile_section(&mut body, "Follow-Up State", followups);
     body
 }

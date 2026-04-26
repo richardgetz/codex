@@ -6,6 +6,25 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AccountsToml": {
+      "additionalProperties": false,
+      "description": "Managed account-alias settings loaded from config.toml.",
+      "properties": {
+        "active": {
+          "description": "Alias whose auth should be active by default for this Codex install.",
+          "type": "string"
+        },
+        "rotation": {
+          "default": null,
+          "description": "Ordered account aliases to use when automatic session-local account rotation is enabled. Use `\"default\"` for the original root auth store.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -1715,6 +1734,39 @@
       },
       "type": "object"
     },
+    "OrchestratorPrimaryContactToml": {
+      "additionalProperties": false,
+      "description": "Primary user-contact channel that Orchestrator mode should start on session boot.",
+      "properties": {
+        "check_messages_every_seconds": {
+          "description": "How often the harness should check the primary contact channel for new user messages. Defaults to 900 seconds. `0` disables polling.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "check_tool": {
+          "description": "Optional MCP tool name used by the harness-only background poller to check for new user messages.",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "When `true`, Orchestrator starts the configured communication MCP at session boot.",
+          "type": "boolean"
+        },
+        "mcp": {
+          "description": "MCP server or communication channel name, for example `\"imessage\"`.",
+          "type": "string"
+        },
+        "startup_prompt": {
+          "description": "Optional replacement startup prompt for advanced channel-specific behavior.",
+          "type": "string"
+        },
+        "tool": {
+          "description": "Optional MCP tool name to invoke/start through the model, for example `\"imessage_followup_start\"`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "OrchestratorThreadControlToml": {
       "additionalProperties": false,
       "description": "Orchestrator-specific thread-control settings loaded from config.toml.",
@@ -1758,6 +1810,18 @@
             }
           ],
           "default": null
+        },
+        "primary_contact": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/OrchestratorPrimaryContactToml"
+            }
+          ],
+          "default": null
+        },
+        "recover_scratchpad_after_compaction": {
+          "description": "When true, Orchestrator mode schedules a scratchpad recovery prompt after a context compaction item is observed.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2675,6 +2739,15 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
+    "accounts": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AccountsToml"
+        }
+      ],
+      "default": null,
+      "description": "Managed account alias selection for CLI auth storage."
+    },
     "agents": {
       "allOf": [
         {

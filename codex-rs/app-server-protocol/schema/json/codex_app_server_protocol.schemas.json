@@ -1920,6 +1920,30 @@
             },
             "method": {
               "enum": [
+                "account/switch"
+              ],
+              "title": "Account/switchRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SwitchAccountParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/switchRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "fuzzyFileSearch"
               ],
               "title": "FuzzyFileSearchRequestMethod",
@@ -5312,6 +5336,16 @@
       "AccountUpdatedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/Account"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "authMode": {
             "anyOf": [
               {
@@ -14035,6 +14069,7 @@
             "enum": [
               "review",
               "compact",
+              "memory_extraction",
               "memory_consolidation"
             ],
             "type": "string"
@@ -14104,6 +14139,25 @@
             "type": "object"
           }
         ]
+      },
+      "SwitchAccountParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "alias": {
+            "description": "Managed account alias to activate. `null` means use the original root auth store.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "SwitchAccountParams",
+        "type": "object"
+      },
+      "SwitchAccountResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "SwitchAccountResponse",
+        "type": "object"
       },
       "TerminalInteractionNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",

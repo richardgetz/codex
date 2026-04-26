@@ -99,6 +99,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::UnavailableToolHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
+    use crate::tools::handlers::builtin_scratchpad::BuiltinScratchpadHandler;
+    use crate::tools::handlers::builtin_scratchpad::scratchpad_namespace_spec;
     use crate::tools::handlers::multi_agents::CloseAgentHandler;
     use crate::tools::handlers::multi_agents::ResumeAgentHandler;
     use crate::tools::handlers::multi_agents::SendInputHandler;
@@ -199,6 +201,30 @@ pub(crate) fn build_specs_with_discoverable_tools(
         } else {
             builder.push_spec(spec.spec);
         }
+    }
+
+    let scratchpad_handler = Arc::new(BuiltinScratchpadHandler);
+    if existing_spec_names.insert("scratchpad".to_string()) {
+        builder.push_spec(scratchpad_namespace_spec());
+    }
+    for tool_name in [
+        "open_scratchpad",
+        "get_scratchpad",
+        "get_scratchpad_summary",
+        "append_scratchpad_note",
+        "set_next_steps",
+        "set_pending_waits",
+        "update_scratchpad",
+        "archive_scratchpad",
+        "unarchive_scratchpad",
+        "lookup_scratchpads",
+        "get_scratchpad_schema",
+        "check_action_allowed",
+    ] {
+        builder.register_handler(
+            ToolName::namespaced("scratchpad", tool_name),
+            scratchpad_handler.clone(),
+        );
     }
 
     for handler in plan.handlers {

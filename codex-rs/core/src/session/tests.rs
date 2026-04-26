@@ -23,6 +23,7 @@ use crate::tools::format_exec_output_str;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_login::CodexAuth;
+use codex_mcp::ToolInfo as McpToolInfo;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
@@ -136,6 +137,8 @@ use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::Metric;
 use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use rmcp::model::JsonObject;
+use rmcp::model::Tool;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
@@ -2558,6 +2561,31 @@ async fn resolve_router_turn_settings_remaps_unsupported_explicit_effort() {
 }
 
 #[tokio::test]
+async fn resolve_router_turn_settings_applies_implicit_orchestrator_defaults() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let mut orchestrator_mode = session.collaboration_mode().await;
+    orchestrator_mode.mode = ModeKind::Orchestrator;
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(orchestrator_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("orchestrator mode update should succeed");
+    let thread = test_codex_thread(session);
+
+    let (model, reasoning_effort, collaboration_mode) = thread.resolve_router_turn_settings().await;
+
+    assert_eq!(model, "gpt-5.3-codex-spark");
+    assert_eq!(reasoning_effort, Some(ReasoningEffortConfig::Low));
+    assert_eq!(collaboration_mode.model(), "gpt-5.3-codex-spark");
+    assert_eq!(
+        collaboration_mode.reasoning_effort(),
+        Some(ReasoningEffortConfig::Low)
+    );
+}
+
+#[tokio::test]
 async fn resolve_router_turn_settings_preserves_absent_effort() {
     let (session, _turn_context) = make_session_and_context().await;
     {
@@ -2723,13 +2751,6 @@ async fn session_update_settings_syncs_orchestrator_collaboration_mode_control()
 #[tokio::test]
 async fn session_update_settings_applies_orchestrator_overrides_immediately() {
     let (session, _turn_context) = make_session_and_context().await;
-    {
-        let mut state = session.state.lock().await;
-        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
-        config.thread_control.orchestrator.model = Some("gpt-5.4".to_string());
-        config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
-        state.session_configuration.original_config_do_not_use = Arc::new(config);
-    }
 
     let mut orchestrator_mode = session.collaboration_mode().await;
     orchestrator_mode.mode = ModeKind::Orchestrator;
@@ -2744,7 +2765,7 @@ async fn session_update_settings_applies_orchestrator_overrides_immediately() {
 
     let updated = session.collaboration_mode().await;
     assert_eq!(updated.mode, ModeKind::Orchestrator);
-    assert_eq!(updated.model(), "gpt-5.4");
+    assert_eq!(updated.model(), "gpt-5.3-codex-spark");
     assert_eq!(updated.reasoning_effort(), Some(ReasoningEffortConfig::Low));
 }
 
@@ -6373,6 +6394,31 @@ async fn build_initial_context_surfaces_recent_orchestrator_memory_when_summary_
 }
 
 #[tokio::test]
+async fn build_initial_context_injects_fork_help_inventory() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |_config| {},
+    )
+    .await;
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+    let developer_texts = developer_input_texts(&initial_context);
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("Rick Fork Guidance")),
+        "expected fork guidance in developer instructions, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("/account <alias>")),
+        "expected fork delta inventory to mention account alias switching, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
 async fn build_initial_context_injects_orchestrator_supervision_in_orchestrator_mode() {
     let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
@@ -7765,6 +7811,83 @@ async fn build_prompt_limits_orchestrator_to_coordination_tools() {
     assert!(!tool_names.contains(&"apply_patch"));
     assert!(!tool_names.contains(&"view_image"));
     assert!(!tool_names.contains(&"web_search"));
+}
+
+fn test_mcp_tool_info(server_name: &str, tool_name: &str) -> McpToolInfo {
+    McpToolInfo {
+        server_name: server_name.to_string(),
+        callable_name: tool_name.to_string(),
+        callable_namespace: format!("mcp__{server_name}__"),
+        server_instructions: None,
+        tool: Tool {
+            name: tool_name.to_string().into(),
+            title: None,
+            description: Some("Test tool".into()),
+            input_schema: Arc::new(JsonObject::default()),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        },
+        connector_id: None,
+        connector_name: None,
+        plugin_display_names: Vec::new(),
+        connector_description: None,
+    }
+}
+
+#[tokio::test]
+async fn build_prompt_allows_explicitly_enabled_orchestrator_mcp_tools() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
+    Arc::make_mut(&mut turn_context.config)
+        .enablement
+        .modes
+        .insert(
+            ModeKind::Orchestrator,
+            codex_config::ModeEnablementConfig {
+                skills: None,
+                mcps: Some(codex_config::EnablementFilterConfig {
+                    mode: codex_config::EnablementFilterMode::Include,
+                    items: vec!["imessage".to_string()],
+                }),
+                plugins: None,
+            },
+        );
+
+    let mcp_tools = std::collections::HashMap::from([(
+        "mcp__imessage__imessage_send_message".to_string(),
+        test_mcp_tool_info("imessage", "imessage_send_message"),
+    )]);
+
+    let router = ToolRouter::from_config(
+        &turn_context.tools_config,
+        crate::tools::router::ToolRouterParams {
+            deferred_mcp_tools: None,
+            lazy_mcp_servers: Vec::new(),
+            mcp_tools: Some(mcp_tools),
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
+            discoverable_tools: None,
+            dynamic_tools: turn_context.dynamic_tools.as_slice(),
+        },
+    );
+
+    let prompt = build_prompt(
+        Vec::new(),
+        &router,
+        &turn_context,
+        session.get_base_instructions().await,
+    );
+    let tool_names = prompt.tools.iter().map(ToolSpec::name).collect::<Vec<_>>();
+
+    assert!(
+        tool_names
+            .iter()
+            .any(|tool_name| tool_name.starts_with("mcp__imessage__")),
+        "expected an imessage MCP namespace in orchestrator tools, got {tool_names:?}"
+    );
 }
 
 async fn sample_rollout(

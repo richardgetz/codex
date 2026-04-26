@@ -148,3 +148,77 @@ async fn build_developer_instructions_appends_recent_direct_items_missing_from_s
     assert!(instructions.contains("## Recent Continuity Items"));
     assert!(instructions.contains("https://calendar.app.google/example-booking-link"));
 }
+
+#[tokio::test]
+async fn build_developer_instructions_appends_relational_and_thread_items_missing_from_summary() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path().abs();
+    let orchestrator_memory_dir = codex_home.join("orchestrator_memory");
+    tokio_fs::create_dir_all(&orchestrator_memory_dir)
+        .await
+        .unwrap();
+    tokio_fs::write(
+        orchestrator_memory_dir.join("summary.md"),
+        "# Orchestrator Memory Summary\n\n## Working Preferences\n- Prefer direct answers.\n",
+    )
+    .await
+    .unwrap();
+    tokio_fs::write(
+        orchestrator_memory_dir.join("preferences.jsonl"),
+        concat!(
+            "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"relational_attunement\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"clarify under ambiguity\",\"candidate\":\"Clarify when ambiguity could trigger the wrong thing\",\"source_excerpt\":\"clarify first\",\"confidence\":0.8}\n",
+            "{\"observed_at\":\"2026-04-25T00:00:01Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-2\",\"bucket\":\"ongoing_threads\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"memory attunement redesign\",\"candidate\":\"The user is actively shaping orchestrator memory around emotional continuity\",\"source_excerpt\":\"memory and tone matter\",\"confidence\":0.8}\n",
+        ),
+    )
+    .await
+    .unwrap();
+
+    let instructions = build_developer_instructions(
+        &codex_home,
+        &OrchestratorMemoryConfig {
+            enabled: true,
+            ..OrchestratorMemoryConfig::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(instructions.contains("## Recent Continuity Items"));
+    assert!(instructions.contains("Clarify when ambiguity could trigger the wrong thing"));
+    assert!(instructions.contains("orchestrator memory around emotional continuity"));
+}
+
+#[tokio::test]
+async fn build_developer_instructions_appends_operator_playbook_items_missing_from_summary() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path().abs();
+    let orchestrator_memory_dir = codex_home.join("orchestrator_memory");
+    tokio_fs::create_dir_all(&orchestrator_memory_dir)
+        .await
+        .unwrap();
+    tokio_fs::write(
+        orchestrator_memory_dir.join("summary.md"),
+        "# Orchestrator Memory Summary\n\n## Working Preferences\n- Prefer direct answers.\n",
+    )
+    .await
+    .unwrap();
+    tokio_fs::write(
+        orchestrator_memory_dir.join("preferences.jsonl"),
+        "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"operator_playbook\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"warming endpoint unblock\",\"candidate\":\"When aws-auth-guard authentication stalls, try the warming endpoint to unblock it\",\"source_excerpt\":\"warming endpoint worked\",\"confidence\":0.8}\n",
+    )
+    .await
+    .unwrap();
+
+    let instructions = build_developer_instructions(
+        &codex_home,
+        &OrchestratorMemoryConfig {
+            enabled: true,
+            ..OrchestratorMemoryConfig::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(instructions.contains("## Recent Continuity Items"));
+    assert!(instructions.contains("warming endpoint to unblock it"));
+}

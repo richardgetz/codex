@@ -772,6 +772,7 @@ mod tests {
     #[test]
     fn verify_account_updated_notification_serialization() {
         let notification = ServerNotification::AccountUpdated(AccountUpdatedNotification {
+            account: Some(codex_app_server_protocol::Account::ApiKey {}),
             auth_mode: Some(AuthMode::ApiKey),
             plan_type: None,
         });
@@ -781,6 +782,9 @@ mod tests {
             json!({
                 "method": "account/updated",
                 "params": {
+                    "account": {
+                        "type": "apiKey"
+                    },
                     "authMode": "apikey",
                     "planType": null
                 },

@@ -165,6 +165,9 @@ async fn with_recent_memory_supplement(
         .preferences
         .iter()
         .chain(snapshot.personal_context.iter())
+        .chain(snapshot.relational_attunement.iter())
+        .chain(snapshot.operator_playbook.iter())
+        .chain(snapshot.ongoing_threads.iter())
         .chain(snapshot.followups.iter())
         .filter(|item| item.direct_observations > 0)
         .filter(|item| !existing_summary.contains(&item.candidate))

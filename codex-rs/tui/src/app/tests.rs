@@ -94,12 +94,10 @@ use tokio::time;
 
 #[tokio::test]
 async fn startup_orchestrator_mode_applies_thread_control_model_to_session_config() {
-    let mut config = ConfigBuilder::default()
+    let config = ConfigBuilder::default()
         .build()
         .await
         .expect("config should build");
-    config.thread_control.orchestrator.model = Some("gpt-5.3-codex-spark".to_string());
-    config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
 
     let startup = config_for_startup_collaboration_mode(&config, Some(ModeKind::Orchestrator));
 
@@ -107,6 +105,54 @@ async fn startup_orchestrator_mode_applies_thread_control_model_to_session_confi
     assert_eq!(
         startup.model_reasoning_effort,
         Some(ReasoningEffortConfig::Low)
+    );
+}
+
+#[tokio::test]
+async fn startup_session_override_replaces_existing_account_alias() {
+    let mut config = ConfigBuilder::default()
+        .build()
+        .await
+        .expect("config should build");
+    config.accounts.active = Some("personal".to_string());
+
+    let startup = config_for_startup_session(
+        &config,
+        Some("work"),
+        Some(ModeKind::Orchestrator),
+        /*primary_contact_mcp*/ None,
+    );
+
+    assert_eq!(startup.accounts.active.as_deref(), Some("work"));
+    assert_eq!(
+        startup.auth_storage_home(),
+        config.codex_home.join("accounts/work").to_path_buf()
+    );
+    assert_eq!(startup.model.as_deref(), Some("gpt-5.3-codex-spark"));
+    assert_eq!(
+        startup.model_reasoning_effort,
+        Some(ReasoningEffortConfig::Low)
+    );
+}
+
+#[tokio::test]
+async fn startup_primary_contact_override_enables_orchestrator_contact_mcp() {
+    let config = ConfigBuilder::default()
+        .build()
+        .await
+        .expect("config should build");
+
+    let startup = config_for_startup_session(
+        &config,
+        /*alias*/ None,
+        Some(ModeKind::Orchestrator),
+        Some("imessage"),
+    );
+
+    assert!(startup.orchestrator.primary_contact.enabled);
+    assert_eq!(
+        startup.orchestrator.primary_contact.mcp.as_deref(),
+        Some("imessage")
     );
 }
 

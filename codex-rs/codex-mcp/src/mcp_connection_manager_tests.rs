@@ -1099,6 +1099,13 @@ fn startup_mode_required_and_explicit_values_override_auto_lazy_defaults() {
     assert!(!should_start_server_on_session_start(
         "docs", &config, /*lazy_mcp_servers_by_default*/ false,
     ));
+
+    let scratchpad_config = test_stdio_server_config("scratchpad");
+    assert!(should_start_server_on_session_start(
+        "scratchpad",
+        &scratchpad_config,
+        /*lazy_mcp_servers_by_default*/ false,
+    ));
 }
 
 #[test]

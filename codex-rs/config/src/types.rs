@@ -316,6 +316,59 @@ pub struct OrchestratorMemoryToml {
     pub max_summary_items: Option<usize>,
 }
 
+/// Managed account-alias settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AccountsToml {
+    /// Alias whose auth should be active by default for this Codex install.
+    pub active: Option<String>,
+    /// Ordered account aliases to use when automatic session-local account
+    /// rotation is enabled. Use `"default"` for the original root auth store.
+    #[serde(default)]
+    pub rotation: Option<Vec<String>>,
+}
+
+/// Effective managed account-alias settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AccountsConfig {
+    pub active: Option<String>,
+    pub rotation: Vec<String>,
+}
+
+impl From<AccountsToml> for AccountsConfig {
+    fn from(toml: AccountsToml) -> Self {
+        Self {
+            active: toml.active.and_then(|value| {
+                let value = value.trim().to_string();
+                (!value.is_empty()).then_some(value)
+            }),
+            rotation: normalize_account_rotation(toml.rotation.unwrap_or_default()),
+        }
+    }
+}
+
+fn normalize_account_rotation(rotation: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for alias in rotation {
+        let alias = alias.trim();
+        if alias.is_empty() {
+            continue;
+        }
+        let alias = if alias.eq_ignore_ascii_case("default") {
+            "default".to_string()
+        } else {
+            alias.to_string()
+        };
+        if !normalized
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(&alias))
+        {
+            normalized.push(alias);
+        }
+    }
+    normalized
+}
+
 /// Effective orchestrator-memory settings after defaults are applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrchestratorMemoryConfig {
@@ -330,7 +383,7 @@ pub struct OrchestratorMemoryConfig {
 impl Default for OrchestratorMemoryConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             scope: MemoriesScope::Orchestrator,
             debounce_seconds: 60,
             min_observations: 2,
@@ -399,12 +452,38 @@ pub struct OrchestratorEscalationToml {
     pub tool: Option<String>,
 }
 
+/// Primary user-contact channel that Orchestrator mode should start on session boot.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct OrchestratorPrimaryContactToml {
+    /// When `true`, Orchestrator starts the configured communication MCP at session boot.
+    pub enabled: Option<bool>,
+    /// MCP server or communication channel name, for example `"imessage"`.
+    pub mcp: Option<String>,
+    /// Optional MCP tool name to invoke/start through the model, for example
+    /// `"imessage_followup_start"`.
+    pub tool: Option<String>,
+    /// Optional MCP tool name used by the harness-only background poller to
+    /// check for new user messages.
+    pub check_tool: Option<String>,
+    /// How often the harness should check the primary contact channel for new
+    /// user messages. Defaults to 900 seconds. `0` disables polling.
+    pub check_messages_every_seconds: Option<u32>,
+    /// Optional replacement startup prompt for advanced channel-specific behavior.
+    pub startup_prompt: Option<String>,
+}
+
 /// Orchestrator behavior settings loaded from config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct OrchestratorToml {
     #[serde(default)]
     pub escalation: Option<OrchestratorEscalationToml>,
+    #[serde(default)]
+    pub primary_contact: Option<OrchestratorPrimaryContactToml>,
+    /// When true, Orchestrator mode schedules a scratchpad recovery prompt
+    /// after a context compaction item is observed.
+    pub recover_scratchpad_after_compaction: Option<bool>,
     /// How often Orchestrator mode should proactively re-check active workers
     /// when supervision state has not otherwise changed. `0` disables
     /// proactive model check-ins and relies only on mechanical state changes.
@@ -461,6 +540,8 @@ impl From<OrchestratorEscalationToml> for OrchestratorEscalationConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrchestratorConfig {
     pub escalation: OrchestratorEscalationConfig,
+    pub primary_contact: OrchestratorPrimaryContactConfig,
+    pub recover_scratchpad_after_compaction: bool,
     pub active_agent_checkin_seconds: u32,
     pub allowed_spawn_modes: Vec<ModeKind>,
 }
@@ -469,6 +550,8 @@ impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
             escalation: OrchestratorEscalationConfig::default(),
+            primary_contact: OrchestratorPrimaryContactConfig::default(),
+            recover_scratchpad_after_compaction: true,
             active_agent_checkin_seconds: 600,
             allowed_spawn_modes: vec![ModeKind::Default],
         }
@@ -479,6 +562,10 @@ impl From<OrchestratorToml> for OrchestratorConfig {
     fn from(toml: OrchestratorToml) -> Self {
         Self {
             escalation: toml.escalation.unwrap_or_default().into(),
+            primary_contact: toml.primary_contact.unwrap_or_default().into(),
+            recover_scratchpad_after_compaction: toml
+                .recover_scratchpad_after_compaction
+                .unwrap_or_else(|| Self::default().recover_scratchpad_after_compaction),
             active_agent_checkin_seconds: toml
                 .active_agent_checkin_seconds
                 .unwrap_or_else(|| Self::default().active_agent_checkin_seconds),
@@ -488,6 +575,52 @@ impl From<OrchestratorToml> for OrchestratorConfig {
                 .unwrap_or_else(|| Self::default().allowed_spawn_modes),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrchestratorPrimaryContactConfig {
+    pub enabled: bool,
+    pub mcp: Option<String>,
+    pub tool: Option<String>,
+    pub check_tool: Option<String>,
+    pub check_messages_every_seconds: u32,
+    pub startup_prompt: Option<String>,
+}
+
+impl Default for OrchestratorPrimaryContactConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mcp: None,
+            tool: None,
+            check_tool: None,
+            check_messages_every_seconds: 900,
+            startup_prompt: None,
+        }
+    }
+}
+
+impl From<OrchestratorPrimaryContactToml> for OrchestratorPrimaryContactConfig {
+    fn from(toml: OrchestratorPrimaryContactToml) -> Self {
+        let defaults = Self::default();
+        Self {
+            enabled: toml.enabled.unwrap_or(false),
+            mcp: trimmed_non_empty(toml.mcp),
+            tool: trimmed_non_empty(toml.tool),
+            check_tool: trimmed_non_empty(toml.check_tool),
+            check_messages_every_seconds: toml
+                .check_messages_every_seconds
+                .unwrap_or(defaults.check_messages_every_seconds),
+            startup_prompt: trimmed_non_empty(toml.startup_prompt),
+        }
+    }
+}
+
+fn trimmed_non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let value = value.trim().to_string();
+        (!value.is_empty()).then_some(value)
+    })
 }
 
 /// Effective orchestrator-specific thread-control settings after defaults are applied.

@@ -186,17 +186,8 @@ fn build_consolidation_agent_config(base: &Arc<Config>) -> anyhow::Result<Config
         );
     agent_config.permissions.network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
 
-    agent_config.model = base
-        .thread_control
-        .orchestrator
-        .model
-        .clone()
-        .or_else(|| base.model.clone());
-    agent_config.model_reasoning_effort = base
-        .thread_control
-        .orchestrator
-        .reasoning_effort
-        .or(base.model_reasoning_effort);
+    agent_config.model = Some(base.effective_orchestrator_model().to_string());
+    agent_config.model_reasoning_effort = base.effective_orchestrator_reasoning_effort();
 
     Ok(agent_config)
 }
@@ -314,6 +305,9 @@ fn apply_heuristic_guarantees(
         .preferences
         .iter()
         .chain(snapshot.personal_context.iter())
+        .chain(snapshot.relational_attunement.iter())
+        .chain(snapshot.operator_playbook.iter())
+        .chain(snapshot.ongoing_threads.iter())
         .chain(snapshot.followups.iter())
         .any(|item| item.direct_observations > 0);
 
@@ -340,6 +334,21 @@ fn apply_heuristic_guarantees(
     );
     append_missing_summary_items(
         &mut payload.summary_markdown,
+        "Relational Attunement",
+        &snapshot.relational_attunement,
+    );
+    append_missing_summary_items(
+        &mut payload.summary_markdown,
+        "Operator Playbook",
+        &snapshot.operator_playbook,
+    );
+    append_missing_summary_items(
+        &mut payload.summary_markdown,
+        "Ongoing Threads",
+        &snapshot.ongoing_threads,
+    );
+    append_missing_summary_items(
+        &mut payload.summary_markdown,
         "Follow-Up State",
         &snapshot.followups,
     );
@@ -353,6 +362,21 @@ fn apply_heuristic_guarantees(
         &mut payload.profile_markdown,
         "Personal Context",
         &snapshot.personal_context,
+    );
+    append_missing_profile_items(
+        &mut payload.profile_markdown,
+        "Relational Attunement",
+        &snapshot.relational_attunement,
+    );
+    append_missing_profile_items(
+        &mut payload.profile_markdown,
+        "Operator Playbook",
+        &snapshot.operator_playbook,
+    );
+    append_missing_profile_items(
+        &mut payload.profile_markdown,
+        "Ongoing Threads",
+        &snapshot.ongoing_threads,
     );
     append_missing_profile_items(
         &mut payload.profile_markdown,

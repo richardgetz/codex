@@ -30,6 +30,24 @@ async fn build_consolidation_agent_config_prefers_orchestrator_model_defaults() 
     assert!(!built.memories.use_memories);
 }
 
+#[tokio::test]
+async fn build_consolidation_agent_config_uses_implicit_orchestrator_defaults() {
+    let temp = tempdir().expect("tempdir");
+    let mut config = crate::config::ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(temp.path().to_path_buf())
+        .build()
+        .await
+        .expect("test config");
+    config.model = Some("gpt-5".to_string());
+    config.model_reasoning_effort = Some(ReasoningEffort::High);
+
+    let config = Arc::new(config);
+    let built = build_consolidation_agent_config(&config).expect("build consolidation config");
+
+    assert_eq!(built.model.as_deref(), Some("gpt-5.3-codex-spark"));
+    assert_eq!(built.model_reasoning_effort, Some(ReasoningEffort::Low));
+}
+
 #[test]
 fn parse_consolidation_payload_extracts_embedded_json() {
     let payload = parse_consolidation_payload(Some(
@@ -100,6 +118,9 @@ fn apply_heuristic_guarantees_preserves_direct_items_missing_from_model_payload(
                 last_seen: Utc::now(),
                 confidence_sum: 0.8,
             }],
+            relational_attunement: Vec::new(),
+            operator_playbook: Vec::new(),
+            ongoing_threads: Vec::new(),
             followups: Vec::new(),
         },
     );

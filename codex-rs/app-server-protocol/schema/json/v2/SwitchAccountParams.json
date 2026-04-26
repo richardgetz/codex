@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "alias": {
+      "description": "Managed account alias to activate. `null` means use the original root auth store.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "SwitchAccountParams",
+  "type": "object"
+}

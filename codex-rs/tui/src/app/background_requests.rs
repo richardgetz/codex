@@ -7,6 +7,39 @@
 use super::*;
 
 impl App {
+    pub(super) fn start_primary_contact_polling(
+        &mut self,
+        app_server: &AppServerSession,
+        thread_id: ThreadId,
+    ) {
+        let Some(poll_config) = PrimaryContactPollConfig::from_config(&self.config) else {
+            return;
+        };
+
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(u64::from(poll_config.interval_seconds)))
+                    .await;
+
+                match poll_primary_contact_once(&request_handle, thread_id, &poll_config).await {
+                    Ok(Some(text)) => {
+                        app_event_tx.send(AppEvent::PrimaryContactMessageReceived { text });
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        tracing::warn!(
+                            mcp = %poll_config.mcp,
+                            tool = %poll_config.tool,
+                            "primary contact poll failed: {err:#}"
+                        );
+                    }
+                }
+            }
+        });
+    }
+
     pub(super) fn fetch_mcp_inventory(
         &mut self,
         app_server: &AppServerSession,
@@ -369,7 +402,10 @@ impl App {
 
         self.chat_widget
             .add_to_history(history_cell::new_mcp_tools_output_from_statuses(
-                &config, &statuses, detail,
+                &config,
+                &statuses,
+                detail,
+                self.chat_widget.active_collaboration_mode_kind(),
             ));
     }
 
@@ -386,6 +422,148 @@ impl App {
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
             overlay.replace_cells(self.transcript_cells.clone());
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PrimaryContactPollConfig {
+    mcp: String,
+    tool: String,
+    interval_seconds: u32,
+}
+
+impl PrimaryContactPollConfig {
+    fn from_config(config: &Config) -> Option<Self> {
+        let primary_contact = &config.orchestrator.primary_contact;
+        if !primary_contact.enabled || primary_contact.check_messages_every_seconds == 0 {
+            return None;
+        }
+        let mcp = primary_contact.mcp.as_ref()?.trim();
+        if mcp.is_empty() {
+            return None;
+        }
+        let tool = primary_contact
+            .check_tool
+            .as_deref()
+            .map(str::trim)
+            .filter(|tool| !tool.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| default_primary_contact_check_tool(mcp));
+        Some(Self {
+            mcp: mcp.to_string(),
+            tool,
+            interval_seconds: primary_contact.check_messages_every_seconds,
+        })
+    }
+}
+
+fn default_primary_contact_check_tool(mcp: &str) -> String {
+    if mcp.eq_ignore_ascii_case("imessage") {
+        "imessage_followup_status".to_string()
+    } else {
+        format!("{mcp}_followup_status")
+    }
+}
+
+async fn poll_primary_contact_once(
+    request_handle: &AppServerRequestHandle,
+    thread_id: ThreadId,
+    poll_config: &PrimaryContactPollConfig,
+) -> Result<Option<String>> {
+    let request_id = RequestId::String(format!("primary-contact-poll-{}", Uuid::new_v4()));
+    let response: McpServerToolCallResponse = request_handle
+        .request_typed(ClientRequest::McpServerToolCall {
+            request_id,
+            params: McpServerToolCallParams {
+                thread_id: thread_id.to_string(),
+                server: poll_config.mcp.clone(),
+                tool: poll_config.tool.clone(),
+                arguments: None,
+                meta: None,
+            },
+        })
+        .await
+        .wrap_err("mcpServer/tool/call failed during primary contact poll")?;
+
+    Ok(extract_primary_contact_message(&response))
+}
+
+fn extract_primary_contact_message(response: &McpServerToolCallResponse) -> Option<String> {
+    if response.is_error == Some(true) {
+        return None;
+    }
+
+    if let Some(value) = response.structured_content.as_ref()
+        && let Some(message) = extract_message_from_value(value)
+    {
+        return Some(message);
+    }
+
+    response.content.iter().find_map(extract_message_from_value)
+}
+
+fn extract_message_from_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Object(map) => {
+            if explicit_no_new_message(map) {
+                return None;
+            }
+            let explicit_new_message = explicit_new_message(map);
+            if let Some(messages) = map.get("messages").and_then(serde_json::Value::as_array)
+                && let Some(message) = messages.iter().rev().find_map(extract_message_from_value)
+            {
+                return Some(message);
+            }
+            for key in ["user_message", "message"] {
+                if let Some(message) = map.get(key).and_then(extract_text_field)
+                    && !message.is_empty()
+                {
+                    return Some(message);
+                }
+            }
+            if explicit_new_message {
+                for key in ["text", "body", "content"] {
+                    if let Some(message) = map.get(key).and_then(extract_text_field)
+                        && !message.is_empty()
+                    {
+                        return Some(message);
+                    }
+                }
+            }
+            None
+        }
+        serde_json::Value::Array(values) => {
+            values.iter().rev().find_map(extract_message_from_value)
+        }
+        _ => None,
+    }
+}
+
+fn explicit_no_new_message(map: &serde_json::Map<String, serde_json::Value>) -> bool {
+    ["has_new_message", "has_message", "new_message", "available"]
+        .iter()
+        .any(|key| map.get(*key).and_then(serde_json::Value::as_bool) == Some(false))
+}
+
+fn explicit_new_message(map: &serde_json::Map<String, serde_json::Value>) -> bool {
+    ["has_new_message", "has_message", "new_message", "available"]
+        .iter()
+        .any(|key| map.get(*key).and_then(serde_json::Value::as_bool) == Some(true))
+}
+
+fn extract_text_field(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) => {
+            let text = text.trim().to_string();
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text)
+                && let Some(message) = extract_message_from_value(&value)
+            {
+                return Some(message);
+            }
+            (!text.is_empty()).then_some(text)
+        }
+        serde_json::Value::Object(_) => extract_message_from_value(value),
+        _ => None,
     }
 }
 
@@ -732,6 +910,54 @@ mod tests {
             auth_statuses.get("disabled"),
             Some(&McpAuthStatus::Unsupported)
         );
+    }
+
+    #[test]
+    fn extracts_primary_contact_message_from_structured_content() {
+        let response = McpServerToolCallResponse {
+            content: Vec::new(),
+            structured_content: Some(serde_json::json!({
+                "has_new_message": true,
+                "message": " can you check this? "
+            })),
+            is_error: None,
+            meta: None,
+        };
+
+        assert_eq!(
+            extract_primary_contact_message(&response),
+            Some("can you check this?".to_string())
+        );
+    }
+
+    #[test]
+    fn primary_contact_poll_ignores_explicit_empty_status() {
+        let response = McpServerToolCallResponse {
+            content: vec![serde_json::json!({
+                "has_new_message": false,
+                "message": "stale status"
+            })],
+            structured_content: None,
+            is_error: None,
+            meta: None,
+        };
+
+        assert_eq!(extract_primary_contact_message(&response), None);
+    }
+
+    #[test]
+    fn primary_contact_poll_ignores_plain_status_text() {
+        let response = McpServerToolCallResponse {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": "No new messages"
+            })],
+            structured_content: None,
+            is_error: None,
+            meta: None,
+        };
+
+        assert_eq!(extract_primary_contact_message(&response), None);
     }
 
     #[test]

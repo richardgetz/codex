@@ -48,6 +48,7 @@ pub enum SlashCommand {
     OrchestratorMemoryForget,
     Apps,
     Plugins,
+    Account,
     Logout,
     Quit,
     Exit,
@@ -123,6 +124,7 @@ impl SlashCommand {
             }
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
+            SlashCommand::Account => "show or switch the session account alias",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
@@ -148,6 +150,7 @@ impl SlashCommand {
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
                 | SlashCommand::OrchestratorMemoryForget
+                | SlashCommand::Account
         )
     }
 
@@ -181,6 +184,7 @@ impl SlashCommand {
             | SlashCommand::Plan
             | SlashCommand::Clear
             | SlashCommand::Logout
+            | SlashCommand::Account
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff

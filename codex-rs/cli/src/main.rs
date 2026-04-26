@@ -1595,6 +1595,8 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         approval_policy,
         web_search,
         startup_collaboration_mode,
+        startup_account_alias,
+        startup_primary_contact_mcp,
         prompt,
         config_overrides,
         ..
@@ -1610,6 +1612,12 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     }
     if let Some(mode) = startup_collaboration_mode {
         interactive.startup_collaboration_mode = Some(mode);
+    }
+    if let Some(alias) = startup_account_alias {
+        interactive.startup_account_alias = Some(alias);
+    }
+    if let Some(mcp) = startup_primary_contact_mcp {
+        interactive.startup_primary_contact_mcp = Some(mcp);
     }
     if let Some(prompt) = prompt {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
@@ -1814,6 +1822,49 @@ mod tests {
         assert_eq!(
             interactive.startup_collaboration_mode,
             Some(codex_protocol::config_types::ModeKind::Plan)
+        );
+    }
+
+    #[test]
+    fn interactive_account_flag_parses_alias() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--account", "work"]).expect("parse");
+
+        assert_eq!(
+            cli.interactive.startup_account_alias.as_deref(),
+            Some("work")
+        );
+    }
+
+    #[test]
+    fn resume_account_flag_is_merged_into_interactive_cli() {
+        let interactive =
+            finalize_resume_from_args(["codex", "resume", "--account", "default"].as_ref());
+
+        assert_eq!(
+            interactive.startup_account_alias.as_deref(),
+            Some("default")
+        );
+    }
+
+    #[test]
+    fn interactive_primary_contact_flag_parses_mcp() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--primary-contact", "imessage"])
+            .expect("parse");
+
+        assert_eq!(
+            cli.interactive.startup_primary_contact_mcp.as_deref(),
+            Some("imessage")
+        );
+    }
+
+    #[test]
+    fn resume_primary_contact_flag_is_merged_into_interactive_cli() {
+        let interactive =
+            finalize_resume_from_args(["codex", "resume", "--primary-contact", "off"].as_ref());
+
+        assert_eq!(
+            interactive.startup_primary_contact_mcp.as_deref(),
+            Some("off")
         );
     }
 

@@ -46,10 +46,10 @@ You can also use Codex with an API key, but this requires [additional setup](htt
 ## Docs
 
 - [**Codex Documentation**](https://developers.openai.com/codex)
-- [**Contributing**](./docs/contributing.md)
-- [**Installing & building**](./docs/install.md)
-- [**Fork differences**](./docs/fork-differences.md)
-- [**Fork npm releases**](./docs/fork-release.md)
-- [**Open source fund**](./docs/open-source-fund.md)
+- [**Contributing**](https://github.com/richardgetz/codex/blob/stable/docs/contributing.md)
+- [**Installing & building**](https://github.com/richardgetz/codex/blob/stable/docs/install.md)
+- [**Fork differences**](https://github.com/richardgetz/codex/blob/stable/docs/fork-differences.md)
+- [**Fork npm releases**](https://github.com/richardgetz/codex/blob/stable/docs/fork-release.md)
+- [**Open source fund**](https://github.com/richardgetz/codex/blob/stable/docs/open-source-fund.md)
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).

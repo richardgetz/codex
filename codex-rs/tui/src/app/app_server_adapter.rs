@@ -16,6 +16,7 @@ use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::app_server_rate_limit_snapshot_to_core;
+use crate::app_server_session::status_account_display_from_account;
 use crate::app_server_session::status_account_display_from_auth_mode;
 #[cfg(test)]
 use crate::exec_command::split_command_string;
@@ -183,11 +184,24 @@ impl App {
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
+                let alias = self
+                    .chat_widget
+                    .config_ref()
+                    .active_account_alias()
+                    .map(str::to_string);
                 self.chat_widget.update_account_state(
-                    status_account_display_from_auth_mode(
-                        notification.auth_mode,
-                        notification.plan_type,
-                    ),
+                    notification
+                        .account
+                        .clone()
+                        .and_then(|account| {
+                            status_account_display_from_account(Some(account), alias.as_deref())
+                        })
+                        .or_else(|| {
+                            status_account_display_from_auth_mode(
+                                notification.auth_mode,
+                                notification.plan_type,
+                            )
+                        }),
                     notification.plan_type,
                     matches!(
                         notification.auth_mode,
