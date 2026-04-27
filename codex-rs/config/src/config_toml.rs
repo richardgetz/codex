@@ -25,6 +25,7 @@ use crate::types::OrchestratorToml;
 use crate::types::OtelConfigToml;
 use crate::types::PluginConfig;
 use crate::types::SandboxWorkspaceWrite;
+use crate::types::ScratchpadToml;
 use crate::types::ShellEnvironmentPolicyToml;
 use crate::types::SkillsConfig;
 use crate::types::ThreadControlToml;
@@ -343,6 +344,9 @@ pub struct ConfigToml {
 
     /// Orchestrator-memory subsystem settings.
     pub orchestrator_memory: Option<OrchestratorMemoryToml>,
+
+    /// Built-in scratchpad subsystem settings.
+    pub scratchpad: Option<ScratchpadToml>,
 
     /// Orchestrator supervision and escalation settings.
     #[serde(default)]

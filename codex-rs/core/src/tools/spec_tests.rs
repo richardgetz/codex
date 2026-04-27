@@ -1080,6 +1080,92 @@ async fn direct_mcp_tools_register_namespaced_handlers() {
 }
 
 #[tokio::test]
+async fn builtin_scratchpad_replaces_mcp_scratchpad_namespace() {
+    let config = test_config().await;
+    let model_info = construct_model_info_offline("gpt-5.4", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (tools, registry) = build_specs(
+        &tools_config,
+        Some(HashMap::from([(
+            "scratchpad_open_scratchpad".to_string(),
+            mcp_tool_info_with_display_name(
+                "scratchpad/open_scratchpad",
+                mcp_tool(
+                    "open_scratchpad",
+                    "MCP scratchpad should not be model-visible",
+                    serde_json::json!({"type": "object"}),
+                ),
+            ),
+        )])),
+        /*deferred_mcp_tools*/ None,
+        &[],
+    )
+    .build();
+
+    assert_eq!(
+        tools
+            .iter()
+            .filter(|tool| tool.name() == "scratchpad")
+            .count(),
+        1
+    );
+    let open_scratchpad = find_namespace_function_tool(&tools, "scratchpad", "open_scratchpad");
+    assert!(
+        open_scratchpad
+            .description
+            .contains("Open an existing active scratchpad"),
+        "expected built-in scratchpad description, got {}",
+        open_scratchpad.description
+    );
+    assert!(registry.has_handler(&ToolName::namespaced("scratchpad", "set_action_policy")));
+    assert!(registry.has_handler(&ToolName::namespaced("scratchpad", "open_scratchpad")));
+}
+
+#[tokio::test]
+async fn builtin_scratchpad_can_be_disabled_for_mode() {
+    let config = test_config().await;
+    let model_info = construct_model_info_offline("gpt-5.4", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_builtin_scratchpad_enabled(false);
+
+    let (tools, registry) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    )
+    .build();
+
+    assert!(!tools.iter().any(|tool| tool.name() == "scratchpad"));
+    assert!(!registry.has_handler(&ToolName::namespaced("scratchpad", "open_scratchpad")));
+}
+
+#[tokio::test]
 async fn unavailable_mcp_tools_are_exposed_as_dummy_function_tools() {
     let config = test_config().await;
     let model_info = construct_model_info_offline("gpt-5.4", &config);

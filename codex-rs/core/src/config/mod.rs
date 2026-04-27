@@ -45,9 +45,12 @@ use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_config::types::OrchestratorConfig;
 use codex_config::types::OrchestratorMemoryConfig;
+use codex_config::types::OrchestratorToml;
 use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
+use codex_config::types::ScratchpadConfig;
+use codex_config::types::ScratchpadToml;
 use codex_config::types::ShellEnvironmentPolicy;
 use codex_config::types::SkillsConfig;
 use codex_config::types::ThreadControlConfig;
@@ -76,6 +79,7 @@ use codex_model_provider_info::merge_configured_model_providers;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -454,6 +458,9 @@ pub struct Config {
 
     /// Orchestrator-memory subsystem settings.
     pub orchestrator_memory: OrchestratorMemoryConfig,
+
+    /// Built-in scratchpad subsystem settings.
+    pub scratchpad: ScratchpadConfig,
 
     /// Managed account-alias settings for auth storage selection.
     pub accounts: AccountsConfig,
@@ -1372,6 +1379,24 @@ fn resolve_tool_suggest_config(config_toml: &ConfigToml) -> ToolSuggestConfig {
     ToolSuggestConfig { discoverables }
 }
 
+fn resolve_scratchpad_config(
+    scratchpad_toml: Option<ScratchpadToml>,
+    orchestrator_toml: Option<&OrchestratorToml>,
+) -> ScratchpadConfig {
+    let mut scratchpad_toml = scratchpad_toml.unwrap_or_default();
+    if let Some(legacy_recover) =
+        orchestrator_toml.and_then(|toml| toml.recover_scratchpad_after_compaction)
+    {
+        scratchpad_toml
+            .modes
+            .entry(ModeKind::Orchestrator)
+            .or_default()
+            .recover_after_compaction
+            .get_or_insert(legacy_recover);
+    }
+    scratchpad_toml.into()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PermissionConfigSyntax {
     Legacy,
@@ -1838,6 +1863,14 @@ impl Config {
             .any(|existing| existing == &orchestrator_supervision_root)
         {
             additional_writable_roots.push(orchestrator_supervision_root);
+        }
+        let scratchpad_root = codex_home.join("scratchpad");
+        std::fs::create_dir_all(&scratchpad_root)?;
+        if !additional_writable_roots
+            .iter()
+            .any(|existing| existing == &scratchpad_root)
+        {
+            additional_writable_roots.push(scratchpad_root);
         }
 
         let profiles_are_active = matches!(
@@ -2455,6 +2488,7 @@ impl Config {
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
             orchestrator_memory: cfg.orchestrator_memory.unwrap_or_default().into(),
+            scratchpad: resolve_scratchpad_config(cfg.scratchpad, cfg.orchestrator.as_ref()),
             accounts: cfg.accounts.unwrap_or_default().into(),
             orchestrator: cfg.orchestrator.unwrap_or_default().into(),
             thread_control: cfg.thread_control.unwrap_or_default().into(),

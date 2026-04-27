@@ -1,0 +1,46 @@
+use super::ContextualUserFragment;
+
+const SCRATCHPAD_INSTRUCTIONS_OPEN_TAG: &str = "<scratchpad_instructions>";
+const SCRATCHPAD_INSTRUCTIONS_CLOSE_TAG: &str = "</scratchpad_instructions>";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ScratchpadInstructions;
+
+impl ScratchpadInstructions {
+    pub(crate) fn new() -> Self {
+        Self
+    }
+}
+
+impl ContextualUserFragment for ScratchpadInstructions {
+    const ROLE: &'static str = "developer";
+    const START_MARKER: &'static str = SCRATCHPAD_INSTRUCTIONS_OPEN_TAG;
+    const END_MARKER: &'static str = SCRATCHPAD_INSTRUCTIONS_CLOSE_TAG;
+
+    fn body(&self) -> String {
+        "\n## Built-in Scratchpad\n\
+The built-in `scratchpad` tool namespace is available in this mode and is the canonical recovery ledger for non-trivial work.\n\
+Use it proactively to keep durable working state across interruptions, compaction, waits, and delegation.\n\n\
+Expected use:\n\
+- Open or resume the scratchpad early for non-trivial tasks. If no explicit id is needed, `open_scratchpad` defaults to the current thread/session id.\n\
+- Keep `objective`, `status`, `completed`, `next_steps`, `pending_waits`, `resume_instructions`, `final_guard`, and recent notes current enough that another agent can recover the work.\n\
+- Before waiting, delegating, ending a follow-up channel, merging, deploying, or stopping, update the scratchpad with the exact next recovery step.\n\
+- Use `set_action_policy`, `check_action_allowed`, and `mark_wait_checked` when the task has safety constraints or long-running waits.\n\
+- Archive the scratchpad when the objective is finished; use `resume_scratchpad` or `lookup_scratchpads` when asked to recover older state.\n\n\
+After context compaction, the harness may mechanically read the active thread scratchpad and loop a compact recovery summary back into the model. Treat that recovery summary as authoritative working state and continue keeping the scratchpad updated.\n".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn body_mentions_core_tools() {
+        let body = ScratchpadInstructions::new().body();
+
+        assert!(body.contains("open_scratchpad"));
+        assert!(body.contains("mark_wait_checked"));
+        assert!(body.contains("After context compaction"));
+    }
+}

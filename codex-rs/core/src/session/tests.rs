@@ -68,6 +68,7 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::AppInfo;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
+use codex_config::types::ScratchpadModeConfig;
 use codex_config::types::SkillModeFilterConfig;
 use codex_config::types::SkillModeFilterMode;
 use codex_execpolicy::Decision;
@@ -6007,6 +6008,77 @@ async fn build_initial_context_filters_skills_by_unified_mode_enablement() {
 
     assert!(developer_texts.contains("agent-state"));
     assert!(!developer_texts.contains("scratchpad"));
+}
+
+#[tokio::test]
+async fn build_initial_context_injects_builtin_scratchpad_in_enabled_modes() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.collaboration_mode.mode = ModeKind::Default;
+
+    let default_context = session.build_initial_context(&turn_context).await;
+    let default_developer_texts = developer_input_texts(&default_context).join("\n");
+    assert!(
+        default_developer_texts.contains("Built-in Scratchpad"),
+        "expected scratchpad guidance in default mode, got {default_developer_texts:?}"
+    );
+
+    turn_context.collaboration_mode.mode = ModeKind::Continuous;
+    let continuous_context = session.build_initial_context(&turn_context).await;
+    let continuous_developer_texts = developer_input_texts(&continuous_context).join("\n");
+    assert!(
+        continuous_developer_texts.contains("Built-in Scratchpad"),
+        "expected scratchpad guidance in continuous mode, got {continuous_developer_texts:?}"
+    );
+
+    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
+    let orchestrator_context = session.build_initial_context(&turn_context).await;
+    let orchestrator_developer_texts = developer_input_texts(&orchestrator_context).join("\n");
+    assert!(
+        orchestrator_developer_texts.contains("Built-in Scratchpad"),
+        "expected scratchpad guidance in orchestrator mode, got {orchestrator_developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_omits_builtin_scratchpad_in_plan_mode_by_default() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.collaboration_mode.mode = ModeKind::Plan;
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+
+    assert!(
+        !developer_texts.contains("Built-in Scratchpad"),
+        "did not expect scratchpad guidance in plan mode, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_respects_mode_scoped_scratchpad_disable() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.scratchpad.modes.insert(
+                ModeKind::Default,
+                ScratchpadModeConfig {
+                    enabled: false,
+                    recover_after_compaction: true,
+                },
+            );
+        },
+    )
+    .await;
+    let turn_context = Arc::try_unwrap(turn_context)
+        .expect("turn context should not have additional strong references");
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+
+    assert!(
+        !developer_texts.contains("Built-in Scratchpad"),
+        "did not expect scratchpad guidance when disabled, got {developer_texts:?}"
+    );
 }
 
 #[test]

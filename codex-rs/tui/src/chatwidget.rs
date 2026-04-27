@@ -5920,14 +5920,19 @@ impl ChatWidget {
     }
 
     fn maybe_submit_scratchpad_recovery_after_compaction(&mut self) {
-        if !self.config.orchestrator.recover_scratchpad_after_compaction
-            || self.active_mode_kind() != ModeKind::Orchestrator
+        if !self
+            .config
+            .scratchpad
+            .for_mode(self.active_mode_kind())
+            .recover_after_compaction
         {
             return;
         }
-        self.submit_external_user_message(
-            "Context was compacted. Before continuing, recover the active scratchpad for this objective/session, confirm the current status/next step from it, and update it if compaction changed what future recovery needs. If scratchpad is unavailable, say that explicitly and preserve the recovery state in the best available durable channel.".to_string(),
-        );
+        let Some(thread_id) = self.thread_id else {
+            return;
+        };
+        self.app_event_tx
+            .send(AppEvent::RecoverScratchpadAfterCompaction { thread_id });
     }
 
     fn submit_user_message_with_shell_escape_policy(

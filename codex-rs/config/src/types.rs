@@ -320,6 +320,115 @@ pub struct OrchestratorMemoryToml {
     pub model_consolidation: Option<bool>,
 }
 
+/// Built-in scratchpad behavior for one collaboration mode.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ScratchpadModeToml {
+    /// When false, the built-in scratchpad tool namespace and scratchpad
+    /// developer guidance are not exposed in this mode.
+    pub enabled: Option<bool>,
+    /// When false, live compaction events do not mechanically loop recovered
+    /// scratchpad state back into the next model turn in this mode.
+    pub recover_after_compaction: Option<bool>,
+}
+
+/// Built-in scratchpad settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ScratchpadToml {
+    /// Global default for built-in scratchpad tool/guidance exposure.
+    pub enabled: Option<bool>,
+    /// Global default for live compaction recovery loopback.
+    pub recover_after_compaction: Option<bool>,
+    /// Collaboration-mode-specific overrides.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub modes: HashMap<ModeKind, ScratchpadModeToml>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScratchpadModeConfig {
+    pub enabled: bool,
+    pub recover_after_compaction: bool,
+}
+
+impl ScratchpadModeConfig {
+    const fn default_for_mode(mode: ModeKind) -> Self {
+        match mode {
+            ModeKind::Plan => Self {
+                enabled: false,
+                recover_after_compaction: false,
+            },
+            ModeKind::Default
+            | ModeKind::Continuous
+            | ModeKind::Orchestrator
+            | ModeKind::PairProgramming
+            | ModeKind::Execute => Self {
+                enabled: true,
+                recover_after_compaction: true,
+            },
+        }
+    }
+}
+
+/// Effective built-in scratchpad settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScratchpadConfig {
+    pub modes: HashMap<ModeKind, ScratchpadModeConfig>,
+}
+
+impl Default for ScratchpadConfig {
+    fn default() -> Self {
+        let modes = [
+            ModeKind::Default,
+            ModeKind::Plan,
+            ModeKind::Continuous,
+            ModeKind::Orchestrator,
+            ModeKind::PairProgramming,
+            ModeKind::Execute,
+        ]
+        .into_iter()
+        .map(|mode| (mode, ScratchpadModeConfig::default_for_mode(mode)))
+        .collect();
+        Self { modes }
+    }
+}
+
+impl ScratchpadConfig {
+    pub fn for_mode(&self, mode: ModeKind) -> ScratchpadModeConfig {
+        self.modes
+            .get(&mode)
+            .copied()
+            .unwrap_or_else(|| ScratchpadModeConfig::default_for_mode(mode))
+    }
+}
+
+impl From<ScratchpadToml> for ScratchpadConfig {
+    fn from(toml: ScratchpadToml) -> Self {
+        let defaults = ScratchpadConfig::default();
+        let modes = defaults
+            .modes
+            .into_iter()
+            .map(|(mode, default)| {
+                let mode_toml = toml.modes.get(&mode);
+                (
+                    mode,
+                    ScratchpadModeConfig {
+                        enabled: mode_toml
+                            .and_then(|config| config.enabled)
+                            .or(toml.enabled)
+                            .unwrap_or(default.enabled),
+                        recover_after_compaction: mode_toml
+                            .and_then(|config| config.recover_after_compaction)
+                            .or(toml.recover_after_compaction)
+                            .unwrap_or(default.recover_after_compaction),
+                    },
+                )
+            })
+            .collect();
+        Self { modes }
+    }
+}
+
 /// Managed account-alias settings loaded from config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]

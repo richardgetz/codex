@@ -99,6 +99,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::UnavailableToolHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
+    use crate::tools::handlers::builtin_scratchpad::BUILTIN_SCRATCHPAD_TOOL_NAMES;
     use crate::tools::handlers::builtin_scratchpad::BuiltinScratchpadHandler;
     use crate::tools::handlers::builtin_scratchpad::scratchpad_namespace_spec;
     use crate::tools::handlers::multi_agents::CloseAgentHandler;
@@ -186,6 +187,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let mut existing_spec_names = plan
         .specs
         .iter()
+        .filter(|configured_tool| {
+            !config.builtin_scratchpad_enabled || configured_tool.name() != "scratchpad"
+        })
         .map(|configured_tool| configured_tool.name().to_string())
         .collect::<HashSet<_>>();
 
@@ -194,6 +198,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
     }
 
     for spec in plan.specs {
+        if config.builtin_scratchpad_enabled && spec.name() == "scratchpad" {
+            continue;
+        }
         if spec.supports_parallel_tool_calls {
             builder.push_spec_with_parallel_support(
                 spec.spec, /*supports_parallel_tool_calls*/ true,
@@ -201,31 +208,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
         } else {
             builder.push_spec(spec.spec);
         }
-    }
-
-    let scratchpad_handler = Arc::new(BuiltinScratchpadHandler);
-    if existing_spec_names.insert("scratchpad".to_string()) {
-        builder.push_spec(scratchpad_namespace_spec());
-    }
-    for tool_name in [
-        "open_scratchpad",
-        "resume_scratchpad",
-        "get_scratchpad",
-        "get_scratchpad_summary",
-        "append_scratchpad_note",
-        "set_next_steps",
-        "set_pending_waits",
-        "update_scratchpad",
-        "archive_scratchpad",
-        "unarchive_scratchpad",
-        "lookup_scratchpads",
-        "get_scratchpad_schema",
-        "check_action_allowed",
-    ] {
-        builder.register_handler(
-            ToolName::namespaced("scratchpad", tool_name),
-            scratchpad_handler.clone(),
-        );
     }
 
     for handler in plan.handlers {
@@ -342,6 +324,18 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 .is_some_and(|tools| tools.contains_key(*name))
         }) {
             builder.register_handler(name.clone(), mcp_handler.clone());
+        }
+    }
+
+    if config.builtin_scratchpad_enabled {
+        let scratchpad_handler = Arc::new(BuiltinScratchpadHandler);
+        existing_spec_names.insert("scratchpad".to_string());
+        builder.push_spec(scratchpad_namespace_spec());
+        for tool_name in BUILTIN_SCRATCHPAD_TOOL_NAMES {
+            builder.register_handler(
+                ToolName::namespaced("scratchpad", *tool_name),
+                scratchpad_handler.clone(),
+            );
         }
     }
 

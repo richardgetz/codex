@@ -30,12 +30,32 @@ const TOOL_SUMMARY: &str = "get_scratchpad_summary";
 const TOOL_APPEND_NOTE: &str = "append_scratchpad_note";
 const TOOL_SET_NEXT_STEPS: &str = "set_next_steps";
 const TOOL_SET_PENDING_WAITS: &str = "set_pending_waits";
+const TOOL_SET_ACTION_POLICY: &str = "set_action_policy";
+const TOOL_MARK_WAIT_CHECKED: &str = "mark_wait_checked";
 const TOOL_UPDATE: &str = "update_scratchpad";
 const TOOL_ARCHIVE: &str = "archive_scratchpad";
 const TOOL_UNARCHIVE: &str = "unarchive_scratchpad";
 const TOOL_LOOKUP: &str = "lookup_scratchpads";
 const TOOL_SCHEMA: &str = "get_scratchpad_schema";
 const TOOL_CHECK_ACTION: &str = "check_action_allowed";
+
+pub(crate) const BUILTIN_SCRATCHPAD_TOOL_NAMES: &[&str] = &[
+    TOOL_OPEN,
+    TOOL_RESUME,
+    TOOL_GET,
+    TOOL_SUMMARY,
+    TOOL_APPEND_NOTE,
+    TOOL_SET_NEXT_STEPS,
+    TOOL_SET_PENDING_WAITS,
+    TOOL_SET_ACTION_POLICY,
+    TOOL_MARK_WAIT_CHECKED,
+    TOOL_UPDATE,
+    TOOL_ARCHIVE,
+    TOOL_UNARCHIVE,
+    TOOL_LOOKUP,
+    TOOL_SCHEMA,
+    TOOL_CHECK_ACTION,
+];
 
 pub(crate) fn scratchpad_namespace_spec() -> ToolSpec {
     let tools = [
@@ -63,6 +83,14 @@ pub(crate) fn scratchpad_namespace_spec() -> ToolSpec {
         (
             TOOL_SET_PENDING_WAITS,
             "Replace the scratchpad's structured pending waits list.",
+        ),
+        (
+            TOOL_SET_ACTION_POLICY,
+            "Replace the scratchpad's structured action policy.",
+        ),
+        (
+            TOOL_MARK_WAIT_CHECKED,
+            "Mark one pending wait as checked, update its reuse details, or resolve it.",
         ),
         (TOOL_UPDATE, "Update structured scratchpad fields."),
         (
@@ -157,6 +185,8 @@ impl ToolHandler for BuiltinScratchpadHandler {
             TOOL_APPEND_NOTE => append_scratchpad_note(&store, &args),
             TOOL_SET_NEXT_STEPS => set_next_steps(&store, &args),
             TOOL_SET_PENDING_WAITS => set_pending_waits(&store, &args),
+            TOOL_SET_ACTION_POLICY => set_action_policy(&store, &args),
+            TOOL_MARK_WAIT_CHECKED => mark_wait_checked(&store, &args),
             TOOL_UPDATE => update_scratchpad(&store, &args),
             TOOL_ARCHIVE => archive_scratchpad(&store, &args),
             TOOL_UNARCHIVE => unarchive_scratchpad(&store, &args),
@@ -424,6 +454,50 @@ fn set_pending_waits(store: &ScratchpadStore, args: &Value) -> Result<Value, Fun
     Ok(serde_json::json!({ "scratchpad": scratchpad }))
 }
 
+fn set_action_policy(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+    let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    let mut scratchpad = store.read(&scratchpad_id)?;
+    scratchpad.action_policy = object_arg(args, "action_policy");
+    touch(&mut scratchpad);
+    store.write(&scratchpad)?;
+    Ok(serde_json::json!({ "scratchpad": scratchpad }))
+}
+
+fn mark_wait_checked(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+    let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    let mut scratchpad = store.read(&scratchpad_id)?;
+    let wait_id = optional_string_arg(args, "wait_id");
+    let target = optional_string_arg(args, "target");
+    let index = find_pending_wait_index(
+        &scratchpad.pending_waits,
+        wait_id.as_deref(),
+        target.as_deref(),
+    )?;
+    if bool_arg(args, "resolved") {
+        scratchpad.pending_waits.remove(index);
+    } else {
+        let mut wait = scratchpad.pending_waits[index]
+            .as_object()
+            .cloned()
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel("pending wait is not an object".to_string())
+            })?;
+        wait.insert("last_checked_at".to_string(), serde_json::json!(now()));
+        for key in ["next_check_at", "reuse_session_id", "check_method"] {
+            if let Some(value) = args.get(key) {
+                wait.insert(key.to_string(), value.clone());
+            }
+        }
+        if let Some(value) = args.get("fallback_work") {
+            wait.insert("fallback_work".to_string(), value.clone());
+        }
+        scratchpad.pending_waits[index] = serde_json::Value::Object(wait);
+    }
+    touch(&mut scratchpad);
+    store.write(&scratchpad)?;
+    Ok(serde_json::json!({ "scratchpad": scratchpad }))
+}
+
 fn update_scratchpad(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     let mut scratchpad = store.read(&scratchpad_id)?;
@@ -499,21 +573,21 @@ fn lookup_scratchpads(store: &ScratchpadStore, args: &Value) -> Result<Value, Fu
 fn check_action_allowed(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     let scratchpad = store.read(&scratchpad_id)?;
-    let action = optional_string_arg(args, "action").unwrap_or_default();
-    let denied = scratchpad
-        .action_policy
-        .get("deny")
-        .and_then(Value::as_array)
-        .is_some_and(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .any(|item| item.eq_ignore_ascii_case(&action))
-        });
+    let action = string_arg(args, "action")?.to_ascii_lowercase();
+    let decision = evaluate_action_policy(&scratchpad, args, &action);
     Ok(serde_json::json!({
-        "allowed": !denied,
-        "scratchpad_id": scratchpad.scratchpad_id,
-        "action": action,
+        "allowed": decision.allowed,
+        "reason": decision.reason,
+        "message": decision.message,
+        "decision": {
+            "allowed": decision.allowed,
+            "reason": decision.reason,
+            "message": decision.message,
+            "scratchpad_id": scratchpad.scratchpad_id,
+            "status": scratchpad.status,
+            "action": action,
+            "evaluated_policy": decision.evaluated_policy,
+        }
     }))
 }
 
@@ -549,6 +623,8 @@ fn schema_payload() -> Value {
             TOOL_APPEND_NOTE,
             TOOL_SET_NEXT_STEPS,
             TOOL_SET_PENDING_WAITS,
+            TOOL_SET_ACTION_POLICY,
+            TOOL_MARK_WAIT_CHECKED,
             TOOL_UPDATE,
             TOOL_ARCHIVE,
             TOOL_UNARCHIVE,
@@ -622,6 +698,185 @@ fn summary(scratchpad: &Scratchpad) -> Value {
         "updated_at": scratchpad.updated_at,
         "archived_at": scratchpad.archived_at,
     })
+}
+
+struct ActionPolicyDecision {
+    allowed: bool,
+    reason: String,
+    message: String,
+    evaluated_policy: Value,
+}
+
+fn evaluate_action_policy(
+    scratchpad: &Scratchpad,
+    args: &Value,
+    action: &str,
+) -> ActionPolicyDecision {
+    let policy = &scratchpad.action_policy;
+    let effective_policy = effective_action_policy(policy, args);
+    let mut reason = None;
+    let mut message = None;
+
+    if action == "finalize"
+        && matches!(scratchpad.status.as_str(), "active" | "waiting")
+        && policy_bool(&effective_policy, "guard_finalization_while_active", true)
+    {
+        reason = Some("objective_in_progress".to_string());
+        message = Some(format!(
+            "cannot finalize while scratchpad status is '{}'",
+            scratchpad.status
+        ));
+    }
+
+    if reason.is_none()
+        && action == "end_followup"
+        && matches!(scratchpad.status.as_str(), "active" | "waiting")
+        && policy_bool(
+            &effective_policy,
+            "guard_followup_shutdown_while_active",
+            true,
+        )
+    {
+        let channel =
+            optional_string_arg(args, "channel").unwrap_or_else(|| "follow-up".to_string());
+        reason = Some("objective_in_progress".to_string());
+        message = Some(format!(
+            "cannot end {channel} while scratchpad status is '{}'",
+            scratchpad.status
+        ));
+    }
+
+    if reason.is_none() && matches!(action, "merge" | "pull_request") {
+        if bool_arg(args, "bypass_pr_requirements")
+            && !policy_bool(&effective_policy, "allow_pr_requirement_bypass", false)
+        {
+            reason = Some("pr_bypass_forbidden".to_string());
+            message = Some("PR requirement bypass is forbidden by action policy".to_string());
+        }
+        let branch = optional_string_arg(args, "target_branch").unwrap_or_default();
+        let forbidden = policy_list(&effective_policy, &["forbidden_base_branches"]);
+        let allowed = policy_list(&effective_policy, &["allowed_base_branches"]);
+        if reason.is_none() && branch.is_empty() && (!forbidden.is_empty() || !allowed.is_empty()) {
+            reason = Some("target_branch_required".to_string());
+            message =
+                Some("target_branch is required when branch policy is configured".to_string());
+        } else if reason.is_none() && !branch.is_empty() {
+            if forbidden.iter().any(|item| item == &branch) {
+                reason = Some("branch_forbidden".to_string());
+                message = Some(format!("target branch '{branch}' is forbidden"));
+            } else if !allowed.is_empty() && !allowed.iter().any(|item| item == &branch) {
+                reason = Some("branch_not_allowed".to_string());
+                message = Some(format!("target branch '{branch}' is not allowed"));
+            }
+        }
+    }
+
+    if reason.is_none() && matches!(action, "deploy" | "ecs_benchmark_launch") {
+        let env = optional_string_arg(args, "env").unwrap_or_default();
+        if !env.is_empty() {
+            let (forbidden_keys, allowed_keys): (&[&str], &[&str]) =
+                if action == "ecs_benchmark_launch" {
+                    (
+                        &["forbidden_benchmark_envs", "forbidden_envs"],
+                        &["allowed_benchmark_envs", "allowed_envs"],
+                    )
+                } else {
+                    (
+                        &["forbidden_deploy_envs", "forbidden_envs"],
+                        &["allowed_deploy_envs", "allowed_envs"],
+                    )
+                };
+            let forbidden = policy_list(&effective_policy, forbidden_keys);
+            let allowed = policy_list(&effective_policy, allowed_keys);
+            if forbidden.iter().any(|item| item == &env) {
+                reason = Some("env_forbidden".to_string());
+                message = Some(format!(
+                    "target env '{env}' is forbidden for action '{action}'"
+                ));
+            } else if !allowed.is_empty() && !allowed.iter().any(|item| item == &env) {
+                reason = Some("env_not_allowed".to_string());
+                message = Some(format!(
+                    "target env '{env}' is not allowed for action '{action}'"
+                ));
+            }
+        }
+    }
+
+    if reason.is_none()
+        && action == "aws_write"
+        && !policy_bool(&effective_policy, "allow_aws_writes", false)
+    {
+        reason = Some("aws_write_forbidden".to_string());
+        message = Some("AWS write path is forbidden by action policy".to_string());
+    }
+
+    let allowed = reason.is_none();
+    ActionPolicyDecision {
+        allowed,
+        reason: reason.unwrap_or_else(|| "allowed".to_string()),
+        message: message
+            .unwrap_or_else(|| "action is allowed by current scratchpad policy".to_string()),
+        evaluated_policy: effective_policy,
+    }
+}
+
+fn effective_action_policy(policy: &BTreeMap<String, Value>, args: &Value) -> Value {
+    let mut effective = serde_json::Map::new();
+    if let Some(defaults) = policy.get("defaults").and_then(Value::as_object) {
+        effective.extend(defaults.clone());
+    }
+    if let Some(repo_policy) = resolve_repo_policy(policy, args) {
+        effective.extend(repo_policy.clone());
+    }
+    Value::Object(effective)
+}
+
+fn resolve_repo_policy<'a>(
+    policy: &'a BTreeMap<String, Value>,
+    args: &Value,
+) -> Option<&'a serde_json::Map<String, Value>> {
+    let repo = optional_string_arg(args, "repo")?;
+    let repos = policy.get("repos").and_then(Value::as_object)?;
+    repos.iter().find_map(|(key, value)| {
+        (repo == *key || repo.ends_with(key))
+            .then(|| value.as_object())
+            .flatten()
+    })
+}
+
+fn policy_bool(policy: &Value, key: &str, default: bool) -> bool {
+    policy.get(key).and_then(Value::as_bool).unwrap_or(default)
+}
+
+fn policy_list(policy: &Value, keys: &[&str]) -> Vec<String> {
+    keys.iter()
+        .find_map(|key| policy.get(*key).and_then(Value::as_array))
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn find_pending_wait_index(
+    waits: &[Value],
+    wait_id: Option<&str>,
+    target: Option<&str>,
+) -> Result<usize, FunctionCallError> {
+    let wait_id = wait_id.unwrap_or_default();
+    let target = target.unwrap_or_default();
+    if wait_id.is_empty() && target.is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "mark_wait_checked requires wait_id or target".to_string(),
+        ));
+    }
+    waits
+        .iter()
+        .position(|wait| {
+            wait.get("wait_id").and_then(Value::as_str) == Some(wait_id)
+                || wait.get("target").and_then(Value::as_str) == Some(target)
+        })
+        .ok_or_else(|| FunctionCallError::RespondToModel("pending wait not found".to_string()))
 }
 
 fn sanitize_id(value: &str) -> Result<String, FunctionCallError> {
@@ -810,5 +1065,114 @@ mod tests {
         )
         .unwrap();
         assert!(archived_explicit["summary"]["archived_at"].is_string());
+    }
+
+    #[test]
+    fn action_policy_checks_effective_repo_policy() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(Some(tmp.path().to_str().unwrap()), tmp.path()).unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "guard release",
+                "scratchpad_id": "sp-policy",
+                "status": "active",
+                "action_policy": {
+                    "defaults": {
+                        "forbidden_base_branches": ["main"],
+                        "allow_aws_writes": false
+                    },
+                    "repos": {
+                        "codex": {
+                            "allowed_deploy_envs": ["dev"]
+                        }
+                    }
+                }
+            }),
+            "thread-123",
+        )
+        .unwrap();
+
+        let merge_decision = check_action_allowed(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "sp-policy",
+                "action": "merge",
+                "target_branch": "main"
+            }),
+        )
+        .unwrap();
+        let deploy_decision = check_action_allowed(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "sp-policy",
+                "action": "deploy",
+                "repo": "/Users/example/codex",
+                "env": "prod"
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(merge_decision["allowed"], serde_json::json!(false));
+        assert_eq!(
+            merge_decision["reason"],
+            serde_json::json!("branch_forbidden")
+        );
+        assert_eq!(deploy_decision["allowed"], serde_json::json!(false));
+        assert_eq!(
+            deploy_decision["reason"],
+            serde_json::json!("env_not_allowed")
+        );
+    }
+
+    #[test]
+    fn mark_wait_checked_updates_or_resolves_pending_wait() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(Some(tmp.path().to_str().unwrap()), tmp.path()).unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "watch ci",
+                "scratchpad_id": "sp-wait",
+                "pending_waits": [
+                    {"wait_id": "ci-1", "target": "ci", "status": "pending"}
+                ]
+            }),
+            "thread-123",
+        )
+        .unwrap();
+
+        let checked = mark_wait_checked(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "sp-wait",
+                "wait_id": "ci-1",
+                "next_check_at": "2026-04-27T12:00:00Z",
+                "reuse_session_id": "agent-1"
+            }),
+        )
+        .unwrap();
+        assert!(
+            checked["scratchpad"]["pending_waits"][0]["last_checked_at"].is_string(),
+            "expected wait check timestamp"
+        );
+        assert_eq!(
+            checked["scratchpad"]["pending_waits"][0]["reuse_session_id"],
+            serde_json::json!("agent-1")
+        );
+
+        let resolved = mark_wait_checked(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "sp-wait",
+                "target": "ci",
+                "resolved": true
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            resolved["scratchpad"]["pending_waits"],
+            serde_json::json!([])
+        );
     }
 }
