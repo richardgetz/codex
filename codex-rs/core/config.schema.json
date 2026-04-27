@@ -6,6 +6,25 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AccountsToml": {
+      "additionalProperties": false,
+      "description": "Managed account-alias settings loaded from config.toml.",
+      "properties": {
+        "active": {
+          "description": "Alias whose auth should be active by default for this Codex install.",
+          "type": "string"
+        },
+        "rotation": {
+          "default": null,
+          "description": "Ordered account aliases to use when automatic session-local account rotation is enabled. Use `\"default\"` for the original root auth store.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -1697,6 +1716,14 @@
           "minimum": 1.0,
           "type": "integer"
         },
+        "model_consolidation": {
+          "description": "When true, use a model agent to rewrite summary/profile artifacts after memory writes.",
+          "type": "boolean"
+        },
+        "model_on_heuristic_miss": {
+          "description": "When true, run a model classifier even when heuristic extraction finds no memory signal.",
+          "type": "boolean"
+        },
         "recent_turn_window": {
           "description": "Number of recent user turns to inspect when looking for repeated steering patterns.",
           "format": "uint",
@@ -1711,6 +1738,74 @@
             }
           ],
           "description": "Which collaboration modes may read orchestrator memory."
+        }
+      },
+      "type": "object"
+    },
+    "OrchestratorPrimaryContactScheduleToml": {
+      "additionalProperties": false,
+      "description": "Local-time primary-contact polling interval override.",
+      "properties": {
+        "check_messages_every_seconds": {
+          "description": "Polling interval to use when this schedule entry matches.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "days": {
+          "description": "Optional day names. Omit or leave empty to match every day.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "end": {
+          "description": "Local end time in `HH:MM` 24-hour format.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Local start time in `HH:MM` 24-hour format.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "OrchestratorPrimaryContactToml": {
+      "additionalProperties": false,
+      "description": "Primary user-contact channel that Orchestrator mode should start on session boot.",
+      "properties": {
+        "check_messages_every_seconds": {
+          "description": "How often the harness should check the primary contact channel for new user messages. Defaults to 900 seconds. `0` disables polling.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "check_tool": {
+          "description": "Optional MCP tool name used by the harness-only background poller to check for new user messages.",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "When `true`, Orchestrator starts the configured communication MCP at session boot.",
+          "type": "boolean"
+        },
+        "mcp": {
+          "description": "MCP server or communication channel name, for example `\"imessage\"`.",
+          "type": "string"
+        },
+        "schedule": {
+          "description": "Optional local-time schedule that overrides `check_messages_every_seconds` when a rule matches.",
+          "items": {
+            "$ref": "#/definitions/OrchestratorPrimaryContactScheduleToml"
+          },
+          "type": "array"
+        },
+        "startup_prompt": {
+          "description": "Deprecated: ignored. Primary-contact startup is harness-only and no longer injects a model-visible startup prompt.",
+          "type": "string"
+        },
+        "tool": {
+          "description": "Optional MCP tool name that the harness invokes to arm the channel, for example `\"imessage_followup_start\"`.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -1758,6 +1853,18 @@
             }
           ],
           "default": null
+        },
+        "primary_contact": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/OrchestratorPrimaryContactToml"
+            }
+          ],
+          "default": null
+        },
+        "recover_scratchpad_after_compaction": {
+          "description": "When true, Orchestrator mode schedules a scratchpad recovery prompt after a context compaction item is observed.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2675,6 +2782,15 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
+    "accounts": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AccountsToml"
+        }
+      ],
+      "default": null,
+      "description": "Managed account alias selection for CLI auth storage."
+    },
     "agents": {
       "allOf": [
         {

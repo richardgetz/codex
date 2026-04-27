@@ -133,6 +133,8 @@ use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::SortDirection;
+use codex_app_server_protocol::SwitchAccountParams;
+use codex_app_server_protocol::SwitchAccountResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadApproveGuardianDeniedActionParams;
 use codex_app_server_protocol::ThreadApproveGuardianDeniedActionResponse;
@@ -390,6 +392,25 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
+
+fn account_from_auth(auth: Option<&CodexAuth>) -> Option<Account> {
+    match auth {
+        Some(auth) => match auth.auth_mode() {
+            CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
+            CoreAuthMode::Chatgpt
+            | CoreAuthMode::ChatgptAuthTokens
+            | CoreAuthMode::AgentIdentity => {
+                let email = auth.get_account_email();
+                let plan_type = auth.account_plan_type();
+                match (email, plan_type) {
+                    (Some(email), Some(plan_type)) => Some(Account::Chatgpt { email, plan_type }),
+                    _ => None,
+                }
+            }
+        },
+        None => None,
+    }
+}
 
 #[cfg(test)]
 use codex_app_server_protocol::ServerRequest;
@@ -692,9 +713,14 @@ impl CodexMessageProcessor {
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
         let auth = self.auth_manager.auth_cached();
         AccountUpdatedNotification {
+            account: account_from_auth(auth.as_ref()),
             auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
             plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
         }
+    }
+
+    fn current_account(&self) -> Option<Account> {
+        account_from_auth(self.auth_manager.auth_cached().as_ref())
     }
 
     fn track_error_response(
@@ -1146,6 +1172,10 @@ impl CodexMessageProcessor {
                 self.get_account(to_connection_request_id(request_id), params)
                     .await;
             }
+            ClientRequest::SwitchAccount { request_id, params } => {
+                self.switch_account(to_connection_request_id(request_id), params)
+                    .await;
+            }
             ClientRequest::GitDiffToRemote { request_id, params } => {
                 self.git_diff_to_origin(to_connection_request_id(request_id), params.cwd)
                     .await;
@@ -1298,9 +1328,9 @@ impl CodexMessageProcessor {
         }
 
         match login_with_api_key(
-            &self.config.codex_home,
+            &self.auth_manager.auth_storage_home(),
             &params.api_key,
-            self.config.cli_auth_credentials_store_mode,
+            self.auth_manager.auth_credentials_store_mode(),
         ) {
             Ok(()) => {
                 self.auth_manager.reload();
@@ -1364,10 +1394,10 @@ impl CodexMessageProcessor {
         let opts = LoginServerOptions {
             open_browser: false,
             ..LoginServerOptions::new(
-                config.codex_home.to_path_buf(),
+                self.auth_manager.auth_storage_home(),
                 CLIENT_ID.to_string(),
                 config.forced_chatgpt_workspace_id.clone(),
-                config.cli_auth_credentials_store_mode,
+                self.auth_manager.auth_credentials_store_mode(),
             )
         };
         #[cfg(debug_assertions)]
@@ -1466,6 +1496,7 @@ impl CodexMessageProcessor {
                             // Notify clients with the actual current auth mode.
                             let auth = auth_manager.auth_cached();
                             let payload_v2 = AccountUpdatedNotification {
+                                account: account_from_auth(auth.as_ref()),
                                 auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
                                 plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
                             };
@@ -1573,6 +1604,7 @@ impl CodexMessageProcessor {
 
                             let auth = auth_manager.auth_cached();
                             let payload_v2 = AccountUpdatedNotification {
+                                account: account_from_auth(auth.as_ref()),
                                 auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
                                 plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
                             };
@@ -1685,7 +1717,7 @@ impl CodexMessageProcessor {
         }
 
         if let Err(err) = login_with_chatgpt_auth_tokens(
-            &self.config.codex_home,
+            &self.auth_manager.auth_storage_home(),
             &access_token,
             &chatgpt_account_id,
             chatgpt_plan_type.as_deref(),
@@ -1765,6 +1797,7 @@ impl CodexMessageProcessor {
                     .await;
 
                 let payload_v2 = AccountUpdatedNotification {
+                    account: None,
                     auth_mode: current_auth_method,
                     plan_type: None,
                 };
@@ -1776,6 +1809,44 @@ impl CodexMessageProcessor {
                 self.outgoing.send_error(request_id, error).await;
             }
         }
+    }
+
+    async fn switch_account(&self, request_id: ConnectionRequestId, params: SwitchAccountParams) {
+        let alias = params.alias.and_then(|value| {
+            let value = value.trim().to_string();
+            (!value.is_empty()).then_some(value)
+        });
+        let normalized_alias = alias.filter(|value| !value.eq_ignore_ascii_case("default"));
+
+        let auth_storage_home = match normalized_alias.as_deref() {
+            Some(alias) => self
+                .config
+                .codex_home
+                .join("accounts")
+                .join(alias)
+                .to_path_buf(),
+            None => self.config.codex_home.to_path_buf(),
+        };
+        let auth_credentials_store_mode = self
+            .config
+            .effective_cli_auth_credentials_store_mode_for_alias(normalized_alias.as_deref());
+        self.auth_manager
+            .set_auth_storage_selection(auth_storage_home, auth_credentials_store_mode);
+        self.config_manager.replace_cloud_requirements_loader(
+            self.auth_manager.clone(),
+            self.config.chatgpt_base_url.clone(),
+        );
+        self.config_manager
+            .sync_default_client_residency_requirement()
+            .await;
+        self.outgoing
+            .send_response(request_id, SwitchAccountResponse {})
+            .await;
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(
+                self.current_account_updated_notification(),
+            ))
+            .await;
     }
 
     async fn refresh_token_if_requested(&self, do_refresh: bool) -> RefreshTokenRequestOutcome {
@@ -1874,33 +1945,24 @@ impl CodexMessageProcessor {
         }
 
         let account = match self.auth_manager.auth_cached() {
-            Some(auth) => match auth.auth_mode() {
-                CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
-                CoreAuthMode::Chatgpt
-                | CoreAuthMode::ChatgptAuthTokens
-                | CoreAuthMode::AgentIdentity => {
-                    let email = auth.get_account_email();
-                    let plan_type = auth.account_plan_type();
-
-                    match (email, plan_type) {
-                        (Some(email), Some(plan_type)) => {
-                            Some(Account::Chatgpt { email, plan_type })
-                        }
-                        _ => {
-                            let error = JSONRPCErrorError {
-                                code: INVALID_REQUEST_ERROR_CODE,
-                                message:
-                                    "email and plan type are required for chatgpt authentication"
-                                        .to_string(),
-                                data: None,
-                            };
-                            self.outgoing.send_error(request_id, error).await;
-                            return;
-                        }
-                    }
-                }
-            },
-            None => None,
+            Some(auth)
+                if matches!(
+                    auth.auth_mode(),
+                    CoreAuthMode::Chatgpt
+                        | CoreAuthMode::ChatgptAuthTokens
+                        | CoreAuthMode::AgentIdentity
+                ) && self.current_account().is_none() =>
+            {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: "email and plan type are required for chatgpt authentication"
+                        .to_string(),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            _ => self.current_account(),
         };
 
         let response = GetAccountResponse {

@@ -1,0 +1,20 @@
+---
+source: tui/src/history_cell.rs
+assertion_line: 3719
+expression: rendered
+---
+/mcp
+
+🔌  MCP Tools
+
+  • docs
+    • Visible in Orchestrator mode: no (hidden by mode filter)
+    • Auth: Unsupported
+    • Command: docs-server --stdio
+    • Tools: lookup
+
+  • imessage
+    • Visible in Orchestrator mode: yes
+    • Auth: Unsupported
+    • Command: imessage-server --stdio
+    • Tools: send_message

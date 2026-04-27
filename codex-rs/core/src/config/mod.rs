@@ -31,6 +31,7 @@ use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::validate_model_providers;
 use codex_config::profile_toml::ConfigProfile;
+use codex_config::types::AccountsConfig;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::DEFAULT_OTEL_ENVIRONMENT;
@@ -454,6 +455,9 @@ pub struct Config {
     /// Orchestrator-memory subsystem settings.
     pub orchestrator_memory: OrchestratorMemoryConfig,
 
+    /// Managed account-alias settings for auth storage selection.
+    pub accounts: AccountsConfig,
+
     /// Orchestrator supervision and escalation settings.
     pub orchestrator: OrchestratorConfig,
 
@@ -638,6 +642,10 @@ pub struct Config {
     pub otel: codex_config::types::OtelConfig,
 }
 
+pub const DEFAULT_ORCHESTRATOR_MODEL: &str = "gpt-5.3-codex-spark";
+pub const DEFAULT_ORCHESTRATOR_FALLBACK_MODEL: &str = "gpt-5.4-mini";
+pub const DEFAULT_ORCHESTRATOR_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultiAgentV2Config {
     pub usage_hint_enabled: bool,
@@ -660,8 +668,12 @@ impl AuthManagerConfig for Config {
         self.codex_home.to_path_buf()
     }
 
+    fn auth_storage_home(&self) -> PathBuf {
+        self.auth_storage_home()
+    }
+
     fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
-        self.cli_auth_credentials_store_mode
+        self.effective_cli_auth_credentials_store_mode()
     }
 
     fn forced_chatgpt_workspace_id(&self) -> Option<String> {
@@ -819,6 +831,57 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    pub fn active_account_alias(&self) -> Option<&str> {
+        self.accounts.active.as_deref()
+    }
+
+    pub fn effective_cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
+        self.effective_cli_auth_credentials_store_mode_for_alias(self.active_account_alias())
+    }
+
+    pub fn effective_cli_auth_credentials_store_mode_for_alias(
+        &self,
+        alias: Option<&str>,
+    ) -> AuthCredentialsStoreMode {
+        match (alias, self.cli_auth_credentials_store_mode) {
+            (Some(alias), AuthCredentialsStoreMode::File)
+                if !alias.eq_ignore_ascii_case("default") =>
+            {
+                resolve_cli_auth_credentials_store_mode(
+                    AuthCredentialsStoreMode::Auto,
+                    env!("CARGO_PKG_VERSION"),
+                )
+            }
+            (_, mode) => mode,
+        }
+    }
+
+    pub fn auth_storage_home(&self) -> PathBuf {
+        match self.active_account_alias() {
+            Some(alias) if !alias.eq_ignore_ascii_case("default") => {
+                self.codex_home.join("accounts").join(alias).to_path_buf()
+            }
+            _ => self.codex_home.to_path_buf(),
+        }
+    }
+
+    pub fn effective_orchestrator_model(&self) -> &str {
+        self.thread_control
+            .orchestrator
+            .model
+            .as_deref()
+            .unwrap_or(DEFAULT_ORCHESTRATOR_MODEL)
+    }
+
+    pub fn effective_orchestrator_reasoning_effort(&self) -> Option<ReasoningEffort> {
+        Some(
+            self.thread_control
+                .orchestrator
+                .reasoning_effort
+                .unwrap_or(DEFAULT_ORCHESTRATOR_REASONING_EFFORT),
+        )
+    }
+
     pub fn to_models_manager_config(&self) -> ModelsManagerConfig {
         ModelsManagerConfig {
             model_context_window: self.model_context_window,
@@ -2392,6 +2455,7 @@ impl Config {
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
             orchestrator_memory: cfg.orchestrator_memory.unwrap_or_default().into(),
+            accounts: cfg.accounts.unwrap_or_default().into(),
             orchestrator: cfg.orchestrator.unwrap_or_default().into(),
             thread_control: cfg.thread_control.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,

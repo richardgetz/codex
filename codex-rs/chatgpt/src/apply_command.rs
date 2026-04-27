@@ -32,8 +32,11 @@ pub async fn run_apply_command(
     )
     .await?;
 
-    init_chatgpt_token_from_auth(&config.codex_home, config.cli_auth_credentials_store_mode)
-        .await?;
+    init_chatgpt_token_from_auth(
+        &config.auth_storage_home(),
+        config.effective_cli_auth_credentials_store_mode(),
+    )
+    .await?;
 
     let task_response = get_task(&config, apply_cli.task_id).await?;
     apply_diff_from_task(task_response, cwd).await

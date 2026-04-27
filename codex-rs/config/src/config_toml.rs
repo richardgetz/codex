@@ -7,6 +7,7 @@ use std::path::Path;
 use crate::HookEventsToml;
 use crate::permissions_toml::PermissionsToml;
 use crate::profile_toml::ConfigProfile;
+use crate::types::AccountsToml;
 use crate::types::AnalyticsConfigToml;
 use crate::types::ApprovalsReviewer;
 use crate::types::AppsConfigToml;
@@ -176,6 +177,10 @@ pub struct ConfigToml {
     /// auto: Use the keyring if available, otherwise use a file.
     #[serde(default)]
     pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
+
+    /// Managed account alias selection for CLI auth storage.
+    #[serde(default)]
+    pub accounts: Option<AccountsToml>,
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     #[serde(default)]

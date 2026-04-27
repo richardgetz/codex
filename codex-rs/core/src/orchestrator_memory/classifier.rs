@@ -196,17 +196,8 @@ fn build_classification_agent_config(base: &Arc<Config>) -> anyhow::Result<Confi
         );
     agent_config.permissions.network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
 
-    agent_config.model = base
-        .thread_control
-        .orchestrator
-        .model
-        .clone()
-        .or_else(|| base.model.clone());
-    agent_config.model_reasoning_effort = base
-        .thread_control
-        .orchestrator
-        .reasoning_effort
-        .or(base.model_reasoning_effort);
+    agent_config.model = Some(base.effective_orchestrator_model().to_string());
+    agent_config.model_reasoning_effort = base.effective_orchestrator_reasoning_effort();
 
     Ok(agent_config)
 }

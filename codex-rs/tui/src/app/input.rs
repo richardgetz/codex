@@ -214,6 +214,8 @@ impl App {
                 self.chat_widget.handle_key_event(key_event);
             }
         };
+        self.ensure_primary_contact_startup(app_server);
+        self.ensure_primary_contact_polling(app_server);
     }
 
     pub(super) fn refresh_status_line(&mut self) {

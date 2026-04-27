@@ -100,6 +100,12 @@ pub(crate) enum RateLimitRefreshOrigin {
     StatusCommand { request_id: u64 },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AccountSwitchReason {
+    User,
+    AutoRotation,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -161,6 +167,12 @@ pub(crate) enum AppEvent {
     /// Request app-server account logout, then exit after it succeeds.
     Logout,
 
+    /// Switch to a managed account alias. `None` means the original root auth store.
+    SwitchAccount {
+        alias: Option<String>,
+        reason: AccountSwitchReason,
+    },
+
     /// Request to exit the application due to a fatal error.
     #[allow(dead_code)]
     FatalExitRequest(String),
@@ -191,6 +203,18 @@ pub(crate) enum AppEvent {
     RateLimitsLoaded {
         origin: RateLimitRefreshOrigin,
         result: Result<Vec<RateLimitSnapshot>, String>,
+    },
+
+    /// A harness-only primary-contact poll found a new user message.
+    PrimaryContactMessageReceived {
+        text: String,
+    },
+
+    /// Harness-only primary-contact startup completed.
+    PrimaryContactMonitoringStarted {
+        mcp: String,
+        interval_seconds: u32,
+        scheduled: bool,
     },
 
     /// Send a user-confirmed request to notify the workspace owner.

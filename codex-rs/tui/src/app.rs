@@ -91,6 +91,8 @@ use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
+use codex_app_server_protocol::McpServerToolCallParams;
+use codex_app_server_protocol::McpServerToolCallResponse;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
@@ -231,16 +233,59 @@ fn app_server_request_id_to_mcp_request_id(
     }
 }
 
-fn config_for_startup_collaboration_mode(config: &Config, mode: Option<ModeKind>) -> Config {
+pub(crate) fn config_for_startup_collaboration_mode(
+    config: &Config,
+    mode: Option<ModeKind>,
+) -> Config {
     let mut startup_config = config.clone();
     if mode == Some(ModeKind::Orchestrator) {
-        if let Some(model) = startup_config.thread_control.orchestrator.model.clone() {
-            startup_config.model = Some(model);
+        startup_config.model = Some(startup_config.effective_orchestrator_model().to_string());
+        startup_config.model_reasoning_effort =
+            startup_config.effective_orchestrator_reasoning_effort();
+    }
+    startup_config
+}
+
+pub(crate) fn config_for_startup_session(
+    config: &Config,
+    alias: Option<&str>,
+    mode: Option<ModeKind>,
+    primary_contact_mcp: Option<&str>,
+) -> Config {
+    let startup_config = config_for_startup_account_alias(config, alias);
+    let startup_config = config_for_startup_primary_contact(&startup_config, primary_contact_mcp);
+    config_for_startup_collaboration_mode(&startup_config, mode)
+}
+
+pub(crate) fn config_for_startup_account_alias(config: &Config, alias: Option<&str>) -> Config {
+    let mut startup_config = config.clone();
+    startup_config.accounts.active = alias.and_then(|value| {
+        let value = value.trim().to_string();
+        if value.is_empty() || value.eq_ignore_ascii_case("default") {
+            None
+        } else {
+            Some(value)
         }
-        if let Some(reasoning_effort) = startup_config.thread_control.orchestrator.reasoning_effort
-        {
-            startup_config.model_reasoning_effort = Some(reasoning_effort);
-        }
+    });
+    startup_config
+}
+
+pub(crate) fn config_for_startup_primary_contact(config: &Config, mcp: Option<&str>) -> Config {
+    let mut startup_config = config.clone();
+    let Some(mcp) = mcp else {
+        return startup_config;
+    };
+    let mcp = mcp.trim();
+    if mcp.eq_ignore_ascii_case("off")
+        || mcp.eq_ignore_ascii_case("none")
+        || mcp.eq_ignore_ascii_case("disabled")
+    {
+        startup_config.orchestrator.primary_contact.enabled = false;
+        return startup_config;
+    }
+    if !mcp.is_empty() {
+        startup_config.orchestrator.primary_contact.enabled = true;
+        startup_config.orchestrator.primary_contact.mcp = Some(mcp.to_string());
     }
     startup_config
 }
@@ -569,12 +614,26 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     last_subagent_backfill_attempt: Option<ThreadId>,
     primary_session_configured: Option<ThreadSessionState>,
+    primary_contact_startup: Option<PrimaryContactStartupState>,
+    primary_contact_polling: Option<PrimaryContactPollingState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
     // Serialize plugin enablement writes per plugin so stale completions cannot
     // overwrite a newer toggle, even if the plugin is toggled from different
     // cwd contexts.
     pending_plugin_enabled_writes: HashMap<String, Option<bool>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrimaryContactStartupState {
+    thread_id: ThreadId,
+    mcp: String,
+    tool: String,
+}
+
+struct PrimaryContactPollingState {
+    thread_id: ThreadId,
+    task: JoinHandle<()>,
 }
 
 fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<AppServerTurnError> {
@@ -782,6 +841,7 @@ impl App {
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
             Self::should_wait_for_initial_session(&session_selection);
+        let startup_initial_prompt = initial_prompt.clone();
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let started = app_server.start_thread(&session_bootstrap_config).await?;
@@ -793,7 +853,7 @@ impl App {
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
-                        initial_prompt.clone(),
+                        startup_initial_prompt.clone(),
                         initial_images.clone(),
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
@@ -828,7 +888,7 @@ impl App {
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
-                        initial_prompt.clone(),
+                        startup_initial_prompt.clone(),
                         initial_images.clone(),
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
@@ -868,7 +928,7 @@ impl App {
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
-                        initial_prompt.clone(),
+                        startup_initial_prompt.clone(),
                         initial_images.clone(),
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
@@ -941,6 +1001,8 @@ impl App {
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
+            primary_contact_startup: None,
+            primary_contact_polling: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),
@@ -949,6 +1011,8 @@ impl App {
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
         }
+        app.ensure_primary_contact_startup(&app_server);
+        app.ensure_primary_contact_polling(&app_server);
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -1170,6 +1234,9 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
+        if let Some(state) = self.primary_contact_polling.take() {
+            state.task.abort();
+        }
         if let Err(err) = self.chat_widget.clear_managed_terminal_title() {
             tracing::debug!(error = %err, "failed to clear terminal title on app drop");
         }

@@ -539,11 +539,13 @@ fn fake_jwt_for_auth_file_params(params: &AuthFileParams) -> std::io::Result<Str
 
 async fn build_config(
     codex_home: &Path,
+    auth_storage_home: &Path,
     forced_login_method: Option<ForcedLoginMethod>,
     forced_chatgpt_workspace_id: Option<String>,
 ) -> AuthConfig {
     AuthConfig {
         codex_home: codex_home.to_path_buf(),
+        auth_storage_home: auth_storage_home.to_path_buf(),
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         forced_login_method,
         forced_chatgpt_workspace_id,
@@ -589,6 +591,7 @@ async fn enforce_login_restrictions_logs_out_for_method_mismatch() {
 
     let config = build_config(
         codex_home.path(),
+        codex_home.path(),
         Some(ForcedLoginMethod::Chatgpt),
         /*forced_chatgpt_workspace_id*/ None,
     )
@@ -618,6 +621,7 @@ async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
     .expect("failed to write auth file");
 
     let config = build_config(
+        codex_home.path(),
         codex_home.path(),
         /*forced_login_method*/ None,
         Some("org_mine".to_string()),
@@ -649,6 +653,7 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
 
     let config = build_config(
         codex_home.path(),
+        codex_home.path(),
         /*forced_login_method*/ None,
         Some("org_mine".to_string()),
     )
@@ -670,6 +675,7 @@ async fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_f
 
     let config = build_config(
         codex_home.path(),
+        codex_home.path(),
         /*forced_login_method*/ None,
         Some("org_mine".to_string()),
     )
@@ -690,6 +696,7 @@ async fn enforce_login_restrictions_blocks_env_api_key_when_chatgpt_required() {
 
     let config = build_config(
         codex_home.path(),
+        codex_home.path(),
         Some(ForcedLoginMethod::Chatgpt),
         /*forced_chatgpt_workspace_id*/ None,
     )
@@ -700,6 +707,55 @@ async fn enforce_login_restrictions_blocks_env_api_key_when_chatgpt_required() {
     assert!(
         err.to_string()
             .contains("ChatGPT login is required, but an API key is currently being used.")
+    );
+}
+
+#[tokio::test]
+#[serial(codex_api_key)]
+async fn enforce_login_restrictions_uses_selected_auth_storage_home() {
+    let codex_home = tempdir().unwrap();
+    login_with_api_key(codex_home.path(), "sk-root", AuthCredentialsStoreMode::File)
+        .expect("seed root auth");
+    let alias_home = codex_home.path().join("accounts").join("work");
+    std::fs::create_dir_all(&alias_home).expect("create alias auth home");
+
+    let config = build_config(
+        codex_home.path(),
+        &alias_home,
+        Some(ForcedLoginMethod::Chatgpt),
+        /*forced_chatgpt_workspace_id*/ None,
+    )
+    .await;
+
+    super::enforce_login_restrictions(&config)
+        .expect("empty alias auth store should not reuse root auth");
+    assert!(
+        codex_home.path().join("auth.json").exists(),
+        "root auth.json should remain untouched when alias auth is selected"
+    );
+    assert!(
+        !alias_home.join("auth.json").exists(),
+        "alias auth store should still be empty"
+    );
+}
+
+#[test]
+fn auth_manager_switches_storage_selection_per_session() {
+    let codex_home = tempdir().unwrap();
+    let auth_manager = AuthManager::new(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    );
+
+    let alias_home = codex_home.path().join("accounts").join("work");
+    auth_manager.set_auth_storage_selection(alias_home.clone(), AuthCredentialsStoreMode::Auto);
+
+    assert_eq!(auth_manager.auth_storage_home(), alias_home);
+    assert_eq!(
+        auth_manager.auth_credentials_store_mode(),
+        AuthCredentialsStoreMode::Auto
     );
 }
 

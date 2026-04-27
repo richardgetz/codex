@@ -48,6 +48,57 @@ async fn suppressed_interrupted_turn_notice_skips_history_warning() {
     );
 }
 
+#[tokio::test]
+async fn live_orchestrator_compaction_submits_scratchpad_recovery_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let orchestrator_mask =
+        collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Orchestrator)
+            .expect("expected orchestrator collaboration mask");
+    chat.set_collaboration_mask(orchestrator_mask);
+
+    chat.handle_thread_item(
+        ThreadItem::ContextCompaction {
+            id: "compaction-1".to_string(),
+        },
+        "turn-1".to_string(),
+        ThreadItemRenderSource::Live,
+    );
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                UserInput::Text { text, .. } => {
+                    assert!(text.contains("recover the active scratchpad"));
+                }
+                other => panic!("expected text input, got {other:?}"),
+            }
+        }
+        other => panic!("expected UserTurn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn replayed_orchestrator_compaction_does_not_submit_recovery_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let orchestrator_mask =
+        collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Orchestrator)
+            .expect("expected orchestrator collaboration mask");
+    chat.set_collaboration_mask(orchestrator_mask);
+
+    chat.replay_thread_item(
+        ThreadItem::ContextCompaction {
+            id: "compaction-1".to_string(),
+        },
+        "turn-1".to_string(),
+        ReplayKind::ResumeInitialMessages,
+    );
+
+    assert_no_submit_op(&mut op_rx);
+}
+
 fn assert_side_rename_rejected(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>,

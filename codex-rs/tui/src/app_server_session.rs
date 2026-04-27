@@ -34,6 +34,8 @@ use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::SwitchAccountParams;
+use codex_app_server_protocol::SwitchAccountResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadApproveGuardianDeniedActionParams;
 use codex_app_server_protocol::ThreadApproveGuardianDeniedActionResponse;
@@ -265,6 +267,7 @@ impl AppServerSession {
                     Some(email.clone()),
                     Some(TelemetryAuthMode::Chatgpt),
                     Some(StatusAccountDisplay::ChatGpt {
+                        alias: config.active_account_alias().map(str::to_string),
                         email: Some(email),
                         plan: Some(plan_type_display_name(plan_type)),
                     }),
@@ -681,6 +684,19 @@ impl AppServerSession {
         Ok(())
     }
 
+    pub(crate) async fn switch_account(&mut self, alias: Option<String>) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: SwitchAccountResponse = self
+            .client
+            .request_typed(ClientRequest::SwitchAccount {
+                request_id,
+                params: SwitchAccountParams { alias },
+            })
+            .await
+            .wrap_err("account/switch failed in TUI")?;
+        Ok(())
+    }
+
     pub(crate) async fn thread_unsubscribe(&mut self, thread_id: ThreadId) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadUnsubscribeResponse = self
@@ -962,8 +978,24 @@ pub(crate) fn status_account_display_from_auth_mode(
         Some(AuthMode::Chatgpt)
         | Some(AuthMode::ChatgptAuthTokens)
         | Some(AuthMode::AgentIdentity) => Some(StatusAccountDisplay::ChatGpt {
+            alias: None,
             email: None,
             plan: plan_type.map(plan_type_display_name),
+        }),
+        None => None,
+    }
+}
+
+pub(crate) fn status_account_display_from_account(
+    account: Option<Account>,
+    active_alias: Option<&str>,
+) -> Option<StatusAccountDisplay> {
+    match account {
+        Some(Account::ApiKey {}) => Some(StatusAccountDisplay::ApiKey),
+        Some(Account::Chatgpt { email, plan_type }) => Some(StatusAccountDisplay::ChatGpt {
+            alias: active_alias.map(str::to_string),
+            email: Some(email),
+            plan: Some(plan_type_display_name(plan_type)),
         }),
         None => None,
     }
@@ -1716,6 +1748,7 @@ mod tests {
         assert!(matches!(
             business,
             Some(StatusAccountDisplay::ChatGpt {
+                alias: None,
                 email: None,
                 plan: Some(ref plan),
             }) if plan == "Enterprise"
@@ -1728,9 +1761,30 @@ mod tests {
         assert!(matches!(
             team,
             Some(StatusAccountDisplay::ChatGpt {
+                alias: None,
                 email: None,
                 plan: Some(ref plan),
             }) if plan == "Business"
+        ));
+    }
+
+    #[test]
+    fn status_account_display_from_account_preserves_email_and_alias() {
+        let display = status_account_display_from_account(
+            Some(Account::Chatgpt {
+                email: "person@example.com".to_string(),
+                plan_type: codex_protocol::account::PlanType::Pro,
+            }),
+            Some("secondary"),
+        );
+
+        assert!(matches!(
+            display,
+            Some(StatusAccountDisplay::ChatGpt {
+                alias: Some(ref alias),
+                email: Some(ref email),
+                plan: Some(ref plan),
+            }) if alias == "secondary" && email == "person@example.com" && plan == "Pro"
         ));
     }
 }

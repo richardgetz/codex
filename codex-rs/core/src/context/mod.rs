@@ -2,11 +2,13 @@
 
 mod approved_command_prefix_saved;
 mod apps_instructions;
+mod available_mcp_instructions;
 mod available_plugins_instructions;
 mod available_skills_instructions;
 mod collaboration_mode_instructions;
 mod contextual_user_message;
 mod environment_context;
+mod fork_help_instructions;
 mod fragment;
 mod guardian_followup_review_reminder;
 mod hook_additional_context;
@@ -28,6 +30,7 @@ mod user_shell_command;
 
 pub(crate) use approved_command_prefix_saved::ApprovedCommandPrefixSaved;
 pub(crate) use apps_instructions::AppsInstructions;
+pub(crate) use available_mcp_instructions::AvailableMcpInstructions;
 pub(crate) use available_plugins_instructions::AvailablePluginsInstructions;
 pub(crate) use available_skills_instructions::AvailableSkillsInstructions;
 pub(crate) use collaboration_mode_instructions::CollaborationModeInstructions;
@@ -35,6 +38,7 @@ pub(crate) use contextual_user_message::is_contextual_user_fragment;
 pub(crate) use contextual_user_message::is_memory_excluded_contextual_user_fragment;
 pub(crate) use contextual_user_message::parse_visible_hook_prompt_message;
 pub(crate) use environment_context::EnvironmentContext;
+pub(crate) use fork_help_instructions::ForkHelpInstructions;
 pub use fragment::ContextualUserFragment;
 pub(crate) use fragment::FragmentRegistration;
 pub(crate) use fragment::FragmentRegistrationProxy;

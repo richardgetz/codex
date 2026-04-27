@@ -62,6 +62,18 @@ pub struct Cli {
     #[arg(long = "collab", value_name = "MODE", value_parser = parse_collaboration_mode_cli)]
     pub startup_collaboration_mode: Option<ModeKind>,
 
+    /// Start the interactive session using the selected managed account alias.
+    ///
+    /// Use `default` to force the original root auth store under `CODEX_HOME`.
+    #[arg(long = "account", value_name = "ALIAS")]
+    pub startup_account_alias: Option<String>,
+
+    /// Start the configured communication MCP as Orchestrator's primary contact channel.
+    ///
+    /// Use `off` to disable a configured primary contact for this session.
+    #[arg(long = "primary-contact", value_name = "MCP")]
+    pub startup_primary_contact_mcp: Option<String>,
+
     /// Enable live web search. When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval).
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,

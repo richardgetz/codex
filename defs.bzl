@@ -131,6 +131,7 @@ def codex_rust_crate(
         proc_macro = False,
         build_script_enabled = True,
         build_script_data = [],
+        build_script_srcs_extra = [],
         compile_data = [],
         lib_data_extra = [],
         rustc_flags_extra = [],
@@ -165,6 +166,7 @@ def codex_rust_crate(
             You probably don't want this, it's only here for a single caller.
         proc_macro: Whether this crate builds a proc-macro library.
         build_script_data: Data files exposed to the build script at runtime.
+        build_script_srcs_extra: Extra source files needed to compile the build script.
         compile_data: Non-Rust compile-time data for the library target.
         lib_data_extra: Extra runtime data for the library target.
         rustc_env: Extra rustc_env entries to merge with defaults.
@@ -227,7 +229,8 @@ def codex_rust_crate(
     if build_script_enabled and native.glob(["build.rs"], allow_empty = True):
         cargo_build_script(
             name = name + "-build-script",
-            srcs = ["build.rs"],
+            crate_root = "build.rs",
+            srcs = ["build.rs"] + build_script_srcs_extra,
             deps = all_crate_deps(build = True),
             data = build_script_data,
             # Some build script deps sniff version-related env vars...

@@ -115,8 +115,8 @@ async fn requested_spawn_agent_collaboration_mode_preserves_mask_model() {
         &turn,
         &config,
         Some(ModeKind::Orchestrator),
-        None,
-        None,
+        /*requested_model*/ None,
+        /*requested_reasoning_effort*/ None,
         &mode_masks,
     )
     .expect("mode should be available")
@@ -190,8 +190,8 @@ async fn requested_spawn_agent_collaboration_mode_blocks_disallowed_orchestrator
         &turn,
         &config,
         Some(ModeKind::Plan),
-        None,
-        None,
+        /*requested_model*/ None,
+        /*requested_reasoning_effort*/ None,
         &mode_masks,
     )
     .expect_err("orchestrator should reject non-default child modes by default");
@@ -815,6 +815,11 @@ async fn multi_agent_v2_spawn_fork_turns_all_downgrades_orchestrator_parent_to_d
             developer_instructions: Some("orchestrator mode".to_string()),
         },
     };
+    let expected_parent_mode = parent_mode.with_updates(
+        Some(turn.config.effective_orchestrator_model().to_string()),
+        Some(turn.config.effective_orchestrator_reasoning_effort()),
+        /*developer_instructions*/ None,
+    );
     root.thread
         .submit(Op::OverrideTurnContext {
             cwd: None,
@@ -834,7 +839,7 @@ async fn multi_agent_v2_spawn_fork_turns_all_downgrades_orchestrator_parent_to_d
         .expect("parent mode override should submit");
     timeout(Duration::from_secs(5), async {
         loop {
-            if root.thread.codex.session.collaboration_mode().await == parent_mode {
+            if root.thread.codex.session.collaboration_mode().await == expected_parent_mode {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

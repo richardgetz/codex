@@ -114,6 +114,14 @@ fn orchestrator_mode_instructions_replace_mode_names_placeholder() {
     assert!(
         orchestrator_instructions.contains("Orchestrator mode is for supervising delegated work")
     );
+    assert!(orchestrator_instructions.contains(
+        "Communication and supervision tools explicitly enabled for Orchestrator mode may be used directly in this thread"
+    ));
+    assert!(orchestrator_instructions.contains("Active-worker check-ins are patience checks"));
+    assert!(
+        orchestrator_instructions.contains("Do not tell workers to move faster"),
+        "orchestrator prompt should keep patient supervision guidance"
+    );
 
     let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
     let expected_snippet = format!("Known mode names are {known_mode_names}.");

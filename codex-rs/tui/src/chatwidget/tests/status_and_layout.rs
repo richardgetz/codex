@@ -473,6 +473,59 @@ async fn rate_limit_switch_prompt_skips_non_codex_limit() {
 }
 
 #[tokio::test]
+async fn exhausted_usage_auto_rotates_to_next_configured_account() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.accounts.active = Some("work".to_string());
+    chat.config.accounts.rotation = vec!["work".to_string(), "personal".to_string()];
+
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 100.0)));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::SwitchAccount {
+            alias: Some(alias),
+            reason: crate::app_event::AccountSwitchReason::AutoRotation,
+        }) if alias == "personal"
+    );
+}
+
+#[tokio::test]
+async fn exhausted_usage_auto_rotation_can_switch_to_default_auth_store() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.accounts.active = Some("work".to_string());
+    chat.config.accounts.rotation = vec!["work".to_string(), "default".to_string()];
+
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 100.0)));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::SwitchAccount {
+            alias: None,
+            reason: crate::app_event::AccountSwitchReason::AutoRotation,
+        })
+    );
+}
+
+#[tokio::test]
+async fn exhausted_usage_does_not_auto_rotate_without_configured_sequence() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.accounts.active = Some("work".to_string());
+
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 100.0)));
+
+    assert!(
+        !matches!(
+            rx.try_recv(),
+            Ok(AppEvent::SwitchAccount {
+                reason: crate::app_event::AccountSwitchReason::AutoRotation,
+                ..
+            })
+        ),
+        "unexpected auto account rotation"
+    );
+}
+
+#[tokio::test]
 async fn rate_limit_switch_prompt_shows_once_per_session() {
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.has_chatgpt_account = true;
@@ -1464,6 +1517,41 @@ async fn terminal_title_model_updates_on_model_change_without_manual_refresh() {
     chat.set_model("gpt-5.3-codex");
 
     assert_eq!(chat.last_terminal_title, Some("gpt-5.3-codex".to_string()));
+}
+
+#[tokio::test]
+async fn primary_contact_waiting_uses_static_terminal_title_marker_between_turns() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_primary_contact_waiting(/*waiting*/ true);
+
+    assert!(!chat.bottom_pane.is_task_running());
+    assert_eq!(chat.terminal_title_status_text(), "Waiting for messages");
+    assert_eq!(
+        chat.terminal_title_spinner_text_at(chat.terminal_title_animation_origin)
+            .as_deref(),
+        Some("⠞")
+    );
+
+    chat.on_task_started();
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(chat.terminal_title_status_text(), "Working");
+    assert_eq!(
+        chat.terminal_title_spinner_text_at(chat.terminal_title_animation_origin)
+            .as_deref(),
+        Some("⠋")
+    );
+
+    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
+
+    assert!(!chat.bottom_pane.is_task_running());
+    assert_eq!(chat.terminal_title_status_text(), "Waiting for messages");
+    assert_eq!(
+        chat.terminal_title_spinner_text_at(chat.terminal_title_animation_origin)
+            .as_deref(),
+        Some("⠞")
+    );
 }
 
 #[tokio::test]

@@ -141,9 +141,9 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
 
     match login_with_chatgpt(
-        config.codex_home.to_path_buf(),
+        config.auth_storage_home(),
         forced_chatgpt_workspace_id,
-        config.cli_auth_credentials_store_mode,
+        config.effective_cli_auth_credentials_store_mode(),
     )
     .await
     {
@@ -172,9 +172,9 @@ pub async fn run_login_with_api_key(
     }
 
     match login_with_api_key(
-        &config.codex_home,
+        &config.auth_storage_home(),
         &api_key,
-        config.cli_auth_credentials_store_mode,
+        config.effective_cli_auth_credentials_store_mode(),
     ) {
         Ok(_) => {
             eprintln!("{LOGIN_SUCCESS_MESSAGE}");
@@ -229,10 +229,10 @@ pub async fn run_login_with_device_code(
     }
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
-        config.codex_home.to_path_buf(),
+        config.auth_storage_home(),
         client_id.unwrap_or(CLIENT_ID.to_string()),
         forced_chatgpt_workspace_id,
-        config.cli_auth_credentials_store_mode,
+        config.effective_cli_auth_credentials_store_mode(),
     );
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
@@ -268,10 +268,10 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
-        config.codex_home.to_path_buf(),
+        config.auth_storage_home(),
         client_id.unwrap_or(CLIENT_ID.to_string()),
         forced_chatgpt_workspace_id,
-        config.cli_auth_credentials_store_mode,
+        config.effective_cli_auth_credentials_store_mode(),
     );
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
@@ -316,7 +316,10 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
-    match CodexAuth::from_auth_storage(&config.codex_home, config.cli_auth_credentials_store_mode) {
+    match CodexAuth::from_auth_storage(
+        &config.auth_storage_home(),
+        config.effective_cli_auth_credentials_store_mode(),
+    ) {
         Ok(Some(auth)) => match auth.auth_mode() {
             AuthMode::ApiKey => match auth.get_token() {
                 Ok(api_key) => {
@@ -351,7 +354,12 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
 pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
-    match logout_with_revoke(&config.codex_home, config.cli_auth_credentials_store_mode).await {
+    match logout_with_revoke(
+        &config.auth_storage_home(),
+        config.effective_cli_auth_credentials_store_mode(),
+    )
+    .await
+    {
         Ok(true) => {
             eprintln!("Successfully logged out");
             std::process::exit(0);

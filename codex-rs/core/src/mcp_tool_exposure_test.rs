@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_connectors::metadata::sanitize_name;
@@ -123,6 +124,7 @@ async fn directly_exposes_small_effective_tool_sets() {
         &mcp_tools,
         /*connectors*/ None,
         &[],
+        &std::collections::HashSet::new(),
         &config,
         &tools_config,
     );
@@ -145,6 +147,7 @@ async fn searches_large_effective_tool_sets() {
         &mcp_tools,
         /*connectors*/ None,
         &[],
+        &std::collections::HashSet::new(),
         &config,
         &tools_config,
     );
@@ -181,6 +184,7 @@ async fn directly_exposes_explicit_apps_without_deferred_overlap() {
         &mcp_tools,
         Some(connectors.as_slice()),
         connectors.as_slice(),
+        &std::collections::HashSet::new(),
         &config,
         &tools_config,
     );
@@ -240,6 +244,7 @@ async fn always_defer_feature_preserves_explicit_apps() {
         &mcp_tools,
         Some(connectors.as_slice()),
         connectors.as_slice(),
+        &std::collections::HashSet::new(),
         &config,
         &tools_config,
     );
@@ -256,4 +261,84 @@ async fn always_defer_feature_preserves_explicit_apps() {
         .expect("MCP tools should be discoverable through tool_search");
     assert!(deferred_tools.contains_key("mcp__rmcp__tool"));
     assert!(!deferred_tools.contains_key("mcp__codex_apps__calendar_create_event"));
+}
+
+#[tokio::test]
+async fn directly_exposes_explicitly_referenced_non_app_mcp_servers_when_tools_are_deferred() {
+    let config = test_config().await;
+    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
+    let mut mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
+    mcp_tools.insert(
+        "mcp__imessage__imessage_send_message".to_string(),
+        make_mcp_tool(
+            "imessage",
+            "imessage_send_message",
+            /*connector_id*/ None,
+            /*connector_name*/ None,
+        ),
+    );
+    let explicitly_referenced_mcp_servers = HashSet::from(["imessage".to_string()]);
+
+    let exposure = build_mcp_tool_exposure(
+        &mcp_tools,
+        /*connectors*/ None,
+        &[],
+        &explicitly_referenced_mcp_servers,
+        &config,
+        &tools_config,
+    );
+
+    let direct_tool_names = exposure.direct_tools.into_keys().collect::<Vec<_>>();
+    assert_eq!(
+        direct_tool_names,
+        vec!["mcp__imessage__imessage_send_message".to_string()]
+    );
+
+    let deferred_tools = exposure
+        .deferred_tools
+        .as_ref()
+        .expect("large tool sets should still defer non-mentioned MCP tools");
+    assert!(!deferred_tools.contains_key("mcp__imessage__imessage_send_message"));
+    assert_eq!(deferred_tools.len(), DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
+    assert!(deferred_tools.contains_key("mcp__rmcp__tool_0"));
+}
+
+#[tokio::test]
+async fn directly_exposes_explicitly_referenced_scratchpad_server_when_tools_are_deferred() {
+    let config = test_config().await;
+    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
+    let mut mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
+    mcp_tools.insert(
+        "mcp__scratchpad__open_scratchpad".to_string(),
+        make_mcp_tool(
+            "scratchpad",
+            "open_scratchpad",
+            /*connector_id*/ None,
+            /*connector_name*/ None,
+        ),
+    );
+    let explicitly_referenced_mcp_servers = HashSet::from(["scratchpad".to_string()]);
+
+    let exposure = build_mcp_tool_exposure(
+        &mcp_tools,
+        /*connectors*/ None,
+        &[],
+        &explicitly_referenced_mcp_servers,
+        &config,
+        &tools_config,
+    );
+
+    let direct_tool_names = exposure.direct_tools.into_keys().collect::<Vec<_>>();
+    assert_eq!(
+        direct_tool_names,
+        vec!["mcp__scratchpad__open_scratchpad".to_string()]
+    );
+
+    let deferred_tools = exposure
+        .deferred_tools
+        .as_ref()
+        .expect("large tool sets should still defer non-mentioned MCP tools");
+    assert!(!deferred_tools.contains_key("mcp__scratchpad__open_scratchpad"));
+    assert_eq!(deferred_tools.len(), DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
+    assert!(deferred_tools.contains_key("mcp__rmcp__tool_0"));
 }

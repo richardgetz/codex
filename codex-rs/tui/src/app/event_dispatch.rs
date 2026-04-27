@@ -244,6 +244,36 @@ impl App {
                         .add_error_message(format!("Logout failed: {err}"));
                 }
             },
+            AppEvent::SwitchAccount { alias, reason } => {
+                match app_server.switch_account(alias.clone()).await {
+                    Ok(()) => {
+                        self.config.accounts.active = alias.clone();
+                        self.chat_widget.set_active_account_alias(alias.clone());
+                        let label = alias.unwrap_or_else(|| "default".to_string());
+                        let message = match reason {
+                            crate::app_event::AccountSwitchReason::User => {
+                                format!("Switched this session to account alias {label}.")
+                            }
+                            crate::app_event::AccountSwitchReason::AutoRotation => {
+                                format!(
+                                    "Account usage exhausted; switched this session to account alias {label}."
+                                )
+                            }
+                        };
+                        self.chat_widget.add_info_message(
+                            message,
+                            Some(
+                                "Auth now resolves from the selected alias store for this session only."
+                                    .to_string(),
+                            ),
+                        );
+                    }
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Account switch failed: {err}"));
+                    }
+                }
+            }
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
@@ -539,6 +569,26 @@ impl App {
                     }
                 }
             },
+            AppEvent::PrimaryContactMessageReceived { text } => {
+                self.chat_widget.submit_external_user_message(text);
+            }
+            AppEvent::PrimaryContactMonitoringStarted {
+                mcp,
+                interval_seconds,
+                scheduled,
+            } => {
+                let cadence = if scheduled {
+                    format!("scheduled polling enabled, fallback every {interval_seconds} seconds")
+                } else {
+                    format!("checking every {interval_seconds} seconds")
+                };
+                self.chat_widget.add_info_message(
+                    format!(
+                        "{mcp} monitoring is active for Orchestrator mode; inbound messages will be handled as user input ({cadence})."
+                    ),
+                    Some("Model stays idle until a message arrives.".to_string()),
+                );
+            }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }
@@ -550,6 +600,8 @@ impl App {
             }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
+                self.ensure_primary_contact_startup(app_server);
+                self.ensure_primary_contact_polling(app_server);
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);

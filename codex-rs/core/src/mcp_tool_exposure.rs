@@ -21,6 +21,7 @@ pub(crate) fn build_mcp_tool_exposure(
     all_mcp_tools: &HashMap<String, McpToolInfo>,
     connectors: Option<&[connectors::AppInfo]>,
     explicitly_enabled_connectors: &[connectors::AppInfo],
+    explicitly_referenced_mcp_servers: &HashSet<String>,
     config: &Config,
     tools_config: &ToolsConfig,
 ) -> McpToolExposure {
@@ -46,8 +47,12 @@ pub(crate) fn build_mcp_tool_exposure(
         };
     }
 
-    let direct_tools =
+    let mut direct_tools =
         filter_codex_apps_mcp_tools(all_mcp_tools, explicitly_enabled_connectors, config);
+    direct_tools.extend(filter_explicitly_referenced_non_app_mcp_tools(
+        all_mcp_tools,
+        explicitly_referenced_mcp_servers,
+    ));
     for direct_tool_name in direct_tools.keys() {
         deferred_tools.remove(direct_tool_name);
     }
@@ -56,6 +61,24 @@ pub(crate) fn build_mcp_tool_exposure(
         direct_tools,
         deferred_tools: (!deferred_tools.is_empty()).then_some(deferred_tools),
     }
+}
+
+fn filter_explicitly_referenced_non_app_mcp_tools(
+    mcp_tools: &HashMap<String, McpToolInfo>,
+    explicitly_referenced_mcp_servers: &HashSet<String>,
+) -> HashMap<String, McpToolInfo> {
+    if explicitly_referenced_mcp_servers.is_empty() {
+        return HashMap::new();
+    }
+
+    mcp_tools
+        .iter()
+        .filter(|(_, tool)| {
+            tool.server_name != CODEX_APPS_MCP_SERVER_NAME
+                && explicitly_referenced_mcp_servers.contains(&tool.server_name)
+        })
+        .map(|(name, tool)| (name.clone(), tool.clone()))
+        .collect()
 }
 
 fn filter_codex_apps_mcp_tools(

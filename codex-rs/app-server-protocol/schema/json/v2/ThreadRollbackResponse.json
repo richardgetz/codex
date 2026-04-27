@@ -680,6 +680,7 @@
           "enum": [
             "review",
             "compact",
+            "memory_extraction",
             "memory_consolidation"
           ],
           "type": "string"

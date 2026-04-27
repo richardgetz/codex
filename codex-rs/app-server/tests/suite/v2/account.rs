@@ -26,6 +26,7 @@ use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SwitchAccountResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_config::types::AuthCredentialsStoreMode;
@@ -190,6 +191,7 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
         payload.auth_mode.is_none(),
         "auth_method should be None after logout"
     );
+    assert_eq!(payload.account, None);
     assert_eq!(payload.plan_type, None);
 
     assert!(
@@ -260,6 +262,13 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     let ServerNotification::AccountUpdated(payload) = parsed else {
         bail!("unexpected notification: {parsed:?}");
     };
+    assert_eq!(
+        payload.account,
+        Some(Account::Chatgpt {
+            email: "embedded@example.com".to_string(),
+            plan_type: AccountPlanType::Pro,
+        })
+    );
     assert_eq!(payload.auth_mode, Some(AuthMode::ChatgptAuthTokens));
     assert_eq!(payload.plan_type, Some(AccountPlanType::Pro));
 
@@ -285,6 +294,40 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
         }
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn switch_account_is_session_scoped_and_does_not_persist_alias_to_config() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    let original_config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let id = mcp
+        .send_raw_request("account/switch", Some(json!({ "alias": "work" })))
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(id)),
+    )
+    .await??;
+    let _: SwitchAccountResponse = to_response(resp)?;
+
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/updated"),
+    )
+    .await??;
+    let parsed: ServerNotification = note.try_into()?;
+    let ServerNotification::AccountUpdated(_) = parsed else {
+        bail!("unexpected notification: {parsed:?}");
+    };
+
+    let current_config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    assert_eq!(current_config, original_config);
     Ok(())
 }
 
@@ -903,6 +946,7 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
     let ServerNotification::AccountUpdated(payload) = parsed else {
         bail!("unexpected notification: {parsed:?}");
     };
+    pretty_assertions::assert_eq!(payload.account, Some(Account::ApiKey {}));
     pretty_assertions::assert_eq!(payload.auth_mode, Some(AuthMode::ApiKey));
     pretty_assertions::assert_eq!(payload.plan_type, None);
 

@@ -370,6 +370,20 @@ impl ChatWidget {
             SlashCommand::Plugins => {
                 self.add_plugins_output();
             }
+            SlashCommand::Account => {
+                let label = self
+                    .config
+                    .active_account_alias()
+                    .unwrap_or("default")
+                    .to_string();
+                self.add_info_message(
+                    format!("Current session account alias: {label}"),
+                    Some(
+                        "Use `/account <alias>` to switch this session, or `/account default` to return to the root auth store."
+                            .to_string(),
+                    ),
+                );
+            }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
                     self.add_info_message(
@@ -567,6 +581,17 @@ impl ChatWidget {
                     tx.send(AppEvent::OrchestratorMemoryForgetResult { needle, result });
                 });
             }
+            SlashCommand::Account if !trimmed.is_empty() => {
+                let alias = if trimmed.eq_ignore_ascii_case("default") {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                };
+                self.app_event_tx.send(AppEvent::SwitchAccount {
+                    alias,
+                    reason: crate::app_event::AccountSwitchReason::User,
+                });
+            }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
                     return;
@@ -746,6 +771,7 @@ impl ChatWidget {
             | SlashCommand::MemoryUpdate
             | SlashCommand::Mcp
             | SlashCommand::OrchestratorMemoryForget
+            | SlashCommand::Account
             | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Rollout

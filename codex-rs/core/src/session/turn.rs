@@ -16,6 +16,8 @@ use crate::compact::collect_user_messages;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
+use crate::config::DEFAULT_ORCHESTRATOR_FALLBACK_MODEL;
+use crate::config::DEFAULT_ORCHESTRATOR_MODEL;
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::enablement::filter_connectors_for_mode;
@@ -46,6 +48,7 @@ use crate::parse_turn_item;
 use crate::plugins::build_plugin_injections;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
+use crate::session::SessionSettingsUpdate;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -149,6 +152,7 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
+    let mut turn_context = turn_context;
     if input.is_empty() && !sess.has_pending_input().await {
         return None;
     }
@@ -171,7 +175,8 @@ pub(crate) async fn run_turn(
         client_session.reset_websocket_session();
     }
 
-    let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
+    let turn_skills_outcome = Arc::clone(&turn_context.turn_skills.outcome);
+    let skills_outcome = Some(turn_skills_outcome.as_ref());
 
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
@@ -383,11 +388,13 @@ pub(crate) async fn run_turn(
 
     track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;
 
-    let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
+    let turn_skills_outcome = Arc::clone(&turn_context.turn_skills.outcome);
+    let skills_outcome = Some(turn_skills_outcome.as_ref());
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
         .await;
     let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
+    let mut attempted_orchestrator_model_fallback = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -697,6 +704,19 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(e) => {
+                if let Some(fallback_turn_context) = maybe_apply_orchestrator_model_fallback(
+                    &sess,
+                    &turn_context,
+                    &e,
+                    attempted_orchestrator_model_fallback,
+                )
+                .await
+                {
+                    attempted_orchestrator_model_fallback = true;
+                    turn_context = Arc::new(fallback_turn_context);
+                    client_session.reset_websocket_session();
+                    continue;
+                }
                 info!("Turn error: {e:#}");
                 let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
                 sess.send_event(&turn_context, event).await;
@@ -725,9 +745,75 @@ fn build_continuous_run_block_message(reason: &str, release_channel: Option<&str
     lines.join("\n")
 }
 
+async fn maybe_apply_orchestrator_model_fallback(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    err: &CodexErr,
+    attempted_orchestrator_model_fallback: bool,
+) -> Option<TurnContext> {
+    if attempted_orchestrator_model_fallback
+        || turn_context.collaboration_mode.mode != ModeKind::Orchestrator
+        || turn_context.model_info.slug != DEFAULT_ORCHESTRATOR_MODEL
+        || !matches_unsupported_orchestrator_default_model_error(err)
+    {
+        return None;
+    }
+
+    let fallback_mode = turn_context.collaboration_mode.with_updates(
+        Some(DEFAULT_ORCHESTRATOR_FALLBACK_MODEL.to_string()),
+        Some(
+            turn_context
+                .config
+                .effective_orchestrator_reasoning_effort(),
+        ),
+        /*developer_instructions*/ None,
+    );
+    if let Err(update_err) = sess
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(fallback_mode),
+            ..Default::default()
+        })
+        .await
+    {
+        warn!("failed to persist orchestrator fallback model update: {update_err}");
+    }
+
+    sess.send_event(
+        turn_context,
+        EventMsg::Warning(WarningEvent {
+            message: format!(
+                "Orchestrator default model `{DEFAULT_ORCHESTRATOR_MODEL}` is unavailable for this account. Retrying with `{DEFAULT_ORCHESTRATOR_FALLBACK_MODEL}`."
+            ),
+        }),
+    )
+    .await;
+
+    Some(
+        turn_context
+            .with_model(
+                DEFAULT_ORCHESTRATOR_FALLBACK_MODEL.to_string(),
+                &sess.services.models_manager,
+            )
+            .await,
+    )
+}
+
+fn matches_unsupported_orchestrator_default_model_error(err: &CodexErr) -> bool {
+    let message = match err {
+        CodexErr::InvalidRequest(message) => message.as_str(),
+        CodexErr::UnexpectedStatus(error) => error.body.as_str(),
+        _ => return false,
+    };
+
+    message.contains(DEFAULT_ORCHESTRATOR_MODEL)
+        && message.contains("not supported when using Codex with a ChatGPT account")
+}
+
 #[cfg(test)]
 mod thread_control_tests {
     use super::build_continuous_run_block_message;
+    use super::matches_unsupported_orchestrator_default_model_error;
+    use codex_protocol::error::CodexErr;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -741,8 +827,24 @@ mod thread_control_tests {
 Reason: Finish the deployment validation loop\n\
 You are not allowed to stop, finalize, or hand off a completed answer yet.\n\
 Release channel: imessage.\n\
-Continue working toward the objective until the user explicitly releases this thread."
+            Continue working toward the objective until the user explicitly releases this thread."
         );
+    }
+
+    #[test]
+    fn orchestrator_default_model_fallback_matches_chatgpt_account_error() {
+        assert!(matches_unsupported_orchestrator_default_model_error(
+            &CodexErr::InvalidRequest(
+                "Error code: 400 - {'error': {'message': \"The 'gpt-5.3-codex-spark' model is not supported when using Codex with a ChatGPT account.\", 'type': 'invalid_request_error'}}".to_string()
+            )
+        ));
+    }
+
+    #[test]
+    fn orchestrator_default_model_fallback_ignores_other_invalid_requests() {
+        assert!(!matches_unsupported_orchestrator_default_model_error(
+            &CodexErr::InvalidRequest("The request payload was invalid.".to_string())
+        ));
     }
 }
 
@@ -1026,6 +1128,30 @@ fn connector_inserted_in_messages(
     connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&mention_slug)
 }
 
+fn explicitly_referenced_mcp_servers_for_input(
+    input: &[ResponseItem],
+    mcp_tools: &HashMap<String, codex_mcp::ToolInfo>,
+) -> HashSet<String> {
+    let user_messages = collect_user_messages(input).join("\n").to_ascii_lowercase();
+    if user_messages.is_empty() {
+        return HashSet::new();
+    }
+
+    mcp_tools
+        .values()
+        .map(|tool| tool.server_name.as_str())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .filter(|server_name| {
+            let lower = server_name.to_ascii_lowercase();
+            user_messages.contains(&lower)
+                || user_messages.contains(&lower.replace('-', " "))
+                || user_messages.contains(&lower.replace('_', " "))
+        })
+        .map(ToString::to_string)
+        .collect()
+}
+
 pub(crate) fn build_prompt(
     input: Vec<ResponseItem>,
     router: &ToolRouter,
@@ -1079,25 +1205,36 @@ fn filter_tools_for_collaboration_mode(
 fn filter_orchestrator_tool_spec(spec: ToolSpec, turn_context: &TurnContext) -> Option<ToolSpec> {
     match spec {
         ToolSpec::Function(tool) => {
-            coordination_tool_allowed_in_orchestrator(None, tool.name.as_str(), turn_context)
-                .then_some(ToolSpec::Function(tool))
+            coordination_tool_allowed_in_orchestrator(
+                /*namespace*/ None,
+                tool.name.as_str(),
+                turn_context,
+            )
+            .then_some(ToolSpec::Function(tool))
         }
         ToolSpec::Namespace(mut namespace) => {
             let namespace_name = namespace.name.clone();
+            let allow_direct_mcp_namespace =
+                direct_mcp_tools_allowed_in_orchestrator(namespace_name.as_str(), turn_context);
             namespace.tools.retain(|tool| match tool {
                 ResponsesApiNamespaceTool::Function(tool) => {
-                    coordination_tool_allowed_in_orchestrator(
-                        Some(namespace_name.as_str()),
-                        tool.name.as_str(),
-                        turn_context,
-                    )
+                    allow_direct_mcp_namespace
+                        || coordination_tool_allowed_in_orchestrator(
+                            Some(namespace_name.as_str()),
+                            tool.name.as_str(),
+                            turn_context,
+                        )
                 }
             });
             (!namespace.tools.is_empty()).then_some(ToolSpec::Namespace(namespace))
         }
         ToolSpec::Freeform(tool) => {
-            coordination_tool_allowed_in_orchestrator(None, tool.name.as_str(), turn_context)
-                .then_some(ToolSpec::Freeform(tool))
+            coordination_tool_allowed_in_orchestrator(
+                /*namespace*/ None,
+                tool.name.as_str(),
+                turn_context,
+            )
+            .then_some(ToolSpec::Freeform(tool))
         }
         ToolSpec::ToolSearch { .. }
         | ToolSpec::LocalShell {}
@@ -1124,7 +1261,25 @@ fn coordination_tool_allowed_in_orchestrator(
     ];
 
     ORCHESTRATOR_COORDINATION_TOOLS.contains(&tool_name)
+        || matches!(namespace, Some("scratchpad"))
         || escalation_tool_allowed_in_orchestrator(namespace, tool_name, turn_context)
+}
+
+fn direct_mcp_tools_allowed_in_orchestrator(namespace: &str, turn_context: &TurnContext) -> bool {
+    if !namespace.starts_with("mcp__") {
+        return false;
+    }
+
+    turn_context
+        .config
+        .enablement
+        .modes
+        .get(&ModeKind::Orchestrator)
+        .and_then(|mode_enablement| mode_enablement.mcps.as_ref())
+        .is_some_and(|filter| {
+            matches!(filter.mode, codex_config::EnablementFilterMode::Include)
+                && !filter.items.is_empty()
+        })
 }
 
 fn escalation_tool_allowed_in_orchestrator(
@@ -1468,10 +1623,13 @@ pub(crate) async fn built_tools(
         turn_context.collaboration_mode.mode,
         &all_mcp_tools,
     );
+    let explicitly_referenced_mcp_servers =
+        explicitly_referenced_mcp_servers_for_input(input, &filtered_all_mcp_tools);
     let mcp_tool_exposure = build_mcp_tool_exposure(
         &filtered_all_mcp_tools,
         connectors.as_deref(),
         explicitly_enabled.as_slice(),
+        &explicitly_referenced_mcp_servers,
         &turn_context.config,
         &turn_context.tools_config,
     );

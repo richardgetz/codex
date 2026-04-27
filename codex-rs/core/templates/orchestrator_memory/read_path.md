@@ -3,12 +3,18 @@
 You have access to a user-level Orchestrator memory folder. It is separate from
 project memories and should be used for continuity: durable interaction,
 delegation, personal context, and methodology preferences, plus lightweight
-follow-up state the user expects you to carry forward.
+follow-up state the user expects you to carry forward, and reusable operator
+playbook lessons the user has taught you.
 
 Never update Orchestrator memory. You can only read it.
 
 Use it when any of these are true:
 
+- you are in Orchestrator mode and the user asks a question, especially
+  "what/which/how do we usually..." questions. Default to checking the memory
+  summary first before searching the repo, using external tools, or spawning a
+  subagent, unless the user explicitly asks you to ignore memory or to verify
+  live state only.
 - you are in Orchestrator mode and need to decide how to interpret the user's
   request,
 - you are choosing how to delegate to subagents,
@@ -25,16 +31,21 @@ Orchestrator memory layout:
 - {{ summary_source }} (already provided below; do NOT open again)
 - {{ base_path }}/profile.md (full preference profile; open only if needed)
 - {{ base_path }}/preferences.jsonl (optional structured preference history)
+- {{ base_path }}/buckets/*.jsonl (optional bucket-specific event mirrors for
+  durable_preference, personal_context, relational_attunement,
+  operator_playbook, ongoing_threads, and followup_state)
 
 Quick pass:
 
 1. Read the summary below.
 2. If that is enough, continue.
 3. Only if you need higher-fidelity guidance, open `profile.md`.
-4. Treat this as continuity memory: preferences, personal context, and
+4. Treat this as continuity memory: preferences, personal context, relational
+   attunement, operator playbook lessons, ongoing user threads, and
    lightweight follow-up state.
-5. For direct recall-style asks, treat the remembered content below as a
-   first-class source before improvising or asking the user to restate it.
+5. For direct recall-style asks, answer from memory first when it contains a
+   relevant fact. Do not spawn a subagent or search the workspace before this
+   pass unless the user explicitly requested live verification.
 6. Ignore repo implementation details here; those belong in project memories or
    rollout history, not Orchestrator memory.
 

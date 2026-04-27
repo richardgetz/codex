@@ -94,12 +94,10 @@ use tokio::time;
 
 #[tokio::test]
 async fn startup_orchestrator_mode_applies_thread_control_model_to_session_config() {
-    let mut config = ConfigBuilder::default()
+    let config = ConfigBuilder::default()
         .build()
         .await
         .expect("config should build");
-    config.thread_control.orchestrator.model = Some("gpt-5.3-codex-spark".to_string());
-    config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
 
     let startup = config_for_startup_collaboration_mode(&config, Some(ModeKind::Orchestrator));
 
@@ -108,6 +106,98 @@ async fn startup_orchestrator_mode_applies_thread_control_model_to_session_confi
         startup.model_reasoning_effort,
         Some(ReasoningEffortConfig::Low)
     );
+}
+
+#[tokio::test]
+async fn startup_session_override_replaces_existing_account_alias() {
+    let mut config = ConfigBuilder::default()
+        .build()
+        .await
+        .expect("config should build");
+    config.accounts.active = Some("personal".to_string());
+
+    let startup = config_for_startup_session(
+        &config,
+        Some("work"),
+        Some(ModeKind::Orchestrator),
+        /*primary_contact_mcp*/ None,
+    );
+
+    assert_eq!(startup.accounts.active.as_deref(), Some("work"));
+    assert_eq!(
+        startup.auth_storage_home(),
+        config.codex_home.join("accounts/work").to_path_buf()
+    );
+    assert_eq!(startup.model.as_deref(), Some("gpt-5.3-codex-spark"));
+    assert_eq!(
+        startup.model_reasoning_effort,
+        Some(ReasoningEffortConfig::Low)
+    );
+}
+
+#[tokio::test]
+async fn startup_primary_contact_override_enables_orchestrator_contact_mcp() {
+    let config = ConfigBuilder::default()
+        .build()
+        .await
+        .expect("config should build");
+
+    let startup = config_for_startup_session(
+        &config,
+        /*alias*/ None,
+        Some(ModeKind::Orchestrator),
+        Some("imessage"),
+    );
+
+    assert!(startup.orchestrator.primary_contact.enabled);
+    assert_eq!(
+        startup.orchestrator.primary_contact.mcp.as_deref(),
+        Some("imessage")
+    );
+}
+
+#[tokio::test]
+async fn primary_contact_polling_arms_after_entering_orchestrator_mode() {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    app.primary_thread_id = Some(thread_id);
+    app.config.orchestrator.primary_contact.enabled = true;
+    app.config.orchestrator.primary_contact.mcp = Some("imessage".to_string());
+
+    assert!(app.primary_contact_polling_candidate().is_none());
+
+    app.chat_widget
+        .set_collaboration_mask(CollaborationModeMask {
+            name: "Orchestrator".to_string(),
+            mode: Some(ModeKind::Orchestrator),
+            model: Some("gpt-test-orchestrator".to_string()),
+            reasoning_effort: Some(Some(ReasoningEffortConfig::Low)),
+            developer_instructions: None,
+        });
+
+    assert!(app.primary_contact_polling_candidate().is_some());
+}
+
+#[tokio::test]
+async fn primary_contact_startup_arms_after_entering_orchestrator_mode() {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    app.primary_thread_id = Some(thread_id);
+    app.config.orchestrator.primary_contact.enabled = true;
+    app.config.orchestrator.primary_contact.mcp = Some("imessage".to_string());
+
+    assert!(app.primary_contact_startup_candidate().is_none());
+
+    app.chat_widget
+        .set_collaboration_mask(CollaborationModeMask {
+            name: "Orchestrator".to_string(),
+            mode: Some(ModeKind::Orchestrator),
+            model: Some("gpt-test-orchestrator".to_string()),
+            reasoning_effort: Some(Some(ReasoningEffortConfig::Low)),
+            developer_instructions: None,
+        });
+
+    assert!(app.primary_contact_startup_candidate().is_some());
 }
 
 macro_rules! assert_app_snapshot {
@@ -3758,6 +3848,8 @@ async fn make_test_app() -> App {
         primary_thread_id: None,
         last_subagent_backfill_attempt: None,
         primary_session_configured: None,
+        primary_contact_startup: None,
+        primary_contact_polling: None,
         pending_primary_events: VecDeque::new(),
         pending_app_server_requests: PendingAppServerRequests::default(),
         pending_plugin_enabled_writes: HashMap::new(),
@@ -3815,6 +3907,8 @@ async fn make_test_app_with_channels() -> (
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
+            primary_contact_startup: None,
+            primary_contact_polling: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),

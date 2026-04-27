@@ -20,15 +20,18 @@ use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::context::ApprovedCommandPrefixSaved;
 use crate::context::AppsInstructions;
+use crate::context::AvailableMcpInstructions;
 use crate::context::AvailablePluginsInstructions;
 use crate::context::AvailableSkillsInstructions;
 use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
+use crate::context::ForkHelpInstructions;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
 use crate::enablement::filter_connectors_for_mode;
+use crate::enablement::filter_lazy_mcp_servers_for_mode;
 use crate::enablement::filter_plugins_for_mode;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
@@ -1119,7 +1122,7 @@ impl Session {
                     }
                 }
                 self.disable_orchestrator_scoped_memories().await;
-                self.set_active_thread_control(None).await;
+                self.set_active_thread_control(/*control*/ None).await;
                 return Ok(());
             }
         };
@@ -1221,24 +1224,19 @@ impl Session {
             return session_configuration;
         }
 
-        let orchestrator_config = &session_configuration
-            .original_config_do_not_use
-            .thread_control
-            .orchestrator;
         let selected_model = if explicit_model_change {
             collaboration_mode.model()
         } else {
-            orchestrator_config
-                .model
-                .as_deref()
-                .unwrap_or(collaboration_mode.model())
+            session_configuration
+                .original_config_do_not_use
+                .effective_orchestrator_model()
         };
         let selected_reasoning_effort = if explicit_effort_change {
             collaboration_mode.reasoning_effort()
         } else {
-            orchestrator_config
-                .reasoning_effort
-                .or(collaboration_mode.reasoning_effort())
+            session_configuration
+                .original_config_do_not_use
+                .effective_orchestrator_reasoning_effort()
         };
         let model_changed = selected_model != collaboration_mode.model();
         let reasoning_changed = selected_reasoning_effort != collaboration_mode.reasoning_effort();
@@ -1263,7 +1261,7 @@ impl Session {
         session_configuration.collaboration_mode = collaboration_mode.with_updates(
             Some(selected_model.to_string()),
             Some(reasoning_effort),
-            None,
+            /*developer_instructions*/ None,
         );
         session_configuration
     }
@@ -1293,7 +1291,7 @@ impl Session {
             return;
         }
         self.disable_orchestrator_scoped_memories().await;
-        self.set_active_thread_control(None).await;
+        self.set_active_thread_control(/*control*/ None).await;
     }
 
     async fn release_active_continuous_control(&self) {
@@ -1320,7 +1318,7 @@ impl Session {
             );
             return;
         }
-        self.set_active_thread_control(None).await;
+        self.set_active_thread_control(/*control*/ None).await;
     }
 
     async fn enable_orchestrator_scoped_memories(&self) {
@@ -3012,23 +3010,53 @@ impl Session {
                     .push(PersonalitySpecInstructions::new(personality_message).render());
             }
         }
-        if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
+        {
+            developer_sections.push(ForkHelpInstructions::new().render());
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
-            let accessible_and_enabled_connectors =
-                connectors::list_accessible_and_enabled_connectors_from_manager(
-                    &mcp_connection_manager,
+            if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
+                let accessible_and_enabled_connectors =
+                    connectors::list_accessible_and_enabled_connectors_from_manager(
+                        &mcp_connection_manager,
+                        &turn_context.config,
+                    )
+                    .await;
+                let accessible_and_enabled_connectors = filter_connectors_for_mode(
                     &turn_context.config,
-                )
-                .await;
-            let accessible_and_enabled_connectors = filter_connectors_for_mode(
+                    turn_context.collaboration_mode.mode,
+                    &accessible_and_enabled_connectors,
+                );
+                if let Some(apps_instructions) =
+                    AppsInstructions::from_connectors(&accessible_and_enabled_connectors)
+                {
+                    developer_sections.push(apps_instructions.render());
+                }
+            }
+
+            let direct_mcp_server_names = mcp_connection_manager
+                .list_all_tools()
+                .await
+                .into_values()
+                .filter(|tool| {
+                    crate::enablement::mcp_tool_allowed_in_mode(
+                        &turn_context.config,
+                        turn_context.collaboration_mode.mode,
+                        tool,
+                    )
+                })
+                .map(|tool| tool.server_name)
+                .collect::<Vec<_>>();
+            let lazy_mcp_server_names = filter_lazy_mcp_servers_for_mode(
                 &turn_context.config,
                 turn_context.collaboration_mode.mode,
-                &accessible_and_enabled_connectors,
-            );
-            if let Some(apps_instructions) =
-                AppsInstructions::from_connectors(&accessible_and_enabled_connectors)
+                &mcp_connection_manager.lazy_server_infos(),
+            )
+            .into_iter()
+            .map(|server| server.server_name)
+            .collect::<Vec<_>>();
+            if let Some(mcp_instructions) =
+                AvailableMcpInstructions::new(direct_mcp_server_names, lazy_mcp_server_names)
             {
-                developer_sections.push(apps_instructions.render());
+                developer_sections.push(mcp_instructions.render());
             }
         }
         if turn_context.config.include_skill_instructions {

@@ -387,7 +387,9 @@ async fn assert_model_tools(
         .iter()
         .map(ToolSpec::name)
         .collect::<Vec<_>>();
-    assert_eq!(&tool_names, &expected_tools,);
+    let mut expected_tools = expected_tools.to_vec();
+    expected_tools.push("scratchpad");
+    assert_eq!(tool_names, expected_tools);
 }
 
 async fn assert_default_model_tools(

@@ -623,6 +623,11 @@ client_request_definitions! {
         response: v2::GetAccountResponse,
     },
 
+    SwitchAccount => "account/switch" {
+        params: v2::SwitchAccountParams,
+        response: v2::SwitchAccountResponse,
+    },
+
     /// DEPRECATED APIs below
     GetConversationSummary {
         params: v1::GetConversationSummaryParams,

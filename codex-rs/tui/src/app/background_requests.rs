@@ -4,9 +4,145 @@
 //! limits, add-credit nudges, and feedback uploads. Results are routed back through `AppEvent` so
 //! the main event loop remains single-threaded.
 
+use chrono::Datelike;
+use chrono::Local;
+use chrono::Timelike;
+use chrono::Weekday;
+use codex_config::types::OrchestratorPrimaryContactScheduleToml;
+
 use super::*;
 
 impl App {
+    pub(super) fn ensure_primary_contact_startup(&mut self, app_server: &AppServerSession) {
+        let Some((thread_id, startup_config)) = self.primary_contact_startup_candidate() else {
+            self.primary_contact_startup = None;
+            return;
+        };
+
+        let state = PrimaryContactStartupState {
+            thread_id,
+            mcp: startup_config.mcp.clone(),
+            tool: startup_config.tool.clone(),
+        };
+        if self.primary_contact_startup.as_ref() == Some(&state) {
+            return;
+        }
+
+        self.primary_contact_startup = Some(state);
+        self.start_primary_contact_channel(app_server, thread_id, startup_config);
+    }
+
+    pub(super) fn primary_contact_startup_candidate(
+        &self,
+    ) -> Option<(ThreadId, PrimaryContactStartupConfig)> {
+        if self.chat_widget.active_collaboration_mode_kind() != ModeKind::Orchestrator {
+            return None;
+        }
+        let startup_config = PrimaryContactStartupConfig::from_config(&self.config)?;
+        let thread_id = self.primary_thread_id?;
+        Some((thread_id, startup_config))
+    }
+
+    fn start_primary_contact_channel(
+        &self,
+        app_server: &AppServerSession,
+        thread_id: ThreadId,
+        startup_config: PrimaryContactStartupConfig,
+    ) {
+        let request_handle = app_server.request_handle();
+        tokio::spawn(async move {
+            match start_primary_contact_once(&request_handle, thread_id, &startup_config).await {
+                Ok(()) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        mcp = %startup_config.mcp,
+                        tool = %startup_config.tool,
+                        "primary contact startup failed: {err:#}"
+                    );
+                }
+            }
+        });
+    }
+
+    pub(super) fn ensure_primary_contact_polling(&mut self, app_server: &AppServerSession) {
+        let Some((thread_id, poll_config)) = self.primary_contact_polling_candidate() else {
+            self.stop_primary_contact_polling();
+            return;
+        };
+
+        if self
+            .primary_contact_polling
+            .as_ref()
+            .is_some_and(|state| state.thread_id == thread_id)
+        {
+            self.chat_widget
+                .set_primary_contact_waiting(/*waiting*/ true);
+            return;
+        }
+
+        self.stop_primary_contact_polling();
+        self.start_primary_contact_polling(app_server, thread_id, poll_config);
+    }
+
+    pub(super) fn primary_contact_polling_candidate(
+        &self,
+    ) -> Option<(ThreadId, PrimaryContactPollConfig)> {
+        if self.chat_widget.active_collaboration_mode_kind() != ModeKind::Orchestrator {
+            return None;
+        }
+        let poll_config = PrimaryContactPollConfig::from_config(&self.config)?;
+        let thread_id = self.primary_thread_id?;
+        Some((thread_id, poll_config))
+    }
+
+    fn stop_primary_contact_polling(&mut self) {
+        if let Some(state) = self.primary_contact_polling.take() {
+            state.task.abort();
+        }
+        self.chat_widget
+            .set_primary_contact_waiting(/*waiting*/ false);
+    }
+
+    fn start_primary_contact_polling(
+        &mut self,
+        app_server: &AppServerSession,
+        thread_id: ThreadId,
+        poll_config: PrimaryContactPollConfig,
+    ) {
+        self.chat_widget
+            .set_primary_contact_waiting(/*waiting*/ true);
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        app_event_tx.send(AppEvent::PrimaryContactMonitoringStarted {
+            mcp: poll_config.mcp.clone(),
+            interval_seconds: poll_config.default_interval_seconds,
+            scheduled: !poll_config.schedule.is_empty(),
+        });
+        let task = tokio::spawn(async move {
+            loop {
+                match poll_primary_contact_once(&request_handle, thread_id, &poll_config).await {
+                    Ok(Some(text)) => {
+                        app_event_tx.send(AppEvent::PrimaryContactMessageReceived { text });
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        tracing::warn!(
+                            mcp = %poll_config.mcp,
+                            tool = %poll_config.tool,
+                            "primary contact poll failed: {err:#}"
+                        );
+                    }
+                }
+
+                tokio::time::sleep(Duration::from_secs(u64::from(
+                    poll_config.interval_seconds_now(),
+                )))
+                .await;
+            }
+        });
+        self.primary_contact_polling = Some(PrimaryContactPollingState { thread_id, task });
+    }
+
     pub(super) fn fetch_mcp_inventory(
         &mut self,
         app_server: &AppServerSession,
@@ -369,7 +505,10 @@ impl App {
 
         self.chat_widget
             .add_to_history(history_cell::new_mcp_tools_output_from_statuses(
-                &config, &statuses, detail,
+                &config,
+                &statuses,
+                detail,
+                self.chat_widget.active_collaboration_mode_kind(),
             ));
     }
 
@@ -386,6 +525,438 @@ impl App {
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
             overlay.replace_cells(self.transcript_cells.clone());
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PrimaryContactPollConfig {
+    mcp: String,
+    tool: String,
+    arguments: Option<serde_json::Value>,
+    default_interval_seconds: u32,
+    schedule: Vec<PrimaryContactPollSchedule>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PrimaryContactStartupConfig {
+    mcp: String,
+    tool: String,
+    arguments: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrimaryContactPollSchedule {
+    days: Option<Vec<Weekday>>,
+    start_minute: u16,
+    end_minute: u16,
+    interval_seconds: u32,
+}
+
+impl PrimaryContactStartupConfig {
+    fn from_config(config: &Config) -> Option<Self> {
+        let primary_contact = &config.orchestrator.primary_contact;
+        if !primary_contact.enabled {
+            return None;
+        }
+        let mcp = primary_contact.mcp.as_ref()?.trim();
+        if mcp.is_empty() {
+            return None;
+        }
+        let tool = primary_contact
+            .tool
+            .as_deref()
+            .map(str::trim)
+            .filter(|tool| !tool.is_empty())
+            .map(str::to_string)
+            .or_else(|| default_primary_contact_start_tool(mcp))?;
+        Some(Self {
+            mcp: mcp.to_string(),
+            tool,
+            arguments: default_primary_contact_start_arguments(mcp),
+        })
+    }
+}
+
+impl PrimaryContactPollConfig {
+    fn from_config(config: &Config) -> Option<Self> {
+        let primary_contact = &config.orchestrator.primary_contact;
+        if !primary_contact.enabled || primary_contact.check_messages_every_seconds == 0 {
+            return None;
+        }
+        let mcp = primary_contact.mcp.as_ref()?.trim();
+        if mcp.is_empty() {
+            return None;
+        }
+        let tool = primary_contact
+            .check_tool
+            .as_deref()
+            .map(str::trim)
+            .filter(|tool| !tool.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| default_primary_contact_check_tool(mcp));
+        Some(Self {
+            mcp: mcp.to_string(),
+            tool,
+            arguments: default_primary_contact_check_arguments(mcp),
+            default_interval_seconds: primary_contact.check_messages_every_seconds,
+            schedule: primary_contact
+                .schedule
+                .iter()
+                .filter_map(PrimaryContactPollSchedule::from_config)
+                .collect(),
+        })
+    }
+
+    fn interval_seconds_now(&self) -> u32 {
+        let now = Local::now();
+        self.interval_seconds_at(
+            now.weekday(),
+            (now.hour() * 60 + now.minute())
+                .try_into()
+                .unwrap_or(/*default*/ 0),
+        )
+    }
+
+    fn interval_seconds_at(&self, weekday: Weekday, minute_of_day: u16) -> u32 {
+        self.schedule
+            .iter()
+            .find_map(|schedule| schedule.interval_seconds_at(weekday, minute_of_day))
+            .unwrap_or(self.default_interval_seconds)
+    }
+}
+
+impl PrimaryContactPollSchedule {
+    fn from_config(toml: &OrchestratorPrimaryContactScheduleToml) -> Option<Self> {
+        let start_minute = parse_local_time_minutes(toml.start.as_deref()?)?;
+        let end_minute = parse_local_time_minutes(toml.end.as_deref()?)?;
+        let interval_seconds = toml.check_messages_every_seconds?;
+        if interval_seconds == 0 || start_minute == end_minute {
+            return None;
+        }
+        let days = parse_schedule_days(toml.days.as_deref())?;
+        Some(Self {
+            days,
+            start_minute,
+            end_minute,
+            interval_seconds,
+        })
+    }
+
+    fn interval_seconds_at(&self, weekday: Weekday, minute_of_day: u16) -> Option<u32> {
+        let active_day = if self.start_minute < self.end_minute {
+            (self.start_minute..self.end_minute)
+                .contains(&minute_of_day)
+                .then_some(weekday)?
+        } else if minute_of_day >= self.start_minute {
+            weekday
+        } else if minute_of_day < self.end_minute {
+            previous_weekday(weekday)
+        } else {
+            return None;
+        };
+        if self
+            .days
+            .as_ref()
+            .is_none_or(|days| days.contains(&active_day))
+        {
+            Some(self.interval_seconds)
+        } else {
+            None
+        }
+    }
+}
+
+fn parse_local_time_minutes(value: &str) -> Option<u16> {
+    let (hour, minute) = value.trim().split_once(':')?;
+    let hour = hour.parse::<u16>().ok()?;
+    let minute = minute.parse::<u16>().ok()?;
+    if hour < 24 && minute < 60 {
+        Some(hour * 60 + minute)
+    } else {
+        None
+    }
+}
+
+fn parse_schedule_days(days: Option<&[String]>) -> Option<Option<Vec<Weekday>>> {
+    let Some(days) = days else {
+        return Some(None);
+    };
+    let mut parsed = Vec::new();
+    for day in days {
+        match day.trim().to_ascii_lowercase().as_str() {
+            "" | "*" | "all" | "any" | "daily" | "everyday" => return Some(None),
+            "weekday" | "weekdays" => {
+                parsed.extend([
+                    Weekday::Mon,
+                    Weekday::Tue,
+                    Weekday::Wed,
+                    Weekday::Thu,
+                    Weekday::Fri,
+                ]);
+            }
+            "weekend" | "weekends" => {
+                parsed.extend([Weekday::Sat, Weekday::Sun]);
+            }
+            "mon" | "monday" => parsed.push(Weekday::Mon),
+            "tue" | "tues" | "tuesday" => parsed.push(Weekday::Tue),
+            "wed" | "weds" | "wednesday" => parsed.push(Weekday::Wed),
+            "thu" | "thur" | "thurs" | "thursday" => parsed.push(Weekday::Thu),
+            "fri" | "friday" => parsed.push(Weekday::Fri),
+            "sat" | "saturday" => parsed.push(Weekday::Sat),
+            "sun" | "sunday" => parsed.push(Weekday::Sun),
+            _ => return None,
+        }
+    }
+    parsed.sort_by_key(Weekday::num_days_from_monday);
+    parsed.dedup();
+    if parsed.is_empty() {
+        Some(None)
+    } else {
+        Some(Some(parsed))
+    }
+}
+
+fn previous_weekday(weekday: Weekday) -> Weekday {
+    match weekday {
+        Weekday::Mon => Weekday::Sun,
+        Weekday::Tue => Weekday::Mon,
+        Weekday::Wed => Weekday::Tue,
+        Weekday::Thu => Weekday::Wed,
+        Weekday::Fri => Weekday::Thu,
+        Weekday::Sat => Weekday::Fri,
+        Weekday::Sun => Weekday::Sat,
+    }
+}
+
+fn default_primary_contact_start_tool(mcp: &str) -> Option<String> {
+    mcp.eq_ignore_ascii_case("imessage")
+        .then(|| "imessage_followup_start".to_string())
+}
+
+fn default_primary_contact_start_arguments(mcp: &str) -> Option<serde_json::Value> {
+    if mcp.eq_ignore_ascii_case("imessage") {
+        Some(serde_json::json!({
+            "max_polls": 1,
+            "activate_after_current_task": true
+        }))
+    } else {
+        None
+    }
+}
+
+fn default_primary_contact_check_tool(mcp: &str) -> String {
+    if mcp.eq_ignore_ascii_case("imessage") {
+        "imessage_followup_wait_for_reply".to_string()
+    } else {
+        format!("{mcp}_followup_status")
+    }
+}
+
+fn default_primary_contact_check_arguments(mcp: &str) -> Option<serde_json::Value> {
+    if mcp.eq_ignore_ascii_case("imessage") {
+        Some(serde_json::json!({
+            "max_polls": 1,
+            "block_until_reply": false
+        }))
+    } else {
+        None
+    }
+}
+
+async fn start_primary_contact_once(
+    request_handle: &AppServerRequestHandle,
+    thread_id: ThreadId,
+    startup_config: &PrimaryContactStartupConfig,
+) -> Result<()> {
+    let request_id = RequestId::String(format!("primary-contact-startup-{}", Uuid::new_v4()));
+    let response: McpServerToolCallResponse = request_handle
+        .request_typed(ClientRequest::McpServerToolCall {
+            request_id,
+            params: McpServerToolCallParams {
+                thread_id: thread_id.to_string(),
+                server: startup_config.mcp.clone(),
+                tool: startup_config.tool.clone(),
+                arguments: startup_config.arguments.clone(),
+                meta: None,
+            },
+        })
+        .await
+        .wrap_err("mcpServer/tool/call failed during primary contact startup")?;
+    if response.is_error == Some(true) {
+        return Err(color_eyre::eyre::eyre!(
+            "primary contact startup tool returned an error"
+        ));
+    }
+    Ok(())
+}
+
+async fn poll_primary_contact_once(
+    request_handle: &AppServerRequestHandle,
+    thread_id: ThreadId,
+    poll_config: &PrimaryContactPollConfig,
+) -> Result<Option<String>> {
+    let request_id = RequestId::String(format!("primary-contact-poll-{}", Uuid::new_v4()));
+    let response: McpServerToolCallResponse = request_handle
+        .request_typed(ClientRequest::McpServerToolCall {
+            request_id,
+            params: McpServerToolCallParams {
+                thread_id: thread_id.to_string(),
+                server: poll_config.mcp.clone(),
+                tool: poll_config.tool.clone(),
+                arguments: poll_config.arguments.clone(),
+                meta: None,
+            },
+        })
+        .await
+        .wrap_err("mcpServer/tool/call failed during primary contact poll")?;
+
+    Ok(extract_primary_contact_message(&response))
+}
+
+fn extract_primary_contact_message(response: &McpServerToolCallResponse) -> Option<String> {
+    if response.is_error == Some(true) {
+        return None;
+    }
+
+    if let Some(value) = response.structured_content.as_ref()
+        && let Some(message) = extract_message_from_value(value)
+    {
+        return Some(message);
+    }
+
+    response.content.iter().find_map(extract_message_from_value)
+}
+
+fn extract_message_from_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Object(map) => {
+            if explicit_no_new_message(map) {
+                if let Some(message) = ambiguous_primary_contact_message(map) {
+                    return Some(message);
+                }
+                return None;
+            }
+            let explicit_new_message = explicit_new_message(map);
+            if let Some(messages) = map.get("messages").and_then(serde_json::Value::as_array)
+                && let Some(message) = messages.iter().rev().find_map(extract_message_from_value)
+            {
+                return Some(message);
+            }
+            if let Some(messages) = map
+                .get("reply_messages")
+                .and_then(serde_json::Value::as_array)
+                && let Some(message) = messages.iter().rev().find_map(extract_message_from_value)
+            {
+                return Some(message);
+            }
+            for key in ["user_message", "message", "reply_text", "raw_reply_text"] {
+                if let Some(message) = map.get(key).and_then(extract_text_field)
+                    && !message.is_empty()
+                {
+                    return Some(message);
+                }
+            }
+            if explicit_new_message {
+                for key in ["text", "body", "content"] {
+                    if let Some(message) = map.get(key).and_then(extract_text_field)
+                        && !message.is_empty()
+                    {
+                        return Some(message);
+                    }
+                }
+            }
+            None
+        }
+        serde_json::Value::Array(values) => {
+            values.iter().rev().find_map(extract_message_from_value)
+        }
+        _ => None,
+    }
+}
+
+fn ambiguous_primary_contact_message(
+    map: &serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
+    if map.get("ambiguous").and_then(serde_json::Value::as_bool) != Some(true) {
+        return None;
+    }
+    let match_reason = map
+        .get("match_reason")
+        .or_else(|| map.get("crossed_message_warning"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !matches!(
+        match_reason,
+        "conflicting_reply_target" | "conflicting_session_ids" | "single_untagged_reply"
+    ) {
+        return None;
+    }
+    for key in ["raw_reply_text", "reply_text", "text"] {
+        if let Some(message) = map.get(key).and_then(extract_text_field)
+            && !message.is_empty()
+        {
+            return Some(message);
+        }
+    }
+    map.get("reply_messages")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|messages| messages.iter().rev().find_map(extract_reply_message_text))
+}
+
+fn extract_reply_message_text(value: &serde_json::Value) -> Option<String> {
+    let serde_json::Value::Object(map) = value else {
+        return extract_text_field(value).filter(|message| !message.is_empty());
+    };
+    if map.get("is_from_me").and_then(serde_json::Value::as_bool) == Some(true) {
+        return None;
+    }
+    for key in ["raw_reply_text", "reply_text", "text", "body", "content"] {
+        if let Some(message) = map.get(key).and_then(extract_text_field)
+            && !message.is_empty()
+        {
+            return Some(message);
+        }
+    }
+    None
+}
+
+fn explicit_no_new_message(map: &serde_json::Map<String, serde_json::Value>) -> bool {
+    [
+        "has_new_message",
+        "has_message",
+        "new_message",
+        "available",
+        "reply_received",
+    ]
+    .iter()
+    .any(|key| map.get(*key).and_then(serde_json::Value::as_bool) == Some(false))
+}
+
+fn explicit_new_message(map: &serde_json::Map<String, serde_json::Value>) -> bool {
+    [
+        "has_new_message",
+        "has_message",
+        "new_message",
+        "available",
+        "reply_received",
+    ]
+    .iter()
+    .any(|key| map.get(*key).and_then(serde_json::Value::as_bool) == Some(true))
+}
+
+fn extract_text_field(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) => {
+            let text = text.trim().to_string();
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text)
+                && let Some(message) = extract_message_from_value(&value)
+            {
+                return Some(message);
+            }
+            (!text.is_empty()).then_some(text)
+        }
+        serde_json::Value::Object(_) => extract_message_from_value(value),
+        _ => None,
     }
 }
 
@@ -732,6 +1303,208 @@ mod tests {
             auth_statuses.get("disabled"),
             Some(&McpAuthStatus::Unsupported)
         );
+    }
+
+    #[test]
+    fn extracts_primary_contact_message_from_structured_content() {
+        let response = McpServerToolCallResponse {
+            content: Vec::new(),
+            structured_content: Some(serde_json::json!({
+                "has_new_message": true,
+                "message": " can you check this? "
+            })),
+            is_error: None,
+            meta: None,
+        };
+
+        assert_eq!(
+            extract_primary_contact_message(&response),
+            Some("can you check this?".to_string())
+        );
+    }
+
+    #[test]
+    fn primary_contact_poll_ignores_explicit_empty_status() {
+        let response = McpServerToolCallResponse {
+            content: vec![serde_json::json!({
+                "has_new_message": false,
+                "message": "stale status"
+            })],
+            structured_content: None,
+            is_error: None,
+            meta: None,
+        };
+
+        assert_eq!(extract_primary_contact_message(&response), None);
+    }
+
+    #[test]
+    fn primary_contact_poll_ignores_plain_status_text() {
+        let response = McpServerToolCallResponse {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": "No new messages"
+            })],
+            structured_content: None,
+            is_error: None,
+            meta: None,
+        };
+
+        assert_eq!(extract_primary_contact_message(&response), None);
+    }
+
+    #[test]
+    fn primary_contact_poll_extracts_imessage_wait_reply_text() {
+        let response = McpServerToolCallResponse {
+            content: Vec::new(),
+            structured_content: Some(serde_json::json!({
+                "reply_received": true,
+                "reply_text": " keep going "
+            })),
+            is_error: None,
+            meta: None,
+        };
+
+        assert_eq!(
+            extract_primary_contact_message(&response),
+            Some("keep going".to_string())
+        );
+    }
+
+    #[test]
+    fn primary_contact_poll_ignores_imessage_wait_without_reply() {
+        let response = McpServerToolCallResponse {
+            content: Vec::new(),
+            structured_content: Some(serde_json::json!({
+                "reply_received": false,
+                "awaiting_reply": true,
+                "reply_text": "stale"
+            })),
+            is_error: None,
+            meta: None,
+        };
+
+        assert_eq!(extract_primary_contact_message(&response), None);
+    }
+
+    #[test]
+    fn primary_contact_poll_accepts_ambiguous_conflicting_reply_target() {
+        let response = McpServerToolCallResponse {
+            content: Vec::new(),
+            structured_content: Some(serde_json::json!({
+                "reply_received": false,
+                "ambiguous": true,
+                "match_reason": "conflicting_reply_target",
+                "raw_reply_text": " just curious if you're awake "
+            })),
+            is_error: None,
+            meta: None,
+        };
+
+        assert_eq!(
+            extract_primary_contact_message(&response),
+            Some("just curious if you're awake".to_string())
+        );
+    }
+
+    #[test]
+    fn primary_contact_poll_accepts_imessage_crossed_warning_reply_messages() {
+        let response = McpServerToolCallResponse {
+            content: Vec::new(),
+            structured_content: Some(serde_json::json!({
+                "reply_received": false,
+                "ambiguous": true,
+                "crossed_message_warning": "conflicting_reply_target",
+                "reply_messages": [{
+                    "rowid": 816,
+                    "text": " Are you available right now? ",
+                    "direction": "incoming",
+                    "is_from_me": false
+                }]
+            })),
+            is_error: None,
+            meta: None,
+        };
+
+        assert_eq!(
+            extract_primary_contact_message(&response),
+            Some("Are you available right now?".to_string())
+        );
+    }
+
+    #[test]
+    fn primary_contact_imessage_check_is_one_shot() {
+        assert_eq!(
+            default_primary_contact_check_tool("imessage"),
+            "imessage_followup_wait_for_reply"
+        );
+        assert_eq!(
+            default_primary_contact_check_arguments("imessage"),
+            Some(serde_json::json!({
+                "max_polls": 1,
+                "block_until_reply": false
+            }))
+        );
+    }
+
+    #[test]
+    fn primary_contact_imessage_start_is_harness_only_one_shot() {
+        assert_eq!(
+            default_primary_contact_start_tool("imessage"),
+            Some("imessage_followup_start".to_string())
+        );
+        assert_eq!(
+            default_primary_contact_start_arguments("imessage"),
+            Some(serde_json::json!({
+                "max_polls": 1,
+                "activate_after_current_task": true
+            }))
+        );
+    }
+
+    #[test]
+    fn primary_contact_schedule_overrides_default_interval_when_active() {
+        let poll_config = PrimaryContactPollConfig {
+            mcp: "imessage".to_string(),
+            tool: "imessage_followup_status".to_string(),
+            arguments: None,
+            default_interval_seconds: 900,
+            schedule: vec![
+                PrimaryContactPollSchedule::from_config(&OrchestratorPrimaryContactScheduleToml {
+                    days: Some(vec!["weekdays".to_string()]),
+                    start: Some("07:00".to_string()),
+                    end: Some("22:00".to_string()),
+                    check_messages_every_seconds: Some(300),
+                })
+                .expect("valid schedule"),
+            ],
+        };
+
+        assert_eq!(poll_config.interval_seconds_at(Weekday::Mon, 8 * 60), 300);
+        assert_eq!(poll_config.interval_seconds_at(Weekday::Sat, 8 * 60), 900);
+        assert_eq!(poll_config.interval_seconds_at(Weekday::Mon, 23 * 60), 900);
+    }
+
+    #[test]
+    fn primary_contact_schedule_supports_overnight_windows() {
+        let schedule =
+            PrimaryContactPollSchedule::from_config(&OrchestratorPrimaryContactScheduleToml {
+                days: Some(vec!["mon".to_string()]),
+                start: Some("22:00".to_string()),
+                end: Some("07:00".to_string()),
+                check_messages_every_seconds: Some(1800),
+            })
+            .expect("valid schedule");
+
+        assert_eq!(
+            schedule.interval_seconds_at(Weekday::Mon, 23 * 60),
+            Some(1800)
+        );
+        assert_eq!(
+            schedule.interval_seconds_at(Weekday::Tue, 6 * 60),
+            Some(1800)
+        );
+        assert_eq!(schedule.interval_seconds_at(Weekday::Tue, 8 * 60), None);
     }
 
     #[test]

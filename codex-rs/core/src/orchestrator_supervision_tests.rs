@@ -47,6 +47,8 @@ async fn build_developer_instructions_renders_registered_workers() {
     assert!(instructions.contains("Arendt"));
     assert!(instructions.contains("Blocked on boto3"));
     assert!(instructions.contains("mode: inline"));
+    assert!(instructions.contains("Global background job tables"));
+    assert!(instructions.contains("past N hours"));
 }
 
 #[tokio::test]

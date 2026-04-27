@@ -28,7 +28,7 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
             (plain_name.clone(), Arc::clone(&plain_handler)),
             (namespaced_name.clone(), Arc::clone(&namespaced_handler)),
         ]),
-        None,
+        /*fallback_mcp_handler*/ None,
     );
 
     let plain = registry.handler(&plain_name, /*payload*/ None);

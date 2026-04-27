@@ -9,6 +9,7 @@ use crate::status::StatusAccountDisplay;
 use crate::test_support::PathBufExt;
 use crate::test_support::test_path_buf;
 use chrono::Duration as ChronoDuration;
+use chrono::Local;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::ThreadId;
@@ -36,6 +37,80 @@ async fn test_config(temp_home: &TempDir) -> Config {
 
 fn test_status_account_display() -> Option<StatusAccountDisplay> {
     None
+}
+
+#[tokio::test]
+async fn status_renders_alias_email_and_plan_for_managed_account() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.cwd = test_path_buf("/workspace/tests").abs();
+    let account_display = Some(StatusAccountDisplay::ChatGpt {
+        alias: Some("secondary".to_string()),
+        email: Some("person@example.com".to_string()),
+        plan: Some("Pro".to_string()),
+    });
+    let usage = TokenUsage::default();
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+
+    let output = new_status_output(
+        &config,
+        account_display.as_ref(),
+        /*token_info*/ None,
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
+        None,
+        Local::now(),
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+    );
+    let rendered = sanitize_directory(render_lines(&output.display_lines(/*width*/ 90)));
+    let joined = rendered.join("\n");
+
+    assert!(
+        joined.contains("secondary - person@example.com - (Pro)"),
+        "rendered: {joined}"
+    );
+}
+
+#[tokio::test]
+async fn status_renders_email_and_plan_without_alias() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.cwd = test_path_buf("/workspace/tests").abs();
+    let account_display = Some(StatusAccountDisplay::ChatGpt {
+        alias: None,
+        email: Some("person@example.com".to_string()),
+        plan: Some("Pro".to_string()),
+    });
+    let usage = TokenUsage::default();
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+
+    let output = new_status_output(
+        &config,
+        account_display.as_ref(),
+        /*token_info*/ None,
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
+        None,
+        Local::now(),
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+    );
+    let rendered = sanitize_directory(render_lines(&output.display_lines(/*width*/ 90)));
+    let joined = rendered.join("\n");
+
+    assert!(
+        joined.contains("person@example.com (Pro)"),
+        "rendered: {joined}"
+    );
 }
 
 fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> TokenUsageInfo {

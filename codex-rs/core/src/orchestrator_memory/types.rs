@@ -22,6 +22,9 @@ pub(super) enum MemorySignal {
 pub(super) enum MemoryBucket {
     DurablePreference,
     PersonalContext,
+    RelationalAttunement,
+    OperatorPlaybook,
+    OngoingThreads,
     FollowupState,
 }
 
@@ -71,6 +74,9 @@ pub(super) struct AggregatedMemoryItem {
 pub(super) struct AggregatedMemorySnapshot {
     pub preferences: Vec<AggregatedMemoryItem>,
     pub personal_context: Vec<AggregatedMemoryItem>,
+    pub relational_attunement: Vec<AggregatedMemoryItem>,
+    pub operator_playbook: Vec<AggregatedMemoryItem>,
+    pub ongoing_threads: Vec<AggregatedMemoryItem>,
     pub followups: Vec<AggregatedMemoryItem>,
 }
 
@@ -82,5 +88,29 @@ impl MemorySignal {
                 | MemorySignal::AssistantAcknowledged
                 | MemorySignal::ModelClassified
         )
+    }
+}
+
+impl MemoryBucket {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MemoryBucket::DurablePreference => "durable_preference",
+            MemoryBucket::PersonalContext => "personal_context",
+            MemoryBucket::RelationalAttunement => "relational_attunement",
+            MemoryBucket::OperatorPlaybook => "operator_playbook",
+            MemoryBucket::OngoingThreads => "ongoing_threads",
+            MemoryBucket::FollowupState => "followup_state",
+        }
+    }
+
+    pub fn all() -> &'static [MemoryBucket] {
+        &[
+            MemoryBucket::DurablePreference,
+            MemoryBucket::PersonalContext,
+            MemoryBucket::RelationalAttunement,
+            MemoryBucket::OperatorPlaybook,
+            MemoryBucket::OngoingThreads,
+            MemoryBucket::FollowupState,
+        ]
     }
 }

@@ -13,6 +13,12 @@ pub(super) const DEFAULT_TERMINAL_TITLE_ITEMS: [&str; 2] = ["spinner", "project-
 pub(super) const TERMINAL_TITLE_SPINNER_FRAMES: [&str; 10] =
     ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/// Static braille marker for model-less primary-contact waiting.
+///
+/// This lights the middle two rows of a 2x4 braille cell, leaving the top and
+/// bottom rows empty so it reads differently from the normal running spinner.
+pub(super) const TERMINAL_TITLE_WAITING_FRAME: &str = "⠞";
+
 /// Time between spinner frame advances in the terminal title.
 pub(super) const TERMINAL_TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -25,6 +31,8 @@ pub(super) const TERMINAL_TITLE_SPINNER_INTERVAL: Duration = Duration::from_mill
 pub(super) enum TerminalTitleStatusKind {
     Working,
     WaitingForBackgroundTerminal,
+    WaitingForAgents,
+    WaitingForPrimaryContact,
     Undoing,
     #[default]
     Thinking,
@@ -629,11 +637,21 @@ impl ChatWidget {
             {
                 "Ready".to_string()
             }
+            TerminalTitleStatusKind::WaitingForAgents if !self.bottom_pane.is_task_running() => {
+                "Ready".to_string()
+            }
+            TerminalTitleStatusKind::WaitingForPrimaryContact
+                if !self.bottom_pane.is_task_running() =>
+            {
+                "Waiting for messages".to_string()
+            }
             TerminalTitleStatusKind::Thinking if !self.bottom_pane.is_task_running() => {
                 "Ready".to_string()
             }
             TerminalTitleStatusKind::Working => "Working".to_string(),
             TerminalTitleStatusKind::WaitingForBackgroundTerminal => "Waiting".to_string(),
+            TerminalTitleStatusKind::WaitingForAgents => "Waiting on agents".to_string(),
+            TerminalTitleStatusKind::WaitingForPrimaryContact => "Working".to_string(),
             TerminalTitleStatusKind::Undoing => "Undoing".to_string(),
             TerminalTitleStatusKind::Thinking => "Thinking".to_string(),
         }
@@ -646,6 +664,12 @@ impl ChatWidget {
 
         if !self.terminal_title_has_active_progress() {
             return None;
+        }
+
+        if self.terminal_title_status_kind == TerminalTitleStatusKind::WaitingForPrimaryContact
+            && !self.bottom_pane.is_task_running()
+        {
+            return Some(TERMINAL_TITLE_WAITING_FRAME.to_string());
         }
 
         Some(self.terminal_title_spinner_frame_at(now).to_string())
@@ -668,6 +692,9 @@ impl ChatWidget {
     fn terminal_title_has_active_progress(&self) -> bool {
         self.mcp_startup_status.is_some()
             || self.bottom_pane.is_task_running()
+            || (self.terminal_title_status_kind
+                == TerminalTitleStatusKind::WaitingForPrimaryContact
+                && !self.bottom_pane.is_task_running())
             || self.terminal_title_status_kind == TerminalTitleStatusKind::Undoing
     }
 

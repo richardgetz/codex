@@ -309,6 +309,8 @@ export type { SkillsListExtraRootsForCwd } from "./SkillsListExtraRootsForCwd";
 export type { SkillsListParams } from "./SkillsListParams";
 export type { SkillsListResponse } from "./SkillsListResponse";
 export type { SortDirection } from "./SortDirection";
+export type { SwitchAccountParams } from "./SwitchAccountParams";
+export type { SwitchAccountResponse } from "./SwitchAccountResponse";
 export type { TerminalInteractionNotification } from "./TerminalInteractionNotification";
 export type { TextElement } from "./TextElement";
 export type { TextPosition } from "./TextPosition";

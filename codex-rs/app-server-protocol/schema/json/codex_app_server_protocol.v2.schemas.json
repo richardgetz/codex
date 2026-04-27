@@ -90,6 +90,16 @@
     "AccountUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "account": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Account"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "authMode": {
           "anyOf": [
             {
@@ -2602,6 +2612,30 @@
             "params"
           ],
           "title": "Account/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/switch"
+              ],
+              "title": "Account/switchRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SwitchAccountParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/switchRequest",
           "type": "object"
         },
         {
@@ -11922,6 +11956,7 @@
           "enum": [
             "review",
             "compact",
+            "memory_extraction",
             "memory_consolidation"
           ],
           "type": "string"
@@ -11991,6 +12026,25 @@
           "type": "object"
         }
       ]
+    },
+    "SwitchAccountParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "alias": {
+          "description": "Managed account alias to activate. `null` means use the original root auth store.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "SwitchAccountParams",
+      "type": "object"
+    },
+    "SwitchAccountResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "SwitchAccountResponse",
+      "type": "object"
     },
     "TerminalInteractionNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",

@@ -45,11 +45,14 @@ use crate::wrapping::adaptive_wrap_lines;
 use base64::Engine;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
+use codex_config::EnablementFilterConfig;
+use codex_config::EnablementFilterMode;
 use codex_config::types::McpServerTransportConfig;
 #[cfg(test)]
 use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
+use codex_protocol::config_types::ModeKind;
 #[cfg(test)]
 use codex_protocol::mcp::Resource;
 #[cfg(test)]
@@ -2107,6 +2110,7 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
     config: &Config,
     statuses: &[McpServerStatus],
     detail: McpServerStatusDetail,
+    mode: ModeKind,
 ) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = vec![
         "/mcp".magenta().into(),
@@ -2135,6 +2139,23 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
         let header: Vec<Span<'static>> = vec!["  • ".into(), server.clone().into()];
 
         lines.push(header.into());
+        if let Some(visible_in_mode) = mcp_server_visible_in_mode(config, mode, &server) {
+            let visibility = if visible_in_mode {
+                "yes".green()
+            } else {
+                "no".red()
+            };
+            let mut line = vec![
+                "    • Visible in ".into(),
+                mode.display_name().into(),
+                " mode: ".into(),
+                visibility,
+            ];
+            if !visible_in_mode {
+                line.push(" (hidden by mode filter)".dim());
+            }
+            lines.push(line.into());
+        }
         if matches!(detail, McpServerStatusDetail::Full) {
             let enabled = cfg.map(|cfg| cfg.enabled).unwrap_or(true);
             let status_text = if enabled {
@@ -2280,6 +2301,47 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
     }
 
     PlainHistoryCell { lines }
+}
+
+fn mcp_server_visible_in_mode(config: &Config, mode: ModeKind, server_name: &str) -> Option<bool> {
+    let filter = config
+        .enablement
+        .modes
+        .get(&mode)
+        .and_then(|mode_enablement| mode_enablement.mcps.as_ref())?;
+    Some(filter_allows(filter, &[server_name]))
+}
+
+fn filter_allows(filter: &EnablementFilterConfig, candidates: &[&str]) -> bool {
+    if filter.items.is_empty() {
+        return true;
+    }
+
+    let matches = filter
+        .items
+        .iter()
+        .any(|selector| selector_matches(selector, candidates));
+    match filter.mode {
+        EnablementFilterMode::Include => matches,
+        EnablementFilterMode::Exclude => !matches,
+    }
+}
+
+fn selector_matches(selector: &str, candidates: &[&str]) -> bool {
+    let selector = selector.trim();
+    if selector.is_empty() {
+        return false;
+    }
+    if selector == "*" {
+        return candidates
+            .iter()
+            .any(|candidate| !candidate.trim().is_empty());
+    }
+
+    candidates.iter().any(|candidate| {
+        let candidate = candidate.trim();
+        !candidate.is_empty() && (candidate == selector || candidate.ends_with(selector))
+    })
 }
 
 pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
@@ -2911,12 +2973,16 @@ mod tests {
     use crate::exec_cell::ExecCell;
     use crate::legacy_core::config::Config;
     use crate::legacy_core::config::ConfigBuilder;
+    use codex_config::EnablementFilterConfig;
+    use codex_config::EnablementFilterMode;
+    use codex_config::ModeEnablementConfig;
     use codex_config::types::McpServerConfig;
     use codex_config::types::McpServerDisabledReason;
     use codex_otel::RuntimeMetricTotals;
     use codex_otel::RuntimeMetricsSummary;
     use codex_protocol::ThreadId;
     use codex_protocol::account::PlanType;
+    use codex_protocol::config_types::ModeKind;
     use codex_protocol::models::WebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::AskForApproval;
@@ -3505,6 +3571,7 @@ mod tests {
             &config,
             &statuses,
             McpServerStatusDetail::ToolsAndAuthOnly,
+            ModeKind::Default,
         );
         let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
@@ -3559,8 +3626,98 @@ mod tests {
             auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
         }];
 
-        let cell =
-            new_mcp_tools_output_from_statuses(&config, &statuses, McpServerStatusDetail::Full);
+        let cell = new_mcp_tools_output_from_statuses(
+            &config,
+            &statuses,
+            McpServerStatusDetail::Full,
+            ModeKind::Default,
+        );
+        let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[tokio::test]
+    async fn mcp_tools_output_from_statuses_marks_servers_hidden_by_current_mode() {
+        let mut config = test_config().await;
+        config.enablement.modes.insert(
+            ModeKind::Orchestrator,
+            ModeEnablementConfig {
+                skills: None,
+                mcps: Some(EnablementFilterConfig {
+                    mode: EnablementFilterMode::Include,
+                    items: vec!["imessage".to_string()],
+                }),
+                plugins: None,
+            },
+        );
+        let servers = HashMap::from([
+            (
+                "imessage".to_string(),
+                stdio_server_config(
+                    "imessage-server",
+                    vec!["--stdio"],
+                    /*env*/ None,
+                    vec![],
+                ),
+            ),
+            (
+                "docs".to_string(),
+                stdio_server_config("docs-server", vec!["--stdio"], /*env*/ None, vec![]),
+            ),
+        ]);
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
+
+        let statuses = vec![
+            McpServerStatus {
+                name: "docs".to_string(),
+                tools: HashMap::from([(
+                    "lookup".to_string(),
+                    Tool {
+                        description: None,
+                        name: "lookup".to_string(),
+                        title: None,
+                        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+                        output_schema: None,
+                        annotations: None,
+                        icons: None,
+                        meta: None,
+                    },
+                )]),
+                resources: Vec::new(),
+                resource_templates: Vec::new(),
+                auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+            },
+            McpServerStatus {
+                name: "imessage".to_string(),
+                tools: HashMap::from([(
+                    "send_message".to_string(),
+                    Tool {
+                        description: None,
+                        name: "send_message".to_string(),
+                        title: None,
+                        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+                        output_schema: None,
+                        annotations: None,
+                        icons: None,
+                        meta: None,
+                    },
+                )]),
+                resources: Vec::new(),
+                resource_templates: Vec::new(),
+                auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+            },
+        ];
+
+        let cell = new_mcp_tools_output_from_statuses(
+            &config,
+            &statuses,
+            McpServerStatusDetail::ToolsAndAuthOnly,
+            ModeKind::Orchestrator,
+        );
         let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
         insta::assert_snapshot!(rendered);

@@ -61,16 +61,18 @@ fn memories_config_clamps_count_limits_to_nonzero_values() {
 }
 
 #[test]
-fn orchestrator_memory_config_defaults_to_disabled_orchestrator_scope() {
+fn orchestrator_memory_config_defaults_to_enabled_orchestrator_scope() {
     assert_eq!(
         OrchestratorMemoryConfig::default(),
         OrchestratorMemoryConfig {
-            enabled: false,
+            enabled: true,
             scope: MemoriesScope::Orchestrator,
             debounce_seconds: 60,
             min_observations: 2,
             recent_turn_window: 8,
             max_summary_items: 24,
+            model_on_heuristic_miss: false,
+            model_consolidation: false,
         }
     );
 }
@@ -84,6 +86,8 @@ fn orchestrator_memory_config_uses_explicit_values() {
         min_observations: Some(3),
         recent_turn_window: Some(6),
         max_summary_items: Some(10),
+        model_on_heuristic_miss: Some(true),
+        model_consolidation: Some(true),
     });
 
     assert_eq!(
@@ -95,6 +99,118 @@ fn orchestrator_memory_config_uses_explicit_values() {
             min_observations: 3,
             recent_turn_window: 6,
             max_summary_items: 10,
+            model_on_heuristic_miss: true,
+            model_consolidation: true,
+        }
+    );
+}
+
+#[test]
+fn accounts_config_trims_blank_active_alias() {
+    let config = AccountsConfig::from(AccountsToml {
+        active: Some("   ".to_string()),
+        rotation: None,
+    });
+
+    assert_eq!(
+        config,
+        AccountsConfig {
+            active: None,
+            rotation: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn accounts_config_preserves_active_alias() {
+    let config = AccountsConfig::from(AccountsToml {
+        active: Some("work".to_string()),
+        rotation: None,
+    });
+
+    assert_eq!(
+        config,
+        AccountsConfig {
+            active: Some("work".to_string()),
+            rotation: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn accounts_config_normalizes_rotation_aliases() {
+    let config = AccountsConfig::from(AccountsToml {
+        active: None,
+        rotation: Some(vec![
+            " default ".to_string(),
+            "work".to_string(),
+            "WORK".to_string(),
+            " ".to_string(),
+            "personal".to_string(),
+        ]),
+    });
+
+    assert_eq!(
+        config,
+        AccountsConfig {
+            active: None,
+            rotation: vec![
+                "default".to_string(),
+                "work".to_string(),
+                "personal".to_string()
+            ],
+        }
+    );
+}
+
+#[test]
+fn orchestrator_primary_contact_config_trims_optional_fields() {
+    let config = OrchestratorPrimaryContactConfig::from(OrchestratorPrimaryContactToml {
+        enabled: Some(true),
+        mcp: Some(" imessage ".to_string()),
+        tool: Some(" imessage_followup_start ".to_string()),
+        check_tool: Some(" imessage_followup_status ".to_string()),
+        check_messages_every_seconds: Some(60),
+        schedule: None,
+        startup_prompt: Some(" start follow-up ".to_string()),
+    });
+
+    assert_eq!(
+        config,
+        OrchestratorPrimaryContactConfig {
+            enabled: true,
+            mcp: Some("imessage".to_string()),
+            tool: Some("imessage_followup_start".to_string()),
+            check_tool: Some("imessage_followup_status".to_string()),
+            check_messages_every_seconds: 60,
+            schedule: Vec::new(),
+            startup_prompt: Some("start follow-up".to_string()),
+        }
+    );
+}
+
+#[test]
+fn orchestrator_primary_contact_config_defaults_check_interval() {
+    let config = OrchestratorPrimaryContactConfig::from(OrchestratorPrimaryContactToml {
+        enabled: Some(true),
+        mcp: Some("imessage".to_string()),
+        tool: None,
+        check_tool: None,
+        check_messages_every_seconds: None,
+        schedule: None,
+        startup_prompt: None,
+    });
+
+    assert_eq!(
+        config,
+        OrchestratorPrimaryContactConfig {
+            enabled: true,
+            mcp: Some("imessage".to_string()),
+            tool: None,
+            check_tool: None,
+            check_messages_every_seconds: 900,
+            schedule: Vec::new(),
+            startup_prompt: None,
         }
     );
 }
