@@ -155,6 +155,7 @@ impl TurnContext {
         .with_builtin_scratchpad_enabled(
             config.scratchpad.for_mode(collaboration_mode.mode).enabled,
         )
+        .with_builtin_schedule_enabled(config.schedule.for_mode(collaboration_mode.mode).enabled)
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &config.agent_roles,
         ));
@@ -436,6 +437,12 @@ impl Session {
         .with_builtin_scratchpad_enabled(
             per_turn_config
                 .scratchpad
+                .for_mode(session_configuration.collaboration_mode.mode)
+                .enabled,
+        )
+        .with_builtin_schedule_enabled(
+            per_turn_config
+                .schedule
                 .for_mode(session_configuration.collaboration_mode.mode)
                 .enabled,
         )

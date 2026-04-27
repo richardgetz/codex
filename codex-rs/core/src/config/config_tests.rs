@@ -58,6 +58,9 @@ use codex_config::types::OrchestratorPrimaryContactToml;
 use codex_config::types::OrchestratorThreadControlToml;
 use codex_config::types::OrchestratorToml;
 use codex_config::types::SandboxWorkspaceWrite;
+use codex_config::types::ScheduleConfig;
+use codex_config::types::ScheduleModeToml;
+use codex_config::types::ScheduleToml;
 use codex_config::types::ScratchpadConfig;
 use codex_config::types::ScratchpadModeToml;
 use codex_config::types::ScratchpadToml;
@@ -631,6 +634,46 @@ recover_after_compaction = false
     );
 }
 
+#[test]
+fn parses_mode_scoped_schedule_config() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[schedule]
+enabled = false
+
+[schedule.modes.default]
+enabled = true
+
+[schedule.modes.orchestrator]
+enabled = true
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.schedule,
+        Some(ScheduleToml {
+            enabled: Some(false),
+            modes: [
+                (
+                    ModeKind::Default,
+                    ScheduleModeToml {
+                        enabled: Some(true),
+                    },
+                ),
+                (
+                    ModeKind::Orchestrator,
+                    ScheduleModeToml {
+                        enabled: Some(true),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        })
+    );
+}
+
 #[tokio::test]
 async fn scratchpad_defaults_on_except_plan_and_supports_mode_overrides() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
@@ -661,6 +704,33 @@ recover_after_compaction = true
             .for_mode(ModeKind::Plan)
             .recover_after_compaction
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn schedule_defaults_to_orchestrator_only_and_supports_mode_overrides() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        toml::from_str::<ConfigToml>(
+            r#"
+[schedule.modes.default]
+enabled = true
+
+[schedule.modes.orchestrator]
+enabled = false
+"#,
+        )
+        .expect("TOML deserialization should succeed"),
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(config.schedule.for_mode(ModeKind::Default).enabled);
+    assert!(!config.schedule.for_mode(ModeKind::Continuous).enabled);
+    assert!(!config.schedule.for_mode(ModeKind::Orchestrator).enabled);
+    assert!(!config.schedule.for_mode(ModeKind::Plan).enabled);
     Ok(())
 }
 
@@ -2236,6 +2306,7 @@ async fn workspace_write_always_includes_runtime_roots_once() -> std::io::Result
     let memories_root = codex_home.path().join("memories");
     let orchestrator_memory_root = codex_home.path().join("orchestrator_memory");
     let scratchpad_root = codex_home.path().join("scratchpad");
+    let schedule_root = codex_home.path().join("schedule");
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
             sandbox_workspace_write: Some(SandboxWorkspaceWrite {
@@ -2273,9 +2344,15 @@ async fn workspace_write_always_includes_runtime_roots_once() -> std::io::Result
             "expected scratchpad root directory to exist at {}",
             scratchpad_root.display()
         );
+        assert!(
+            schedule_root.is_dir(),
+            "expected schedule root directory to exist at {}",
+            schedule_root.display()
+        );
         let expected_memories_root = memories_root.abs();
         let expected_orchestrator_memory_root = orchestrator_memory_root.abs();
         let expected_scratchpad_root = scratchpad_root.abs();
+        let expected_schedule_root = schedule_root.abs();
         match config.permissions.sandbox_policy.get() {
             SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
                 assert_eq!(
@@ -2304,6 +2381,15 @@ async fn workspace_write_always_includes_runtime_roots_once() -> std::io::Result
                     1,
                     "expected single writable root entry for {}",
                     expected_scratchpad_root.display()
+                );
+                assert_eq!(
+                    writable_roots
+                        .iter()
+                        .filter(|root| **root == expected_schedule_root)
+                        .count(),
+                    1,
+                    "expected single writable root entry for {}",
+                    expected_schedule_root.display()
                 );
             }
             other => panic!("expected workspace-write policy, got {other:?}"),
@@ -5713,6 +5799,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             memories: MemoriesConfig::default(),
             orchestrator_memory: OrchestratorMemoryConfig::default(),
             scratchpad: ScratchpadConfig::default(),
+            schedule: ScheduleConfig::default(),
             orchestrator: OrchestratorConfig::default(),
             thread_control: ThreadControlConfig::default(),
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -5916,6 +6003,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         memories: MemoriesConfig::default(),
         orchestrator_memory: OrchestratorMemoryConfig::default(),
         scratchpad: ScratchpadConfig::default(),
+        schedule: ScheduleConfig::default(),
         orchestrator: OrchestratorConfig::default(),
         thread_control: ThreadControlConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -6073,6 +6161,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         memories: MemoriesConfig::default(),
         orchestrator_memory: OrchestratorMemoryConfig::default(),
         scratchpad: ScratchpadConfig::default(),
+        schedule: ScheduleConfig::default(),
         orchestrator: OrchestratorConfig::default(),
         thread_control: ThreadControlConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -6215,6 +6304,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         memories: MemoriesConfig::default(),
         orchestrator_memory: OrchestratorMemoryConfig::default(),
         scratchpad: ScratchpadConfig::default(),
+        schedule: ScheduleConfig::default(),
         orchestrator: OrchestratorConfig::default(),
         thread_control: ThreadControlConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,

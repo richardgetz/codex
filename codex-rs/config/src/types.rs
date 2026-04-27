@@ -429,6 +429,98 @@ impl From<ScratchpadToml> for ScratchpadConfig {
     }
 }
 
+/// Built-in schedule behavior for one collaboration mode.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ScheduleModeToml {
+    /// When false, the built-in schedule tool namespace is not exposed in this mode.
+    pub enabled: Option<bool>,
+}
+
+/// Built-in schedule settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ScheduleToml {
+    /// Global default for built-in schedule tool exposure.
+    pub enabled: Option<bool>,
+    /// Collaboration-mode-specific overrides.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub modes: HashMap<ModeKind, ScheduleModeToml>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScheduleModeConfig {
+    pub enabled: bool,
+}
+
+impl ScheduleModeConfig {
+    const fn default_for_mode(mode: ModeKind) -> Self {
+        match mode {
+            ModeKind::Orchestrator => Self { enabled: true },
+            ModeKind::Default
+            | ModeKind::Plan
+            | ModeKind::Continuous
+            | ModeKind::PairProgramming
+            | ModeKind::Execute => Self { enabled: false },
+        }
+    }
+}
+
+/// Effective built-in schedule settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleConfig {
+    pub modes: HashMap<ModeKind, ScheduleModeConfig>,
+}
+
+impl Default for ScheduleConfig {
+    fn default() -> Self {
+        let modes = [
+            ModeKind::Default,
+            ModeKind::Plan,
+            ModeKind::Continuous,
+            ModeKind::Orchestrator,
+            ModeKind::PairProgramming,
+            ModeKind::Execute,
+        ]
+        .into_iter()
+        .map(|mode| (mode, ScheduleModeConfig::default_for_mode(mode)))
+        .collect();
+        Self { modes }
+    }
+}
+
+impl ScheduleConfig {
+    pub fn for_mode(&self, mode: ModeKind) -> ScheduleModeConfig {
+        self.modes
+            .get(&mode)
+            .copied()
+            .unwrap_or_else(|| ScheduleModeConfig::default_for_mode(mode))
+    }
+}
+
+impl From<ScheduleToml> for ScheduleConfig {
+    fn from(toml: ScheduleToml) -> Self {
+        let defaults = ScheduleConfig::default();
+        let modes = defaults
+            .modes
+            .into_iter()
+            .map(|(mode, default)| {
+                let mode_toml = toml.modes.get(&mode);
+                (
+                    mode,
+                    ScheduleModeConfig {
+                        enabled: mode_toml
+                            .and_then(|config| config.enabled)
+                            .or(toml.enabled)
+                            .unwrap_or(default.enabled),
+                    },
+                )
+            })
+            .collect();
+        Self { modes }
+    }
+}
+
 /// Managed account-alias settings loaded from config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]

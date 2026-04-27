@@ -1,5 +1,6 @@
 pub(crate) mod agent_jobs;
 pub(crate) mod apply_patch;
+pub(crate) mod builtin_schedule;
 pub(crate) mod builtin_scratchpad;
 mod dynamic;
 mod js_repl;

@@ -49,6 +49,7 @@ use codex_config::types::OrchestratorToml;
 use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
+use codex_config::types::ScheduleConfig;
 use codex_config::types::ScratchpadConfig;
 use codex_config::types::ScratchpadToml;
 use codex_config::types::ShellEnvironmentPolicy;
@@ -461,6 +462,9 @@ pub struct Config {
 
     /// Built-in scratchpad subsystem settings.
     pub scratchpad: ScratchpadConfig,
+
+    /// Built-in schedule subsystem settings.
+    pub schedule: ScheduleConfig,
 
     /// Managed account-alias settings for auth storage selection.
     pub accounts: AccountsConfig,
@@ -1872,6 +1876,14 @@ impl Config {
         {
             additional_writable_roots.push(scratchpad_root);
         }
+        let schedule_root = codex_home.join("schedule");
+        std::fs::create_dir_all(&schedule_root)?;
+        if !additional_writable_roots
+            .iter()
+            .any(|existing| existing == &schedule_root)
+        {
+            additional_writable_roots.push(schedule_root);
+        }
 
         let profiles_are_active = matches!(
             permission_config_syntax,
@@ -2489,6 +2501,7 @@ impl Config {
             memories: cfg.memories.unwrap_or_default().into(),
             orchestrator_memory: cfg.orchestrator_memory.unwrap_or_default().into(),
             scratchpad: resolve_scratchpad_config(cfg.scratchpad, cfg.orchestrator.as_ref()),
+            schedule: cfg.schedule.unwrap_or_default().into(),
             accounts: cfg.accounts.unwrap_or_default().into(),
             orchestrator: cfg.orchestrator.unwrap_or_default().into(),
             thread_control: cfg.thread_control.unwrap_or_default().into(),

@@ -178,6 +178,38 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - The legacy `[orchestrator].recover_scratchpad_after_compaction` key remains
   supported as an Orchestrator-only compatibility alias.
 
+### Built-in schedule
+
+- The fork has a canonical built-in `schedule` tool namespace for durable
+  reminders, recurring routines, and conditional future checks.
+- Orchestrator mode exposes it by default. Default and Continuous modes can opt
+  in. Plan mode is disabled by default.
+- Scheduled triggers are JSON-backed under `<codex_home>/schedule/triggers`
+  unless a tool call provides `state_home`.
+- `<codex_home>/schedule` is created and added to workspace-write writable roots
+  automatically.
+- Agents receive mode-scoped developer guidance explaining when to use schedule,
+  when to prefer scratchpad pending waits instead, and how to link triggers to
+  built-in scratchpad ids or orchestrator memory context.
+- Built-in schedule exposure is controlled globally and per mode with:
+
+  ```toml
+  [schedule]
+  enabled = false
+
+  [schedule.modes.orchestrator]
+  enabled = true
+
+  [schedule.modes.default]
+  enabled = true
+  ```
+
+- The namespace supports create/get/list/list-due/update/close/reopen/delete,
+  `mark_scheduled_trigger_fired`, and schema discovery.
+- Recurrence metadata is preserved as structured JSON. `interval_seconds` is
+  mechanically advanced by `mark_scheduled_trigger_fired`; richer schedules can
+  store their source text/timezone/day combination for future runners or agents.
+
 ### Account aliases
 
 - `--account <alias>` starts a session using a managed account alias.

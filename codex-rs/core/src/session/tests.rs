@@ -6081,6 +6081,35 @@ async fn build_initial_context_respects_mode_scoped_scratchpad_disable() {
     );
 }
 
+#[tokio::test]
+async fn build_initial_context_injects_builtin_schedule_only_when_enabled() {
+    let (session, mut turn_context) = make_session_and_context().await;
+
+    turn_context.collaboration_mode.mode = ModeKind::Default;
+    let default_context = session.build_initial_context(&turn_context).await;
+    let default_developer_texts = developer_input_texts(&default_context).join("\n");
+    assert!(
+        !default_developer_texts.contains("Built-in Schedule"),
+        "did not expect schedule guidance in default mode, got {default_developer_texts:?}"
+    );
+
+    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
+    let orchestrator_context = session.build_initial_context(&turn_context).await;
+    let orchestrator_developer_texts = developer_input_texts(&orchestrator_context).join("\n");
+    assert!(
+        orchestrator_developer_texts.contains("Built-in Schedule"),
+        "expected schedule guidance in orchestrator mode, got {orchestrator_developer_texts:?}"
+    );
+
+    turn_context.collaboration_mode.mode = ModeKind::Plan;
+    let plan_context = session.build_initial_context(&turn_context).await;
+    let plan_developer_texts = developer_input_texts(&plan_context).join("\n");
+    assert!(
+        !plan_developer_texts.contains("Built-in Schedule"),
+        "did not expect schedule guidance in plan mode, got {plan_developer_texts:?}"
+    );
+}
+
 #[test]
 fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
     let session_telemetry = test_session_telemetry_without_metadata();

@@ -2361,6 +2361,35 @@
       },
       "type": "object"
     },
+    "ScheduleModeToml": {
+      "additionalProperties": false,
+      "description": "Built-in schedule behavior for one collaboration mode.",
+      "properties": {
+        "enabled": {
+          "description": "When false, the built-in schedule tool namespace is not exposed in this mode.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ScheduleToml": {
+      "additionalProperties": false,
+      "description": "Built-in schedule settings loaded from config.toml.",
+      "properties": {
+        "enabled": {
+          "description": "Global default for built-in schedule tool exposure.",
+          "type": "boolean"
+        },
+        "modes": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ScheduleModeToml"
+          },
+          "description": "Collaboration-mode-specific overrides.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "ScratchpadModeToml": {
       "additionalProperties": false,
       "description": "Built-in scratchpad behavior for one collaboration mode.",
@@ -3555,6 +3584,14 @@
         }
       ],
       "description": "Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`."
+    },
+    "schedule": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ScheduleToml"
+        }
+      ],
+      "description": "Built-in schedule subsystem settings."
     },
     "scratchpad": {
       "allOf": [
