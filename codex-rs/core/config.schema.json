@@ -1734,6 +1734,34 @@
       },
       "type": "object"
     },
+    "OrchestratorPrimaryContactScheduleToml": {
+      "additionalProperties": false,
+      "description": "Local-time primary-contact polling interval override.",
+      "properties": {
+        "check_messages_every_seconds": {
+          "description": "Polling interval to use when this schedule entry matches.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "days": {
+          "description": "Optional day names. Omit or leave empty to match every day.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "end": {
+          "description": "Local end time in `HH:MM` 24-hour format.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Local start time in `HH:MM` 24-hour format.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "OrchestratorPrimaryContactToml": {
       "additionalProperties": false,
       "description": "Primary user-contact channel that Orchestrator mode should start on session boot.",
@@ -1755,6 +1783,13 @@
         "mcp": {
           "description": "MCP server or communication channel name, for example `\"imessage\"`.",
           "type": "string"
+        },
+        "schedule": {
+          "description": "Optional local-time schedule that overrides `check_messages_every_seconds` when a rule matches.",
+          "items": {
+            "$ref": "#/definitions/OrchestratorPrimaryContactScheduleToml"
+          },
+          "type": "array"
         },
         "startup_prompt": {
           "description": "Optional replacement startup prompt for advanced channel-specific behavior.",

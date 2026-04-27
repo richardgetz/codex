@@ -165,6 +165,7 @@ fn orchestrator_primary_contact_config_trims_optional_fields() {
         tool: Some(" imessage_followup_start ".to_string()),
         check_tool: Some(" imessage_followup_status ".to_string()),
         check_messages_every_seconds: Some(60),
+        schedule: None,
         startup_prompt: Some(" start follow-up ".to_string()),
     });
 
@@ -176,6 +177,7 @@ fn orchestrator_primary_contact_config_trims_optional_fields() {
             tool: Some("imessage_followup_start".to_string()),
             check_tool: Some("imessage_followup_status".to_string()),
             check_messages_every_seconds: 60,
+            schedule: Vec::new(),
             startup_prompt: Some("start follow-up".to_string()),
         }
     );
@@ -189,6 +191,7 @@ fn orchestrator_primary_contact_config_defaults_check_interval() {
         tool: None,
         check_tool: None,
         check_messages_every_seconds: None,
+        schedule: None,
         startup_prompt: None,
     });
 
@@ -200,6 +203,7 @@ fn orchestrator_primary_contact_config_defaults_check_interval() {
             tool: None,
             check_tool: None,
             check_messages_every_seconds: 900,
+            schedule: Vec::new(),
             startup_prompt: None,
         }
     );

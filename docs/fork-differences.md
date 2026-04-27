@@ -70,6 +70,29 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   primary_contact = { enabled = true, mcp = "imessage", check_messages_every_seconds = 900 }
   ```
 
+- The default interval can be overridden by an optional local-time schedule:
+
+  ```toml
+  [orchestrator.primary_contact]
+  enabled = true
+  mcp = "imessage"
+  check_messages_every_seconds = 900
+
+  [[orchestrator.primary_contact.schedule]]
+  days = ["weekdays"]
+  start = "07:00"
+  end = "22:00"
+  check_messages_every_seconds = 300
+
+  [[orchestrator.primary_contact.schedule]]
+  start = "22:00"
+  end = "07:00"
+  check_messages_every_seconds = 1800
+  ```
+
+- Schedule entries use local `HH:MM` time. `days` may be omitted for every day,
+  or set to day names like `"mon"`/`"monday"`, `"weekdays"`, or `"weekends"`.
+  Overnight windows are supported.
 - `check_messages_every_seconds = 0` disables the harness-level poller.
 - When the poller is armed and no model turn is active, the terminal title uses
   a static waiting braille marker so a headless or background window still looks

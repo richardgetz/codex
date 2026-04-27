@@ -310,6 +310,7 @@ fn initial_prompt_with_primary_contact(
             mcp,
             primary_contact.tool.as_deref(),
             primary_contact.check_messages_every_seconds,
+            !primary_contact.schedule.is_empty(),
         )
     });
     match initial_prompt {
@@ -324,6 +325,7 @@ fn default_primary_contact_startup_prompt(
     mcp: &str,
     tool: Option<&str>,
     check_messages_every_seconds: u32,
+    has_schedule: bool,
 ) -> String {
     let tool = tool
         .map(str::to_string)
@@ -334,6 +336,10 @@ fn default_primary_contact_startup_prompt(
         .unwrap_or_else(|| format!("{mcp} follow-up start tool"));
     let check_note = if check_messages_every_seconds == 0 {
         "Harness-level primary-contact message polling is disabled.".to_string()
+    } else if has_schedule {
+        format!(
+            "The harness will also check this channel for new user messages on the configured schedule, falling back to every {check_messages_every_seconds} seconds when no schedule entry matches, without calling the model unless a new user message is found."
+        )
     } else {
         format!(
             "The harness will also check this channel for new user messages every {check_messages_every_seconds} seconds without calling the model unless a new user message is found."

@@ -469,8 +469,25 @@ pub struct OrchestratorPrimaryContactToml {
     /// How often the harness should check the primary contact channel for new
     /// user messages. Defaults to 900 seconds. `0` disables polling.
     pub check_messages_every_seconds: Option<u32>,
+    /// Optional local-time schedule that overrides
+    /// `check_messages_every_seconds` when a rule matches.
+    pub schedule: Option<Vec<OrchestratorPrimaryContactScheduleToml>>,
     /// Optional replacement startup prompt for advanced channel-specific behavior.
     pub startup_prompt: Option<String>,
+}
+
+/// Local-time primary-contact polling interval override.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct OrchestratorPrimaryContactScheduleToml {
+    /// Optional day names. Omit or leave empty to match every day.
+    pub days: Option<Vec<String>>,
+    /// Local start time in `HH:MM` 24-hour format.
+    pub start: Option<String>,
+    /// Local end time in `HH:MM` 24-hour format.
+    pub end: Option<String>,
+    /// Polling interval to use when this schedule entry matches.
+    pub check_messages_every_seconds: Option<u32>,
 }
 
 /// Orchestrator behavior settings loaded from config.toml.
@@ -584,6 +601,7 @@ pub struct OrchestratorPrimaryContactConfig {
     pub tool: Option<String>,
     pub check_tool: Option<String>,
     pub check_messages_every_seconds: u32,
+    pub schedule: Vec<OrchestratorPrimaryContactScheduleToml>,
     pub startup_prompt: Option<String>,
 }
 
@@ -595,6 +613,7 @@ impl Default for OrchestratorPrimaryContactConfig {
             tool: None,
             check_tool: None,
             check_messages_every_seconds: 900,
+            schedule: Vec::new(),
             startup_prompt: None,
         }
     }
@@ -611,6 +630,7 @@ impl From<OrchestratorPrimaryContactToml> for OrchestratorPrimaryContactConfig {
             check_messages_every_seconds: toml
                 .check_messages_every_seconds
                 .unwrap_or(defaults.check_messages_every_seconds),
+            schedule: toml.schedule.unwrap_or_default(),
             startup_prompt: trimmed_non_empty(toml.startup_prompt),
         }
     }

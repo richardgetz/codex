@@ -25,6 +25,8 @@ async fn build_developer_instructions_renders_summary_template() {
             .unwrap();
 
     assert!(instructions.contains("Orchestrator Memory"));
+    assert!(instructions.contains("Default to checking the memory"));
+    assert!(instructions.contains("Do not spawn a subagent or search the workspace before this"));
     assert!(instructions.contains(&format!(
         "- {} (already provided below; do NOT open again)",
         orchestrator_memory_dir.join("summary.md").display()

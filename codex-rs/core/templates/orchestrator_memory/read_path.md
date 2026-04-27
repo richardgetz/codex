@@ -10,6 +10,11 @@ Never update Orchestrator memory. You can only read it.
 
 Use it when any of these are true:
 
+- you are in Orchestrator mode and the user asks a question, especially
+  "what/which/how do we usually..." questions. Default to checking the memory
+  summary first before searching the repo, using external tools, or spawning a
+  subagent, unless the user explicitly asks you to ignore memory or to verify
+  live state only.
 - you are in Orchestrator mode and need to decide how to interpret the user's
   request,
 - you are choosing how to delegate to subagents,
@@ -38,8 +43,9 @@ Quick pass:
 4. Treat this as continuity memory: preferences, personal context, relational
    attunement, operator playbook lessons, ongoing user threads, and
    lightweight follow-up state.
-5. For direct recall-style asks, treat the remembered content below as a
-   first-class source before improvising or asking the user to restate it.
+5. For direct recall-style asks, answer from memory first when it contains a
+   relevant fact. Do not spawn a subagent or search the workspace before this
+   pass unless the user explicitly requested live verification.
 6. Ignore repo implementation details here; those belong in project memories or
    rollout history, not Orchestrator memory.
 

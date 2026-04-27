@@ -53,6 +53,7 @@ use codex_config::types::OrchestratorEscalationMode;
 use codex_config::types::OrchestratorEscalationToml;
 use codex_config::types::OrchestratorMemoryConfig;
 use codex_config::types::OrchestratorMemoryToml;
+use codex_config::types::OrchestratorPrimaryContactScheduleToml;
 use codex_config::types::OrchestratorPrimaryContactToml;
 use codex_config::types::OrchestratorThreadControlToml;
 use codex_config::types::OrchestratorToml;
@@ -513,7 +514,22 @@ tool = "imessage_send_message"
 active_agent_checkin_seconds = 900
 allowed_spawn_modes = ["default", "continuous"]
 recover_scratchpad_after_compaction = false
-primary_contact = { enabled = true, mcp = "imessage", check_messages_every_seconds = 300 }
+
+[orchestrator.primary_contact]
+enabled = true
+mcp = "imessage"
+check_messages_every_seconds = 300
+
+[[orchestrator.primary_contact.schedule]]
+days = ["mon", "tue", "wed", "thu", "fri"]
+start = "07:00"
+end = "22:00"
+check_messages_every_seconds = 300
+
+[[orchestrator.primary_contact.schedule]]
+start = "22:00"
+end = "07:00"
+check_messages_every_seconds = 1800
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -532,6 +548,26 @@ primary_contact = { enabled = true, mcp = "imessage", check_messages_every_secon
                 tool: None,
                 check_tool: None,
                 check_messages_every_seconds: Some(300),
+                schedule: Some(vec![
+                    OrchestratorPrimaryContactScheduleToml {
+                        days: Some(vec![
+                            "mon".to_string(),
+                            "tue".to_string(),
+                            "wed".to_string(),
+                            "thu".to_string(),
+                            "fri".to_string(),
+                        ]),
+                        start: Some("07:00".to_string()),
+                        end: Some("22:00".to_string()),
+                        check_messages_every_seconds: Some(300),
+                    },
+                    OrchestratorPrimaryContactScheduleToml {
+                        days: None,
+                        start: Some("22:00".to_string()),
+                        end: Some("07:00".to_string()),
+                        check_messages_every_seconds: Some(1800),
+                    },
+                ]),
                 startup_prompt: None,
             }),
             recover_scratchpad_after_compaction: Some(false),

@@ -4,6 +4,12 @@
 //! limits, add-credit nudges, and feedback uploads. Results are routed back through `AppEvent` so
 //! the main event loop remains single-threaded.
 
+use chrono::Datelike;
+use chrono::Local;
+use chrono::Timelike;
+use chrono::Weekday;
+use codex_config::types::OrchestratorPrimaryContactScheduleToml;
+
 use super::*;
 
 impl App {
@@ -72,8 +78,10 @@ impl App {
                     }
                 }
 
-                tokio::time::sleep(Duration::from_secs(u64::from(poll_config.interval_seconds)))
-                    .await;
+                tokio::time::sleep(Duration::from_secs(u64::from(
+                    poll_config.interval_seconds_now(),
+                )))
+                .await;
             }
         });
         self.primary_contact_polling = Some(PrimaryContactPollingState { thread_id, task });
@@ -468,6 +476,16 @@ impl App {
 pub(super) struct PrimaryContactPollConfig {
     mcp: String,
     tool: String,
+    arguments: Option<serde_json::Value>,
+    default_interval_seconds: u32,
+    schedule: Vec<PrimaryContactPollSchedule>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrimaryContactPollSchedule {
+    days: Option<Vec<Weekday>>,
+    start_minute: u16,
+    end_minute: u16,
     interval_seconds: u32,
 }
 
@@ -491,16 +509,153 @@ impl PrimaryContactPollConfig {
         Some(Self {
             mcp: mcp.to_string(),
             tool,
-            interval_seconds: primary_contact.check_messages_every_seconds,
+            arguments: default_primary_contact_check_arguments(mcp),
+            default_interval_seconds: primary_contact.check_messages_every_seconds,
+            schedule: primary_contact
+                .schedule
+                .iter()
+                .filter_map(PrimaryContactPollSchedule::from_config)
+                .collect(),
         })
+    }
+
+    fn interval_seconds_now(&self) -> u32 {
+        let now = Local::now();
+        self.interval_seconds_at(
+            now.weekday(),
+            (now.hour() * 60 + now.minute())
+                .try_into()
+                .unwrap_or(/*default*/ 0),
+        )
+    }
+
+    fn interval_seconds_at(&self, weekday: Weekday, minute_of_day: u16) -> u32 {
+        self.schedule
+            .iter()
+            .find_map(|schedule| schedule.interval_seconds_at(weekday, minute_of_day))
+            .unwrap_or(self.default_interval_seconds)
+    }
+}
+
+impl PrimaryContactPollSchedule {
+    fn from_config(toml: &OrchestratorPrimaryContactScheduleToml) -> Option<Self> {
+        let start_minute = parse_local_time_minutes(toml.start.as_deref()?)?;
+        let end_minute = parse_local_time_minutes(toml.end.as_deref()?)?;
+        let interval_seconds = toml.check_messages_every_seconds?;
+        if interval_seconds == 0 || start_minute == end_minute {
+            return None;
+        }
+        let days = parse_schedule_days(toml.days.as_deref())?;
+        Some(Self {
+            days,
+            start_minute,
+            end_minute,
+            interval_seconds,
+        })
+    }
+
+    fn interval_seconds_at(&self, weekday: Weekday, minute_of_day: u16) -> Option<u32> {
+        let active_day = if self.start_minute < self.end_minute {
+            (self.start_minute..self.end_minute)
+                .contains(&minute_of_day)
+                .then_some(weekday)?
+        } else if minute_of_day >= self.start_minute {
+            weekday
+        } else if minute_of_day < self.end_minute {
+            previous_weekday(weekday)
+        } else {
+            return None;
+        };
+        if self
+            .days
+            .as_ref()
+            .is_none_or(|days| days.contains(&active_day))
+        {
+            Some(self.interval_seconds)
+        } else {
+            None
+        }
+    }
+}
+
+fn parse_local_time_minutes(value: &str) -> Option<u16> {
+    let (hour, minute) = value.trim().split_once(':')?;
+    let hour = hour.parse::<u16>().ok()?;
+    let minute = minute.parse::<u16>().ok()?;
+    if hour < 24 && minute < 60 {
+        Some(hour * 60 + minute)
+    } else {
+        None
+    }
+}
+
+fn parse_schedule_days(days: Option<&[String]>) -> Option<Option<Vec<Weekday>>> {
+    let Some(days) = days else {
+        return Some(None);
+    };
+    let mut parsed = Vec::new();
+    for day in days {
+        match day.trim().to_ascii_lowercase().as_str() {
+            "" | "*" | "all" | "any" | "daily" | "everyday" => return Some(None),
+            "weekday" | "weekdays" => {
+                parsed.extend([
+                    Weekday::Mon,
+                    Weekday::Tue,
+                    Weekday::Wed,
+                    Weekday::Thu,
+                    Weekday::Fri,
+                ]);
+            }
+            "weekend" | "weekends" => {
+                parsed.extend([Weekday::Sat, Weekday::Sun]);
+            }
+            "mon" | "monday" => parsed.push(Weekday::Mon),
+            "tue" | "tues" | "tuesday" => parsed.push(Weekday::Tue),
+            "wed" | "weds" | "wednesday" => parsed.push(Weekday::Wed),
+            "thu" | "thur" | "thurs" | "thursday" => parsed.push(Weekday::Thu),
+            "fri" | "friday" => parsed.push(Weekday::Fri),
+            "sat" | "saturday" => parsed.push(Weekday::Sat),
+            "sun" | "sunday" => parsed.push(Weekday::Sun),
+            _ => return None,
+        }
+    }
+    parsed.sort_by_key(Weekday::num_days_from_monday);
+    parsed.dedup();
+    if parsed.is_empty() {
+        Some(None)
+    } else {
+        Some(Some(parsed))
+    }
+}
+
+fn previous_weekday(weekday: Weekday) -> Weekday {
+    match weekday {
+        Weekday::Mon => Weekday::Sun,
+        Weekday::Tue => Weekday::Mon,
+        Weekday::Wed => Weekday::Tue,
+        Weekday::Thu => Weekday::Wed,
+        Weekday::Fri => Weekday::Thu,
+        Weekday::Sat => Weekday::Fri,
+        Weekday::Sun => Weekday::Sat,
     }
 }
 
 fn default_primary_contact_check_tool(mcp: &str) -> String {
     if mcp.eq_ignore_ascii_case("imessage") {
-        "imessage_followup_status".to_string()
+        "imessage_followup_wait_for_reply".to_string()
     } else {
         format!("{mcp}_followup_status")
+    }
+}
+
+fn default_primary_contact_check_arguments(mcp: &str) -> Option<serde_json::Value> {
+    if mcp.eq_ignore_ascii_case("imessage") {
+        Some(serde_json::json!({
+            "max_polls": 1,
+            "block_until_reply": false
+        }))
+    } else {
+        None
     }
 }
 
@@ -517,7 +672,7 @@ async fn poll_primary_contact_once(
                 thread_id: thread_id.to_string(),
                 server: poll_config.mcp.clone(),
                 tool: poll_config.tool.clone(),
-                arguments: None,
+                arguments: poll_config.arguments.clone(),
                 meta: None,
             },
         })
@@ -545,6 +700,9 @@ fn extract_message_from_value(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::Object(map) => {
             if explicit_no_new_message(map) {
+                if let Some(message) = ambiguous_primary_contact_message(map) {
+                    return Some(message);
+                }
                 return None;
             }
             let explicit_new_message = explicit_new_message(map);
@@ -553,7 +711,7 @@ fn extract_message_from_value(value: &serde_json::Value) -> Option<String> {
             {
                 return Some(message);
             }
-            for key in ["user_message", "message"] {
+            for key in ["user_message", "message", "reply_text", "raw_reply_text"] {
                 if let Some(message) = map.get(key).and_then(extract_text_field)
                     && !message.is_empty()
                 {
@@ -578,16 +736,49 @@ fn extract_message_from_value(value: &serde_json::Value) -> Option<String> {
     }
 }
 
+fn ambiguous_primary_contact_message(
+    map: &serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
+    if map.get("ambiguous").and_then(serde_json::Value::as_bool) != Some(true) {
+        return None;
+    }
+    let match_reason = map
+        .get("match_reason")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !matches!(
+        match_reason,
+        "conflicting_reply_target" | "conflicting_session_ids" | "single_untagged_reply"
+    ) {
+        return None;
+    }
+    map.get("raw_reply_text")
+        .and_then(extract_text_field)
+        .filter(|message| !message.is_empty())
+}
+
 fn explicit_no_new_message(map: &serde_json::Map<String, serde_json::Value>) -> bool {
-    ["has_new_message", "has_message", "new_message", "available"]
-        .iter()
-        .any(|key| map.get(*key).and_then(serde_json::Value::as_bool) == Some(false))
+    [
+        "has_new_message",
+        "has_message",
+        "new_message",
+        "available",
+        "reply_received",
+    ]
+    .iter()
+    .any(|key| map.get(*key).and_then(serde_json::Value::as_bool) == Some(false))
 }
 
 fn explicit_new_message(map: &serde_json::Map<String, serde_json::Value>) -> bool {
-    ["has_new_message", "has_message", "new_message", "available"]
-        .iter()
-        .any(|key| map.get(*key).and_then(serde_json::Value::as_bool) == Some(true))
+    [
+        "has_new_message",
+        "has_message",
+        "new_message",
+        "available",
+        "reply_received",
+    ]
+    .iter()
+    .any(|key| map.get(*key).and_then(serde_json::Value::as_bool) == Some(true))
 }
 
 fn extract_text_field(value: &serde_json::Value) -> Option<String> {
@@ -997,6 +1188,120 @@ mod tests {
         };
 
         assert_eq!(extract_primary_contact_message(&response), None);
+    }
+
+    #[test]
+    fn primary_contact_poll_extracts_imessage_wait_reply_text() {
+        let response = McpServerToolCallResponse {
+            content: Vec::new(),
+            structured_content: Some(serde_json::json!({
+                "reply_received": true,
+                "reply_text": " keep going "
+            })),
+            is_error: None,
+            meta: None,
+        };
+
+        assert_eq!(
+            extract_primary_contact_message(&response),
+            Some("keep going".to_string())
+        );
+    }
+
+    #[test]
+    fn primary_contact_poll_ignores_imessage_wait_without_reply() {
+        let response = McpServerToolCallResponse {
+            content: Vec::new(),
+            structured_content: Some(serde_json::json!({
+                "reply_received": false,
+                "awaiting_reply": true,
+                "reply_text": "stale"
+            })),
+            is_error: None,
+            meta: None,
+        };
+
+        assert_eq!(extract_primary_contact_message(&response), None);
+    }
+
+    #[test]
+    fn primary_contact_poll_accepts_ambiguous_conflicting_reply_target() {
+        let response = McpServerToolCallResponse {
+            content: Vec::new(),
+            structured_content: Some(serde_json::json!({
+                "reply_received": false,
+                "ambiguous": true,
+                "match_reason": "conflicting_reply_target",
+                "raw_reply_text": " just curious if you're awake "
+            })),
+            is_error: None,
+            meta: None,
+        };
+
+        assert_eq!(
+            extract_primary_contact_message(&response),
+            Some("just curious if you're awake".to_string())
+        );
+    }
+
+    #[test]
+    fn primary_contact_imessage_check_is_one_shot() {
+        assert_eq!(
+            default_primary_contact_check_tool("imessage"),
+            "imessage_followup_wait_for_reply"
+        );
+        assert_eq!(
+            default_primary_contact_check_arguments("imessage"),
+            Some(serde_json::json!({
+                "max_polls": 1,
+                "block_until_reply": false
+            }))
+        );
+    }
+
+    #[test]
+    fn primary_contact_schedule_overrides_default_interval_when_active() {
+        let poll_config = PrimaryContactPollConfig {
+            mcp: "imessage".to_string(),
+            tool: "imessage_followup_status".to_string(),
+            arguments: None,
+            default_interval_seconds: 900,
+            schedule: vec![
+                PrimaryContactPollSchedule::from_config(&OrchestratorPrimaryContactScheduleToml {
+                    days: Some(vec!["weekdays".to_string()]),
+                    start: Some("07:00".to_string()),
+                    end: Some("22:00".to_string()),
+                    check_messages_every_seconds: Some(300),
+                })
+                .expect("valid schedule"),
+            ],
+        };
+
+        assert_eq!(poll_config.interval_seconds_at(Weekday::Mon, 8 * 60), 300);
+        assert_eq!(poll_config.interval_seconds_at(Weekday::Sat, 8 * 60), 900);
+        assert_eq!(poll_config.interval_seconds_at(Weekday::Mon, 23 * 60), 900);
+    }
+
+    #[test]
+    fn primary_contact_schedule_supports_overnight_windows() {
+        let schedule =
+            PrimaryContactPollSchedule::from_config(&OrchestratorPrimaryContactScheduleToml {
+                days: Some(vec!["mon".to_string()]),
+                start: Some("22:00".to_string()),
+                end: Some("07:00".to_string()),
+                check_messages_every_seconds: Some(1800),
+            })
+            .expect("valid schedule");
+
+        assert_eq!(
+            schedule.interval_seconds_at(Weekday::Mon, 23 * 60),
+            Some(1800)
+        );
+        assert_eq!(
+            schedule.interval_seconds_at(Weekday::Tue, 6 * 60),
+            Some(1800)
+        );
+        assert_eq!(schedule.interval_seconds_at(Weekday::Tue, 8 * 60), None);
     }
 
     #[test]
