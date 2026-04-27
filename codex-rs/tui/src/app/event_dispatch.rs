@@ -583,6 +583,7 @@ impl App {
             }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
+                self.ensure_primary_contact_polling(app_server);
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);

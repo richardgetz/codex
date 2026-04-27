@@ -668,12 +668,18 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     last_subagent_backfill_attempt: Option<ThreadId>,
     primary_session_configured: Option<ThreadSessionState>,
+    primary_contact_polling: Option<PrimaryContactPollingState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
     // Serialize plugin enablement writes per plugin so stale completions cannot
     // overwrite a newer toggle, even if the plugin is toggled from different
     // cwd contexts.
     pending_plugin_enabled_writes: HashMap<String, Option<bool>>,
+}
+
+struct PrimaryContactPollingState {
+    thread_id: ThreadId,
+    task: JoinHandle<()>,
 }
 
 fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<AppServerTurnError> {
@@ -1045,6 +1051,7 @@ impl App {
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
+            primary_contact_polling: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),
@@ -1053,11 +1060,7 @@ impl App {
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
         }
-        if initial_collaboration_mode == Some(ModeKind::Orchestrator)
-            && let Some(thread_id) = app.primary_thread_id
-        {
-            app.start_primary_contact_polling(&app_server, thread_id);
-        }
+        app.ensure_primary_contact_polling(&app_server);
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -1279,6 +1282,9 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
+        if let Some(state) = self.primary_contact_polling.take() {
+            state.task.abort();
+        }
         if let Err(err) = self.chat_widget.clear_managed_terminal_title() {
             tracing::debug!(error = %err, "failed to clear terminal title on app drop");
         }

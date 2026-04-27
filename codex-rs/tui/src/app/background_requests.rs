@@ -7,20 +7,56 @@
 use super::*;
 
 impl App {
-    pub(super) fn start_primary_contact_polling(
-        &mut self,
-        app_server: &AppServerSession,
-        thread_id: ThreadId,
-    ) {
-        let Some(poll_config) = PrimaryContactPollConfig::from_config(&self.config) else {
+    pub(super) fn ensure_primary_contact_polling(&mut self, app_server: &AppServerSession) {
+        let Some((thread_id, poll_config)) = self.primary_contact_polling_candidate() else {
+            self.stop_primary_contact_polling();
             return;
         };
 
+        if self
+            .primary_contact_polling
+            .as_ref()
+            .is_some_and(|state| state.thread_id == thread_id)
+        {
+            self.chat_widget
+                .set_primary_contact_waiting(/*waiting*/ true);
+            return;
+        }
+
+        self.stop_primary_contact_polling();
+        self.start_primary_contact_polling(app_server, thread_id, poll_config);
+    }
+
+    pub(super) fn primary_contact_polling_candidate(
+        &self,
+    ) -> Option<(ThreadId, PrimaryContactPollConfig)> {
+        if self.chat_widget.active_collaboration_mode_kind() != ModeKind::Orchestrator {
+            return None;
+        }
+        let poll_config = PrimaryContactPollConfig::from_config(&self.config)?;
+        let thread_id = self.primary_thread_id?;
+        Some((thread_id, poll_config))
+    }
+
+    fn stop_primary_contact_polling(&mut self) {
+        if let Some(state) = self.primary_contact_polling.take() {
+            state.task.abort();
+        }
+        self.chat_widget
+            .set_primary_contact_waiting(/*waiting*/ false);
+    }
+
+    fn start_primary_contact_polling(
+        &mut self,
+        app_server: &AppServerSession,
+        thread_id: ThreadId,
+        poll_config: PrimaryContactPollConfig,
+    ) {
         self.chat_widget
             .set_primary_contact_waiting(/*waiting*/ true);
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             loop {
                 match poll_primary_contact_once(&request_handle, thread_id, &poll_config).await {
                     Ok(Some(text)) => {
@@ -40,6 +76,7 @@ impl App {
                     .await;
             }
         });
+        self.primary_contact_polling = Some(PrimaryContactPollingState { thread_id, task });
     }
 
     pub(super) fn fetch_mcp_inventory(
