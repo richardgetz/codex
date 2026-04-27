@@ -123,6 +123,28 @@ async fn process_completed_turn(
         } else {
             "heuristics produced no continuity candidates"
         };
+        if forced_trigger.is_none()
+            && !turn_context
+                .config
+                .orchestrator_memory
+                .model_on_heuristic_miss
+        {
+            append_diagnostic_event(
+                &turn_context.config.codex_home,
+                "skipped_model_classifier_heuristic_miss",
+                &turn_context.sub_id,
+                Some(classifier_reason),
+            )
+            .await?;
+            append_diagnostic_event(
+                &turn_context.config.codex_home,
+                "skipped_no_signal",
+                &turn_context.sub_id,
+                Some("no continuity signal or follow-up state detected"),
+            )
+            .await?;
+            return Ok(());
+        }
         append_diagnostic_event(
             &turn_context.config.codex_home,
             "running_model_classifier",
@@ -212,9 +234,12 @@ async fn process_completed_turn(
         {
             return;
         }
-        if let Err(err) =
+        let consolidation_result = if config.orchestrator_memory.model_consolidation {
             super::model::consolidate_with_fallback(&session, &config, generation).await
-        {
+        } else {
+            consolidate_preferences(&config.codex_home, &config.orchestrator_memory).await
+        };
+        if let Err(err) = consolidation_result {
             warn!("failed consolidating orchestrator memory: {err}");
             let _ = append_diagnostic_event(
                 &config.codex_home,

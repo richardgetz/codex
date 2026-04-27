@@ -71,6 +71,8 @@ fn orchestrator_memory_config_defaults_to_enabled_orchestrator_scope() {
             min_observations: 2,
             recent_turn_window: 8,
             max_summary_items: 24,
+            model_on_heuristic_miss: false,
+            model_consolidation: false,
         }
     );
 }
@@ -84,6 +86,8 @@ fn orchestrator_memory_config_uses_explicit_values() {
         min_observations: Some(3),
         recent_turn_window: Some(6),
         max_summary_items: Some(10),
+        model_on_heuristic_miss: Some(true),
+        model_consolidation: Some(true),
     });
 
     assert_eq!(
@@ -95,6 +99,8 @@ fn orchestrator_memory_config_uses_explicit_values() {
             min_observations: 3,
             recent_turn_window: 6,
             max_summary_items: 10,
+            model_on_heuristic_miss: true,
+            model_consolidation: true,
         }
     );
 }

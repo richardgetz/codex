@@ -315,6 +315,8 @@ debounce_seconds = 15
 min_observations = 3
 recent_turn_window = 6
 max_summary_items = 10
+model_on_heuristic_miss = true
+model_consolidation = true
 "#;
     let orchestrator_memory_cfg = toml::from_str::<ConfigToml>(orchestrator_memory)
         .expect("TOML deserialization should succeed");
@@ -326,6 +328,8 @@ max_summary_items = 10
             min_observations: Some(3),
             recent_turn_window: Some(6),
             max_summary_items: Some(10),
+            model_on_heuristic_miss: Some(true),
+            model_consolidation: Some(true),
         }),
         orchestrator_memory_cfg.orchestrator_memory
     );
@@ -346,6 +350,8 @@ max_summary_items = 10
             min_observations: 3,
             recent_turn_window: 6,
             max_summary_items: 10,
+            model_on_heuristic_miss: true,
+            model_consolidation: true,
         }
     );
 

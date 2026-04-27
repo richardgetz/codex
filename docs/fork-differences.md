@@ -106,6 +106,8 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   [orchestrator_memory]
   enabled = true
   scope = "orchestrator"
+  model_on_heuristic_miss = false
+  model_consolidation = false
   ```
 
 - The memory classifier is broader than task reminders: it should retain durable
@@ -115,6 +117,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   entries without touching mainline memory stores.
 - Explicit forget requests such as `forget this: ...` are treated as memory
   removal requests.
+- To avoid silent background model spend, heuristic misses do not invoke a
+  classifier model by default, and summary/profile consolidation uses the
+  mechanical renderer by default. Set `model_on_heuristic_miss = true` or
+  `model_consolidation = true` to restore those model-assisted paths.
 - Memory events are mirrored into bucket-specific files under
   `<codex_home>/orchestrator_memory/buckets/` for easier inspection while
   preserving `preferences.jsonl` as the compatibility event log.

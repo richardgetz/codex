@@ -314,6 +314,10 @@ pub struct OrchestratorMemoryToml {
     /// Maximum number of consolidated preference lines kept in the injected summary.
     #[schemars(range(min = 1, max = 128))]
     pub max_summary_items: Option<usize>,
+    /// When true, run a model classifier even when heuristic extraction finds no memory signal.
+    pub model_on_heuristic_miss: Option<bool>,
+    /// When true, use a model agent to rewrite summary/profile artifacts after memory writes.
+    pub model_consolidation: Option<bool>,
 }
 
 /// Managed account-alias settings loaded from config.toml.
@@ -378,6 +382,8 @@ pub struct OrchestratorMemoryConfig {
     pub min_observations: usize,
     pub recent_turn_window: usize,
     pub max_summary_items: usize,
+    pub model_on_heuristic_miss: bool,
+    pub model_consolidation: bool,
 }
 
 impl Default for OrchestratorMemoryConfig {
@@ -389,6 +395,8 @@ impl Default for OrchestratorMemoryConfig {
             min_observations: 2,
             recent_turn_window: 8,
             max_summary_items: 24,
+            model_on_heuristic_miss: false,
+            model_consolidation: false,
         }
     }
 }
@@ -415,6 +423,12 @@ impl From<OrchestratorMemoryToml> for OrchestratorMemoryConfig {
                 .max_summary_items
                 .unwrap_or(defaults.max_summary_items)
                 .clamp(1, 128),
+            model_on_heuristic_miss: toml
+                .model_on_heuristic_miss
+                .unwrap_or(defaults.model_on_heuristic_miss),
+            model_consolidation: toml
+                .model_consolidation
+                .unwrap_or(defaults.model_consolidation),
         }
     }
 }

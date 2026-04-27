@@ -1716,6 +1716,14 @@
           "minimum": 1.0,
           "type": "integer"
         },
+        "model_consolidation": {
+          "description": "When true, use a model agent to rewrite summary/profile artifacts after memory writes.",
+          "type": "boolean"
+        },
+        "model_on_heuristic_miss": {
+          "description": "When true, run a model classifier even when heuristic extraction finds no memory signal.",
+          "type": "boolean"
+        },
         "recent_turn_window": {
           "description": "Number of recent user turns to inspect when looking for repeated steering patterns.",
           "format": "uint",
