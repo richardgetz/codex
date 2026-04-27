@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-04-26/orchestrator-memory-model-spend#7f56c263a80e"
+  change_type: "fix"
+  scope: "orchestrator-memory"
+  summary: "Avoid routine background model spend from orchestrator memory."
+  decision: "Keep routine memory extraction and consolidation mechanical by default; only run the classifier on explicit memory triggers unless model_on_heuristic_miss is enabled, and only use model consolidation when model_consolidation is enabled."
+  constraints:
+    - "Must preserve explicit remember/forget model extraction behavior."
+    - "Must keep model-assisted paths available through config."
+    - "Must not make primary-contact polling call the model unless a user message is received."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/orchestrator_memory/live.rs::process_completed_turn"
+    - "codex-rs/config/src/types.rs::OrchestratorMemoryConfig"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"
