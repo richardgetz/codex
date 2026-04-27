@@ -589,6 +589,12 @@ impl App {
                     Some("Model stays idle until a message arrives.".to_string()),
                 );
             }
+            AppEvent::RecoverScratchpadAfterCompaction { thread_id } => {
+                self.recover_scratchpad_after_compaction(thread_id);
+            }
+            AppEvent::ScratchpadCompactionRecoveryLoaded { thread_id, result } => {
+                self.finish_scratchpad_compaction_recovery(thread_id, result);
+            }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }

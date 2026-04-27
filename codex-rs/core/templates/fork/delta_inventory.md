@@ -52,19 +52,35 @@ stable/mainline is pulled in.
     and only calls the model when a new user message is found.
   - Armed idle polling uses a static terminal-title waiting marker so the
     window still appears alive without model calls.
-- Built-in scratchpad fallback:
+- Built-in scratchpad:
   - Namespace: `scratchpad`
+  - Default, Continuous, and Orchestrator modes expose it by default; Plan mode
+    does not.
+  - The built-in namespace is canonical; if a configured scratchpad MCP exposes
+    the same namespace, the built-in spec remains model-visible and built-in
+    handlers take precedence.
+  - Agents receive built-in scratchpad developer guidance in enabled modes.
   - Stores JSON scratchpads under `<codex_home>/scratchpad/entries` unless a
     tool call provides `state_home`.
+  - `<codex_home>/scratchpad` is created and added to workspace-write writable
+    roots automatically.
+  - Config: `[scratchpad]` with mode overrides under
+    `[scratchpad.modes.<mode>]`
+  - Keys: `enabled`, `recover_after_compaction`
   - `open_scratchpad` defaults `scratchpad_id` to the current thread/session id.
   - `resume_scratchpad` strictly reopens an existing scratchpad by id without
     creating a replacement; archived pads require `include_archived = true`.
-  - Supports active/archived lookup plus archive/unarchive.
+  - Supports active/archived lookup, archive/unarchive, next-step and
+    pending-wait updates, action-policy checks, and wait check-ins.
 - Post-compaction recovery:
-  - Config: `[orchestrator].recover_scratchpad_after_compaction`
+  - Config: `[scratchpad].recover_after_compaction` and
+    `[scratchpad.modes.<mode>].recover_after_compaction`
   - Default: `true`
-  - In Orchestrator mode, live compaction events enqueue a scratchpad recovery
-    instruction; replayed history does not.
+  - In scratchpad-enabled modes, live compaction events mechanically read the
+    built-in scratchpad for the active thread id and inject recovered state into
+    the next model turn; replayed history does not.
+  - Legacy `[orchestrator].recover_scratchpad_after_compaction` remains
+    supported as an Orchestrator-only compatibility alias.
 - Fork docs links:
   - Public README docs links point at the fork `stable` branch because npm
     renders package README links relative to `codex-cli`.
@@ -99,11 +115,14 @@ stable/mainline is pulled in.
 - Verify configured primary contact polling starts in Orchestrator mode and does
   not wake the model for empty status responses, while the terminal title shows
   the waiting marker when idle.
-- Verify built-in `scratchpad` remains available in Orchestrator mode and
+- Verify built-in `scratchpad` remains available in Default, Continuous, and
+  Orchestrator modes, omitted from Plan mode by default, and
   `open_scratchpad` uses the thread id when no id is provided.
 - Verify built-in `resume_scratchpad` refuses to create a new scratchpad and
   requires explicit `include_archived = true` for archived pads.
-- Verify live compaction events trigger scratchpad recovery while replayed
-  compaction history does not.
+- Verify configured scratchpad MCPs do not shadow the built-in scratchpad
+  namespace.
+- Verify live compaction events mechanically recover built-in scratchpad state
+  while replayed compaction history does not.
 - Verify memory helper naming still shows `Memory [extractor]` and
   `Memory [memory builder]`.

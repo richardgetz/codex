@@ -2361,6 +2361,43 @@
       },
       "type": "object"
     },
+    "ScratchpadModeToml": {
+      "additionalProperties": false,
+      "description": "Built-in scratchpad behavior for one collaboration mode.",
+      "properties": {
+        "enabled": {
+          "description": "When false, the built-in scratchpad tool namespace and scratchpad developer guidance are not exposed in this mode.",
+          "type": "boolean"
+        },
+        "recover_after_compaction": {
+          "description": "When false, live compaction events do not mechanically loop recovered scratchpad state back into the next model turn in this mode.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ScratchpadToml": {
+      "additionalProperties": false,
+      "description": "Built-in scratchpad settings loaded from config.toml.",
+      "properties": {
+        "enabled": {
+          "description": "Global default for built-in scratchpad tool/guidance exposure.",
+          "type": "boolean"
+        },
+        "modes": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ScratchpadModeToml"
+          },
+          "description": "Collaboration-mode-specific overrides.",
+          "type": "object"
+        },
+        "recover_after_compaction": {
+          "description": "Global default for live compaction recovery loopback.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ServiceTier": {
       "enum": [
         "fast",
@@ -3518,6 +3555,14 @@
         }
       ],
       "description": "Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`."
+    },
+    "scratchpad": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ScratchpadToml"
+        }
+      ],
+      "description": "Built-in scratchpad subsystem settings."
     },
     "service_tier": {
       "allOf": [

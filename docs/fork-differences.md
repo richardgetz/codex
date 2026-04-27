@@ -129,28 +129,49 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - Legacy memory events that predate bucketed schemas are migrated on the next
   read or consolidation, with a `preferences.jsonl.pre-bucket-migration` backup.
 
-### Scratchpad recovery
+### Built-in scratchpad
 
-- Orchestrator mode treats scratchpad as a first-class recovery ledger.
-- The fork has an additive built-in `scratchpad` tool namespace so recovery
-  notes still work when the scratchpad MCP is missing or hidden by a mode filter.
+- Default, Continuous, and Orchestrator modes treat scratchpad as a first-class
+  recovery ledger. Plan mode does not use built-in scratchpad by default.
+- The fork has a canonical built-in `scratchpad` tool namespace. When a
+  configured scratchpad MCP exposes the same namespace, the built-in namespace
+  stays model-visible and its handlers take precedence.
+- Agents receive mode-scoped developer guidance explaining when and how to use
+  the built-in scratchpad. If built-in scratchpad is disabled for a mode, the
+  tool namespace and guidance are both omitted for that mode.
 - Built-in scratchpads are JSON-backed under `<codex_home>/scratchpad/entries`
   unless a tool call provides `state_home`.
+- `<codex_home>/scratchpad` is created and added to workspace-write writable
+  roots automatically, alongside memory and supervision roots.
 - `open_scratchpad` defaults `scratchpad_id` to the current Codex
   thread/session id when no explicit id is provided.
 - `resume_scratchpad` strictly reopens an existing scratchpad by id without
   creating a replacement; archived pads require `include_archived = true`.
-- Built-in scratchpad supports active and archived lookup plus
-  archive/unarchive operations.
-- After a context compaction item is observed in Orchestrator mode, the fork can
-  mechanically submit a recovery instruction so the orchestrator checks and
-  updates scratchpad before continuing.
-- This hook is enabled by default and can be disabled with:
+- Built-in scratchpad supports active and archived lookup, archive/unarchive,
+  next-step and pending-wait updates, action-policy checks, and wait check-ins.
+- After a live context compaction item is observed in a scratchpad-enabled mode,
+  the fork can mechanically read the built-in scratchpad for the active thread
+  id and inject the recovered state into the next model turn. Replayed history
+  does not fire this hook.
+- Built-in scratchpad and compaction recovery are controlled globally and per
+  mode with:
 
   ```toml
-  [orchestrator]
-  recover_scratchpad_after_compaction = false
+  [scratchpad]
+  enabled = true
+  recover_after_compaction = true
+
+  [scratchpad.modes.plan]
+  enabled = false
+  recover_after_compaction = false
+
+  [scratchpad.modes.orchestrator]
+  enabled = true
+  recover_after_compaction = true
   ```
+
+- The legacy `[orchestrator].recover_scratchpad_after_compaction` key remains
+  supported as an Orchestrator-only compatibility alias.
 
 ### Account aliases
 

@@ -49,9 +49,10 @@ async fn suppressed_interrupted_turn_notice_skips_history_warning() {
 }
 
 #[tokio::test]
-async fn live_orchestrator_compaction_submits_scratchpad_recovery_prompt() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
-    chat.thread_id = Some(ThreadId::new());
+async fn live_orchestrator_compaction_requests_harness_scratchpad_recovery() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
     let orchestrator_mask =
         collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Orchestrator)
             .expect("expected orchestrator collaboration mask");
@@ -65,18 +66,65 @@ async fn live_orchestrator_compaction_submits_scratchpad_recovery_prompt() {
         ThreadItemRenderSource::Live,
     );
 
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => {
-            assert_eq!(items.len(), 1);
-            match &items[0] {
-                UserInput::Text { text, .. } => {
-                    assert!(text.contains("recover the active scratchpad"));
-                }
-                other => panic!("expected text input, got {other:?}"),
-            }
+    let mut recovered_thread_id = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::RecoverScratchpadAfterCompaction { thread_id } = event {
+            recovered_thread_id = Some(thread_id);
+            break;
         }
-        other => panic!("expected UserTurn, got {other:?}"),
     }
+    assert_eq!(recovered_thread_id, Some(thread_id));
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn live_default_compaction_requests_harness_scratchpad_recovery() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.handle_thread_item(
+        ThreadItem::ContextCompaction {
+            id: "compaction-1".to_string(),
+        },
+        "turn-1".to_string(),
+        ThreadItemRenderSource::Live,
+    );
+
+    let mut recovered_thread_id = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::RecoverScratchpadAfterCompaction { thread_id } = event {
+            recovered_thread_id = Some(thread_id);
+            break;
+        }
+    }
+    assert_eq!(recovered_thread_id, Some(thread_id));
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn live_plan_compaction_does_not_request_scratchpad_recovery_by_default() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let plan_mask = collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Plan)
+        .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.handle_thread_item(
+        ThreadItem::ContextCompaction {
+            id: "compaction-1".to_string(),
+        },
+        "turn-1".to_string(),
+        ThreadItemRenderSource::Live,
+    );
+
+    while let Ok(event) = rx.try_recv() {
+        assert!(
+            !matches!(event, AppEvent::RecoverScratchpadAfterCompaction { .. }),
+            "did not expect scratchpad recovery event in plan mode"
+        );
+    }
+    assert_no_submit_op(&mut op_rx);
 }
 
 #[tokio::test]

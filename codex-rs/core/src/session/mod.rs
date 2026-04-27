@@ -29,6 +29,7 @@ use crate::context::ForkHelpInstructions;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
+use crate::context::ScratchpadInstructions;
 use crate::default_skill_metadata_budget;
 use crate::enablement::filter_connectors_for_mode;
 use crate::enablement::filter_lazy_mcp_servers_for_mode;
@@ -2979,6 +2980,14 @@ impl Session {
                 .await
         {
             developer_sections.push(orchestrator_supervision_prompt);
+        }
+        if turn_context
+            .config
+            .scratchpad
+            .for_mode(turn_context.collaboration_mode.mode)
+            .enabled
+        {
+            developer_sections.push(ScratchpadInstructions::new().render());
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
