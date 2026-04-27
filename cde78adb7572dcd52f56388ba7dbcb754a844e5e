@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-04-27/builtin-schedule-triggers#cde78adb7572"
+  change_type: "feat"
+  scope: "orchestrator"
+  summary: "Add built-in durable scheduled-trigger tooling."
+  decision: "Expose a built-in schedule namespace, enabled by default only in Orchestrator mode, with JSON-backed reminders, recurring routines, conditional trigger metadata, and links to built-in scratchpad and orchestrator memory context."
+  constraints:
+    - "Must be disabled by default in Plan mode."
+    - "Must be configurable per collaboration mode."
+    - "Must use built-in scratchpad linkage only for scratchpad context."
+    - "Must keep storage under codex_home and workspace-write allowed roots."
+    - "Must preserve conditional trigger details and tool hints without requiring immediate model spend."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/builtin_schedule.rs"
+    - "codex-rs/config/src/types.rs::ScheduleConfig"
+    - "codex-rs/core/src/context/schedule_instructions.rs"
+    - "codex-rs/core/src/tools/spec.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"
