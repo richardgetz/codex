@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-04-26/primary-contact-harness-start#9a2507adf888"
+  change_type: "fix"
+  scope: "tui-primary-contact"
+  summary: "Start primary contact channels mechanically instead of via a model-visible prompt."
+  decision: "Move primary-contact startup to a harness-only MCP call and keep recurring polling model-less until an inbound message is converted into user input."
+  constraints:
+    - "Must not inject a startup prompt that spends a model turn or lets the model delegate setup."
+    - "Must show a TUI hint when selected channel monitoring is active."
+    - "Must preserve the existing mechanical polling schedule and inbound-message injection behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/app/background_requests.rs::ensure_primary_contact_startup"
+    - "codex-rs/tui/src/app/background_requests.rs::start_primary_contact_channel"
+    - "codex-rs/tui/src/app/event_dispatch.rs::PrimaryContactMonitoringStarted"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"
