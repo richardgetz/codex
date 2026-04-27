@@ -99,6 +99,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::UnavailableToolHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
+    use crate::tools::handlers::builtin_schedule::BUILTIN_SCHEDULE_TOOL_NAMES;
+    use crate::tools::handlers::builtin_schedule::BuiltinScheduleHandler;
+    use crate::tools::handlers::builtin_schedule::schedule_namespace_spec;
     use crate::tools::handlers::builtin_scratchpad::BUILTIN_SCRATCHPAD_TOOL_NAMES;
     use crate::tools::handlers::builtin_scratchpad::BuiltinScratchpadHandler;
     use crate::tools::handlers::builtin_scratchpad::scratchpad_namespace_spec;
@@ -188,7 +191,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
         .specs
         .iter()
         .filter(|configured_tool| {
-            !config.builtin_scratchpad_enabled || configured_tool.name() != "scratchpad"
+            (!config.builtin_scratchpad_enabled || configured_tool.name() != "scratchpad")
+                && (!config.builtin_schedule_enabled || configured_tool.name() != "schedule")
         })
         .map(|configured_tool| configured_tool.name().to_string())
         .collect::<HashSet<_>>();
@@ -199,6 +203,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
 
     for spec in plan.specs {
         if config.builtin_scratchpad_enabled && spec.name() == "scratchpad" {
+            continue;
+        }
+        if config.builtin_schedule_enabled && spec.name() == "schedule" {
             continue;
         }
         if spec.supports_parallel_tool_calls {
@@ -335,6 +342,18 @@ pub(crate) fn build_specs_with_discoverable_tools(
             builder.register_handler(
                 ToolName::namespaced("scratchpad", *tool_name),
                 scratchpad_handler.clone(),
+            );
+        }
+    }
+
+    if config.builtin_schedule_enabled {
+        let schedule_handler = Arc::new(BuiltinScheduleHandler);
+        existing_spec_names.insert("schedule".to_string());
+        builder.push_spec(schedule_namespace_spec());
+        for tool_name in BUILTIN_SCHEDULE_TOOL_NAMES {
+            builder.register_handler(
+                ToolName::namespaced("schedule", *tool_name),
+                schedule_handler.clone(),
             );
         }
     }

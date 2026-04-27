@@ -28,6 +28,8 @@ impl ContextualUserFragment for SubagentNotification {
             serde_json::json!({
                 "agent_path": &self.agent_reference,
                 "status": &self.status,
+                "parent_handling_required": true,
+                "instruction": "A spawned sub-agent produced this terminal update. If it answers a user request or affects user-visible routing, relay the result to the user before reporting that there are no new supervised-session changes.",
             })
         )
     }

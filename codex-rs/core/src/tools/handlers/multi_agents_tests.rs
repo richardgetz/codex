@@ -2169,7 +2169,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
                                 if communication.author == worker_path
                                     && communication.recipient == AgentPath::root()
                                     && communication.other_recipients.is_empty()
-                                    && !communication.trigger_turn =>
+                                    && communication.trigger_turn =>
                             {
                                 Some(communication.content)
                             }
@@ -2314,8 +2314,7 @@ async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
                     Op::InterAgentCommunication { communication }
                         if communication.author.as_str() == "/root/worker"
                             && communication.recipient == AgentPath::root()
-                            && communication.other_recipients.is_empty()
-                            && !communication.trigger_turn =>
+                            && communication.other_recipients.is_empty() =>
                     {
                         Some(communication.content)
                     }

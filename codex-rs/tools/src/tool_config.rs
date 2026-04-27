@@ -109,6 +109,7 @@ pub struct ToolsConfig {
     pub spawn_agent_usage_hint_text: Option<String>,
     pub default_mode_request_user_input: bool,
     pub builtin_scratchpad_enabled: bool,
+    pub builtin_schedule_enabled: bool,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
@@ -231,6 +232,7 @@ impl ToolsConfig {
             spawn_agent_usage_hint_text: None,
             default_mode_request_user_input: include_default_mode_request_user_input,
             builtin_scratchpad_enabled: true,
+            builtin_schedule_enabled: false,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
@@ -263,6 +265,11 @@ impl ToolsConfig {
 
     pub fn with_builtin_scratchpad_enabled(mut self, builtin_scratchpad_enabled: bool) -> Self {
         self.builtin_scratchpad_enabled = builtin_scratchpad_enabled;
+        self
+    }
+
+    pub fn with_builtin_schedule_enabled(mut self, builtin_schedule_enabled: bool) -> Self {
+        self.builtin_schedule_enabled = builtin_schedule_enabled;
         self
     }
 

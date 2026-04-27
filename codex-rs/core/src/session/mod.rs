@@ -29,6 +29,7 @@ use crate::context::ForkHelpInstructions;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
+use crate::context::ScheduleInstructions;
 use crate::context::ScratchpadInstructions;
 use crate::default_skill_metadata_budget;
 use crate::enablement::filter_connectors_for_mode;
@@ -1945,7 +1946,7 @@ impl Session {
             parent_agent_path,
             Vec::new(),
             message,
-            /*trigger_turn*/ false,
+            /*trigger_turn*/ true,
         );
         if let Err(err) = self
             .services
@@ -2988,6 +2989,14 @@ impl Session {
             .enabled
         {
             developer_sections.push(ScratchpadInstructions::new().render());
+        }
+        if turn_context
+            .config
+            .schedule
+            .for_mode(turn_context.collaboration_mode.mode)
+            .enabled
+        {
+            developer_sections.push(ScheduleInstructions::new().render());
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
