@@ -89,7 +89,7 @@ fn compact_scratchpad_summary(value: &serde_json::Value) -> serde_json::Value {
         let recent_notes = notes
             .iter()
             .rev()
-            .take(5)
+            .take(/*n*/ 5)
             .cloned()
             .collect::<Vec<_>>()
             .into_iter()

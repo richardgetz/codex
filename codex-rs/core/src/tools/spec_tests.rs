@@ -1151,7 +1151,7 @@ async fn builtin_scratchpad_can_be_disabled_for_mode() {
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     })
-    .with_builtin_scratchpad_enabled(false);
+    .with_builtin_scratchpad_enabled(/*enabled*/ false);
 
     let (tools, registry) = build_specs(
         &tools_config,

@@ -719,7 +719,11 @@ fn evaluate_action_policy(
 
     if action == "finalize"
         && matches!(scratchpad.status.as_str(), "active" | "waiting")
-        && policy_bool(&effective_policy, "guard_finalization_while_active", true)
+        && policy_bool(
+            &effective_policy,
+            "guard_finalization_while_active",
+            /*default*/ true,
+        )
     {
         reason = Some("objective_in_progress".to_string());
         message = Some(format!(
@@ -734,7 +738,7 @@ fn evaluate_action_policy(
         && policy_bool(
             &effective_policy,
             "guard_followup_shutdown_while_active",
-            true,
+            /*default*/ true,
         )
     {
         let channel =
@@ -748,7 +752,11 @@ fn evaluate_action_policy(
 
     if reason.is_none() && matches!(action, "merge" | "pull_request") {
         if bool_arg(args, "bypass_pr_requirements")
-            && !policy_bool(&effective_policy, "allow_pr_requirement_bypass", false)
+            && !policy_bool(
+                &effective_policy,
+                "allow_pr_requirement_bypass",
+                /*default*/ false,
+            )
         {
             reason = Some("pr_bypass_forbidden".to_string());
             message = Some("PR requirement bypass is forbidden by action policy".to_string());
@@ -804,7 +812,11 @@ fn evaluate_action_policy(
 
     if reason.is_none()
         && action == "aws_write"
-        && !policy_bool(&effective_policy, "allow_aws_writes", false)
+        && !policy_bool(
+            &effective_policy,
+            "allow_aws_writes",
+            /*default*/ false,
+        )
     {
         reason = Some("aws_write_forbidden".to_string());
         message = Some("AWS write path is forbidden by action policy".to_string());
@@ -981,7 +993,11 @@ mod tests {
     #[test]
     fn open_defaults_to_thread_id_and_reopens_existing_active_pad() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let store = ScratchpadStore::new(Some(tmp.path().to_str().unwrap()), tmp.path()).unwrap();
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
         let args = serde_json::json!({
             "objective": "test objective",
             "session_key": "session-a",
@@ -1004,7 +1020,11 @@ mod tests {
     #[test]
     fn archive_lookup_and_unarchive_round_trip() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let store = ScratchpadStore::new(Some(tmp.path().to_str().unwrap()), tmp.path()).unwrap();
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
         let args = serde_json::json!({ "objective": "recover me", "scratchpad_id": "sp-test" });
         open_scratchpad(&store, &args, "thread-123").unwrap();
 
