@@ -51,7 +51,7 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   intended to clarify, redirect, unblock, or keep waiting; they are not urgency
   prompts to tell workers to move faster.
 - Spawned child agents send a waking completion notification back to their
-  direct parent when they complete or error. In Orchestrator mode that
+  direct parent when they complete or abort a turn. In Orchestrator mode that
   notification carries an explicit user-delivery obligation so a child answer is
   relayed instead of being treated as inert watch state. Memory extraction and
   consolidation agents are excluded from these hooks to avoid feedback loops.
