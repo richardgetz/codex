@@ -711,6 +711,13 @@ fn extract_message_from_value(value: &serde_json::Value) -> Option<String> {
             {
                 return Some(message);
             }
+            if let Some(messages) = map
+                .get("reply_messages")
+                .and_then(serde_json::Value::as_array)
+                && let Some(message) = messages.iter().rev().find_map(extract_message_from_value)
+            {
+                return Some(message);
+            }
             for key in ["user_message", "message", "reply_text", "raw_reply_text"] {
                 if let Some(message) = map.get(key).and_then(extract_text_field)
                     && !message.is_empty()
@@ -744,6 +751,7 @@ fn ambiguous_primary_contact_message(
     }
     let match_reason = map
         .get("match_reason")
+        .or_else(|| map.get("crossed_message_warning"))
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
     if !matches!(
@@ -752,9 +760,33 @@ fn ambiguous_primary_contact_message(
     ) {
         return None;
     }
-    map.get("raw_reply_text")
-        .and_then(extract_text_field)
-        .filter(|message| !message.is_empty())
+    for key in ["raw_reply_text", "reply_text", "text"] {
+        if let Some(message) = map.get(key).and_then(extract_text_field)
+            && !message.is_empty()
+        {
+            return Some(message);
+        }
+    }
+    map.get("reply_messages")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|messages| messages.iter().rev().find_map(extract_reply_message_text))
+}
+
+fn extract_reply_message_text(value: &serde_json::Value) -> Option<String> {
+    let serde_json::Value::Object(map) = value else {
+        return extract_text_field(value).filter(|message| !message.is_empty());
+    };
+    if map.get("is_from_me").and_then(serde_json::Value::as_bool) == Some(true) {
+        return None;
+    }
+    for key in ["raw_reply_text", "reply_text", "text", "body", "content"] {
+        if let Some(message) = map.get(key).and_then(extract_text_field)
+            && !message.is_empty()
+        {
+            return Some(message);
+        }
+    }
+    None
 }
 
 fn explicit_no_new_message(map: &serde_json::Map<String, serde_json::Value>) -> bool {
@@ -1241,6 +1273,31 @@ mod tests {
         assert_eq!(
             extract_primary_contact_message(&response),
             Some("just curious if you're awake".to_string())
+        );
+    }
+
+    #[test]
+    fn primary_contact_poll_accepts_imessage_crossed_warning_reply_messages() {
+        let response = McpServerToolCallResponse {
+            content: Vec::new(),
+            structured_content: Some(serde_json::json!({
+                "reply_received": false,
+                "ambiguous": true,
+                "crossed_message_warning": "conflicting_reply_target",
+                "reply_messages": [{
+                    "rowid": 816,
+                    "text": " Are you available right now? ",
+                    "direction": "incoming",
+                    "is_from_me": false
+                }]
+            })),
+            is_error: None,
+            meta: None,
+        };
+
+        assert_eq!(
+            extract_primary_contact_message(&response),
+            Some("Are you available right now?".to_string())
         );
     }
 
