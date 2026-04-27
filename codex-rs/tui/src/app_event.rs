@@ -210,6 +210,13 @@ pub(crate) enum AppEvent {
         text: String,
     },
 
+    /// Harness-only primary-contact startup completed.
+    PrimaryContactMonitoringStarted {
+        mcp: String,
+        interval_seconds: u32,
+        scheduled: bool,
+    },
+
     /// Send a user-confirmed request to notify the workspace owner.
     SendAddCreditsNudgeEmail {
         credit_type: AddCreditsNudgeCreditType,

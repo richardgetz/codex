@@ -13,6 +13,57 @@ use codex_config::types::OrchestratorPrimaryContactScheduleToml;
 use super::*;
 
 impl App {
+    pub(super) fn ensure_primary_contact_startup(&mut self, app_server: &AppServerSession) {
+        let Some((thread_id, startup_config)) = self.primary_contact_startup_candidate() else {
+            self.primary_contact_startup = None;
+            return;
+        };
+
+        let state = PrimaryContactStartupState {
+            thread_id,
+            mcp: startup_config.mcp.clone(),
+            tool: startup_config.tool.clone(),
+        };
+        if self.primary_contact_startup.as_ref() == Some(&state) {
+            return;
+        }
+
+        self.primary_contact_startup = Some(state);
+        self.start_primary_contact_channel(app_server, thread_id, startup_config);
+    }
+
+    pub(super) fn primary_contact_startup_candidate(
+        &self,
+    ) -> Option<(ThreadId, PrimaryContactStartupConfig)> {
+        if self.chat_widget.active_collaboration_mode_kind() != ModeKind::Orchestrator {
+            return None;
+        }
+        let startup_config = PrimaryContactStartupConfig::from_config(&self.config)?;
+        let thread_id = self.primary_thread_id?;
+        Some((thread_id, startup_config))
+    }
+
+    fn start_primary_contact_channel(
+        &self,
+        app_server: &AppServerSession,
+        thread_id: ThreadId,
+        startup_config: PrimaryContactStartupConfig,
+    ) {
+        let request_handle = app_server.request_handle();
+        tokio::spawn(async move {
+            match start_primary_contact_once(&request_handle, thread_id, &startup_config).await {
+                Ok(()) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        mcp = %startup_config.mcp,
+                        tool = %startup_config.tool,
+                        "primary contact startup failed: {err:#}"
+                    );
+                }
+            }
+        });
+    }
+
     pub(super) fn ensure_primary_contact_polling(&mut self, app_server: &AppServerSession) {
         let Some((thread_id, poll_config)) = self.primary_contact_polling_candidate() else {
             self.stop_primary_contact_polling();
@@ -62,6 +113,11 @@ impl App {
             .set_primary_contact_waiting(/*waiting*/ true);
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
+        app_event_tx.send(AppEvent::PrimaryContactMonitoringStarted {
+            mcp: poll_config.mcp.clone(),
+            interval_seconds: poll_config.default_interval_seconds,
+            scheduled: !poll_config.schedule.is_empty(),
+        });
         let task = tokio::spawn(async move {
             loop {
                 match poll_primary_contact_once(&request_handle, thread_id, &poll_config).await {
@@ -482,11 +538,43 @@ pub(super) struct PrimaryContactPollConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PrimaryContactStartupConfig {
+    mcp: String,
+    tool: String,
+    arguments: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PrimaryContactPollSchedule {
     days: Option<Vec<Weekday>>,
     start_minute: u16,
     end_minute: u16,
     interval_seconds: u32,
+}
+
+impl PrimaryContactStartupConfig {
+    fn from_config(config: &Config) -> Option<Self> {
+        let primary_contact = &config.orchestrator.primary_contact;
+        if !primary_contact.enabled {
+            return None;
+        }
+        let mcp = primary_contact.mcp.as_ref()?.trim();
+        if mcp.is_empty() {
+            return None;
+        }
+        let tool = primary_contact
+            .tool
+            .as_deref()
+            .map(str::trim)
+            .filter(|tool| !tool.is_empty())
+            .map(str::to_string)
+            .or_else(|| default_primary_contact_start_tool(mcp))?;
+        Some(Self {
+            mcp: mcp.to_string(),
+            tool,
+            arguments: default_primary_contact_start_arguments(mcp),
+        })
+    }
 }
 
 impl PrimaryContactPollConfig {
@@ -640,6 +728,22 @@ fn previous_weekday(weekday: Weekday) -> Weekday {
     }
 }
 
+fn default_primary_contact_start_tool(mcp: &str) -> Option<String> {
+    mcp.eq_ignore_ascii_case("imessage")
+        .then(|| "imessage_followup_start".to_string())
+}
+
+fn default_primary_contact_start_arguments(mcp: &str) -> Option<serde_json::Value> {
+    if mcp.eq_ignore_ascii_case("imessage") {
+        Some(serde_json::json!({
+            "max_polls": 1,
+            "activate_after_current_task": true
+        }))
+    } else {
+        None
+    }
+}
+
 fn default_primary_contact_check_tool(mcp: &str) -> String {
     if mcp.eq_ignore_ascii_case("imessage") {
         "imessage_followup_wait_for_reply".to_string()
@@ -657,6 +761,33 @@ fn default_primary_contact_check_arguments(mcp: &str) -> Option<serde_json::Valu
     } else {
         None
     }
+}
+
+async fn start_primary_contact_once(
+    request_handle: &AppServerRequestHandle,
+    thread_id: ThreadId,
+    startup_config: &PrimaryContactStartupConfig,
+) -> Result<()> {
+    let request_id = RequestId::String(format!("primary-contact-startup-{}", Uuid::new_v4()));
+    let response: McpServerToolCallResponse = request_handle
+        .request_typed(ClientRequest::McpServerToolCall {
+            request_id,
+            params: McpServerToolCallParams {
+                thread_id: thread_id.to_string(),
+                server: startup_config.mcp.clone(),
+                tool: startup_config.tool.clone(),
+                arguments: startup_config.arguments.clone(),
+                meta: None,
+            },
+        })
+        .await
+        .wrap_err("mcpServer/tool/call failed during primary contact startup")?;
+    if response.is_error == Some(true) {
+        return Err(color_eyre::eyre::eyre!(
+            "primary contact startup tool returned an error"
+        ));
+    }
+    Ok(())
 }
 
 async fn poll_primary_contact_once(
@@ -1312,6 +1443,21 @@ mod tests {
             Some(serde_json::json!({
                 "max_polls": 1,
                 "block_until_reply": false
+            }))
+        );
+    }
+
+    #[test]
+    fn primary_contact_imessage_start_is_harness_only_one_shot() {
+        assert_eq!(
+            default_primary_contact_start_tool("imessage"),
+            Some("imessage_followup_start".to_string())
+        );
+        assert_eq!(
+            default_primary_contact_start_arguments("imessage"),
+            Some(serde_json::json!({
+                "max_polls": 1,
+                "activate_after_current_task": true
             }))
         );
     }

@@ -474,7 +474,7 @@ pub struct OrchestratorPrimaryContactToml {
     pub enabled: Option<bool>,
     /// MCP server or communication channel name, for example `"imessage"`.
     pub mcp: Option<String>,
-    /// Optional MCP tool name to invoke/start through the model, for example
+    /// Optional MCP tool name that the harness invokes to arm the channel, for example
     /// `"imessage_followup_start"`.
     pub tool: Option<String>,
     /// Optional MCP tool name used by the harness-only background poller to
@@ -486,7 +486,8 @@ pub struct OrchestratorPrimaryContactToml {
     /// Optional local-time schedule that overrides
     /// `check_messages_every_seconds` when a rule matches.
     pub schedule: Option<Vec<OrchestratorPrimaryContactScheduleToml>>,
-    /// Optional replacement startup prompt for advanced channel-specific behavior.
+    /// Deprecated: ignored. Primary-contact startup is harness-only and no
+    /// longer injects a model-visible startup prompt.
     pub startup_prompt: Option<String>,
 }
 

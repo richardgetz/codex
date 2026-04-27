@@ -290,66 +290,6 @@ pub(crate) fn config_for_startup_primary_contact(config: &Config, mcp: Option<&s
     startup_config
 }
 
-fn initial_prompt_with_primary_contact(
-    config: &Config,
-    initial_collaboration_mode: Option<ModeKind>,
-    initial_prompt: Option<String>,
-) -> Option<String> {
-    if initial_collaboration_mode != Some(ModeKind::Orchestrator) {
-        return initial_prompt;
-    }
-    let primary_contact = &config.orchestrator.primary_contact;
-    if !primary_contact.enabled {
-        return initial_prompt;
-    }
-    let Some(mcp) = primary_contact.mcp.as_deref() else {
-        return initial_prompt;
-    };
-    let contact_prompt = primary_contact.startup_prompt.clone().unwrap_or_else(|| {
-        default_primary_contact_startup_prompt(
-            mcp,
-            primary_contact.tool.as_deref(),
-            primary_contact.check_messages_every_seconds,
-            !primary_contact.schedule.is_empty(),
-        )
-    });
-    match initial_prompt {
-        Some(initial_prompt) if !initial_prompt.trim().is_empty() => {
-            Some(format!("{initial_prompt}\n\n{contact_prompt}"))
-        }
-        _ => Some(contact_prompt),
-    }
-}
-
-fn default_primary_contact_startup_prompt(
-    mcp: &str,
-    tool: Option<&str>,
-    check_messages_every_seconds: u32,
-    has_schedule: bool,
-) -> String {
-    let tool = tool
-        .map(str::to_string)
-        .or_else(|| {
-            mcp.eq_ignore_ascii_case("imessage")
-                .then(|| "imessage_followup_start".to_string())
-        })
-        .unwrap_or_else(|| format!("{mcp} follow-up start tool"));
-    let check_note = if check_messages_every_seconds == 0 {
-        "Harness-level primary-contact message polling is disabled.".to_string()
-    } else if has_schedule {
-        format!(
-            "The harness will also check this channel for new user messages on the configured schedule, falling back to every {check_messages_every_seconds} seconds when no schedule entry matches, without calling the model unless a new user message is found."
-        )
-    } else {
-        format!(
-            "The harness will also check this channel for new user messages every {check_messages_every_seconds} seconds without calling the model unless a new user message is found."
-        )
-    };
-    format!(
-        "Start the configured primary communication channel now. Use the `{mcp}` MCP and `{tool}` if available, then keep this Orchestrator session reachable through that channel for future user replies. {check_note} Do not delegate this communication setup to a sub-agent."
-    )
-}
-
 fn command_execution_decision_to_review_decision(
     decision: codex_app_server_protocol::CommandExecutionApprovalDecision,
 ) -> codex_protocol::protocol::ReviewDecision {
@@ -674,6 +614,7 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     last_subagent_backfill_attempt: Option<ThreadId>,
     primary_session_configured: Option<ThreadSessionState>,
+    primary_contact_startup: Option<PrimaryContactStartupState>,
     primary_contact_polling: Option<PrimaryContactPollingState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
@@ -681,6 +622,13 @@ pub(crate) struct App {
     // overwrite a newer toggle, even if the plugin is toggled from different
     // cwd contexts.
     pending_plugin_enabled_writes: HashMap<String, Option<bool>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrimaryContactStartupState {
+    thread_id: ThreadId,
+    mcp: String,
+    tool: String,
 }
 
 struct PrimaryContactPollingState {
@@ -893,11 +841,7 @@ impl App {
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
             Self::should_wait_for_initial_session(&session_selection);
-        let startup_initial_prompt = initial_prompt_with_primary_contact(
-            &session_bootstrap_config,
-            initial_collaboration_mode,
-            initial_prompt.clone(),
-        );
+        let startup_initial_prompt = initial_prompt.clone();
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let started = app_server.start_thread(&session_bootstrap_config).await?;
@@ -1057,6 +1001,7 @@ impl App {
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
+            primary_contact_startup: None,
             primary_contact_polling: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
@@ -1066,6 +1011,7 @@ impl App {
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
         }
+        app.ensure_primary_contact_startup(&app_server);
         app.ensure_primary_contact_polling(&app_server);
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.

@@ -178,6 +178,28 @@ async fn primary_contact_polling_arms_after_entering_orchestrator_mode() {
     assert!(app.primary_contact_polling_candidate().is_some());
 }
 
+#[tokio::test]
+async fn primary_contact_startup_arms_after_entering_orchestrator_mode() {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    app.primary_thread_id = Some(thread_id);
+    app.config.orchestrator.primary_contact.enabled = true;
+    app.config.orchestrator.primary_contact.mcp = Some("imessage".to_string());
+
+    assert!(app.primary_contact_startup_candidate().is_none());
+
+    app.chat_widget
+        .set_collaboration_mask(CollaborationModeMask {
+            name: "Orchestrator".to_string(),
+            mode: Some(ModeKind::Orchestrator),
+            model: Some("gpt-test-orchestrator".to_string()),
+            reasoning_effort: Some(Some(ReasoningEffortConfig::Low)),
+            developer_instructions: None,
+        });
+
+    assert!(app.primary_contact_startup_candidate().is_some());
+}
+
 macro_rules! assert_app_snapshot {
     ($name:expr, $value:expr $(,)?) => {
         insta::with_settings!({snapshot_path => "../snapshots"}, {
@@ -3826,6 +3848,7 @@ async fn make_test_app() -> App {
         primary_thread_id: None,
         last_subagent_backfill_attempt: None,
         primary_session_configured: None,
+        primary_contact_startup: None,
         primary_contact_polling: None,
         pending_primary_events: VecDeque::new(),
         pending_app_server_requests: PendingAppServerRequests::default(),
@@ -3884,6 +3907,7 @@ async fn make_test_app_with_channels() -> (
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
+            primary_contact_startup: None,
             primary_contact_polling: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),

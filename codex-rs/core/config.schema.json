@@ -1800,11 +1800,11 @@
           "type": "array"
         },
         "startup_prompt": {
-          "description": "Optional replacement startup prompt for advanced channel-specific behavior.",
+          "description": "Deprecated: ignored. Primary-contact startup is harness-only and no longer injects a model-visible startup prompt.",
           "type": "string"
         },
         "tool": {
-          "description": "Optional MCP tool name to invoke/start through the model, for example `\"imessage_followup_start\"`.",
+          "description": "Optional MCP tool name that the harness invokes to arm the channel, for example `\"imessage_followup_start\"`.",
           "type": "string"
         }
       },

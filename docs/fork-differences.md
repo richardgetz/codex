@@ -53,7 +53,8 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
 ### Primary contact channel
 
-- Orchestrator mode can start a configured communication MCP at session boot:
+- Orchestrator mode can start a configured communication MCP at session boot
+  mechanically, without injecting a startup prompt or spending a model turn:
 
   ```toml
   [orchestrator]
@@ -62,8 +63,9 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
 - `--primary-contact <mcp>` overrides the configured primary contact for one
   launch; `--primary-contact off` disables it for that launch.
-- The primary-contact poller can check for new user messages without calling the
-  model unless a new message is found:
+- The primary-contact poller checks for new user messages without calling the
+  model unless a new message is found. When the channel is active, the TUI shows
+  a lightweight monitoring notice:
 
   ```toml
   [orchestrator]
