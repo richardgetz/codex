@@ -1329,7 +1329,7 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
                 worker_path.clone(),
                 Vec::new(),
                 expected_message.clone(),
-                /*trigger_turn*/ false,
+                /*trigger_turn*/ true,
             ),
         },
     );
@@ -1364,9 +1364,43 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
             AgentPath::root(),
             Vec::new(),
             expected_message,
-            /*trigger_turn*/ false,
+            /*trigger_turn*/ true,
         )
     ));
+}
+
+#[tokio::test]
+async fn memory_subagent_completion_does_not_notify_parent() {
+    let harness = AgentControlHarness::new().await;
+    let (_parent_thread_id, _parent_thread) = harness.start_thread().await;
+    let (memory_thread_id, memory_thread) = harness.start_thread().await;
+    let captured_before = harness.manager.captured_ops().len();
+
+    harness.control.maybe_start_completion_watcher(
+        memory_thread_id,
+        Some(SessionSource::SubAgent(SubAgentSource::MemoryExtraction)),
+        "memory".to_string(),
+        Some(AgentPath::morpheus()),
+    );
+    let memory_turn = memory_thread.codex.session.new_default_turn().await;
+    memory_thread
+        .codex
+        .session
+        .send_event(
+            memory_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: memory_turn.sub_id.clone(),
+                last_agent_message: Some("memory write complete".to_string()),
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        )
+        .await;
+
+    sleep(Duration::from_millis(100)).await;
+
+    assert_eq!(harness.manager.captured_ops().len(), captured_before);
 }
 
 #[tokio::test]

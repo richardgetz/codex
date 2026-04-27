@@ -3,6 +3,7 @@ use crate::context::ContextualUserFragment;
 use codex_protocol::items::HookPromptFragment;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AgentStatus;
 
 #[test]
 fn detects_environment_context_fragment() {
@@ -24,6 +25,18 @@ fn detects_subagent_notification_fragment_case_insensitively() {
     assert!(SubagentNotification::matches_text(
         "<SUBAGENT_NOTIFICATION>{}</subagent_notification>"
     ));
+}
+
+#[test]
+fn subagent_notification_marks_parent_handling_required() {
+    let rendered = SubagentNotification::new(
+        "/root/worker",
+        AgentStatus::Completed(Some("worker found the answer".to_string())),
+    )
+    .render();
+
+    assert!(rendered.contains("\"parent_handling_required\":true"));
+    assert!(rendered.contains("relay the result to the user"));
 }
 
 #[test]
