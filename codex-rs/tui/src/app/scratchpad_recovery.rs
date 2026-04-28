@@ -27,10 +27,12 @@ impl App {
     ) {
         self.pending_scratchpad_recoveries.remove(&thread_id);
         match result {
-            Ok(message) => self.chat_widget.submit_external_user_message(message),
+            Ok(message) => self
+                .chat_widget
+                .submit_hidden_external_user_message(message),
             Err(err) => {
                 tracing::warn!("built-in scratchpad compaction recovery failed: {err}");
-                self.chat_widget.submit_external_user_message(format!(
+                self.chat_widget.submit_hidden_external_user_message(format!(
                     "Post-compaction scratchpad recovery check failed mechanically for thread {thread_id}: {err}. Continue carefully, and if the task remains non-trivial, open or update the built-in scratchpad before proceeding."
                 ));
             }

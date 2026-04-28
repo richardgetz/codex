@@ -1688,10 +1688,55 @@
       },
       "type": "object"
     },
+    "OrchestratorMemoryCleanupToml": {
+      "additionalProperties": false,
+      "description": "Scheduled cleanup settings for orchestrator memory.",
+      "properties": {
+        "dedupe_raw_events": {
+          "description": "When true, rewrite preferences.jsonl into a compact canonical event log.",
+          "type": "boolean"
+        },
+        "deep_consolidation": {
+          "description": "When true, regenerate summary/profile artifacts after cleanup.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "When false, skip scheduled orchestrator-memory cleanup.",
+          "type": "boolean"
+        },
+        "model_consolidation": {
+          "description": "When true, run a memory-builder model pass to merge semantic near-duplicates.",
+          "type": "boolean"
+        },
+        "retain_forget_events_days": {
+          "description": "Days to keep forget tombstones before pruning them. Set 0 to drop them after the cleanup pass applies them.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "run_missed_on_startup": {
+          "description": "When true, a missed scheduled cleanup runs next time Codex starts.",
+          "type": "boolean"
+        },
+        "schedule": {
+          "description": "Local HH:MM time when cleanup should run once per day.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "OrchestratorMemoryToml": {
       "additionalProperties": false,
       "description": "Orchestrator-memory settings loaded from config.toml.",
       "properties": {
+        "cleanup": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/OrchestratorMemoryCleanupToml"
+            }
+          ],
+          "description": "Scheduled raw-event cleanup and deep mechanical consolidation."
+        },
         "debounce_seconds": {
           "description": "Seconds to wait after a newly observed preference before consolidating the summary.",
           "format": "uint64",
@@ -2327,6 +2372,55 @@
           "type": "string"
         }
       ]
+    },
+    "ResumeStrategy": {
+      "description": "Strategy used when reconstructing a session from a rollout file.",
+      "oneOf": [
+        {
+          "description": "Prefer the latest replacement-history compaction checkpoint plus the surviving rollout tail, falling back to full replay when no safe checkpoint exists.",
+          "enum": [
+            "latest_compaction"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Always replay the full rollout file.",
+          "enum": [
+            "full"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ResumeToml": {
+      "additionalProperties": false,
+      "description": "Settings loaded from config.toml for session resume behavior.",
+      "properties": {
+        "inject_scratchpad": {
+          "default": true,
+          "type": "boolean"
+        },
+        "lazy_hydrate_history": {
+          "default": true,
+          "type": "boolean"
+        },
+        "load_timeout_seconds": {
+          "default": 60,
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "strategy": {
+          "$ref": "#/definitions/ResumeStrategy"
+        },
+        "visible_turn_limit": {
+          "default": 80,
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
     },
     "SandboxMode": {
       "enum": [
@@ -3576,6 +3670,14 @@
       ],
       "default": null,
       "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
+    },
+    "resume": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ResumeToml"
+        }
+      ],
+      "description": "Session resume behavior for large rollout files."
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",

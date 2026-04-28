@@ -1655,3 +1655,36 @@ async fn plan_update_renders_history_cell() {
     assert!(blob.contains("Implement feature"));
     assert!(blob.contains("Write tests"));
 }
+
+#[tokio::test]
+async fn scratchpad_update_renders_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::ScratchpadUpdate(ScratchpadUpdateEvent {
+            scratchpad_id: "thread-1".to_string(),
+            objective: "Ship visible scratchpad UX".to_string(),
+            status: "in_progress".to_string(),
+            completed: vec!["Trace plan rendering".to_string()],
+            next_steps: vec![
+                "Add scratchpad history cell".to_string(),
+                "Run focused tests".to_string(),
+            ],
+            pending_waits: vec!["Wait for manual UI feedback".to_string()],
+            updated_at: "2026-04-28T19:00:00Z".to_string(),
+            archived_at: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(!cells.is_empty(), "expected scratchpad update cell");
+    let blob = lines_to_single_string(cells.last().unwrap());
+    assert!(
+        blob.contains("Scratchpad"),
+        "missing scratchpad header: {blob:?}"
+    );
+    assert!(blob.contains("Ship visible scratchpad UX"));
+    assert!(blob.contains("Trace plan rendering"));
+    assert!(blob.contains("Add scratchpad history cell"));
+    assert!(blob.contains("Wait for manual UI feedback"));
+}

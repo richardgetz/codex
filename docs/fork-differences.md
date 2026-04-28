@@ -136,6 +136,15 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   scope = "orchestrator"
   model_on_heuristic_miss = false
   model_consolidation = false
+
+  [orchestrator_memory.cleanup]
+  enabled = true
+  schedule = "03:30"
+  run_missed_on_startup = true
+  dedupe_raw_events = true
+  deep_consolidation = true
+  model_consolidation = true
+  retain_forget_events_days = 30
   ```
 
 - The memory classifier is broader than task reminders: it should retain durable
@@ -143,6 +152,9 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   other continuity notes when the user signals they matter later.
 - `/orchestrator-memory-forget <needle>` removes matching orchestrator-memory
   entries without touching mainline memory stores.
+- `/orchestrator-memory-consolidate` triggers the configured orchestrator-memory
+  cleanup/consolidation path immediately, which is useful for testing cleanup
+  behavior without changing the configured schedule.
 - Explicit forget requests such as `forget this: ...` are treated as memory
   removal requests.
 - To avoid silent background model spend, heuristic misses do not invoke a
@@ -151,7 +163,13 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   `model_consolidation = true` to restore those model-assisted paths.
 - Memory events are mirrored into bucket-specific files under
   `<codex_home>/orchestrator_memory/buckets/` for easier inspection while
-  preserving `preferences.jsonl` as the compatibility event log.
+  preserving `preferences.jsonl` as the canonical event log.
+- Scheduled cleanup runs at most once per day by local time, executes on the next
+  startup if the scheduled time was missed, compacts duplicate raw events,
+  retains recent forget tombstones, and resyncs bucket mirrors. By default it
+  also runs a `Memory [memory builder]` sub-agent to merge semantic
+  near-duplicates before regenerating summary/profile artifacts; set
+  `cleanup.model_consolidation = false` for mechanical-only cleanup.
 - Legacy memory events that predate bucketed schemas are migrated on the next
   read or consolidation, with a `preferences.jsonl.pre-bucket-migration` backup.
 
@@ -178,6 +196,11 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   creating a replacement; archived pads require `include_archived = true`.
 - Built-in scratchpad supports active and archived lookup, archive/unarchive,
   next-step and pending-wait updates, action-policy checks, and wait check-ins.
+- `/scratchpad` renders the current session's built-in scratchpad on demand,
+  including current objective, status, completed work, next steps, and waits.
+- When a session resumes and the thread-id scratchpad already exists, Codex
+  injects the scratchpad id and compact scratchpad state into hidden developer
+  context so the agent can continue the same recovery ledger without searching.
 - Scratchpad lifecycle cleanup runs mechanically during config load. By
   default, non-archived pads are archived after 30 days without updates, and
   archived pads are deleted after 90 days in the archive.
@@ -206,6 +229,28 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
 - The legacy `[orchestrator].recover_scratchpad_after_compaction` key remains
   supported as an Orchestrator-only compatibility alias.
+
+### Fast resume
+
+- Session resume remains compatible with upstream/mainline rollout JSONL files;
+  the fork does not require a sidecar cache or migration.
+- By default, resume reverse-scans the existing rollout from the end, finds the
+  newest compaction item with `replacement_history`, and reconstructs from that
+  compacted baseline plus the surviving tail instead of parsing the whole file.
+- If no safe replacement compaction exists, Codex falls back to full replay.
+- The app-server thread response lazily hydrates visible turns by default so
+  very large sessions do not need to render their entire historical UI payload
+  before becoming usable.
+- Config:
+
+  ```toml
+  [resume]
+  strategy = "latest_compaction" # or "full"
+  visible_turn_limit = 80
+  lazy_hydrate_history = true
+  load_timeout_seconds = 60
+  inject_scratchpad = true
+  ```
 
 ### Built-in schedule
 

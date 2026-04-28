@@ -730,6 +730,39 @@ pub async fn update_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: 
     .await;
 }
 
+pub fn consolidate_orchestrator_memory(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
+    let sess = Arc::clone(sess);
+    let config = Arc::clone(config);
+    tokio::spawn(async move {
+        match crate::orchestrator_memory::run_cleanup_now_for_session(&sess, &config).await {
+            Ok(result) => {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Warning(WarningEvent {
+                        message: format!(
+                            "Orchestrator memory consolidation completed. Raw events: {} -> {} (removed {}).",
+                            result.raw_events_before,
+                            result.raw_events_after,
+                            result.removed_raw_events
+                        ),
+                    }),
+                })
+                .await;
+            }
+            Err(err) => {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("Failed to consolidate orchestrator memory: {err}"),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                })
+                .await;
+            }
+        }
+    });
+}
+
 pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
     if num_turns == 0 {
         sess.send_event_raw(Event {
@@ -1232,6 +1265,10 @@ pub(super) async fn submission_loop(
                 }
                 Op::UpdateMemories => {
                     update_memories(&sess, &config, sub.id.clone()).await;
+                    false
+                }
+                Op::ConsolidateOrchestratorMemory => {
+                    consolidate_orchestrator_memory(&sess, &config, sub.id.clone());
                     false
                 }
                 Op::ThreadRollback { num_turns } => {

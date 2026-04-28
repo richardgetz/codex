@@ -29,6 +29,65 @@ const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
     "'/side' is unavailable while code review is running.";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
 
+fn scratchpad_update_event_from_value(value: &serde_json::Value) -> Option<ScratchpadUpdateEvent> {
+    Some(ScratchpadUpdateEvent {
+        scratchpad_id: value.get("scratchpad_id")?.as_str()?.to_string(),
+        objective: value
+            .get("objective")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        status: value
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        completed: string_array_value(value.get("completed")),
+        next_steps: string_array_value(value.get("next_steps")),
+        pending_waits: value
+            .get("pending_waits")
+            .and_then(serde_json::Value::as_array)
+            .map(|waits| waits.iter().map(format_pending_wait).collect())
+            .unwrap_or_default(),
+        updated_at: value
+            .get("updated_at")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        archived_at: value
+            .get("archived_at")
+            .and_then(serde_json::Value::as_str)
+            .map(ToString::to_string),
+    })
+}
+
+fn string_array_value(value: Option<&serde_json::Value>) -> Vec<String> {
+    value
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn format_pending_wait(wait: &serde_json::Value) -> String {
+    if let Some(text) = wait.as_str() {
+        return text.to_string();
+    }
+    let Some(object) = wait.as_object() else {
+        return wait.to_string();
+    };
+    ["summary", "target", "wait_id", "reason", "next_check_at"]
+        .iter()
+        .find_map(|key| object.get(*key).and_then(serde_json::Value::as_str))
+        .unwrap_or("pending wait")
+        .to_string()
+}
+
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
     ///
@@ -95,6 +154,58 @@ impl ChatWidget {
         };
 
         self.request_side_conversation(parent_thread_id, /*user_message*/ None);
+    }
+
+    fn add_current_scratchpad_output(&mut self) {
+        let Some(thread_id) = self.thread_id else {
+            self.add_error_message(
+                "'/scratchpad' is unavailable before the session starts.".to_string(),
+            );
+            return;
+        };
+
+        let scratchpad_id = thread_id.to_string();
+        let path = self
+            .config
+            .codex_home
+            .join("scratchpad")
+            .join("entries")
+            .join(format!("{scratchpad_id}.json"));
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                self.add_info_message(
+                    "No built-in scratchpad exists for this session yet.".to_string(),
+                    Some(
+                        "Ask Codex to open/update the scratchpad, or use the built-in scratchpad tools during ongoing work."
+                            .to_string(),
+                    ),
+                );
+                return;
+            }
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Could not read built-in scratchpad `{scratchpad_id}`: {err}"
+                ));
+                return;
+            }
+        };
+        let value = match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(value) => value,
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Built-in scratchpad `{scratchpad_id}` is invalid JSON: {err}"
+                ));
+                return;
+            }
+        };
+        let Some(update) = scratchpad_update_event_from_value(&value) else {
+            self.add_error_message(format!(
+                "Built-in scratchpad `{scratchpad_id}` is missing required fields."
+            ));
+            return;
+        };
+        self.on_scratchpad_update(update);
     }
 
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
@@ -363,6 +474,19 @@ impl ChatWidget {
             }
             SlashCommand::OrchestratorMemoryForget => {
                 self.add_error_message("Usage: /orchestrator-memory-forget <needle>".to_string());
+            }
+            SlashCommand::OrchestratorMemoryConsolidate => {
+                self.add_info_message(
+                    "Orchestrator memory consolidation started.".to_string(),
+                    Some(
+                        "This runs the configured cleanup path now, including model-assisted semantic consolidation when enabled."
+                            .to_string(),
+                    ),
+                );
+                self.submit_op(Op::ConsolidateOrchestratorMemory);
+            }
+            SlashCommand::Scratchpad => {
+                self.add_current_scratchpad_output();
             }
             SlashCommand::Apps => {
                 self.add_connectors_output();
@@ -771,6 +895,8 @@ impl ChatWidget {
             | SlashCommand::MemoryUpdate
             | SlashCommand::Mcp
             | SlashCommand::OrchestratorMemoryForget
+            | SlashCommand::OrchestratorMemoryConsolidate
+            | SlashCommand::Scratchpad
             | SlashCommand::Account
             | SlashCommand::Apps
             | SlashCommand::Plugins

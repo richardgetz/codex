@@ -262,7 +262,7 @@ fn build_router_tick_message(control: &ThreadControlRecord) -> String {
         lines.push(format!("Monitored thread ids: {targets}."));
     }
     lines.push(
-        "Check supervised sessions for new progress, blockers, or operator instructions and continue routing work."
+        "Check supervised sessions directly for new progress, blockers, or operator instructions; do not spawn a child agent just to inspect supervision state."
             .to_string(),
     );
     lines.join("\n")
@@ -350,7 +350,7 @@ Reason: Keep supervising the worker pool\n\
 Watch interval: 45 seconds.\n\
 Release channel: imessage.\n\
 Monitored thread ids: 00000000-0000-0000-0000-000000000012, 00000000-0000-0000-0000-000000000013.\n\
-Check supervised sessions for new progress, blockers, or operator instructions and continue routing work."
+Check supervised sessions directly for new progress, blockers, or operator instructions; do not spawn a child agent just to inspect supervision state."
         );
     }
 

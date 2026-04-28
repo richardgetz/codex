@@ -1359,6 +1359,85 @@ async fn slash_orchestrator_memory_forget_prunes_matching_entries() {
 }
 
 #[tokio::test]
+async fn slash_orchestrator_memory_consolidate_submits_core_op() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::OrchestratorMemoryConsolidate);
+
+    match rx.try_recv().expect("expected start message") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(rendered.contains("Orchestrator memory consolidation started."));
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    match op_rx.try_recv() {
+        Ok(Op::ConsolidateOrchestratorMemory) => {}
+        other => panic!("expected ConsolidateOrchestratorMemory op, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn slash_scratchpad_renders_current_session_scratchpad() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let scratchpad_dir = chat.config.codex_home.join("scratchpad").join("entries");
+    tokio::fs::create_dir_all(&scratchpad_dir)
+        .await
+        .expect("create scratchpad dir");
+    tokio::fs::write(
+        scratchpad_dir.join(format!("{thread_id}.json")),
+        serde_json::json!({
+            "scratchpad_id": thread_id.to_string(),
+            "objective": "Ship visible scratchpad state",
+            "status": "in_progress",
+            "completed": ["trace event route"],
+            "next_steps": ["render command output"],
+            "pending_waits": [{"summary": "manual UI check"}],
+            "created_at": "2026-04-28T20:00:00Z",
+            "updated_at": "2026-04-28T20:01:00Z",
+            "archived_at": null
+        })
+        .to_string(),
+    )
+    .await
+    .expect("write scratchpad");
+
+    chat.dispatch_command(SlashCommand::Scratchpad);
+
+    match rx.try_recv().expect("expected scratchpad card") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(rendered.contains("Scratchpad"));
+            assert!(rendered.contains("Working on: Ship visible scratchpad state"));
+            assert!(rendered.contains("✔ trace event route"));
+            assert!(rendered.contains("□ render command output"));
+            assert!(rendered.contains("□ manual UI check"));
+        }
+        other => panic!("expected InsertHistoryCell scratchpad card, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_scratchpad_reports_missing_session_scratchpad() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.dispatch_command(SlashCommand::Scratchpad);
+
+    match rx.try_recv().expect("expected missing scratchpad message") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(rendered.contains("No built-in scratchpad exists for this session yet."));
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
 async fn slash_account_reports_current_alias() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.accounts.active = Some("work".to_string());

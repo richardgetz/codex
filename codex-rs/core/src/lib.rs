@@ -154,6 +154,8 @@ pub(crate) mod turn_diff_tracker;
 mod turn_metadata;
 mod turn_timing;
 mod unavailable_tool;
+pub use codex_rollout::ResumeLoadOptions;
+pub use codex_rollout::ResumeLoadStrategy;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::Cursor;
 pub use rollout::EventPersistenceMode;

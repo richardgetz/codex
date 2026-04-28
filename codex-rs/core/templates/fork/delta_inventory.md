@@ -30,8 +30,13 @@ stable/mainline is pulled in.
   - `scope = "orchestrator"`
 - Orchestrator memory maintenance:
   - Slash command: `/orchestrator-memory-forget <needle>`
+  - Slash command: `/orchestrator-memory-consolidate`
   - Bucket-specific mirror files live under
     `<codex_home>/orchestrator_memory/buckets/`.
+  - Scheduled cleanup runs daily by local `HH:MM` schedule, defaults to `03:30`,
+    compacts duplicate raw events in `preferences.jsonl`, keeps recent forget
+    tombstones, resyncs bucket files, and defaults to a `Memory [memory builder]`
+    semantic merge pass before regenerating summary/profile artifacts.
   - Legacy unbucketed memory events are migrated on next read/consolidation with
     a `preferences.jsonl.pre-bucket-migration` backup.
 - Mode-scoped enablement filters:
@@ -85,6 +90,10 @@ stable/mainline is pulled in.
   - `open_scratchpad` defaults `scratchpad_id` to the current thread/session id.
   - `resume_scratchpad` strictly reopens an existing scratchpad by id without
     creating a replacement; archived pads require `include_archived = true`.
+  - Slash command: `/scratchpad` renders the current session scratchpad on
+    demand using the same status-card UI as live scratchpad updates.
+  - Resume injects the active thread scratchpad id and compact scratchpad state
+    into hidden developer context when the thread-id scratchpad exists.
   - Supports active/archived lookup, archive/unarchive, next-step and
     pending-wait updates, action-policy checks, and wait check-ins.
   - Lifecycle cleanup runs during config load. Defaults: archive non-archived
@@ -99,6 +108,15 @@ stable/mainline is pulled in.
     the next model turn; replayed history does not.
   - Legacy `[orchestrator].recover_scratchpad_after_compaction` remains
     supported as an Orchestrator-only compatibility alias.
+- Fast resume:
+  - Config: `[resume]`
+  - Defaults: `strategy = "latest_compaction"`, `visible_turn_limit = 80`,
+    `lazy_hydrate_history = true`, `load_timeout_seconds = 60`,
+    `inject_scratchpad = true`
+  - Uses the existing rollout JSONL format directly; no required sidecar file.
+  - Reverse-scans from the end to the newest replacement-history compaction and
+    reconstructs from that checkpoint plus the surviving tail, falling back to
+    full replay when no safe checkpoint exists.
 - Fork docs links:
   - Public README docs links point at the fork `stable` branch because npm
     renders package README links relative to `codex-cli`.
@@ -124,6 +142,8 @@ stable/mainline is pulled in.
   without breaking the default root auth location.
 - Verify `/orchestrator-memory-forget <needle>` still prunes and reconsolidates
   orchestrator memory, including bucket mirror files.
+- Verify `/orchestrator-memory-consolidate` still triggers a manual
+  orchestrator-memory cleanup pass.
 - Verify `[enablement.modes.<mode>]` still filters `skills`, `mcps`, and
   `plugins` correctly.
 - Verify Orchestrator child spawns still respect

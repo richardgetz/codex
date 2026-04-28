@@ -73,6 +73,7 @@ fn orchestrator_memory_config_defaults_to_enabled_orchestrator_scope() {
             max_summary_items: 24,
             model_on_heuristic_miss: false,
             model_consolidation: false,
+            cleanup: OrchestratorMemoryCleanupConfig::default(),
         }
     );
 }
@@ -88,6 +89,15 @@ fn orchestrator_memory_config_uses_explicit_values() {
         max_summary_items: Some(10),
         model_on_heuristic_miss: Some(true),
         model_consolidation: Some(true),
+        cleanup: Some(OrchestratorMemoryCleanupToml {
+            enabled: Some(false),
+            schedule: Some("04:15".to_string()),
+            run_missed_on_startup: Some(false),
+            dedupe_raw_events: Some(false),
+            deep_consolidation: Some(false),
+            model_consolidation: Some(false),
+            retain_forget_events_days: Some(7),
+        }),
     });
 
     assert_eq!(
@@ -101,6 +111,15 @@ fn orchestrator_memory_config_uses_explicit_values() {
             max_summary_items: 10,
             model_on_heuristic_miss: true,
             model_consolidation: true,
+            cleanup: OrchestratorMemoryCleanupConfig {
+                enabled: false,
+                schedule: "04:15".to_string(),
+                run_missed_on_startup: false,
+                dedupe_raw_events: false,
+                deep_consolidation: false,
+                model_consolidation: false,
+                retain_forget_events_days: 7,
+            },
         }
     );
 }

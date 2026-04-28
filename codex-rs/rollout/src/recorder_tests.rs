@@ -4,8 +4,11 @@ use super::*;
 use crate::config::RolloutConfig;
 use chrono::TimeZone;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnContextItem;
@@ -61,6 +64,101 @@ fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::Result<Path
     });
     writeln!(file, "{user_event}")?;
     Ok(path)
+}
+
+fn rollout_message(role: &str, text: &str) -> ResponseItem {
+    let content = if role == "user" {
+        vec![ContentItem::InputText {
+            text: text.to_string(),
+        }]
+    } else {
+        vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }]
+    };
+    ResponseItem::Message {
+        id: None,
+        role: role.to_string(),
+        content,
+        end_turn: None,
+        phase: None,
+    }
+}
+
+fn write_rollout_line(file: &mut File, item: RolloutItem) -> std::io::Result<()> {
+    let line = RolloutLine {
+        timestamp: "2026-04-28T00:00:00Z".to_string(),
+        item,
+    };
+    writeln!(file, "{}", serde_json::to_string(&line)?)
+}
+
+#[tokio::test]
+async fn fast_resume_loads_latest_compaction_tail_without_old_heavy_events() -> std::io::Result<()>
+{
+    let home = TempDir::new().expect("temp dir");
+    let path = home.path().join("rollout.jsonl");
+    let thread_id = ThreadId::new();
+    let mut file = File::create(&path)?;
+    write_rollout_line(
+        &mut file,
+        RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                id: thread_id,
+                timestamp: "2026-04-28T00:00:00Z".to_string(),
+                cwd: home.path().to_path_buf(),
+                originator: "test".to_string(),
+                cli_version: "test".to_string(),
+                source: SessionSource::Cli,
+                ..SessionMeta::default()
+            },
+            git: None,
+        }),
+    )?;
+    for index in 0..20 {
+        write_rollout_line(
+            &mut file,
+            RolloutItem::ResponseItem(rollout_message(
+                "assistant",
+                &format!("old-heavy-output-{index}"),
+            )),
+        )?;
+    }
+    write_rollout_line(
+        &mut file,
+        RolloutItem::Compacted(CompactedItem {
+            message: "summary checkpoint".to_string(),
+            replacement_history: Some(vec![rollout_message("user", "compacted baseline")]),
+        }),
+    )?;
+    write_rollout_line(
+        &mut file,
+        RolloutItem::ResponseItem(rollout_message("assistant", "tail response")),
+    )?;
+
+    let history = RolloutRecorder::get_rollout_history_with_options(
+        &path,
+        ResumeLoadOptions {
+            strategy: ResumeLoadStrategy::LatestCompaction,
+            visible_turn_limit: 80,
+            load_timeout: Duration::from_secs(60),
+        },
+    )
+    .await?;
+
+    let InitialHistory::Resumed(resumed) = history else {
+        panic!("expected resumed history");
+    };
+    assert_eq!(resumed.conversation_id, thread_id);
+    assert_eq!(resumed.history.len(), 3);
+    assert!(matches!(resumed.history[0], RolloutItem::SessionMeta(_)));
+    assert!(matches!(resumed.history[1], RolloutItem::Compacted(_)));
+    assert!(matches!(resumed.history[2], RolloutItem::ResponseItem(_)));
+    let rendered = serde_json::to_string(&resumed.history)?;
+    assert!(rendered.contains("tail response"));
+    assert!(rendered.contains("compacted baseline"));
+    assert!(!rendered.contains("old-heavy-output"));
+    Ok(())
 }
 
 #[tokio::test]

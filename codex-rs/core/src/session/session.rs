@@ -948,6 +948,11 @@ impl Session {
             Arc::clone(&config),
             &session_configuration.session_source,
         );
+        crate::orchestrator_memory::start_scheduled_cleanup_task(
+            &sess,
+            &config,
+            &session_configuration.session_source,
+        );
 
         Ok(sess)
     }

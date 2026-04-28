@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "archivedAt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "completed": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "nextSteps": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "objective": {
+      "type": "string"
+    },
+    "pendingWaits": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "scratchpadId": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    },
+    "updatedAt": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "completed",
+    "nextSteps",
+    "objective",
+    "pendingWaits",
+    "scratchpadId",
+    "status",
+    "threadId",
+    "turnId",
+    "updatedAt"
+  ],
+  "title": "TurnScratchpadUpdatedNotification",
+  "type": "object"
+}

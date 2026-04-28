@@ -168,6 +168,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::McpStartupComplete(_)
         | EventMsg::ListSkillsResponse(_)
         | EventMsg::PlanUpdate(_)
+        | EventMsg::ScratchpadUpdate(_)
         | EventMsg::ShutdownComplete
         | EventMsg::DeprecationNotice(_)
         | EventMsg::ItemStarted(_)

@@ -23,6 +23,8 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ScratchpadUpdateEvent;
 
 const SCRATCHPAD_NAMESPACE: &str = "scratchpad";
 const TOOL_OPEN: &str = "open_scratchpad";
@@ -163,7 +165,14 @@ impl ToolHandler for BuiltinScratchpadHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let arguments = match invocation.payload {
+        let ToolInvocation {
+            session,
+            turn,
+            payload,
+            tool_name,
+            ..
+        } = invocation;
+        let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
             _ => {
                 return Err(FunctionCallError::RespondToModel(
@@ -172,14 +181,15 @@ impl ToolHandler for BuiltinScratchpadHandler {
             }
         };
         let args: Value = parse_arguments(&arguments)?;
-        let config = invocation.session.get_config().await;
+        let config = session.get_config().await;
         let store = ScratchpadStore::new(
             args.get("state_home").and_then(Value::as_str),
             config.codex_home.as_path(),
         )?;
-        let default_scratchpad_id = invocation.session.conversation_id.to_string();
+        let default_scratchpad_id = session.conversation_id.to_string();
 
-        let result = match invocation.tool_name.name.as_str() {
+        let tool_name = tool_name.name.as_str();
+        let result = match tool_name {
             TOOL_OPEN => open_scratchpad(&store, &args, &default_scratchpad_id),
             TOOL_RESUME => resume_scratchpad(&store, &args),
             TOOL_GET => get_scratchpad(&store, &args),
@@ -200,11 +210,95 @@ impl ToolHandler for BuiltinScratchpadHandler {
             ))),
         }?;
 
+        if should_emit_scratchpad_update(tool_name)
+            && let Some(event) = scratchpad_update_event_from_result(&result)
+        {
+            session
+                .send_event(turn.as_ref(), EventMsg::ScratchpadUpdate(event))
+                .await;
+        }
+
         Ok(FunctionToolOutput::from_text(
             json_text(result)?,
             Some(true),
         ))
     }
+}
+
+fn should_emit_scratchpad_update(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        TOOL_OPEN
+            | TOOL_RESUME
+            | TOOL_APPEND_NOTE
+            | TOOL_SET_NEXT_STEPS
+            | TOOL_SET_PENDING_WAITS
+            | TOOL_SET_ACTION_POLICY
+            | TOOL_MARK_WAIT_CHECKED
+            | TOOL_UPDATE
+            | TOOL_ARCHIVE
+            | TOOL_UNARCHIVE
+    )
+}
+
+fn scratchpad_update_event_from_result(result: &Value) -> Option<ScratchpadUpdateEvent> {
+    let scratchpad = result.get("scratchpad")?;
+    Some(ScratchpadUpdateEvent {
+        scratchpad_id: scratchpad.get("scratchpad_id")?.as_str()?.to_string(),
+        objective: scratchpad
+            .get("objective")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        status: scratchpad
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        completed: string_array_value(scratchpad.get("completed")),
+        next_steps: string_array_value(scratchpad.get("next_steps")),
+        pending_waits: scratchpad
+            .get("pending_waits")
+            .and_then(Value::as_array)
+            .map(|waits| waits.iter().map(format_pending_wait).collect())
+            .unwrap_or_default(),
+        updated_at: scratchpad
+            .get("updated_at")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        archived_at: scratchpad
+            .get("archived_at")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+    })
+}
+
+fn string_array_value(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn format_pending_wait(wait: &Value) -> String {
+    if let Some(text) = wait.as_str() {
+        return text.to_string();
+    }
+    let Some(object) = wait.as_object() else {
+        return wait.to_string();
+    };
+    ["summary", "target", "wait_id", "reason", "next_check_at"]
+        .iter()
+        .find_map(|key| object.get(*key).and_then(Value::as_str))
+        .unwrap_or("pending wait")
+        .to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -549,7 +549,11 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
-        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        let initial_history = RolloutRecorder::get_rollout_history_with_options(
+            &rollout_path,
+            config.resume_load_options(),
+        )
+        .await?;
         Box::pin(self.resume_thread_with_history(
             config,
             initial_history,
@@ -610,7 +614,11 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         user_shell_override: crate::shell::Shell,
     ) -> CodexResult<NewThread> {
-        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        let initial_history = RolloutRecorder::get_rollout_history_with_options(
+            &rollout_path,
+            config.resume_load_options(),
+        )
+        .await?;
         Box::pin(self.state.spawn_thread(
             config,
             /*initial_collaboration_mode*/ None,
@@ -858,7 +866,11 @@ impl ThreadManagerState {
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
-        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        let initial_history = RolloutRecorder::get_rollout_history_with_options(
+            &rollout_path,
+            config.resume_load_options(),
+        )
+        .await?;
         Box::pin(self.spawn_thread_with_source(
             config,
             /*initial_collaboration_mode*/ None,

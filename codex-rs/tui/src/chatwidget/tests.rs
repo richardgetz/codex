@@ -188,6 +188,7 @@ pub(super) use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 pub(super) use codex_protocol::protocol::RealtimeEvent;
 pub(super) use codex_protocol::protocol::ReviewRequest;
 pub(super) use codex_protocol::protocol::ReviewTarget;
+pub(super) use codex_protocol::protocol::ScratchpadUpdateEvent;
 pub(super) use codex_protocol::protocol::SessionConfiguredEvent;
 pub(super) use codex_protocol::protocol::SessionSource;
 pub(super) use codex_protocol::protocol::SkillScope;

@@ -1667,6 +1667,21 @@ impl Session {
         })
     }
 
+    fn build_active_scratchpad_context(codex_home: &Path, thread_id: ThreadId) -> Option<String> {
+        let scratchpad_id = thread_id.to_string();
+        let path = codex_home
+            .join("scratchpad")
+            .join("entries")
+            .join(format!("{scratchpad_id}.json"));
+        let text = std::fs::read_to_string(path).ok()?;
+        let value = serde_json::from_str::<Value>(&text).ok()?;
+        let summary = compact_active_scratchpad_summary(&value);
+        let summary_text = serde_json::to_string_pretty(&summary).ok()?;
+        Some(format!(
+            "<active_scratchpad>\nThe built-in scratchpad for this thread/session is `{scratchpad_id}`. Continue using this scratchpad id for recovery notes, next steps, waits, and durable working state.\n\n```json\n{summary_text}\n```\n</active_scratchpad>"
+        ))
+    }
+
     async fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
         let state = self.state.lock().await;
         state.previous_turn_settings()
@@ -3039,6 +3054,14 @@ impl Session {
             .enabled
         {
             developer_sections.push(ScratchpadInstructions::new().render());
+            if turn_context.config.resume.inject_scratchpad
+                && let Some(active_scratchpad) = Self::build_active_scratchpad_context(
+                    &turn_context.config.codex_home,
+                    self.conversation_id,
+                )
+            {
+                developer_sections.push(active_scratchpad);
+            }
         }
         if turn_context
             .config
@@ -3871,6 +3894,40 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
             message: err.message.clone(),
         })
         .collect()
+}
+
+fn compact_active_scratchpad_summary(value: &Value) -> Value {
+    let mut summary = serde_json::Map::new();
+    for key in [
+        "scratchpad_id",
+        "objective",
+        "status",
+        "completed",
+        "next_steps",
+        "pending_waits",
+        "resume_instructions",
+        "final_guard",
+        "updated_at",
+        "archived_at",
+    ] {
+        if let Some(item) = value.get(key) {
+            summary.insert(key.to_string(), item.clone());
+        }
+    }
+    if let Some(notes) = value.get("notes").and_then(Value::as_array) {
+        let recent_notes = notes
+            .iter()
+            .rev()
+            .take(/*n*/ 5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>();
+        summary.insert("recent_notes".to_string(), Value::Array(recent_notes));
+        summary.insert("notes_count".to_string(), serde_json::json!(notes.len()));
+    }
+    Value::Object(summary)
 }
 
 use crate::memories::prompts::build_memory_tool_developer_instructions;

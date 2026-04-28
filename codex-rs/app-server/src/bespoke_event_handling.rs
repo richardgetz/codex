@@ -104,6 +104,7 @@ use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
+use codex_app_server_protocol::TurnScratchpadUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::WarningNotification;
@@ -1997,6 +1998,16 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
+        EventMsg::ScratchpadUpdate(event) => {
+            handle_turn_scratchpad_update(
+                conversation_id,
+                &event_turn_id,
+                event,
+                api_version,
+                &outgoing,
+            )
+            .await;
+        }
         EventMsg::ShutdownComplete => {
             thread_watch_manager
                 .note_thread_shutdown(&conversation_id.to_string())
@@ -2149,6 +2160,32 @@ async fn handle_turn_plan_update(
         };
         outgoing
             .send_server_notification(ServerNotification::TurnPlanUpdated(notification))
+            .await;
+    }
+}
+
+async fn handle_turn_scratchpad_update(
+    conversation_id: ThreadId,
+    event_turn_id: &str,
+    scratchpad_update_event: codex_protocol::protocol::ScratchpadUpdateEvent,
+    api_version: ApiVersion,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+) {
+    if let ApiVersion::V2 = api_version {
+        let notification = TurnScratchpadUpdatedNotification {
+            thread_id: conversation_id.to_string(),
+            turn_id: event_turn_id.to_string(),
+            scratchpad_id: scratchpad_update_event.scratchpad_id,
+            objective: scratchpad_update_event.objective,
+            status: scratchpad_update_event.status,
+            completed: scratchpad_update_event.completed,
+            next_steps: scratchpad_update_event.next_steps,
+            pending_waits: scratchpad_update_event.pending_waits,
+            updated_at: scratchpad_update_event.updated_at,
+            archived_at: scratchpad_update_event.archived_at,
+        };
+        outgoing
+            .send_server_notification(ServerNotification::TurnScratchpadUpdated(notification))
             .await;
     }
 }
@@ -3226,6 +3263,7 @@ mod tests {
     use codex_protocol::protocol::McpInvocation;
     use codex_protocol::protocol::RateLimitSnapshot;
     use codex_protocol::protocol::RateLimitWindow;
+    use codex_protocol::protocol::ScratchpadUpdateEvent;
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -4896,6 +4934,59 @@ mod tests {
                 assert_eq!(n.plan[0].status, TurnPlanStepStatus::Pending);
                 assert_eq!(n.plan[1].step, "second");
                 assert_eq!(n.plan[1].status, TurnPlanStepStatus::Completed);
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_turn_scratchpad_update_emits_notification_for_v2() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            ThreadId::new(),
+        );
+        let update = ScratchpadUpdateEvent {
+            scratchpad_id: "scratch-123".to_string(),
+            objective: "Ship scratchpad UX".to_string(),
+            status: "in_progress".to_string(),
+            completed: vec!["wire core event".to_string()],
+            next_steps: vec!["render history card".to_string()],
+            pending_waits: vec!["manual TUI test".to_string()],
+            updated_at: "2026-04-28T20:00:00Z".to_string(),
+            archived_at: None,
+        };
+
+        let conversation_id = ThreadId::new();
+
+        handle_turn_scratchpad_update(
+            conversation_id,
+            "turn-123",
+            update,
+            ApiVersion::V2,
+            &outgoing,
+        )
+        .await;
+
+        let msg = recv_broadcast_message(&mut rx).await?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnScratchpadUpdated(
+                n,
+            )) => {
+                assert_eq!(n.thread_id, conversation_id.to_string());
+                assert_eq!(n.turn_id, "turn-123");
+                assert_eq!(n.scratchpad_id, "scratch-123");
+                assert_eq!(n.objective, "Ship scratchpad UX");
+                assert_eq!(n.status, "in_progress");
+                assert_eq!(n.completed, vec!["wire core event".to_string()]);
+                assert_eq!(n.next_steps, vec!["render history card".to_string()]);
+                assert_eq!(n.pending_waits, vec!["manual TUI test".to_string()]);
+                assert_eq!(n.updated_at, "2026-04-28T20:00:00Z");
+                assert_eq!(n.archived_at, None);
             }
             other => bail!("unexpected message: {other:?}"),
         }

@@ -33,6 +33,8 @@ pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
 pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 256;
 pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
+pub const DEFAULT_RESUME_LOAD_TIMEOUT_SECONDS: u64 = 60;
+pub const DEFAULT_RESUME_VISIBLE_TURN_LIMIT: usize = 80;
 const MIN_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 1;
 const MAX_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 4096;
 const MIN_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 1;
@@ -40,6 +42,83 @@ const MAX_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 128;
 
 const fn default_enabled() -> bool {
     true
+}
+
+fn default_resume_load_timeout_seconds() -> u64 {
+    DEFAULT_RESUME_LOAD_TIMEOUT_SECONDS
+}
+
+fn default_resume_visible_turn_limit() -> usize {
+    DEFAULT_RESUME_VISIBLE_TURN_LIMIT
+}
+
+/// Strategy used when reconstructing a session from a rollout file.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResumeStrategy {
+    /// Prefer the latest replacement-history compaction checkpoint plus the
+    /// surviving rollout tail, falling back to full replay when no safe
+    /// checkpoint exists.
+    #[default]
+    LatestCompaction,
+    /// Always replay the full rollout file.
+    Full,
+}
+
+/// Settings loaded from config.toml for session resume behavior.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ResumeToml {
+    pub strategy: Option<ResumeStrategy>,
+    #[serde(default = "default_resume_visible_turn_limit")]
+    pub visible_turn_limit: usize,
+    #[serde(default = "default_enabled")]
+    pub lazy_hydrate_history: bool,
+    #[serde(default = "default_resume_load_timeout_seconds")]
+    pub load_timeout_seconds: u64,
+    #[serde(default = "default_enabled")]
+    pub inject_scratchpad: bool,
+}
+
+impl Default for ResumeToml {
+    fn default() -> Self {
+        Self {
+            strategy: None,
+            visible_turn_limit: DEFAULT_RESUME_VISIBLE_TURN_LIMIT,
+            lazy_hydrate_history: true,
+            load_timeout_seconds: DEFAULT_RESUME_LOAD_TIMEOUT_SECONDS,
+            inject_scratchpad: true,
+        }
+    }
+}
+
+/// Effective resume settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumeConfig {
+    pub strategy: ResumeStrategy,
+    pub visible_turn_limit: usize,
+    pub lazy_hydrate_history: bool,
+    pub load_timeout_seconds: u64,
+    pub inject_scratchpad: bool,
+}
+
+impl Default for ResumeConfig {
+    fn default() -> Self {
+        let toml = ResumeToml::default();
+        toml.into()
+    }
+}
+
+impl From<ResumeToml> for ResumeConfig {
+    fn from(toml: ResumeToml) -> Self {
+        Self {
+            strategy: toml.strategy.unwrap_or_default(),
+            visible_turn_limit: toml.visible_turn_limit.max(1),
+            lazy_hydrate_history: toml.lazy_hydrate_history,
+            load_timeout_seconds: toml.load_timeout_seconds.max(1),
+            inject_scratchpad: toml.inject_scratchpad,
+        }
+    }
 }
 
 /// Determine where Codex should store CLI auth credentials.
@@ -318,6 +397,29 @@ pub struct OrchestratorMemoryToml {
     pub model_on_heuristic_miss: Option<bool>,
     /// When true, use a model agent to rewrite summary/profile artifacts after memory writes.
     pub model_consolidation: Option<bool>,
+    /// Scheduled raw-event cleanup and deep mechanical consolidation.
+    pub cleanup: Option<OrchestratorMemoryCleanupToml>,
+}
+
+/// Scheduled cleanup settings for orchestrator memory.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct OrchestratorMemoryCleanupToml {
+    /// When false, skip scheduled orchestrator-memory cleanup.
+    pub enabled: Option<bool>,
+    /// Local HH:MM time when cleanup should run once per day.
+    pub schedule: Option<String>,
+    /// When true, a missed scheduled cleanup runs next time Codex starts.
+    pub run_missed_on_startup: Option<bool>,
+    /// When true, rewrite preferences.jsonl into a compact canonical event log.
+    pub dedupe_raw_events: Option<bool>,
+    /// When true, regenerate summary/profile artifacts after cleanup.
+    pub deep_consolidation: Option<bool>,
+    /// When true, run a memory-builder model pass to merge semantic near-duplicates.
+    pub model_consolidation: Option<bool>,
+    /// Days to keep forget tombstones before pruning them. Set 0 to drop them
+    /// after the cleanup pass applies them.
+    pub retain_forget_events_days: Option<u64>,
 }
 
 /// Built-in scratchpad behavior for one collaboration mode.
@@ -607,6 +709,32 @@ pub struct OrchestratorMemoryConfig {
     pub max_summary_items: usize,
     pub model_on_heuristic_miss: bool,
     pub model_consolidation: bool,
+    pub cleanup: OrchestratorMemoryCleanupConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrchestratorMemoryCleanupConfig {
+    pub enabled: bool,
+    pub schedule: String,
+    pub run_missed_on_startup: bool,
+    pub dedupe_raw_events: bool,
+    pub deep_consolidation: bool,
+    pub model_consolidation: bool,
+    pub retain_forget_events_days: u64,
+}
+
+impl Default for OrchestratorMemoryCleanupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            schedule: "03:30".to_string(),
+            run_missed_on_startup: true,
+            dedupe_raw_events: true,
+            deep_consolidation: true,
+            model_consolidation: true,
+            retain_forget_events_days: 30,
+        }
+    }
 }
 
 impl Default for OrchestratorMemoryConfig {
@@ -620,6 +748,7 @@ impl Default for OrchestratorMemoryConfig {
             max_summary_items: 24,
             model_on_heuristic_miss: false,
             model_consolidation: false,
+            cleanup: OrchestratorMemoryCleanupConfig::default(),
         }
     }
 }
@@ -652,6 +781,36 @@ impl From<OrchestratorMemoryToml> for OrchestratorMemoryConfig {
             model_consolidation: toml
                 .model_consolidation
                 .unwrap_or(defaults.model_consolidation),
+            cleanup: toml.cleanup.unwrap_or_default().into(),
+        }
+    }
+}
+
+impl From<OrchestratorMemoryCleanupToml> for OrchestratorMemoryCleanupConfig {
+    fn from(toml: OrchestratorMemoryCleanupToml) -> Self {
+        let defaults = Self::default();
+        let schedule = toml
+            .schedule
+            .map(|schedule| schedule.trim().to_string())
+            .filter(|schedule| !schedule.is_empty())
+            .unwrap_or(defaults.schedule);
+        Self {
+            enabled: toml.enabled.unwrap_or(defaults.enabled),
+            schedule,
+            run_missed_on_startup: toml
+                .run_missed_on_startup
+                .unwrap_or(defaults.run_missed_on_startup),
+            dedupe_raw_events: toml.dedupe_raw_events.unwrap_or(defaults.dedupe_raw_events),
+            deep_consolidation: toml
+                .deep_consolidation
+                .unwrap_or(defaults.deep_consolidation),
+            model_consolidation: toml
+                .model_consolidation
+                .unwrap_or(defaults.model_consolidation),
+            retain_forget_events_days: toml
+                .retain_forget_events_days
+                .unwrap_or(defaults.retain_forget_events_days)
+                .min(365),
         }
     }
 }

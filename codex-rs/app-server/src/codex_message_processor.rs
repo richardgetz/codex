@@ -4874,7 +4874,12 @@ impl CodexMessageProcessor {
             }
         };
 
-        match RolloutRecorder::get_rollout_history(&rollout_path).await {
+        match RolloutRecorder::get_rollout_history_with_options(
+            &rollout_path,
+            self.config.resume_load_options(),
+        )
+        .await
+        {
             Ok(initial_history) => Some(initial_history),
             Err(err) => {
                 self.send_invalid_request_error(
@@ -4925,9 +4930,14 @@ impl CodexMessageProcessor {
         thread.id = thread_id.to_string();
         thread.path = Some(rollout_path.to_path_buf());
         let history_items = thread_history.get_rollout_items();
+        let visible_history_items = visible_rollout_items(
+            &history_items,
+            self.config.resume.visible_turn_limit,
+            self.config.resume.lazy_hydrate_history,
+        );
         populate_thread_turns(
             &mut thread,
-            ThreadTurnSource::HistoryItems(&history_items),
+            ThreadTurnSource::HistoryItems(&visible_history_items),
             /*active_turn*/ None,
         )
         .await?;
@@ -9649,6 +9659,44 @@ pub(crate) async fn read_rollout_items_from_rollout(
     };
 
     Ok(items)
+}
+
+fn visible_rollout_items(
+    items: &[RolloutItem],
+    visible_turn_limit: usize,
+    lazy_hydrate_history: bool,
+) -> Vec<RolloutItem> {
+    if !lazy_hydrate_history || visible_turn_limit == 0 {
+        return items.to_vec();
+    }
+
+    let mut user_turns_seen = 0usize;
+    let mut split_index = 0usize;
+    for (index, item) in items.iter().enumerate().rev() {
+        if matches!(item, RolloutItem::EventMsg(EventMsg::UserMessage(_))) {
+            user_turns_seen = user_turns_seen.saturating_add(1);
+            if user_turns_seen > visible_turn_limit {
+                split_index = index + 1;
+                break;
+            }
+        }
+    }
+    if split_index == 0 {
+        return items.to_vec();
+    }
+
+    let mut visible = Vec::with_capacity(items.len() - split_index + 1);
+    if let Some(session_meta) = items.iter().find_map(|item| match item {
+        RolloutItem::SessionMeta(meta) => Some(RolloutItem::SessionMeta(meta.clone())),
+        RolloutItem::ResponseItem(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::EventMsg(_) => None,
+    }) {
+        visible.push(session_meta);
+    }
+    visible.extend_from_slice(&items[split_index..]);
+    visible
 }
 
 fn extract_conversation_summary(

@@ -24,6 +24,7 @@ use crate::types::OrchestratorMemoryToml;
 use crate::types::OrchestratorToml;
 use crate::types::OtelConfigToml;
 use crate::types::PluginConfig;
+use crate::types::ResumeToml;
 use crate::types::SandboxWorkspaceWrite;
 use crate::types::ScheduleToml;
 use crate::types::ScratchpadToml;
@@ -351,6 +352,9 @@ pub struct ConfigToml {
 
     /// Built-in schedule subsystem settings.
     pub schedule: Option<ScheduleToml>,
+
+    /// Session resume behavior for large rollout files.
+    pub resume: Option<ResumeToml>,
 
     /// Orchestrator supervision and escalation settings.
     #[serde(default)]
