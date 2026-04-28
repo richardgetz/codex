@@ -1,0 +1,19 @@
+id: 2026-04-28-preserve-agent-picker-metadata
+date: 2026-04-28
+intent: Keep memory subagent labels stable in the TUI slash agent list.
+change_type: fix
+scope: codex-rs/tui
+summary: Preserve existing agent picker nickname and role when a later generic refresh omits metadata, and add a regression for Memory [extractor].
+decision: Implement the preservation at App::upsert_agent_picker_thread so every picker update path shares the same fallback behavior.
+constraints: Do not change memory-agent spawn semantics; avoid sensitive data; keep the fix narrow for the open PR branch.
+intent_priority: high
+code_locations:
+  - codex-rs/tui/src/app/session_lifecycle.rs
+  - codex-rs/tui/src/app/tests.rs
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: gpt-5.5
+validation:
+  - cargo test -p codex-tui agent_picker_upsert_preserves_memory_metadata_on_generic_refresh
+  - cargo test -p codex-tui failed in attach_live_thread_for_selection_rejects_unmaterialized_fallback_threads stack overflow, reproduced standalone
