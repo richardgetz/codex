@@ -1204,6 +1204,38 @@ async fn builtin_schedule_can_be_enabled_for_mode() {
 }
 
 #[tokio::test]
+async fn builtin_session_overwatch_can_be_enabled_for_orchestrator_mode() {
+    let config = test_config().await;
+    let model_info = construct_model_info_offline("gpt-5.4", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_builtin_session_overwatch_enabled(/*builtin_session_overwatch_enabled*/ true);
+
+    let (tools, registry) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    )
+    .build();
+
+    assert!(tools.iter().any(|tool| tool.name() == "session_overwatch"));
+    assert!(registry.has_handler(&ToolName::namespaced("session_overwatch", "list_sessions")));
+    assert!(registry.has_handler(&ToolName::namespaced("session_overwatch", "watch_session")));
+}
+
+#[tokio::test]
 async fn unavailable_mcp_tools_are_exposed_as_dummy_function_tools() {
     let config = test_config().await;
     let model_info = construct_model_info_offline("gpt-5.4", &config);

@@ -13,6 +13,7 @@ pub(crate) mod multi_agents_v2;
 mod plan;
 mod request_permissions;
 mod request_user_input;
+pub(crate) mod session_overwatch;
 mod shell;
 mod test_sync;
 mod tool_search;

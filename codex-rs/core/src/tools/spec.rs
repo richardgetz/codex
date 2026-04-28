@@ -116,6 +116,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
+    use crate::tools::handlers::session_overwatch::SESSION_OVERWATCH_TOOL_NAMES;
+    use crate::tools::handlers::session_overwatch::SessionOverwatchHandler;
+    use crate::tools::handlers::session_overwatch::session_overwatch_namespace_spec;
     use crate::tools::handlers::unavailable_tool_message;
     use crate::tools::tool_search_entry::build_tool_search_entries;
 
@@ -193,6 +196,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
         .filter(|configured_tool| {
             (!config.builtin_scratchpad_enabled || configured_tool.name() != "scratchpad")
                 && (!config.builtin_schedule_enabled || configured_tool.name() != "schedule")
+                && (!config.builtin_session_overwatch_enabled
+                    || configured_tool.name() != "session_overwatch")
         })
         .map(|configured_tool| configured_tool.name().to_string())
         .collect::<HashSet<_>>();
@@ -206,6 +211,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
             continue;
         }
         if config.builtin_schedule_enabled && spec.name() == "schedule" {
+            continue;
+        }
+        if config.builtin_session_overwatch_enabled && spec.name() == "session_overwatch" {
             continue;
         }
         if spec.supports_parallel_tool_calls {
@@ -354,6 +362,18 @@ pub(crate) fn build_specs_with_discoverable_tools(
             builder.register_handler(
                 ToolName::namespaced("schedule", *tool_name),
                 schedule_handler.clone(),
+            );
+        }
+    }
+
+    if config.builtin_session_overwatch_enabled {
+        let session_overwatch_handler = Arc::new(SessionOverwatchHandler);
+        existing_spec_names.insert("session_overwatch".to_string());
+        builder.push_spec(session_overwatch_namespace_spec());
+        for tool_name in SESSION_OVERWATCH_TOOL_NAMES {
+            builder.register_handler(
+                ToolName::namespaced("session_overwatch", *tool_name),
+                session_overwatch_handler.clone(),
             );
         }
     }

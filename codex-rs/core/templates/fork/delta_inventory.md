@@ -45,6 +45,16 @@ stable/mainline is pulled in.
 - Orchestrator inline MCP usage:
   - Explicitly enabled Orchestrator MCPs may run in the parent Orchestrator
     thread for communication/state work instead of forcing a child worker.
+- Orchestrator session overwatch:
+  - Built-in namespace: `session_overwatch`
+  - Tools: `list_sessions`, `watch_session`, `unwatch_session`,
+    `message_session`
+  - Watches are persisted as Router thread-control targets so already-started
+    sessions can emit durable completion signals back to the watching
+    orchestrator when a turn completes or aborts.
+  - `message_session` can deliver only to sessions live in the same Codex
+    process; cross-process sessions are observable through state, but message
+    injection is not implemented yet.
 - Orchestrator primary contact channel:
   - Config: `[orchestrator].primary_contact`
   - Startup override: `--primary-contact <mcp>` or `--primary-contact off`
@@ -112,6 +122,9 @@ stable/mainline is pulled in.
   `[orchestrator].allowed_spawn_modes`.
 - Verify explicitly enabled Orchestrator MCPs remain callable inline for
   communication/state workflows.
+- Verify `session_overwatch` lists sessions, can watch/unwatch existing thread
+  ids, records watched sessions in the supervision summary, and reports
+  cross-process message-delivery limits honestly.
 - Verify configured primary contact polling starts in Orchestrator mode and does
   not wake the model for empty status responses, while the terminal title shows
   the waiting marker when idle.

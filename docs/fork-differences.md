@@ -56,6 +56,23 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   relayed instead of being treated as inert watch state. Memory extraction and
   consolidation agents are excluded from these hooks to avoid feedback loops.
 
+### Orchestrator session overwatch
+
+- Orchestrator mode exposes a built-in `session_overwatch` namespace for
+  supervising Codex sessions that were not necessarily launched by the current
+  orchestrator thread.
+- The namespace includes `list_sessions`, `watch_session`, `unwatch_session`,
+  and `message_session`.
+- Watches are recorded in the local state database as Router thread-control
+  targets, so already-started sessions can emit durable completion signals back
+  to the watching orchestrator when a turn completes or aborts.
+- Watched sessions also appear in the orchestrator supervision summary so idle
+  check-ins can stay model-light unless a watched session changes state.
+- `message_session` can deliver to sessions that are live in the same Codex
+  process. If the target session is only visible through durable state from
+  another CLI process, the tool reports that limitation instead of pretending the
+  message was injected.
+
 ### Primary contact channel
 
 - Orchestrator mode can start a configured communication MCP at session boot

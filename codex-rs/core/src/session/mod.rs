@@ -1897,11 +1897,12 @@ impl Session {
         turn_context: &TurnContext,
         msg: &EventMsg,
     ) {
-        if !self.enabled(Feature::MultiAgentV2) {
+        if !matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
             return;
         }
+        self.maybe_notify_overwatch_controllers(msg).await;
 
-        if !matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
+        if !self.enabled(Feature::MultiAgentV2) {
             return;
         }
 
@@ -1923,6 +1924,50 @@ impl Session {
 
         self.forward_child_completion_to_parent(*parent_thread_id, child_agent_path, status)
             .await;
+    }
+
+    async fn maybe_notify_overwatch_controllers(&self, msg: &EventMsg) {
+        let Some(status) = agent_status_from_event(msg) else {
+            return;
+        };
+        if !is_final(&status) {
+            return;
+        }
+        let Some(state_db) = self.state_db() else {
+            return;
+        };
+        let controls = match state_db
+            .list_active_thread_controls_targeting(self.conversation_id)
+            .await
+        {
+            Ok(controls) => controls,
+            Err(err) => {
+                debug!(
+                    thread_id = %self.conversation_id,
+                    error = %err,
+                    "failed to load overwatch controllers for completed turn"
+                );
+                return;
+            }
+        };
+        for control in controls {
+            if control.mode != StateThreadControlMode::Router || control.released_at.is_some() {
+                continue;
+            }
+            if let Err(err) = self
+                .services
+                .orchestrator_supervision
+                .note_watched_session_event(control.thread_id, self.conversation_id, &status)
+                .await
+            {
+                debug!(
+                    orchestrator_thread_id = %control.thread_id,
+                    target_thread_id = %self.conversation_id,
+                    error = %err,
+                    "failed to record watched session terminal turn"
+                );
+            }
+        }
     }
 
     /// Sends the standard completion envelope from a spawned MultiAgentV2 child to its parent.

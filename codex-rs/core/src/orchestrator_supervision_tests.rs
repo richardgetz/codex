@@ -100,3 +100,54 @@ async fn register_worker_updates_existing_entry() {
     assert!(instructions.contains("Updated prompt"));
     assert_eq!(instructions.matches("Arendt").count(), 1);
 }
+
+#[tokio::test]
+async fn watched_sessions_render_and_update_poll_state() {
+    let tmp = TempDir::new().expect("tempdir");
+    let codex_home = codex_utils_absolute_path::AbsolutePathBuf::try_from(tmp.path().to_path_buf())
+        .expect("absolute path");
+    let store = OrchestratorSupervisionStore::new(codex_home);
+    let orchestrator = thread_id("019dbc89-81eb-7300-a9a7-8db90bfa4f1f");
+    let target = thread_id("019dbfd0-6c49-7623-bcd3-6d43a46d5916");
+
+    store
+        .register_watched_session(
+            orchestrator,
+            target,
+            Some("Long running task".to_string()),
+            Some("/tmp/project".to_string()),
+        )
+        .await
+        .expect("register watched session");
+
+    let poll_state = store
+        .poll_state(orchestrator)
+        .await
+        .expect("poll state after watch");
+    assert!(poll_state.has_supervised_workers);
+    assert!(poll_state.has_nonterminal_workers);
+
+    store
+        .note_watched_session_event(
+            orchestrator,
+            target,
+            &AgentStatus::Completed(Some("PR is ready".to_string())),
+        )
+        .await
+        .expect("record watched session completion");
+
+    let instructions = store
+        .build_developer_instructions(orchestrator, &OrchestratorEscalationConfig::default())
+        .await
+        .expect("developer instructions");
+    assert!(instructions.contains("Watched sessions"));
+    assert!(instructions.contains("Long running task"));
+    assert!(instructions.contains("PR is ready"));
+
+    let poll_state = store
+        .poll_state(orchestrator)
+        .await
+        .expect("poll state after completion");
+    assert!(poll_state.has_supervised_workers);
+    assert!(!poll_state.has_nonterminal_workers);
+}
