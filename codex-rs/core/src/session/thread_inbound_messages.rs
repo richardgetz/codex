@@ -83,8 +83,8 @@ mod tests {
                 .expect("initialize runtime");
         let thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000201").expect("thread id");
-        let now =
-            chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp");
+        let now = chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, /*nsecs*/ 0)
+            .expect("timestamp");
         runtime
             .upsert_thread(&codex_state::ThreadMetadata {
                 id: thread_id,
@@ -119,15 +119,15 @@ mod tests {
         runtime
             .enqueue_thread_inbound_message(
                 thread_id,
-                None,
+                /*source_thread_id*/ None,
                 serde_json::to_string(&input).expect("serialize input"),
             )
             .await
             .expect("enqueue inbound message");
 
-        let (tx_sub, rx_sub) = async_channel::bounded(1);
+        let (tx_sub, rx_sub) = async_channel::bounded(/*cap*/ 1);
         start_thread_inbound_message_poller(thread_id, runtime, tx_sub);
-        let submission = timeout(Duration::from_secs(2), rx_sub.recv())
+        let submission = timeout(Duration::from_secs(/*secs*/ 2), rx_sub.recv())
             .await
             .expect("receive queued message")
             .expect("submission channel open");

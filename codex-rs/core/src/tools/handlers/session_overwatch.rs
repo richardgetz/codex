@@ -372,7 +372,7 @@ async fn handle_message(
         let message_id = state_db
             .enqueue_thread_inbound_message(
                 target_thread_id,
-                Some(invocation.session.conversation_id),
+                /*source_thread_id*/ Some(invocation.session.conversation_id),
                 payload_json,
             )
             .await

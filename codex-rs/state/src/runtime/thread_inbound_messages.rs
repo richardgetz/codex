@@ -125,19 +125,23 @@ mod tests {
         runtime
             .enqueue_thread_inbound_message(
                 target_thread_id,
-                Some(source_thread_id),
+                /*source_thread_id*/ Some(source_thread_id),
                 first_payload.clone(),
             )
             .await
             .expect("enqueue first");
         runtime
-            .enqueue_thread_inbound_message(other_thread_id, Some(source_thread_id), "{}".into())
+            .enqueue_thread_inbound_message(
+                other_thread_id,
+                /*source_thread_id*/ Some(source_thread_id),
+                "{}".into(),
+            )
             .await
             .expect("enqueue other");
         runtime
             .enqueue_thread_inbound_message(
                 target_thread_id,
-                Some(source_thread_id),
+                /*source_thread_id*/ Some(source_thread_id),
                 second_payload.clone(),
             )
             .await
