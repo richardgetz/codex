@@ -68,10 +68,14 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   to the watching orchestrator when a turn completes or aborts.
 - Watched sessions also appear in the orchestrator supervision summary so idle
   check-ins can stay model-light unless a watched session changes state.
-- `message_session` can deliver to sessions that are live in the same Codex
-  process. If the target session is only visible through durable state from
-  another CLI process, the tool reports that limitation instead of pretending the
-  message was injected.
+- `message_session` delivers immediately to sessions that are live in the same
+  Codex process. If the target session belongs to another CLI process, the
+  message is queued in the durable session inbox and the target CLI injects it
+  mechanically as normal user input when its inbox poller sees it.
+- Cross-process delivery is not a hard interrupt while the target process is
+  inside a model request. It is a model-less durable inbox handoff that lets
+  separate running CLIs communicate once the target session drains pending
+  input.
 
 ### Primary contact channel
 

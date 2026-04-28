@@ -52,9 +52,11 @@ stable/mainline is pulled in.
   - Watches are persisted as Router thread-control targets so already-started
     sessions can emit durable completion signals back to the watching
     orchestrator when a turn completes or aborts.
-  - `message_session` can deliver only to sessions live in the same Codex
-    process; cross-process sessions are observable through state, but message
-    injection is not implemented yet.
+  - `message_session` delivers immediately to sessions live in the same Codex
+    process and queues durable inbox messages for sessions owned by another
+    local CLI process.
+  - Each running CLI session polls its own durable inbox without model spend and
+    injects queued messages as normal user input when found.
 - Orchestrator primary contact channel:
   - Config: `[orchestrator].primary_contact`
   - Startup override: `--primary-contact <mcp>` or `--primary-contact off`
@@ -123,8 +125,8 @@ stable/mainline is pulled in.
 - Verify explicitly enabled Orchestrator MCPs remain callable inline for
   communication/state workflows.
 - Verify `session_overwatch` lists sessions, can watch/unwatch existing thread
-  ids, records watched sessions in the supervision summary, and reports
-  cross-process message-delivery limits honestly.
+  ids, records watched sessions in the supervision summary, and can queue
+  cross-process `message_session` input that the target CLI later injects.
 - Verify configured primary contact polling starts in Orchestrator mode and does
   not wake the model for empty status responses, while the terminal title shows
   the waiting marker when idle.

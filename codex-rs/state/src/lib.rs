@@ -46,6 +46,7 @@ pub use model::Stage1OutputRef;
 pub use model::Stage1StartupClaimParams;
 pub use model::ThreadControlMode;
 pub use model::ThreadControlRecord;
+pub use model::ThreadInboundMessage;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;

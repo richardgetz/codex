@@ -61,6 +61,7 @@ mod remote_control;
 #[cfg(test)]
 mod test_support;
 mod thread_control;
+mod thread_inbound_messages;
 mod threads;
 
 pub use remote_control::RemoteControlEnrollmentRecord;

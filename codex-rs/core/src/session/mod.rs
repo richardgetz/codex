@@ -192,6 +192,7 @@ mod review;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
+mod thread_inbound_messages;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
 #[cfg(test)]
@@ -202,6 +203,7 @@ use self::session::AppServerClientMetadata;
 use self::session::Session;
 use self::session::SessionConfiguration;
 pub(crate) use self::session::SessionSettingsUpdate;
+use self::thread_inbound_messages::start_thread_inbound_message_poller;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
 #[cfg(test)]
@@ -689,6 +691,9 @@ impl Codex {
             map_session_init_error(&e, &config.codex_home)
         })?;
         let thread_id = session.conversation_id;
+        if let Some(state_db) = session.state_db() {
+            start_thread_inbound_message_poller(thread_id, state_db, tx_sub.clone());
+        }
 
         // This task will run until Op::Shutdown is received.
         let session_for_loop = Arc::clone(&session);

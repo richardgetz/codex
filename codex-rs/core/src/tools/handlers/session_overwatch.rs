@@ -52,7 +52,7 @@ pub(crate) fn session_overwatch_namespace_spec() -> ToolSpec {
         ),
         (
             TOOL_MESSAGE,
-            "Send a message to a watched session when it is live in this Codex process.",
+            "Send a message to a watched session. Live same-process targets receive it immediately; other local CLI processes receive it through the durable session inbox.",
         ),
     ]
     .into_iter()
@@ -349,12 +349,57 @@ async fn handle_message(
         .await
         .unwrap_or_default();
     if !live_thread_ids.contains(&target_thread_id) {
+        let state_db = invocation.session.state_db().ok_or_else(|| {
+            FunctionCallError::RespondToModel("state database is not available".to_string())
+        })?;
+        let metadata = state_db.get_thread(target_thread_id).await.map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to load target session: {err}"))
+        })?;
+        if metadata.is_none() {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "session `{target_thread_id}` was not found"
+            )));
+        }
+        let payload_json = serde_json::to_string(&vec![UserInput::Text {
+            text: message,
+            text_elements: Vec::new(),
+        }])
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to serialize cross-process message: {err}"
+            ))
+        })?;
+        let message_id = state_db
+            .enqueue_thread_inbound_message(
+                target_thread_id,
+                Some(invocation.session.conversation_id),
+                payload_json,
+            )
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to queue message for target session: {err}"
+                ))
+            })?;
+        invocation
+            .session
+            .services
+            .orchestrator_supervision
+            .note_watched_session_instruction(invocation.session.conversation_id, target_thread_id)
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to update overwatch ledger: {err}"
+                ))
+            })?;
         return Ok(MessageSessionResult {
             delivered: false,
+            queued: true,
             thread_id: target_thread_id.to_string(),
             submission_id: None,
+            message_id: Some(message_id),
             reason: Some(
-                "target session is not live in this Codex process; overwatch can observe durable completion signals but cannot inject cross-process messages yet"
+                "target session is not live in this Codex process; message was queued in the durable session inbox and will be injected when that session polls"
                     .to_string(),
             ),
         });
@@ -401,8 +446,10 @@ async fn handle_message(
 
     Ok(MessageSessionResult {
         delivered: true,
+        queued: false,
         thread_id: target_thread_id.to_string(),
         submission_id: Some(submission_id),
+        message_id: None,
         reason: None,
     })
 }
@@ -452,7 +499,9 @@ struct UnwatchSessionResult {
 #[derive(Debug, Serialize)]
 struct MessageSessionResult {
     delivered: bool,
+    queued: bool,
     thread_id: String,
     submission_id: Option<String>,
+    message_id: Option<String>,
     reason: Option<String>,
 }
