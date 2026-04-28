@@ -114,6 +114,12 @@ impl App {
         agent_role: Option<String>,
         is_closed: bool,
     ) {
+        let existing_entry = self.agent_navigation.get(&thread_id);
+        let agent_nickname = agent_nickname
+            .or_else(|| existing_entry.and_then(|entry| entry.agent_nickname.clone()));
+        let agent_role =
+            agent_role.or_else(|| existing_entry.and_then(|entry| entry.agent_role.clone()));
+
         self.chat_widget.set_collab_agent_metadata(
             thread_id,
             agent_nickname.clone(),

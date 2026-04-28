@@ -1385,6 +1385,32 @@ async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Res
 }
 
 #[tokio::test]
+async fn agent_picker_upsert_preserves_memory_metadata_on_generic_refresh() -> Result<()> {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+
+    app.upsert_agent_picker_thread(
+        thread_id,
+        Some("Memory".to_string()),
+        Some("extractor".to_string()),
+        /*is_closed*/ false,
+    );
+    app.upsert_agent_picker_thread(
+        thread_id, /*agent_nickname*/ None, /*agent_role*/ None, /*is_closed*/ false,
+    );
+
+    assert_eq!(
+        app.agent_navigation.get(&thread_id),
+        Some(&AgentPickerThreadEntry {
+            agent_nickname: Some("Memory".to_string()),
+            agent_role: Some("extractor".to_string()),
+            is_closed: false,
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn open_agent_picker_prunes_terminal_metadata_only_threads() -> Result<()> {
     let mut app = make_test_app().await;
     let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
