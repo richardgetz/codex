@@ -74,16 +74,22 @@ stable/mainline is pulled in.
   - Agents receive built-in scratchpad developer guidance in enabled modes.
   - Stores JSON scratchpads under `<codex_home>/scratchpad/entries` unless a
     tool call provides `state_home`.
+  - Maintains generated `<codex_home>/scratchpad/index.json` metadata for
+    recent-work lookup without changing canonical per-scratchpad JSON storage.
   - `<codex_home>/scratchpad` is created and added to workspace-write writable
     roots automatically.
   - Config: `[scratchpad]` with mode overrides under
     `[scratchpad.modes.<mode>]`
-  - Keys: `enabled`, `recover_after_compaction`
+  - Keys: `enabled`, `recover_after_compaction`,
+    `auto_archive_after_days`, `delete_archived_after_days`
   - `open_scratchpad` defaults `scratchpad_id` to the current thread/session id.
   - `resume_scratchpad` strictly reopens an existing scratchpad by id without
     creating a replacement; archived pads require `include_archived = true`.
   - Supports active/archived lookup, archive/unarchive, next-step and
     pending-wait updates, action-policy checks, and wait check-ins.
+  - Lifecycle cleanup runs during config load. Defaults: archive non-archived
+    pads after 30 days without updates; delete archived pads after 90 days in
+    archive. Set either day value to `0` to disable that phase.
 - Post-compaction recovery:
   - Config: `[scratchpad].recover_after_compaction` and
     `[scratchpad.modes.<mode>].recover_after_compaction`

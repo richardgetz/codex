@@ -340,6 +340,12 @@ pub struct ScratchpadToml {
     pub enabled: Option<bool>,
     /// Global default for live compaction recovery loopback.
     pub recover_after_compaction: Option<bool>,
+    /// Archive non-archived scratchpads after this many days without updates.
+    /// Set to 0 to disable automatic archiving.
+    pub auto_archive_after_days: Option<u64>,
+    /// Delete archived scratchpads after this many days in the archive.
+    /// Set to 0 to disable automatic deletion.
+    pub delete_archived_after_days: Option<u64>,
     /// Collaboration-mode-specific overrides.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub modes: HashMap<ModeKind, ScratchpadModeToml>,
@@ -374,6 +380,8 @@ impl ScratchpadModeConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScratchpadConfig {
     pub modes: HashMap<ModeKind, ScratchpadModeConfig>,
+    pub auto_archive_after_days: u64,
+    pub delete_archived_after_days: u64,
 }
 
 impl Default for ScratchpadConfig {
@@ -389,7 +397,11 @@ impl Default for ScratchpadConfig {
         .into_iter()
         .map(|mode| (mode, ScratchpadModeConfig::default_for_mode(mode)))
         .collect();
-        Self { modes }
+        Self {
+            modes,
+            auto_archive_after_days: 30,
+            delete_archived_after_days: 90,
+        }
     }
 }
 
@@ -405,6 +417,8 @@ impl ScratchpadConfig {
 impl From<ScratchpadToml> for ScratchpadConfig {
     fn from(toml: ScratchpadToml) -> Self {
         let defaults = ScratchpadConfig::default();
+        let default_auto_archive_after_days = defaults.auto_archive_after_days;
+        let default_delete_archived_after_days = defaults.delete_archived_after_days;
         let modes = defaults
             .modes
             .into_iter()
@@ -425,7 +439,15 @@ impl From<ScratchpadToml> for ScratchpadConfig {
                 )
             })
             .collect();
-        Self { modes }
+        Self {
+            modes,
+            auto_archive_after_days: toml
+                .auto_archive_after_days
+                .unwrap_or(default_auto_archive_after_days),
+            delete_archived_after_days: toml
+                .delete_archived_after_days
+                .unwrap_or(default_delete_archived_after_days),
+        }
     }
 }
 

@@ -167,6 +167,9 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   tool namespace and guidance are both omitted for that mode.
 - Built-in scratchpads are JSON-backed under `<codex_home>/scratchpad/entries`
   unless a tool call provides `state_home`.
+- A generated `<codex_home>/scratchpad/index.json` manifest lists scratchpads by
+  id, objective, status, session key, creation time, update time, and archive
+  time so recent work can be found without manually scanning every entry file.
 - `<codex_home>/scratchpad` is created and added to workspace-write writable
   roots automatically, alongside memory and supervision roots.
 - `open_scratchpad` defaults `scratchpad_id` to the current Codex
@@ -175,6 +178,9 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   creating a replacement; archived pads require `include_archived = true`.
 - Built-in scratchpad supports active and archived lookup, archive/unarchive,
   next-step and pending-wait updates, action-policy checks, and wait check-ins.
+- Scratchpad lifecycle cleanup runs mechanically during config load. By
+  default, non-archived pads are archived after 30 days without updates, and
+  archived pads are deleted after 90 days in the archive.
 - After a live context compaction item is observed in a scratchpad-enabled mode,
   the fork can mechanically read the built-in scratchpad for the active thread
   id and inject the recovered state into the next model turn. Replayed history
@@ -186,6 +192,8 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   [scratchpad]
   enabled = true
   recover_after_compaction = true
+  auto_archive_after_days = 30
+  delete_archived_after_days = 90
 
   [scratchpad.modes.plan]
   enabled = false

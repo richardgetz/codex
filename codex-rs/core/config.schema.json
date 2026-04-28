@@ -2409,6 +2409,18 @@
       "additionalProperties": false,
       "description": "Built-in scratchpad settings loaded from config.toml.",
       "properties": {
+        "auto_archive_after_days": {
+          "description": "Archive non-archived scratchpads after this many days without updates. Set to 0 to disable automatic archiving.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "delete_archived_after_days": {
+          "description": "Delete archived scratchpads after this many days in the archive. Set to 0 to disable automatic deletion.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "enabled": {
           "description": "Global default for built-in scratchpad tool/guidance exposure.",
           "type": "boolean"

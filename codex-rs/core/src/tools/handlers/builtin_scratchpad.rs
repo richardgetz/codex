@@ -3,6 +3,8 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
+use chrono::DateTime;
+use chrono::Duration;
 use chrono::Utc;
 use codex_tools::AdditionalProperties;
 use codex_tools::JsonSchema;
@@ -258,6 +260,7 @@ struct ScratchpadNote {
 }
 
 struct ScratchpadStore {
+    root: PathBuf,
     entries_dir: PathBuf,
 }
 
@@ -269,6 +272,7 @@ impl ScratchpadStore {
             .unwrap_or_else(|| codex_home.join("scratchpad"));
         Ok(Self {
             entries_dir: root.join("entries"),
+            root,
         })
     }
 
@@ -297,7 +301,8 @@ impl ScratchpadStore {
         let text = serde_json::to_string_pretty(scratchpad).map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to serialize scratchpad: {err}"))
         })?;
-        fs::write(path, format!("{text}\n")).map_err(io_error)
+        fs::write(path, format!("{text}\n")).map_err(io_error)?;
+        self.write_index()
     }
 
     fn list(&self) -> Result<Vec<Scratchpad>, FunctionCallError> {
@@ -325,6 +330,106 @@ impl ScratchpadStore {
         scratchpads.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
         Ok(scratchpads)
     }
+
+    fn remove(&self, scratchpad_id: &str) -> Result<(), FunctionCallError> {
+        let path = self.path(scratchpad_id)?;
+        fs::remove_file(path).map_err(io_error)?;
+        self.write_index()
+    }
+
+    fn write_index(&self) -> Result<(), FunctionCallError> {
+        fs::create_dir_all(&self.root).map_err(io_error)?;
+        let entries: Vec<ScratchpadIndexEntry> = self
+            .list()?
+            .into_iter()
+            .map(|scratchpad| ScratchpadIndexEntry {
+                scratchpad_id: scratchpad.scratchpad_id,
+                objective: scratchpad.objective,
+                status: scratchpad.status,
+                session_key: scratchpad.session_key,
+                created_at: scratchpad.created_at,
+                updated_at: scratchpad.updated_at,
+                archived_at: scratchpad.archived_at,
+            })
+            .collect();
+        let index = ScratchpadIndex {
+            generated_at: now(),
+            entries,
+        };
+        let text = serde_json::to_string_pretty(&index).map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to serialize scratchpad index: {err}"
+            ))
+        })?;
+        fs::write(self.root.join("index.json"), format!("{text}\n")).map_err(io_error)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct ScratchpadIndex {
+    generated_at: String,
+    entries: Vec<ScratchpadIndexEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct ScratchpadIndexEntry {
+    scratchpad_id: String,
+    objective: String,
+    status: String,
+    session_key: Option<String>,
+    created_at: String,
+    updated_at: String,
+    archived_at: Option<String>,
+}
+
+/// Archives inactive built-in scratchpads and deletes old archived scratchpads.
+///
+/// `*_after_days = 0` disables the corresponding cleanup phase.
+pub(crate) fn run_lifecycle_cleanup(
+    codex_home: &Path,
+    auto_archive_after_days: u64,
+    delete_archived_after_days: u64,
+) -> Result<(), FunctionCallError> {
+    if auto_archive_after_days == 0 && delete_archived_after_days == 0 {
+        return Ok(());
+    }
+
+    let store = ScratchpadStore::new(/*state_home*/ None, codex_home)?;
+    let now = Utc::now();
+    for mut scratchpad in store.list()? {
+        if scratchpad.archived_at.is_some() {
+            if delete_archived_after_days > 0
+                && let Some(archived_at) = parse_timestamp(&scratchpad.archived_at)
+                && now.signed_duration_since(archived_at)
+                    >= Duration::days(days_to_i64(delete_archived_after_days))
+            {
+                store.remove(&scratchpad.scratchpad_id)?;
+            }
+            continue;
+        }
+
+        if auto_archive_after_days > 0
+            && let Some(updated_at) = parse_timestamp(&Some(scratchpad.updated_at.clone()))
+            && now.signed_duration_since(updated_at)
+                >= Duration::days(days_to_i64(auto_archive_after_days))
+        {
+            let archived_at = now.to_rfc3339();
+            scratchpad.status = "archived".to_string();
+            scratchpad.archived_at = Some(archived_at.clone());
+            scratchpad.updated_at = archived_at.clone();
+            scratchpad.notes.push(ScratchpadNote {
+                note_id: format!("note-{}", uuid::Uuid::new_v4().simple()),
+                ts: archived_at,
+                category: Some("lifecycle".to_string()),
+                summary: format!(
+                    "Automatically archived after {auto_archive_after_days} days without updates."
+                ),
+                outcome: Some("archived".to_string()),
+            });
+            store.write(&scratchpad)?;
+        }
+    }
+    store.write_index()
 }
 
 fn open_scratchpad(
@@ -974,6 +1079,17 @@ fn now() -> String {
     Utc::now().to_rfc3339()
 }
 
+fn parse_timestamp(timestamp: &Option<String>) -> Option<DateTime<Utc>> {
+    timestamp
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(DateTime::<Utc>::from)
+}
+
+fn days_to_i64(days: u64) -> i64 {
+    i64::try_from(days).unwrap_or(i64::MAX / 86_400)
+}
+
 fn io_error(err: std::io::Error) -> FunctionCallError {
     FunctionCallError::RespondToModel(format!("scratchpad storage error: {err}"))
 }
@@ -1085,6 +1201,120 @@ mod tests {
         )
         .unwrap();
         assert!(archived_explicit["summary"]["archived_at"].is_string());
+    }
+
+    #[test]
+    fn lifecycle_cleanup_archives_inactive_and_deletes_old_archived_scratchpads() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(/*state_home*/ None, tmp.path()).unwrap();
+        let old_updated_at = (Utc::now() - Duration::days(31)).to_rfc3339();
+        let old_archived_at = (Utc::now() - Duration::days(91)).to_rfc3339();
+        let recent_archived_at = (Utc::now() - Duration::days(10)).to_rfc3339();
+
+        store
+            .write(&Scratchpad {
+                scratchpad_id: "sp-inactive".to_string(),
+                objective: "inactive".to_string(),
+                status: "active".to_string(),
+                session_key: None,
+                worktrees: Vec::new(),
+                active_channels: Vec::new(),
+                active_sessions: BTreeMap::new(),
+                action_policy: BTreeMap::new(),
+                completed: Vec::new(),
+                next_steps: Vec::new(),
+                pending_waits: Vec::new(),
+                git_refs: Vec::new(),
+                artifacts: Vec::new(),
+                stop_conditions: Vec::new(),
+                resume_instructions: String::new(),
+                interruption_policy: String::new(),
+                final_guard: String::new(),
+                last_benchmark: None,
+                notes: Vec::new(),
+                created_at: old_updated_at.clone(),
+                updated_at: old_updated_at,
+                archived_at: None,
+            })
+            .unwrap();
+        store
+            .write(&Scratchpad {
+                scratchpad_id: "sp-old-archived".to_string(),
+                objective: "delete me".to_string(),
+                status: "done".to_string(),
+                session_key: None,
+                worktrees: Vec::new(),
+                active_channels: Vec::new(),
+                active_sessions: BTreeMap::new(),
+                action_policy: BTreeMap::new(),
+                completed: Vec::new(),
+                next_steps: Vec::new(),
+                pending_waits: Vec::new(),
+                git_refs: Vec::new(),
+                artifacts: Vec::new(),
+                stop_conditions: Vec::new(),
+                resume_instructions: String::new(),
+                interruption_policy: String::new(),
+                final_guard: String::new(),
+                last_benchmark: None,
+                notes: Vec::new(),
+                created_at: old_archived_at.clone(),
+                updated_at: old_archived_at.clone(),
+                archived_at: Some(old_archived_at),
+            })
+            .unwrap();
+        store
+            .write(&Scratchpad {
+                scratchpad_id: "sp-recent-archived".to_string(),
+                objective: "keep me".to_string(),
+                status: "done".to_string(),
+                session_key: None,
+                worktrees: Vec::new(),
+                active_channels: Vec::new(),
+                active_sessions: BTreeMap::new(),
+                action_policy: BTreeMap::new(),
+                completed: Vec::new(),
+                next_steps: Vec::new(),
+                pending_waits: Vec::new(),
+                git_refs: Vec::new(),
+                artifacts: Vec::new(),
+                stop_conditions: Vec::new(),
+                resume_instructions: String::new(),
+                interruption_policy: String::new(),
+                final_guard: String::new(),
+                last_benchmark: None,
+                notes: Vec::new(),
+                created_at: recent_archived_at.clone(),
+                updated_at: recent_archived_at.clone(),
+                archived_at: Some(recent_archived_at),
+            })
+            .unwrap();
+
+        run_lifecycle_cleanup(
+            tmp.path(),
+            /*auto_archive_after_days*/ 30,
+            /*delete_archived_after_days*/ 90,
+        )
+        .unwrap();
+
+        let inactive = store.read("sp-inactive").unwrap();
+        assert_eq!(inactive.status, "archived");
+        assert!(inactive.archived_at.is_some());
+        assert_eq!(inactive.notes.len(), 1);
+        assert!(store.read("sp-old-archived").is_err());
+        assert!(store.read("sp-recent-archived").is_ok());
+
+        let index_text = fs::read_to_string(tmp.path().join("scratchpad/index.json")).unwrap();
+        let index: ScratchpadIndex = serde_json::from_str(&index_text).unwrap();
+        let index_ids: Vec<String> = index
+            .entries
+            .into_iter()
+            .map(|entry| entry.scratchpad_id)
+            .collect();
+        assert_eq!(
+            index_ids,
+            vec!["sp-inactive".to_string(), "sp-recent-archived".to_string()]
+        );
     }
 
     #[test]

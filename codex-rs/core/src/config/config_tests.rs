@@ -596,6 +596,8 @@ fn parses_mode_scoped_scratchpad_config() {
 [scratchpad]
 enabled = true
 recover_after_compaction = true
+auto_archive_after_days = 14
+delete_archived_after_days = 120
 
 [scratchpad.modes.plan]
 enabled = false
@@ -612,6 +614,8 @@ recover_after_compaction = false
         Some(ScratchpadToml {
             enabled: Some(true),
             recover_after_compaction: Some(true),
+            auto_archive_after_days: Some(14),
+            delete_archived_after_days: Some(120),
             modes: [
                 (
                     ModeKind::Plan,
@@ -698,6 +702,8 @@ recover_after_compaction = true
     assert!(config.scratchpad.for_mode(ModeKind::Continuous).enabled);
     assert!(config.scratchpad.for_mode(ModeKind::Orchestrator).enabled);
     assert!(config.scratchpad.for_mode(ModeKind::Plan).enabled);
+    assert_eq!(config.scratchpad.auto_archive_after_days, 30);
+    assert_eq!(config.scratchpad.delete_archived_after_days, 90);
     assert!(
         config
             .scratchpad
@@ -1208,6 +1214,8 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
     let memories_root = codex_home.path().join("memories").abs();
     let orchestrator_memory_root = codex_home.path().join("orchestrator_memory").abs();
     let orchestrator_supervision_root = codex_home.path().join("orchestrator_supervision").abs();
+    let scratchpad_root = codex_home.path().join("scratchpad").abs();
+    let schedule_root = codex_home.path().join("schedule").abs();
     assert_eq!(
         config.permissions.file_system_sandbox_policy,
         FileSystemSandboxPolicy::restricted(vec![
@@ -1247,6 +1255,18 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                 },
                 access: FileSystemAccessMode::Write,
             },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: scratchpad_root.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: schedule_root.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
         ]),
     );
     assert_eq!(
@@ -1255,7 +1275,9 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
             writable_roots: vec![
                 memories_root,
                 orchestrator_memory_root,
-                orchestrator_supervision_root
+                orchestrator_supervision_root,
+                scratchpad_root,
+                schedule_root
             ],
             read_only_access: ReadOnlyAccess::Restricted {
                 include_platform_defaults: true,
