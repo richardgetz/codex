@@ -1,0 +1,28 @@
+id: 2026-04-28-scratchpad-lifecycle-cleanup
+date: 2026-04-28
+intent: Add automatic lifecycle cleanup for built-in scratchpads and an index manifest for recent-work discovery.
+change_type: feature
+scope: codex-rs/core,codex-rs/config,docs
+summary: Built-in scratchpads now auto-archive after configurable inactivity, delete archived pads after configurable retention, and maintain scratchpad/index.json from remaining entry files.
+decision: Keep canonical per-scratchpad JSON files under scratchpad/entries for compatibility and add index.json as an additive manifest instead of migrating storage layout.
+constraints: Do not change external scratchpad MCP storage; avoid deleting underlying sessions or agents; make cleanup mechanical and model-free during config load.
+intent_priority: high
+code_locations:
+  - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs
+  - codex-rs/config/src/types.rs
+  - codex-rs/core/src/config/mod.rs
+  - docs/fork-differences.md
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: gpt-5.5
+validation:
+  - just write-config-schema
+  - just fmt
+  - just fix -p codex-core
+  - cargo test -p codex-core scratchpad
+  - cargo test -p codex-core default_permissions_profile_populates_runtime_sandbox_policy
+  - cargo test -p codex-core fork_startup_context_then_first_turn_diff_snapshot
+  - cargo test -p codex-core guardian_review_request_layout_matches_model_visible_request_snapshot
+  - cargo test -p codex-core guardian_reuses_prompt_cache_key_and_appends_prior_reviews
+  - cargo test -p codex-core has unrelated current-branch failures in multi-agent/js_repl/code-mode tests under this sandbox
