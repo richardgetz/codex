@@ -21,7 +21,8 @@ async fn build_consolidation_agent_config_prefers_orchestrator_model_defaults() 
     config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffort::Low);
 
     let config = Arc::new(config);
-    let built = build_consolidation_agent_config(&config).expect("build consolidation config");
+    let built = build_consolidation_agent_config(&config, /*is_chatgpt_auth*/ false)
+        .expect("build consolidation config");
 
     assert_eq!(built.model.as_deref(), Some("gpt-5.3-codex-spark"));
     assert_eq!(built.model_reasoning_effort, Some(ReasoningEffort::Low));
@@ -42,10 +43,30 @@ async fn build_consolidation_agent_config_uses_implicit_orchestrator_defaults() 
     config.model_reasoning_effort = Some(ReasoningEffort::High);
 
     let config = Arc::new(config);
-    let built = build_consolidation_agent_config(&config).expect("build consolidation config");
+    let built = build_consolidation_agent_config(&config, /*is_chatgpt_auth*/ false)
+        .expect("build consolidation config");
 
     assert_eq!(built.model.as_deref(), Some("gpt-5.3-codex-spark"));
     assert_eq!(built.model_reasoning_effort, Some(ReasoningEffort::Low));
+}
+
+#[tokio::test]
+async fn resolve_orchestrator_memory_model_falls_back_for_chatgpt_accounts() {
+    let temp = tempdir().expect("tempdir");
+    let config = crate::config::ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(temp.path().to_path_buf())
+        .build()
+        .await
+        .expect("test config");
+
+    assert_eq!(
+        super::resolve_orchestrator_memory_model(&config, /*is_chatgpt_auth*/ true),
+        "gpt-5.4-mini"
+    );
+    assert_eq!(
+        super::resolve_orchestrator_memory_model(&config, /*is_chatgpt_auth*/ false),
+        "gpt-5.3-codex-spark"
+    );
 }
 
 #[test]

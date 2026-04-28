@@ -10,6 +10,8 @@ use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::context::ToolOutput;
+use crate::tools::handlers::multi_agents_common::reject_recursive_subagent_spawn;
+use crate::tools::handlers::multi_agents_common::resolve_spawn_agent_model;
 use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
@@ -95,6 +97,43 @@ fn thread_manager() -> ThreadManager {
         CodexAuth::from_api_key("dummy"),
         built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone(),
     )
+}
+
+#[test]
+fn resolve_spawn_agent_model_falls_back_for_chatgpt_accounts() {
+    assert_eq!(
+        resolve_spawn_agent_model("gpt-5.3-codex-spark", /*is_chatgpt_auth*/ true),
+        "gpt-5.4-mini"
+    );
+    assert_eq!(
+        resolve_spawn_agent_model("gpt-5.3-codex-spark", /*is_chatgpt_auth*/ false),
+        "gpt-5.3-codex-spark"
+    );
+    assert_eq!(
+        resolve_spawn_agent_model("gpt-5.4-mini", /*is_chatgpt_auth*/ true),
+        "gpt-5.4-mini"
+    );
+}
+
+#[test]
+fn reject_recursive_subagent_spawn_blocks_nested_workers() {
+    let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: parse_agent_id("019dc2fb-a912-7d53-a1e3-4db167a0b822"),
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+
+    let err = reject_recursive_subagent_spawn(&session_source)
+        .expect_err("nested subagents should be blocked");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "Spawned subagents cannot launch additional subagents; route that work back through the parent agent instead.".to_string(),
+        )
+    );
 }
 
 #[tokio::test]

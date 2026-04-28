@@ -1,4 +1,6 @@
 use super::*;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -58,5 +60,18 @@ fn ensure_unique_headers_rejects_duplicates() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel("csv header path is duplicated".to_string())
+    );
+}
+
+#[test]
+fn agent_jobs_reject_recursive_subagent_spawn() {
+    let source = SessionSource::SubAgent(SubAgentSource::Other("worker".to_string()));
+    let err = reject_recursive_subagent_spawn(&source).expect_err("subagent should be blocked");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "Spawned subagents cannot launch additional subagents; route that work back through the parent agent instead.".to_string(),
+        )
     );
 }
