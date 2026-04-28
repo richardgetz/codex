@@ -71,7 +71,15 @@ pub(super) async fn classify_with_model(
         &read_existing_memory_file(summary_path(codex_home)).await,
         &read_existing_memory_file(profile_path(codex_home)).await,
     );
-    let agent_config = build_classification_agent_config(config)?;
+    let agent_config = build_classification_agent_config(
+        config,
+        session
+            .services
+            .auth_manager
+            .auth_cached()
+            .as_ref()
+            .is_some_and(codex_login::CodexAuth::is_chatgpt_auth),
+    )?;
     let source = SessionSource::SubAgent(SubAgentSource::MemoryExtraction);
     let agent_control = session.services.agent_control.detached_registry();
     let thread_id = agent_control
@@ -163,7 +171,10 @@ fn build_classification_prompt(
         })
 }
 
-fn build_classification_agent_config(base: &Arc<Config>) -> anyhow::Result<Config> {
+fn build_classification_agent_config(
+    base: &Arc<Config>,
+    is_chatgpt_auth: bool,
+) -> anyhow::Result<Config> {
     let mut agent_config = (*base.as_ref()).clone();
     let root = super::root(&base.codex_home);
 
@@ -196,7 +207,10 @@ fn build_classification_agent_config(base: &Arc<Config>) -> anyhow::Result<Confi
         );
     agent_config.permissions.network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
 
-    agent_config.model = Some(base.effective_orchestrator_model().to_string());
+    agent_config.model = Some(super::model::resolve_orchestrator_memory_model(
+        base,
+        is_chatgpt_auth,
+    ));
     agent_config.model_reasoning_effort = base.effective_orchestrator_reasoning_effort();
 
     Ok(agent_config)

@@ -6,6 +6,8 @@ use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
+use crate::config::DEFAULT_ORCHESTRATOR_FALLBACK_MODEL;
+use crate::config::DEFAULT_ORCHESTRATOR_MODEL;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
@@ -17,6 +19,7 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
+use codex_login::CodexAuth;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -155,6 +158,23 @@ async fn run_remote_compact_task_inner_impl(
         .collect();
 
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
+    let compact_model_slug = resolve_remote_compact_model_slug(
+        &turn_context.model_info.slug,
+        turn_context
+            .auth_manager
+            .as_ref()
+            .and_then(|auth_manager| auth_manager.auth_cached())
+            .as_ref()
+            .is_some_and(CodexAuth::is_chatgpt_auth),
+    );
+    let compact_model_info = sess
+        .services
+        .models_manager
+        .get_model_info(
+            &compact_model_slug,
+            &turn_context.config.to_models_manager_config(),
+        )
+        .await;
     let tool_router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -178,7 +198,7 @@ async fn run_remote_compact_task_inner_impl(
         .model_client
         .compact_conversation_history(
             &prompt,
-            &turn_context.model_info,
+            &compact_model_info,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
             &turn_context.session_telemetry,
@@ -230,6 +250,17 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
     Ok(())
+}
+
+pub(crate) fn resolve_remote_compact_model_slug(
+    current_model_slug: &str,
+    is_chatgpt_auth: bool,
+) -> String {
+    if is_chatgpt_auth && current_model_slug == DEFAULT_ORCHESTRATOR_MODEL {
+        DEFAULT_ORCHESTRATOR_FALLBACK_MODEL.to_string()
+    } else {
+        current_model_slug.to_string()
+    }
 }
 
 pub(crate) async fn process_compacted_history(

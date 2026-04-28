@@ -1,4 +1,5 @@
 use super::*;
+use crate::compact_remote::resolve_remote_compact_model_slug;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
@@ -123,6 +124,18 @@ do things
     let collected = collect_user_messages(&items);
 
     assert_eq!(vec!["real user message".to_string()], collected);
+}
+
+#[test]
+fn resolve_remote_compact_model_slug_falls_back_for_chatgpt_accounts() {
+    assert_eq!(
+        resolve_remote_compact_model_slug("gpt-5.3-codex-spark", /*is_chatgpt_auth*/ true),
+        "gpt-5.4-mini"
+    );
+    assert_eq!(
+        resolve_remote_compact_model_slug("gpt-5.3-codex-spark", /*is_chatgpt_auth*/ false),
+        "gpt-5.3-codex-spark"
+    );
 }
 
 #[test]

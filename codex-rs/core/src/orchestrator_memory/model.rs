@@ -85,7 +85,15 @@ pub(super) async fn consolidate_with_model(
         &existing_profile,
     );
 
-    let agent_config = build_consolidation_agent_config(config)?;
+    let agent_config = build_consolidation_agent_config(
+        config,
+        session
+            .services
+            .auth_manager
+            .auth_cached()
+            .as_ref()
+            .is_some_and(codex_login::CodexAuth::is_chatgpt_auth),
+    )?;
     let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
     let agent_control = session.services.agent_control.detached_registry();
     let thread_id = agent_control
@@ -153,7 +161,10 @@ pub(super) async fn consolidate_with_fallback(
     Ok(())
 }
 
-fn build_consolidation_agent_config(base: &Arc<Config>) -> anyhow::Result<Config> {
+fn build_consolidation_agent_config(
+    base: &Arc<Config>,
+    is_chatgpt_auth: bool,
+) -> anyhow::Result<Config> {
     let mut agent_config = (*base.as_ref()).clone();
     let root = super::root(&base.codex_home);
 
@@ -186,10 +197,19 @@ fn build_consolidation_agent_config(base: &Arc<Config>) -> anyhow::Result<Config
         );
     agent_config.permissions.network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
 
-    agent_config.model = Some(base.effective_orchestrator_model().to_string());
+    agent_config.model = Some(resolve_orchestrator_memory_model(base, is_chatgpt_auth));
     agent_config.model_reasoning_effort = base.effective_orchestrator_reasoning_effort();
 
     Ok(agent_config)
+}
+
+pub(super) fn resolve_orchestrator_memory_model(base: &Config, is_chatgpt_auth: bool) -> String {
+    let model = base.effective_orchestrator_model();
+    if is_chatgpt_auth && model == crate::config::DEFAULT_ORCHESTRATOR_MODEL {
+        crate::config::DEFAULT_ORCHESTRATOR_FALLBACK_MODEL.to_string()
+    } else {
+        model.to_string()
+    }
 }
 
 fn build_consolidation_prompt(

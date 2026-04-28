@@ -46,6 +46,7 @@ impl ToolHandler for Handler {
         let prompt = render_input_preview(&initial_operation);
 
         let session_source = turn.session_source.clone();
+        reject_recursive_subagent_spawn(&session_source)?;
         let child_depth = next_thread_spawn_depth(&session_source);
         let max_depth = turn.config.agent_max_depth;
         if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {

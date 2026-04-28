@@ -9,6 +9,7 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::multi_agents::build_agent_spawn_config;
+use crate::tools::handlers::multi_agents_common::reject_recursive_subagent_spawn;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -525,6 +526,7 @@ async fn build_runner_options(
     requested_concurrency: Option<usize>,
 ) -> Result<JobRunnerOptions, FunctionCallError> {
     let session_source = turn.session_source.clone();
+    reject_recursive_subagent_spawn(&session_source)?;
     let child_depth = next_thread_spawn_depth(&session_source);
     let max_depth = turn.config.agent_max_depth;
     if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {

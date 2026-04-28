@@ -7,6 +7,7 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -197,6 +198,18 @@ pub(crate) fn parse_collab_input(
     }
 }
 
+pub(crate) fn reject_recursive_subagent_spawn(
+    session_source: &SessionSource,
+) -> Result<(), FunctionCallError> {
+    if matches!(session_source, SessionSource::SubAgent(_)) {
+        return Err(FunctionCallError::RespondToModel(
+            "Spawned subagents cannot launch additional subagents; route that work back through the parent agent instead.".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 /// Builds the base config snapshot for a newly spawned sub-agent.
 ///
 /// The returned config starts from the parent's effective config and then refreshes the
@@ -227,7 +240,14 @@ pub(crate) fn build_agent_resume_config(
 fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallError> {
     let base_config = turn.config.clone();
     let mut config = (*base_config).clone();
-    config.model = Some(turn.model_info.slug.clone());
+    config.model = Some(resolve_spawn_agent_model(
+        &turn.model_info.slug,
+        turn.auth_manager
+            .as_ref()
+            .and_then(|auth_manager| auth_manager.auth_cached())
+            .as_ref()
+            .is_some_and(CodexAuth::is_chatgpt_auth),
+    ));
     config.model_provider = turn.provider.info().clone();
     config.model_reasoning_effort = turn
         .reasoning_effort
@@ -292,6 +312,14 @@ pub(crate) fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32)
     if child_depth >= config.agent_max_depth && !config.features.enabled(Feature::MultiAgentV2) {
         let _ = config.features.disable(Feature::SpawnCsv);
         let _ = config.features.disable(Feature::Collab);
+    }
+}
+
+pub(crate) fn resolve_spawn_agent_model(model: &str, is_chatgpt_auth: bool) -> String {
+    if is_chatgpt_auth && model == crate::config::DEFAULT_ORCHESTRATOR_MODEL {
+        crate::config::DEFAULT_ORCHESTRATOR_FALLBACK_MODEL.to_string()
+    } else {
+        model.to_string()
     }
 }
 
