@@ -217,17 +217,6 @@ pub(crate) enum AppEvent {
         scheduled: bool,
     },
 
-    /// A live compaction event should recover the built-in scratchpad mechanically.
-    RecoverScratchpadAfterCompaction {
-        thread_id: ThreadId,
-    },
-
-    /// Result of a harness-side built-in scratchpad recovery check.
-    ScratchpadCompactionRecoveryLoaded {
-        thread_id: ThreadId,
-        result: Result<String, String>,
-    },
-
     /// Send a user-confirmed request to notify the workspace owner.
     SendAddCreditsNudgeEmail {
         credit_type: AddCreditsNudgeCreditType,

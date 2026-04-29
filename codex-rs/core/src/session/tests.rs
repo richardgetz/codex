@@ -384,6 +384,24 @@ fn developer_input_texts(items: &[ResponseItem]) -> Vec<&str> {
         .collect()
 }
 
+fn write_thread_scratchpad(
+    turn_context: &TurnContext,
+    thread_id: ThreadId,
+    value: serde_json::Value,
+) {
+    let entries = turn_context
+        .config
+        .codex_home
+        .join("scratchpad")
+        .join("entries");
+    std::fs::create_dir_all(&entries).expect("create scratchpad entries");
+    std::fs::write(
+        entries.join(format!("{thread_id}.json")),
+        serde_json::to_string_pretty(&value).expect("serialize scratchpad"),
+    )
+    .expect("write thread scratchpad");
+}
+
 fn user_input_texts(items: &[ResponseItem]) -> Vec<&str> {
     items
         .iter()
@@ -6115,6 +6133,79 @@ async fn build_initial_context_injects_builtin_scratchpad_in_enabled_modes() {
         orchestrator_developer_texts.contains("Built-in Scratchpad"),
         "expected scratchpad guidance in orchestrator mode, got {orchestrator_developer_texts:?}"
     );
+}
+
+#[tokio::test]
+async fn build_initial_context_injects_active_scratchpad_when_uncompleted_work_exists() {
+    let (session, turn_context) = make_session_and_context().await;
+    write_thread_scratchpad(
+        &turn_context,
+        session.conversation_id,
+        serde_json::json!({
+            "scratchpad_id": session.conversation_id.to_string(),
+            "objective": "recover active work",
+            "status": "active",
+            "completed": ["found root cause"],
+            "next_steps": ["ship fix"],
+            "pending_waits": [],
+            "created_at": "2026-04-29T00:00:00Z",
+            "updated_at": "2026-04-29T00:00:00Z",
+            "archived_at": null
+        }),
+    );
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+
+    assert!(developer_texts.contains("<active_scratchpad>"));
+    assert!(developer_texts.contains("recover active work"));
+    assert!(developer_texts.contains("ship fix"));
+}
+
+#[tokio::test]
+async fn build_initial_context_omits_completed_or_archived_scratchpad_loopback() {
+    let (session, turn_context) = make_session_and_context().await;
+    write_thread_scratchpad(
+        &turn_context,
+        session.conversation_id,
+        serde_json::json!({
+            "scratchpad_id": session.conversation_id.to_string(),
+            "objective": "already shipped",
+            "status": "archived",
+            "completed": ["opened PR"],
+            "next_steps": [],
+            "pending_waits": [],
+            "created_at": "2026-04-29T00:00:00Z",
+            "updated_at": "2026-04-29T00:00:00Z",
+            "archived_at": "2026-04-29T00:05:00Z"
+        }),
+    );
+
+    let archived_context = session.build_initial_context(&turn_context).await;
+    let archived_developer_texts = developer_input_texts(&archived_context).join("\n");
+    assert!(!archived_developer_texts.contains("<active_scratchpad>"));
+    assert!(!archived_developer_texts.contains("already shipped"));
+
+    write_thread_scratchpad(
+        &turn_context,
+        session.conversation_id,
+        serde_json::json!({
+            "scratchpad_id": session.conversation_id.to_string(),
+            "objective": "complete but retained",
+            "status": "completed",
+            "completed": ["opened PR"],
+            "next_steps": [],
+            "pending_waits": [],
+            "created_at": "2026-04-29T00:00:00Z",
+            "updated_at": "2026-04-29T00:05:00Z",
+            "archived_at": null
+        }),
+    );
+
+    let completed_context = session.build_initial_context(&turn_context).await;
+    let completed_developer_texts = developer_input_texts(&completed_context).join("\n");
+    assert!(!completed_developer_texts.contains("<active_scratchpad>"));
+    assert!(!completed_developer_texts.contains("complete but retained"));
 }
 
 #[tokio::test]

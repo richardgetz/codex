@@ -1692,6 +1692,9 @@ impl Session {
             .join(format!("{scratchpad_id}.json"));
         let text = std::fs::read_to_string(path).ok()?;
         let value = serde_json::from_str::<Value>(&text).ok()?;
+        if !scratchpad_has_uncompleted_items(&value) {
+            return None;
+        }
         let summary = compact_active_scratchpad_summary(&value);
         let summary_text = serde_json::to_string_pretty(&summary).ok()?;
         Some(format!(
@@ -3983,6 +3986,28 @@ fn compact_active_scratchpad_summary(value: &Value) -> Value {
         summary.insert("notes_count".to_string(), serde_json::json!(notes.len()));
     }
     Value::Object(summary)
+}
+
+fn scratchpad_has_uncompleted_items(value: &Value) -> bool {
+    if value.get("archived_at").is_some_and(|item| !item.is_null()) {
+        return false;
+    }
+    if matches!(
+        value
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("archived" | "completed" | "complete" | "done")
+    ) {
+        return false;
+    }
+    ["next_steps", "pending_waits"].iter().any(|key| {
+        value
+            .get(key)
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+    })
 }
 
 use crate::memories::prompts::build_memory_tool_developer_instructions;

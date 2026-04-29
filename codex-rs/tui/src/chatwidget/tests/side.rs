@@ -49,7 +49,7 @@ async fn suppressed_interrupted_turn_notice_skips_history_warning() {
 }
 
 #[tokio::test]
-async fn live_orchestrator_compaction_requests_harness_scratchpad_recovery() {
+async fn live_orchestrator_compaction_does_not_submit_scratchpad_recovery_prompt() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
     let thread_id = ThreadId::new();
     chat.thread_id = Some(thread_id);
@@ -66,19 +66,17 @@ async fn live_orchestrator_compaction_requests_harness_scratchpad_recovery() {
         ThreadItemRenderSource::Live,
     );
 
-    let mut recovered_thread_id = None;
     while let Ok(event) = rx.try_recv() {
-        if let AppEvent::RecoverScratchpadAfterCompaction { thread_id } = event {
-            recovered_thread_id = Some(thread_id);
-            break;
-        }
+        assert!(
+            !matches!(event, AppEvent::CodexOp(Op::UserTurn { .. })),
+            "did not expect live compaction to submit a synthetic user turn"
+        );
     }
-    assert_eq!(recovered_thread_id, Some(thread_id));
     assert_no_submit_op(&mut op_rx);
 }
 
 #[tokio::test]
-async fn live_default_compaction_requests_harness_scratchpad_recovery() {
+async fn live_default_compaction_does_not_submit_scratchpad_recovery_prompt() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
     let thread_id = ThreadId::new();
     chat.thread_id = Some(thread_id);
@@ -91,48 +89,17 @@ async fn live_default_compaction_requests_harness_scratchpad_recovery() {
         ThreadItemRenderSource::Live,
     );
 
-    let mut recovered_thread_id = None;
     while let Ok(event) = rx.try_recv() {
-        if let AppEvent::RecoverScratchpadAfterCompaction { thread_id } = event {
-            recovered_thread_id = Some(thread_id);
-            break;
-        }
+        assert!(
+            !matches!(event, AppEvent::CodexOp(Op::UserTurn { .. })),
+            "did not expect live compaction to submit a synthetic user turn"
+        );
     }
-    assert_eq!(recovered_thread_id, Some(thread_id));
     assert_no_submit_op(&mut op_rx);
 }
 
 #[tokio::test]
-async fn hidden_external_message_submits_without_rendering_user_prompt() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
-    chat.thread_id = Some(ThreadId::new());
-
-    chat.submit_hidden_external_user_message(
-        "Post-compaction scratchpad check completed mechanically.".to_string(),
-    );
-
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "Post-compaction scratchpad check completed mechanically.".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected hidden recovery UserTurn, got {other:?}"),
-    }
-    let inserted = drain_insert_history(&mut rx);
-    assert!(
-        inserted.iter().all(|cell| {
-            !lines_to_single_string(cell)
-                .contains("Post-compaction scratchpad check completed mechanically.")
-        }),
-        "hidden recovery message should not render as a user prompt: {inserted:?}"
-    );
-}
-
-#[tokio::test]
-async fn live_plan_compaction_does_not_request_scratchpad_recovery_by_default() {
+async fn live_plan_compaction_does_not_submit_scratchpad_recovery_prompt() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
     chat.thread_id = Some(ThreadId::new());
     let plan_mask = collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Plan)
@@ -149,8 +116,8 @@ async fn live_plan_compaction_does_not_request_scratchpad_recovery_by_default() 
 
     while let Ok(event) = rx.try_recv() {
         assert!(
-            !matches!(event, AppEvent::RecoverScratchpadAfterCompaction { .. }),
-            "did not expect scratchpad recovery event in plan mode"
+            !matches!(event, AppEvent::CodexOp(Op::UserTurn { .. })),
+            "did not expect live compaction to submit a synthetic user turn"
         );
     }
     assert_no_submit_op(&mut op_rx);

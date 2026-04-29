@@ -105,7 +105,8 @@ stable/mainline is pulled in.
   - Slash command: `/scratchpad` renders the current session scratchpad on
     demand using the same status-card UI as live scratchpad updates.
   - Resume injects the active thread scratchpad id and compact scratchpad state
-    into hidden developer context when the thread-id scratchpad exists.
+    into hidden developer context when the thread-id scratchpad exists with
+    uncompleted work (`next_steps` or `pending_waits`).
   - Supports active/archived lookup, archive/unarchive, next-step and
     pending-wait updates, action-policy checks, and wait check-ins.
   - Lifecycle cleanup runs during config load. Defaults: archive non-archived
@@ -115,9 +116,10 @@ stable/mainline is pulled in.
   - Config: `[scratchpad].recover_after_compaction` and
     `[scratchpad.modes.<mode>].recover_after_compaction`
   - Default: `true`
-  - In scratchpad-enabled modes, live compaction events mechanically read the
-    built-in scratchpad for the active thread id and inject recovered state into
-    the next model turn; replayed history does not.
+  - In scratchpad-enabled modes, actionable built-in scratchpad state is looped
+    back through hidden developer context after compaction. Completed or
+    archived scratchpads are not looped back, and the TUI does not synthesize a
+    user turn for recovery state.
   - Legacy `[orchestrator].recover_scratchpad_after_compaction` remains
     supported as an Orchestrator-only compatibility alias.
 - Fast resume:
@@ -178,7 +180,8 @@ stable/mainline is pulled in.
   requires explicit `include_archived = true` for archived pads.
 - Verify configured scratchpad MCPs do not shadow the built-in scratchpad
   namespace.
-- Verify live compaction events mechanically recover built-in scratchpad state
-  while replayed compaction history does not.
+- Verify post-compaction built-in scratchpad loopback is hidden from the TUI and
+  only injects actionable scratchpads with `next_steps` or `pending_waits`, not
+  completed or archived scratchpads.
 - Verify memory helper naming still shows `Memory [extractor]` and
   `Memory [memory builder]`.
