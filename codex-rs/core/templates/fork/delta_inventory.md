@@ -50,6 +50,13 @@ stable/mainline is pulled in.
 - Orchestrator inline MCP usage:
   - Explicitly enabled Orchestrator MCPs may run in the parent Orchestrator
     thread for communication/state work instead of forcing a child worker.
+- MCP visibility recovery:
+  - Cancelled MCP startups are retried in a bounded way instead of memoizing the
+    cancelled startup for the rest of the session.
+  - Plain unavailable MCP placeholder calls such as
+    `mcp__aws_auth_guard__auth_guard_status` are mapped back to configured MCP
+    servers, forcing a server tool-list/start path and resolving the real MCP
+    tool when the daemon is available.
 - Orchestrator session overwatch:
   - Built-in namespace: `session_overwatch`
   - Tools: `list_sessions`, `watch_session`, `unwatch_session`,
@@ -150,6 +157,9 @@ stable/mainline is pulled in.
   `[orchestrator].allowed_spawn_modes`.
 - Verify explicitly enabled Orchestrator MCPs remain callable inline for
   communication/state workflows.
+- Verify cancelled MCP startup can retry, and a plain unavailable MCP
+  placeholder call can recover the configured server namespace instead of
+  permanently reporting the tool unavailable.
 - Verify `session_overwatch` lists sessions, can watch/unwatch existing thread
   ids, records watched sessions in the supervision summary, and can queue
   cross-process `message_session` input that the target CLI later injects.

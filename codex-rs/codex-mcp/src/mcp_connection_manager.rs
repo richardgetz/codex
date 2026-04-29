@@ -1771,16 +1771,18 @@ impl McpConnectionManager {
         let all_tools = self.list_all_tools().await;
         if let Some(tool) = all_tools
             .into_values()
-            .find(|tool| tool.canonical_tool_name() == *tool_name)
+            .find(|tool| tool_name_matches_canonical(tool_name, tool))
         {
             return Some(tool);
         }
 
-        let server_name = self.server_name_from_tool_namespace(tool_name)?;
+        let server_name = self
+            .server_name_from_tool_namespace(tool_name)
+            .or_else(|| self.server_name_from_plain_mcp_tool(tool_name))?;
         let tools = self.list_tools_for_server(server_name).await.ok()?;
         tools
             .into_values()
-            .find(|tool| tool.canonical_tool_name() == *tool_name)
+            .find(|tool| tool_name_matches_canonical(tool_name, tool))
     }
 
     fn server_name_from_tool_namespace(&self, tool_name: &ToolName) -> Option<&str> {
@@ -1795,6 +1797,27 @@ impl McpConnectionManager {
                     .map(|(server_name, _)| server_name.as_str())
             })
     }
+
+    fn server_name_from_plain_mcp_tool(&self, tool_name: &ToolName) -> Option<&str> {
+        if tool_name.namespace.is_some() {
+            return None;
+        }
+        let namespaces = qualify_server_namespaces(self.clients.keys());
+        namespaces
+            .into_iter()
+            .filter(|(_, callable_namespace)| {
+                tool_name.name.starts_with(callable_namespace)
+                    && tool_name.name.len() > callable_namespace.len()
+            })
+            .max_by_key(|(_, callable_namespace)| callable_namespace.len())
+            .and_then(|(server_name, _)| self.clients.get_key_value(&server_name))
+            .map(|(server_name, _)| server_name.as_str())
+    }
+}
+
+fn tool_name_matches_canonical(tool_name: &ToolName, tool: &ToolInfo) -> bool {
+    let canonical = tool.canonical_tool_name();
+    canonical == *tool_name || canonical.display() == tool_name.display()
 }
 
 async fn emit_update(

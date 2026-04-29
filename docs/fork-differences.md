@@ -301,6 +301,16 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - The prompt includes current MCP availability context so agents can answer
   questions about which MCPs are usable in the exact running harness instead of
   relying on stale docs.
+- If Codex sees `MCP startup cancelled` while resolving a configured MCP, it
+  retries startup in a bounded way instead of leaving the cancelled startup
+  memoized for the rest of the session.
+- If a model calls a previously seen MCP tool through an unavailable placeholder
+  name such as `mcp__aws_auth_guard__auth_guard_status`, Codex maps that plain
+  placeholder back to the configured MCP server, forces a server tool-list/start
+  path, and resolves the real MCP tool when the daemon is available.
+- That recovery is intentionally bounded to configured MCP servers in the
+  current session. It does not create arbitrary MCP servers from unknown tool
+  names.
 
 ### Fork-aware help
 

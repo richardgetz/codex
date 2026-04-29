@@ -882,6 +882,32 @@ async fn server_name_from_tool_namespace_accepts_sanitized_lazy_namespace() {
 }
 
 #[tokio::test]
+async fn server_name_from_plain_mcp_tool_accepts_unavailable_placeholder_name() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    manager.clients.insert(
+        "aws-auth-guard".to_string(),
+        test_async_managed_client(
+            ManagedClientStartupState::Fixed(pending_client),
+            /*start_requested*/ false,
+            /*start_on_startup*/ false,
+            CancellationToken::new(),
+        ),
+    );
+
+    assert_eq!(
+        manager.server_name_from_plain_mcp_tool(&ToolName::plain(
+            "mcp__aws_auth_guard__auth_guard_status",
+        )),
+        Some("aws-auth-guard")
+    );
+}
+
+#[tokio::test]
 async fn lazy_startup_failure_can_retry_in_same_session() {
     let attempts = Arc::new(AtomicU64::new(0));
     let startup_factory: ManagedClientStartupFactory = Arc::new({
