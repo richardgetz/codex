@@ -1,0 +1,1 @@
+Intent: make built-in scratchpads easier to resume across sessions by surfacing the active scratchpad id in the shared TUI scratchpad card and /scratchpad missing-state hint, with tests covering both paths.
