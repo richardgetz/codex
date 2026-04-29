@@ -23,6 +23,13 @@ or behaves differently from upstream.
 - Fork versions use the format `<upstream version>-rick.<counter>`.
 - Git tags use the format `rick-v<upstream version>-rick.<counter>`.
 - The automated release lane currently publishes Apple Silicon macOS binaries only.
+- Fork-only state DB migrations must keep already-shipped numeric versions
+  stable. New fork migrations should use the next unused number and include
+  `rick` in the filename, for example `0031_rick_short_feature_name.sql`.
+  During upstream refreshes, if an upstream migration number collides with a
+  shipped fork migration, preserve the fork migration filename/checksum and move
+  the upstream migration to the next unused version. See
+  [`codex-rs/state/migrations/README.md`](../codex-rs/state/migrations/README.md).
 
 See [Fork npm releases](./fork-release.md) for the release workflow details.
 

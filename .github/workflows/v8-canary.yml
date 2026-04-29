@@ -56,6 +56,10 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     needs: metadata
+    # This workflow depends on OpenAI's BuildBuddy remote execution secret. Keep
+    # the workflow for upstream parity, but do not run the build matrix in forks
+    # that cannot access that private API key.
+    if: ${{ github.repository == 'openai/codex' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
