@@ -35,6 +35,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use async_channel::Sender;
+use codex_api::SharedAuthProvider;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_config::Constrained;
@@ -45,6 +46,7 @@ use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -140,21 +142,10 @@ fn sha1_hex(s: &str) -> String {
 }
 
 pub fn codex_apps_tools_cache_key(auth: Option<&CodexAuth>) -> CodexAppsToolsCacheKey {
-    let token_data = auth.and_then(|auth| auth.get_token_data().ok());
-    let account_id = token_data
-        .as_ref()
-        .and_then(|token_data| token_data.account_id.clone());
-    let chatgpt_user_id = token_data
-        .as_ref()
-        .and_then(|token_data| token_data.id_token.chatgpt_user_id.clone());
-    let is_workspace_account = token_data
-        .as_ref()
-        .is_some_and(|token_data| token_data.id_token.is_workspace_account());
-
     CodexAppsToolsCacheKey {
-        account_id,
-        chatgpt_user_id,
-        is_workspace_account,
+        account_id: auth.and_then(CodexAuth::get_account_id),
+        chatgpt_user_id: auth.and_then(CodexAuth::get_chatgpt_user_id),
+        is_workspace_account: auth.is_some_and(CodexAuth::is_workspace_account),
     }
 }
 
@@ -746,6 +737,7 @@ impl AsyncManagedClient {
         runtime_environment: McpRuntimeEnvironment,
         start_on_startup: bool,
         sharing_mode: EffectiveMcpSharingMode,
+        runtime_auth_provider: Option<SharedAuthProvider>,
     ) -> Self {
         let tool_filter = ToolFilter::from_config(&config);
         let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
@@ -783,6 +775,7 @@ impl AsyncManagedClient {
                 let codex_apps_tools_cache_context = codex_apps_tools_cache_context.clone();
                 let startup_cancel_token = startup_cancel_token.clone();
                 let startup_shared_key = shared_key.clone();
+                let runtime_auth_provider = runtime_auth_provider.clone();
                 let startup = async move {
                     async {
                         if let Err(error) = validate_mcp_server_name(&server_name) {
@@ -795,6 +788,7 @@ impl AsyncManagedClient {
                                 config.clone(),
                                 store_mode,
                                 runtime_environment,
+                                runtime_auth_provider,
                             )
                             .await?,
                         );
@@ -1031,6 +1025,8 @@ pub const MCP_SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<PermissionProfile>,
     pub sandbox_policy: SandboxPolicy,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub sandbox_cwd: PathBuf,
@@ -1174,6 +1170,7 @@ impl McpConnectionManager {
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         tool_plugin_provenance: ToolPluginProvenance,
         lazy_mcp_servers_by_default: bool,
+        auth: Option<&CodexAuth>,
     ) -> (Self, CancellationToken) {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
@@ -1189,6 +1186,9 @@ impl McpConnectionManager {
             tx_event: tx_event.clone(),
             auth_entries: Arc::new(auth_entries.clone()),
         };
+        let codex_apps_auth_provider = auth
+            .filter(|auth| auth.uses_codex_backend())
+            .map(codex_model_provider::auth_provider_from_auth);
         let mcp_servers = mcp_servers.clone();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             let start_on_startup = should_start_server_on_session_start(
@@ -1220,6 +1220,19 @@ impl McpConnectionManager {
             } else {
                 None
             };
+            let uses_env_bearer_token = match &cfg.transport {
+                McpServerTransportConfig::StreamableHttp {
+                    bearer_token_env_var,
+                    ..
+                } => bearer_token_env_var.is_some(),
+                McpServerTransportConfig::Stdio { .. } => false,
+            };
+            let runtime_auth_provider =
+                if server_name == CODEX_APPS_MCP_SERVER_NAME && !uses_env_bearer_token {
+                    codex_apps_auth_provider.clone()
+                } else {
+                    None
+                };
             let sharing_mode = effective_sharing_mode(&server_name, &cfg, &runtime_environment);
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
@@ -1233,6 +1246,7 @@ impl McpConnectionManager {
                 runtime_environment.clone(),
                 start_on_startup,
                 sharing_mode,
+                runtime_auth_provider,
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             if !start_on_startup {
@@ -2151,6 +2165,7 @@ async fn make_rmcp_client(
     config: McpServerConfig,
     store_mode: OAuthCredentialsStoreMode,
     runtime_environment: McpRuntimeEnvironment,
+    runtime_auth_provider: Option<SharedAuthProvider>,
 ) -> Result<RmcpClient, StartupOutcomeError> {
     let McpServerConfig {
         transport,
@@ -2230,6 +2245,7 @@ async fn make_rmcp_client(
                 env_http_headers,
                 store_mode,
                 runtime_environment.environment().get_http_client(),
+                runtime_auth_provider,
             )
             .await
             .map_err(StartupOutcomeError::from)

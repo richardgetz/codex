@@ -219,7 +219,8 @@ impl Session {
             .tool_plugin_provenance(config.as_ref())
             .await;
         let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
-        let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
+        let auth_statuses =
+            compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             guard.cancel();
@@ -244,6 +245,7 @@ impl Session {
             codex_apps_tools_cache_key(auth.as_ref()),
             tool_plugin_provenance,
             matches!(turn_context.session_source, SessionSource::SubAgent(_)),
+            auth.as_ref(),
         )
         .await;
         {
