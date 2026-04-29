@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-04-29/hidden-scratchpad-loopback#bb6e478407a6"
+  change_type: "fix"
+  scope: "scratchpad-compaction"
+  summary: "Keep post-compaction built-in scratchpad recovery hidden and actionable-only."
+  decision: "Move scratchpad recovery loopback to core hidden active-scratchpad context by filtering injected thread scratchpads to non-terminal entries with next_steps or pending_waits, and remove the TUI synthetic user-turn recovery path that could become visible."
+  constraints:
+    - "Must not show post-compaction scratchpad recovery text in the TUI as user-visible content."
+    - "Must not loop back archived or completed scratchpads."
+    - "Must continue looping actionable partial scratchpads through hidden model context."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session/mod.rs::Session::build_active_scratchpad_context"
+    - "codex-rs/tui/src/chatwidget.rs::handle_thread_item"
+    - "codex-rs/tui/src/app_event.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"
