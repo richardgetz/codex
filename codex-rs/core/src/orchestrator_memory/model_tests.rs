@@ -61,7 +61,7 @@ async fn resolve_orchestrator_memory_model_falls_back_for_chatgpt_accounts() {
 
     assert_eq!(
         super::resolve_orchestrator_memory_model(&config, /*is_chatgpt_auth*/ true),
-        "gpt-5.4-mini"
+        "gpt-5.5"
     );
     assert_eq!(
         super::resolve_orchestrator_memory_model(&config, /*is_chatgpt_auth*/ false),

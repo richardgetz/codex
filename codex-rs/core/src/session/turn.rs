@@ -18,6 +18,7 @@ use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::DEFAULT_ORCHESTRATOR_FALLBACK_MODEL;
 use crate::config::DEFAULT_ORCHESTRATOR_MODEL;
+use crate::config::DEFAULT_ORCHESTRATOR_REASONING_EFFORT;
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::enablement::filter_connectors_for_mode;
@@ -761,11 +762,7 @@ async fn maybe_apply_orchestrator_model_fallback(
 
     let fallback_mode = turn_context.collaboration_mode.with_updates(
         Some(DEFAULT_ORCHESTRATOR_FALLBACK_MODEL.to_string()),
-        Some(
-            turn_context
-                .config
-                .effective_orchestrator_reasoning_effort(),
-        ),
+        Some(Some(DEFAULT_ORCHESTRATOR_REASONING_EFFORT)),
         /*developer_instructions*/ None,
     );
     if let Err(update_err) = sess
@@ -788,14 +785,25 @@ async fn maybe_apply_orchestrator_model_fallback(
     )
     .await;
 
-    Some(
-        turn_context
-            .with_model(
-                DEFAULT_ORCHESTRATOR_FALLBACK_MODEL.to_string(),
-                &sess.services.models_manager,
-            )
-            .await,
-    )
+    let mut fallback_turn_context = turn_context
+        .with_model(
+            DEFAULT_ORCHESTRATOR_FALLBACK_MODEL.to_string(),
+            &sess.services.models_manager,
+        )
+        .await;
+    fallback_turn_context.reasoning_effort = Some(DEFAULT_ORCHESTRATOR_REASONING_EFFORT);
+    fallback_turn_context.collaboration_mode =
+        fallback_turn_context.collaboration_mode.with_updates(
+            /*model*/ None,
+            Some(Some(DEFAULT_ORCHESTRATOR_REASONING_EFFORT)),
+            /*developer_instructions*/ None,
+        );
+    fallback_turn_context.config = Arc::new({
+        let mut config = (*fallback_turn_context.config).clone();
+        config.model_reasoning_effort = Some(DEFAULT_ORCHESTRATOR_REASONING_EFFORT);
+        config
+    });
+    Some(fallback_turn_context)
 }
 
 fn matches_unsupported_orchestrator_default_model_error(err: &CodexErr) -> bool {
@@ -813,8 +821,16 @@ fn matches_unsupported_orchestrator_default_model_error(err: &CodexErr) -> bool 
 mod thread_control_tests {
     use super::build_continuous_run_block_message;
     use super::matches_unsupported_orchestrator_default_model_error;
+    use super::maybe_apply_orchestrator_model_fallback;
+    use crate::config::DEFAULT_ORCHESTRATOR_FALLBACK_MODEL;
+    use crate::config::DEFAULT_ORCHESTRATOR_MODEL;
+    use crate::config::DEFAULT_ORCHESTRATOR_REASONING_EFFORT;
+    use crate::session::tests::make_session_and_context;
+    use codex_protocol::config_types::ModeKind;
     use codex_protocol::error::CodexErr;
+    use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
+    use std::sync::Arc;
 
     #[test]
     fn continuous_run_block_message_includes_release_channel_when_present() {
@@ -845,6 +861,62 @@ Release channel: imessage.\n\
         assert!(!matches_unsupported_orchestrator_default_model_error(
             &CodexErr::InvalidRequest("The request payload was invalid.".to_string())
         ));
+    }
+
+    #[tokio::test]
+    async fn orchestrator_default_model_fallback_retries_with_gpt55_low() {
+        let (session, turn_context) = make_session_and_context().await;
+        let mut turn_context = turn_context
+            .with_model(
+                DEFAULT_ORCHESTRATOR_MODEL.to_string(),
+                &session.services.models_manager,
+            )
+            .await;
+        turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
+        turn_context.reasoning_effort = Some(ReasoningEffort::High);
+        turn_context.collaboration_mode = turn_context.collaboration_mode.with_updates(
+            Some(DEFAULT_ORCHESTRATOR_MODEL.to_string()),
+            Some(Some(ReasoningEffort::High)),
+            /*developer_instructions*/ None,
+        );
+        session
+            .update_settings(crate::session::SessionSettingsUpdate {
+                collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+                ..Default::default()
+            })
+            .await
+            .expect("orchestrator mode setup should persist");
+        let session = Arc::new(session);
+        let updated = maybe_apply_orchestrator_model_fallback(
+            &session,
+            &Arc::new(turn_context),
+            &CodexErr::InvalidRequest(format!(
+                "The '{DEFAULT_ORCHESTRATOR_MODEL}' model is not supported when using Codex with a ChatGPT account."
+            )),
+            /*attempted_orchestrator_model_fallback*/ false,
+        )
+        .await
+        .expect("unsupported default orchestrator model should fall back");
+
+        assert_eq!(updated.model_info.slug, DEFAULT_ORCHESTRATOR_FALLBACK_MODEL);
+        assert_eq!(
+            updated.reasoning_effort,
+            Some(DEFAULT_ORCHESTRATOR_REASONING_EFFORT)
+        );
+        assert_eq!(
+            updated.config.model_reasoning_effort,
+            Some(DEFAULT_ORCHESTRATOR_REASONING_EFFORT)
+        );
+        assert_eq!(
+            updated.collaboration_mode.reasoning_effort(),
+            Some(DEFAULT_ORCHESTRATOR_REASONING_EFFORT)
+        );
+        let persisted = session.collaboration_mode().await;
+        assert_eq!(persisted.model(), DEFAULT_ORCHESTRATOR_FALLBACK_MODEL);
+        assert_eq!(
+            persisted.reasoning_effort(),
+            Some(DEFAULT_ORCHESTRATOR_REASONING_EFFORT)
+        );
     }
 }
 

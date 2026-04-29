@@ -667,7 +667,7 @@ pub struct Config {
 }
 
 pub const DEFAULT_ORCHESTRATOR_MODEL: &str = "gpt-5.3-codex-spark";
-pub const DEFAULT_ORCHESTRATOR_FALLBACK_MODEL: &str = "gpt-5.4-mini";
+pub const DEFAULT_ORCHESTRATOR_FALLBACK_MODEL: &str = "gpt-5.5";
 pub const DEFAULT_ORCHESTRATOR_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

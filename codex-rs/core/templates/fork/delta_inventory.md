@@ -23,7 +23,12 @@ stable/mainline is pulled in.
   - Default model/reasoning when no override is set:
     `gpt-5.3-codex-spark` + `low`
   - Fallback on ChatGPT-account unsupported-model errors:
-    `gpt-5.4-mini` + `low`
+    `gpt-5.5` + `low`
+  - Coding-task subagents should prefer `gpt-5.5`, selecting reasoning effort
+    by task difficulty: `low` for exploration/mechanical work, `medium` for
+    clear implementation and straightforward fixes, `high` for complex or
+    unclear work, and `xhigh` only for extreme or explicitly requested cases
+    after checking with the user unless already instructed.
 - Orchestrator memory defaults:
   - `[orchestrator_memory]`
   - `enabled = true`
