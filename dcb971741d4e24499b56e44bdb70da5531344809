@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-04-29/stable-0-125-refresh#dcb971741d4e"
+  change_type: "merge"
+  scope: "stable-refresh"
+  summary: "Refresh fork stable with upstream Codex rust-v0.125.0."
+  decision: "Merge upstream rust-v0.125.0 into the stable-based fork branch and resolve conflicts by preserving fork-only orchestrator, memory, account alias, MCP retry, scratchpad, scheduling, and supervision behavior."
+  constraints:
+    - "Must preserve fork-only behavior documented in docs/fork-differences.md and the fork delta inventory."
+    - "Must merge upstream release into stable rather than replaying stable into upstream."
+    - "Must avoid adding private user-specific data to the public repo."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session"
+    - "codex-rs/core/src/thread_manager.rs"
+    - "codex-rs/codex-mcp/src/mcp_connection_manager.rs"
+    - "codex-rs/app-server/src/codex_message_processor.rs"
+    - "codex-rs/state/migrations"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"
