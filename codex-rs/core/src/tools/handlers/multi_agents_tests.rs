@@ -2,7 +2,6 @@ use super::*;
 use crate::CodexThread;
 use crate::ThreadManager;
 use crate::config::AgentRoleConfig;
-use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::function_tool::FunctionCallError;
 use crate::session::tests::make_session_and_context;
 use crate::session_prefix::format_subagent_notification_message;
@@ -78,6 +77,7 @@ fn invocation(
         tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
         call_id: "call-1".to_string(),
         tool_name: codex_tools::ToolName::plain(tool_name),
+        source: crate::tools::context::ToolCallSource::Direct,
         payload,
     }
 }
@@ -2541,14 +2541,9 @@ async fn spawn_agent_rejects_when_depth_limit_exceeded() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
 
-    let max_depth = turn.config.agent_max_depth;
-    turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-        parent_thread_id: session.conversation_id,
-        depth: max_depth,
-        agent_path: None,
-        agent_nickname: None,
-        agent_role: None,
-    });
+    let mut config = (*turn.config).clone();
+    config.agent_max_depth = 0;
+    turn.config = Arc::new(config);
 
     let invocation = invocation(
         Arc::new(session),
@@ -2568,7 +2563,7 @@ async fn spawn_agent_rejects_when_depth_limit_exceeded() {
 }
 
 #[tokio::test]
-async fn spawn_agent_allows_depth_up_to_configured_max_depth() {
+async fn spawn_agent_allows_root_depth_up_to_configured_max_depth() {
     #[derive(Debug, Deserialize)]
     struct SpawnAgentResult {
         agent_id: String,
@@ -2580,15 +2575,8 @@ async fn spawn_agent_allows_depth_up_to_configured_max_depth() {
     session.services.agent_control = manager.agent_control();
 
     let mut config = (*turn.config).clone();
-    config.agent_max_depth = DEFAULT_AGENT_MAX_DEPTH + 1;
+    config.agent_max_depth = 1;
     turn.config = Arc::new(config);
-    turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-        parent_thread_id: session.conversation_id,
-        depth: DEFAULT_AGENT_MAX_DEPTH,
-        agent_path: None,
-        agent_nickname: None,
-        agent_role: None,
-    });
 
     let invocation = invocation(
         Arc::new(session),

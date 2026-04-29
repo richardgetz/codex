@@ -7,6 +7,7 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
 use crate::context::ContextualUserFragment;
 use crate::context::SpawnAgentInstructions;
+use crate::session::turn_context::TurnEnvironment;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -149,6 +150,12 @@ impl ToolHandler for Handler {
                     fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
                     fork_mode,
                     initial_collaboration_mode,
+                    environments: Some(
+                        turn.environments
+                            .iter()
+                            .map(TurnEnvironment::selection)
+                            .collect(),
+                    ),
                 },
             )
             .await

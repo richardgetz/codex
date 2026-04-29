@@ -284,6 +284,7 @@ fn build_router_tick_turn(
         approval_policy: config_snapshot.approval_policy,
         approvals_reviewer: Some(config_snapshot.approvals_reviewer),
         sandbox_policy: config_snapshot.sandbox_policy.clone(),
+        permission_profile: Some(config_snapshot.permission_profile.clone()),
         model: model.to_string(),
         effort: reasoning_effort,
         summary: None,

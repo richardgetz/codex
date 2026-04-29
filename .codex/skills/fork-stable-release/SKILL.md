@@ -1,6 +1,6 @@
 ---
 name: fork-stable-release
-description: Maintain this fork's stable branch by rebasing it onto the latest upstream non-alpha rust-v release tag, then replaying only the intentional fork-only commits instead of merging fork main.
+description: Refresh this fork's stable branch from an upstream non-alpha rust-v release tag by branching from current stable, merging the upstream tag into that branch, and resolving conflicts while preserving fork-only features.
 ---
 
 ## When To Use
@@ -32,40 +32,38 @@ If the repo cannot persist an `upstream` remote, fetch directly from the URL:
 git fetch https://github.com/openai/codex.git refs/tags/<tag>:refs/tags/<tag>
 ```
 
-4. Create or refresh a branch from the tag instead of merging fork `main`.
+4. Create the refresh branch from current fork `stable`.
 
-For a new stable branch:
-
-```bash
-git checkout -b stable <tag>
-```
-
-For an update branch:
+Always branch from the branch you plan to merge into:
 
 ```bash
-git checkout -b stable-refresh/<tag> <tag>
+git checkout stable
+git pull --ff-only
+git checkout -b stable-refresh/<tag>-from-stable
 ```
 
-5. Replay only the intentional fork-only commits.
-
-Never merge fork `main` into `stable`. Use cherry-picks so upstream development-only changes do not leak into the stable line.
-
-List the fork-only delta relative to the current stable base:
+5. Merge the upstream release tag into the stable-based branch.
 
 ```bash
-git log --oneline --reverse <tag>..stable
+git merge <tag>^{}
 ```
 
-Then pick only the commits that are part of the maintained fork layer.
+Do not merge fork `main` into `stable`. Do not start from the upstream tag and
+then replay fork commits unless the user explicitly asks for that recovery
+strategy. The normal path is a stable-based merge so the current released fork
+state remains the compatibility contract.
 
-6. Audit the maintained fork contract before merging.
+6. Resolve conflicts by preserving the maintained fork contract.
 
-Do not assume the fork layer is only "whatever cherry-picks cleanly". Treat the previous `stable` branch as the compatibility contract and inventory the fork-only surfaces that must survive the refresh.
+Do not assume the correct result is "whatever upstream picked". Treat the
+previous `stable` branch as the compatibility contract and inventory the
+fork-only surfaces that must survive the refresh.
 
 At minimum:
 
-- diff the old `stable` branch against the old upstream tag
-- enumerate the fork-owned runtime, packaging, config, and UX surfaces
+- read `docs/fork-differences.md`
+- compare old `stable` against the incoming upstream tag where conflicts touch fork-owned code
+- enumerate fork-owned runtime, packaging, config, and UX surfaces
 - classify each surface as `preserved`, `adapted`, or `intentionally dropped`
 - stop if any surface is still unclassified
 
@@ -79,16 +77,48 @@ The maintained fork layer must be kept current in this skill. If the fork picks 
 
 As of the current branch, the fork contract includes at least:
 
-- `codex-rs/build-info/**` for Rick-specific source-build version stamping
-- `codex-rs/features/**` and downstream consumers for fork-only feature metadata such as `FeatureOwner` and related user-facing experimental help
-- stable-only MCP behavior that has explicit user-facing expectations, including lazy loading, startup cancellation handling, and related regression proofs
-- stable-only thread-control behavior, including Orchestrator mode, Continuous mode, and `Esc` interrupt semantics
 - fork packaging/versioning surfaces for the `codex-rick` line
-- `.codex/skills/fork-stable-release/**` for this maintenance workflow
+- account alias switching and keychain/file auth compatibility
+- Orchestrator and Continuous mode behavior, including CLI startup mode selection
+- Orchestrator model defaults/fallbacks, spawn safety, primary contact polling, session overwatch, and child completion hooks
+- orchestrator memory, memory helper naming, cleanup/consolidation, and slash commands
+- built-in scratchpad, built-in schedule, compaction recovery, and resume/fast-resume integration
+- MCP behavior with mode enablement filters, startup cancellation retry, missing-tool recovery, and inline Orchestrator communication/state MCP use
+- fork docs and skill docs that teach future agents how to preserve the fork
 
 When refreshing `stable`, prefer carrying forward commits that stay inside those surfaces or are clearly required to preserve them.
 
 If a candidate commit touches broader runtime areas, review it explicitly and map it back to one of the fork-contract surfaces before carrying it forward.
+
+## State Migration Policy
+
+State migrations are versioned by the numeric filename prefix and applied
+migrations validate checksums on startup. Once a migration ships on `stable`, do
+not rename it, renumber it, or change its SQL.
+
+Fork-only migrations should use the next unused version and include `rick` in
+the filename so future upstream refreshes can identify the source quickly:
+
+```text
+0031_rick_short_feature_name.sql
+```
+
+If an upstream release adds a migration number that collides with an
+already-shipped fork migration, keep the shipped fork migration exactly as-is and
+move the upstream migration to the next unused version:
+
+```text
+0028_rick_existing_fork_feature.sql   # already shipped, do not change
+0029_upstream_original_feature.sql    # upstream migration moved forward
+```
+
+The SQL objects may not conflict even when filenames do. Check both separately:
+
+- migration-number conflict: preserve stable's shipped filename/checksum
+- SQL object conflict: resolve with normal schema review
+
+For this repo, also keep `codex-rs/state/migrations/README.md` and
+`docs/fork-differences.md` aligned with the current migration policy.
 
 ## Conflict Policy
 
@@ -96,7 +126,9 @@ Resolve conflicts locally when they are narrow and clearly mechanical, especiall
 
 - workspace dependency wiring
 - crate manifest updates that only need to keep both upstream and fork dependencies
-- build-info implementation drift inside `codex-rs/build-info`
+- generated schema files after resolving source changes
+- app-server/core protocol drift where both upstream API additions and fork behavior can coexist
+- state migration number collisions that can be resolved by preserving shipped fork versions and moving unshipped upstream migrations forward
 
 Stop and ask the user before proceeding when any of the following happens:
 
@@ -108,7 +140,7 @@ Stop and ask the user before proceeding when any of the following happens:
 
 ## Verification
 
-After replaying the fork layer:
+After resolving the upstream merge:
 
 1. Run `just fmt` in `codex-rs` if Rust files changed.
 2. Run the focused tests for the changed area.
@@ -118,16 +150,21 @@ At minimum, validation should include the relevant subset of:
 
 ```bash
 cd codex-rs
-cargo test -p codex-build-info
+cargo check -p codex-core
+cargo check -p codex-app-server
+cargo check -p codex-tui
+cargo test -p codex-app-server-protocol
 ```
 
 Examples of required proofs when those surfaces are in scope:
 
-- release/CLI compile path for feature metadata and packaging changes
+- release/CLI compile path for packaging changes
 - MCP startup cancel/retry regression proof
 - lazy MCP visibility/loading checks
 - Orchestrator mode entry/default behavior
 - Continuous mode interrupt behavior
+- built-in scratchpad and compaction recovery behavior
+- state migration compatibility, especially that already-shipped stable migration checksums did not change
 
 4. Before merging into `stable`, confirm all of the following:
 
@@ -139,10 +176,10 @@ Examples of required proofs when those surfaces are in scope:
 5. If the branch is meant to replace `stable`, push it to the fork and report:
 
 - the upstream tag used
-- the commits replayed
+- the merge branch and merge strategy used
 - the fork-contract surfaces reviewed
 - any conflicts that were resolved
-- any commits intentionally left behind
+- any upstream release behavior intentionally skipped in the fork, such as private-infra workflows
 - any remaining infra-only CI failures that did not block the merge
 
 ## Notes

@@ -6,7 +6,6 @@ use codex_git_utils::ApplyGitRequest;
 use codex_git_utils::apply_git_patch;
 use codex_utils_cli::CliConfigOverrides;
 
-use crate::chatgpt_token::init_chatgpt_token_from_auth;
 use crate::get_task::GetTaskResponse;
 use crate::get_task::OutputItem;
 use crate::get_task::PrOutputItem;
@@ -29,12 +28,6 @@ pub async fn run_apply_command(
             .config_overrides
             .parse_overrides()
             .map_err(anyhow::Error::msg)?,
-    )
-    .await?;
-
-    init_chatgpt_token_from_auth(
-        &config.auth_storage_home(),
-        config.effective_cli_auth_credentials_store_mode(),
     )
     .await?;
 

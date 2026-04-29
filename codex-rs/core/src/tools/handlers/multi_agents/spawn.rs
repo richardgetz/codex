@@ -6,6 +6,7 @@ use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use crate::session::turn_context::TurnEnvironment;
 use codex_protocol::config_types::ModeKind;
 
 pub(crate) struct Handler;
@@ -93,10 +94,8 @@ impl ToolHandler for Handler {
             &session.services.models_manager.list_collaboration_modes(),
         )?;
 
-        let result = session
-            .services
-            .agent_control
-            .spawn_agent_with_metadata(
+        let result = Box::pin(
+            session.services.agent_control.spawn_agent_with_metadata(
                 config,
                 input_items,
                 Some(thread_spawn_source(
@@ -110,10 +109,17 @@ impl ToolHandler for Handler {
                     fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
                     fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
                     initial_collaboration_mode,
+                    environments: Some(
+                        turn.environments
+                            .iter()
+                            .map(TurnEnvironment::selection)
+                            .collect(),
+                    ),
                 },
-            )
-            .await
-            .map_err(collab_spawn_error);
+            ),
+        )
+        .await
+        .map_err(collab_spawn_error);
         let (new_thread_id, new_agent_metadata, status) = match &result {
             Ok(spawned_agent) => (
                 Some(spawned_agent.thread_id),
