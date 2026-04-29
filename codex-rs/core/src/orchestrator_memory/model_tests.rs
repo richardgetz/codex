@@ -88,6 +88,36 @@ fn parse_consolidation_payload_extracts_embedded_json() {
     );
 }
 
+#[test]
+fn parse_cleanup_payload_accepts_semantically_merged_memory_events() {
+    let payload = parse_cleanup_payload(Some(
+        r#"notes {
+          "events": [
+            {
+              "bucket": "personal_context",
+              "key": "user calendar meeting request link",
+              "candidate": "User's Google Calendar meeting request link lets others schedule meetings with them: https://calendar.app.google/example-booking-link",
+              "source_excerpt": "Merged duplicate calendar invite and meeting request link memories."
+            }
+          ]
+        }"#,
+    ))
+    .expect("payload");
+
+    assert_eq!(
+        payload,
+        CleanupPayload {
+            events: vec![CleanupPayloadEvent {
+                bucket: MemoryBucket::PersonalContext,
+                key: "user calendar meeting request link".to_string(),
+                candidate: "User's Google Calendar meeting request link lets others schedule meetings with them: https://calendar.app.google/example-booking-link".to_string(),
+                source_excerpt: "Merged duplicate calendar invite and meeting request link memories."
+                    .to_string(),
+            }],
+        }
+    );
+}
+
 #[tokio::test]
 async fn write_consolidation_payload_clears_generated_files_when_requested() {
     let temp = tempdir().expect("tempdir");

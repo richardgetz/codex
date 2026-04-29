@@ -103,6 +103,35 @@ async fn live_default_compaction_requests_harness_scratchpad_recovery() {
 }
 
 #[tokio::test]
+async fn hidden_external_message_submits_without_rendering_user_prompt() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.submit_hidden_external_user_message(
+        "Post-compaction scratchpad check completed mechanically.".to_string(),
+    );
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "Post-compaction scratchpad check completed mechanically.".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected hidden recovery UserTurn, got {other:?}"),
+    }
+    let inserted = drain_insert_history(&mut rx);
+    assert!(
+        inserted.iter().all(|cell| {
+            !lines_to_single_string(cell)
+                .contains("Post-compaction scratchpad check completed mechanically.")
+        }),
+        "hidden recovery message should not render as a user prompt: {inserted:?}"
+    );
+}
+
+#[tokio::test]
 async fn live_plan_compaction_does_not_request_scratchpad_recovery_by_default() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
     chat.thread_id = Some(ThreadId::new());

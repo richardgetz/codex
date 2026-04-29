@@ -3,11 +3,19 @@
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
+use std::io::BufRead;
+use std::io::BufReader;
 use std::io::Error as IoError;
+use std::io::ErrorKind;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
+use std::time::Instant;
 
 use chrono::SecondsFormat;
 use chrono::Utc;
@@ -64,6 +72,31 @@ use codex_protocol::protocol::SessionSource;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
 use codex_utils_path as path_utils;
+
+const REVERSE_SCAN_CHUNK_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeLoadStrategy {
+    LatestCompaction,
+    Full,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResumeLoadOptions {
+    pub strategy: ResumeLoadStrategy,
+    pub visible_turn_limit: usize,
+    pub load_timeout: Duration,
+}
+
+impl Default for ResumeLoadOptions {
+    fn default() -> Self {
+        Self {
+            strategy: ResumeLoadStrategy::LatestCompaction,
+            visible_turn_limit: 80,
+            load_timeout: Duration::from_secs(60),
+        }
+    }
+}
 
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
 /// every update.
@@ -916,6 +949,67 @@ impl RolloutRecorder {
         }))
     }
 
+    pub async fn get_rollout_history_with_options(
+        path: &Path,
+        options: ResumeLoadOptions,
+    ) -> std::io::Result<InitialHistory> {
+        if options.strategy == ResumeLoadStrategy::LatestCompaction {
+            match tokio::time::timeout(
+                options.load_timeout,
+                Self::get_latest_compaction_history(path, options),
+            )
+            .await
+            {
+                Ok(Ok(Some(history))) => return Ok(history),
+                Ok(Ok(None)) => {
+                    trace!(
+                        "no replacement compaction found while fast-loading rollout {}; falling back to full replay",
+                        path.display()
+                    );
+                }
+                Ok(Err(err)) if err.kind() == ErrorKind::InvalidData => {
+                    warn!(
+                        "failed fast-loading rollout {}; falling back to full replay: {err}",
+                        path.display()
+                    );
+                }
+                Ok(Err(err)) => return Err(err),
+                Err(_) => {
+                    return Err(IoError::new(
+                        ErrorKind::TimedOut,
+                        format!(
+                            "timed out after {}s fast-loading rollout `{}`",
+                            options.load_timeout.as_secs(),
+                            path.display()
+                        ),
+                    ));
+                }
+            }
+        }
+
+        match tokio::time::timeout(options.load_timeout, Self::get_rollout_history(path)).await {
+            Ok(result) => result,
+            Err(_) => Err(IoError::new(
+                ErrorKind::TimedOut,
+                format!(
+                    "timed out after {}s loading rollout `{}`",
+                    options.load_timeout.as_secs(),
+                    path.display()
+                ),
+            )),
+        }
+    }
+
+    async fn get_latest_compaction_history(
+        path: &Path,
+        options: ResumeLoadOptions,
+    ) -> std::io::Result<Option<InitialHistory>> {
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || latest_compaction_history_blocking(&path, options))
+            .await
+            .map_err(|err| IoError::other(format!("fast rollout loader task failed: {err}")))?
+    }
+
     /// Drain pending items before stopping the writer task.
     ///
     /// If draining fails, the writer stays alive so callers can continue retrying flush/shutdown.
@@ -942,6 +1036,151 @@ impl RolloutRecorder {
         };
         Ok(())
     }
+}
+
+fn latest_compaction_history_blocking(
+    path: &Path,
+    options: ResumeLoadOptions,
+) -> std::io::Result<Option<InitialHistory>> {
+    let started = Instant::now();
+    let (session_meta, session_meta_line) = read_first_session_meta_line(path)?;
+    let selected_lines = reverse_scan_latest_compaction_lines(path, options, started)?;
+    let Some(mut selected_lines) = selected_lines else {
+        return Ok(None);
+    };
+    selected_lines.reverse();
+
+    let mut items = Vec::with_capacity(selected_lines.len() + 1);
+    items.push(RolloutItem::SessionMeta(session_meta_line));
+    let mut parse_errors = 0usize;
+    for line in selected_lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_slice::<RolloutLine>(line.as_bytes()) {
+            Ok(rollout_line) => items.push(rollout_line.item),
+            Err(err) => {
+                trace!("failed to parse fast rollout line: {err}");
+                parse_errors = parse_errors.saturating_add(1);
+            }
+        }
+    }
+
+    tracing::debug!(
+        "Fast-resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
+        items.len(),
+        session_meta.id,
+        parse_errors,
+    );
+    Ok(Some(InitialHistory::Resumed(ResumedHistory {
+        conversation_id: session_meta.id,
+        history: items,
+        rollout_path: path.to_path_buf(),
+    })))
+}
+
+fn read_first_session_meta_line(path: &Path) -> std::io::Result<(SessionMeta, SessionMetaLine)> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let read = reader.read_line(&mut line)?;
+        if read == 0 {
+            return Err(IoError::other("empty session file"));
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        let rollout_line = serde_json::from_str::<RolloutLine>(&line).map_err(|err| {
+            IoError::new(
+                ErrorKind::InvalidData,
+                format!("failed to parse first rollout line: {err}"),
+            )
+        })?;
+        let RolloutItem::SessionMeta(session_meta_line) = rollout_line.item else {
+            return Err(IoError::new(
+                ErrorKind::InvalidData,
+                "first non-empty rollout line is not session metadata",
+            ));
+        };
+        return Ok((session_meta_line.meta.clone(), session_meta_line));
+    }
+}
+
+fn reverse_scan_latest_compaction_lines(
+    path: &Path,
+    options: ResumeLoadOptions,
+    started: Instant,
+) -> std::io::Result<Option<Vec<String>>> {
+    let mut file = File::open(path)?;
+    let mut position = file.metadata()?.len();
+    if position == 0 {
+        return Err(IoError::other("empty session file"));
+    }
+
+    let mut carry = Vec::<u8>::new();
+    let mut selected_lines = Vec::<String>::new();
+    while position > 0 {
+        if started.elapsed() > options.load_timeout {
+            return Err(IoError::new(
+                ErrorKind::TimedOut,
+                format!(
+                    "timed out after {}s reverse-scanning rollout `{}`",
+                    options.load_timeout.as_secs(),
+                    path.display()
+                ),
+            ));
+        }
+
+        let chunk_len = usize::try_from(position.min(REVERSE_SCAN_CHUNK_BYTES as u64))
+            .unwrap_or(REVERSE_SCAN_CHUNK_BYTES);
+        position -= u64::try_from(chunk_len).unwrap_or(0);
+        file.seek(SeekFrom::Start(position))?;
+        let mut chunk = vec![0u8; chunk_len];
+        file.read_exact(&mut chunk)?;
+        chunk.extend_from_slice(&carry);
+
+        let mut end = chunk.len();
+        while let Some(newline_index) = chunk[..end].iter().rposition(|byte| *byte == b'\n') {
+            let line_bytes = &chunk[newline_index + 1..end];
+            if !line_bytes.is_empty() {
+                let line = String::from_utf8_lossy(line_bytes).into_owned();
+                let is_checkpoint = line_is_replacement_compaction(&line);
+                selected_lines.push(line);
+                if is_checkpoint {
+                    return Ok(Some(selected_lines));
+                }
+            }
+            end = newline_index;
+        }
+        carry = chunk[..end].to_vec();
+    }
+
+    if !carry.is_empty() {
+        let line = String::from_utf8_lossy(&carry).into_owned();
+        let is_checkpoint = line_is_replacement_compaction(&line);
+        selected_lines.push(line);
+        if is_checkpoint {
+            return Ok(Some(selected_lines));
+        }
+    }
+    Ok(None)
+}
+
+fn line_is_replacement_compaction(line: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return false;
+    };
+    value.get("type").and_then(Value::as_str) == Some("compacted")
+        && value
+            .get("payload")
+            .and_then(|payload| payload.get("replacement_history"))
+            .is_some_and(|replacement_history| {
+                replacement_history
+                    .as_array()
+                    .is_some_and(|items| !items.is_empty())
+            })
 }
 
 fn truncate_fs_page(

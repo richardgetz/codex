@@ -192,6 +192,7 @@ mod review;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
+mod thread_inbound_messages;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
 #[cfg(test)]
@@ -202,6 +203,7 @@ use self::session::AppServerClientMetadata;
 use self::session::Session;
 use self::session::SessionConfiguration;
 pub(crate) use self::session::SessionSettingsUpdate;
+use self::thread_inbound_messages::start_thread_inbound_message_poller;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
 #[cfg(test)]
@@ -689,6 +691,9 @@ impl Codex {
             map_session_init_error(&e, &config.codex_home)
         })?;
         let thread_id = session.conversation_id;
+        if let Some(state_db) = session.state_db() {
+            start_thread_inbound_message_poller(thread_id, state_db, tx_sub.clone());
+        }
 
         // This task will run until Op::Shutdown is received.
         let session_for_loop = Arc::clone(&session);
@@ -1662,6 +1667,21 @@ impl Session {
         })
     }
 
+    fn build_active_scratchpad_context(codex_home: &Path, thread_id: ThreadId) -> Option<String> {
+        let scratchpad_id = thread_id.to_string();
+        let path = codex_home
+            .join("scratchpad")
+            .join("entries")
+            .join(format!("{scratchpad_id}.json"));
+        let text = std::fs::read_to_string(path).ok()?;
+        let value = serde_json::from_str::<Value>(&text).ok()?;
+        let summary = compact_active_scratchpad_summary(&value);
+        let summary_text = serde_json::to_string_pretty(&summary).ok()?;
+        Some(format!(
+            "<active_scratchpad>\nThe built-in scratchpad for this thread/session is `{scratchpad_id}`. Continue using this scratchpad id for recovery notes, next steps, waits, and durable working state.\n\n```json\n{summary_text}\n```\n</active_scratchpad>"
+        ))
+    }
+
     async fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
         let state = self.state.lock().await;
         state.previous_turn_settings()
@@ -1897,11 +1917,12 @@ impl Session {
         turn_context: &TurnContext,
         msg: &EventMsg,
     ) {
-        if !self.enabled(Feature::MultiAgentV2) {
+        if !matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
             return;
         }
+        self.maybe_notify_overwatch_controllers(msg).await;
 
-        if !matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
+        if !self.enabled(Feature::MultiAgentV2) {
             return;
         }
 
@@ -1923,6 +1944,50 @@ impl Session {
 
         self.forward_child_completion_to_parent(*parent_thread_id, child_agent_path, status)
             .await;
+    }
+
+    async fn maybe_notify_overwatch_controllers(&self, msg: &EventMsg) {
+        let Some(status) = agent_status_from_event(msg) else {
+            return;
+        };
+        if !is_final(&status) {
+            return;
+        }
+        let Some(state_db) = self.state_db() else {
+            return;
+        };
+        let controls = match state_db
+            .list_active_thread_controls_targeting(self.conversation_id)
+            .await
+        {
+            Ok(controls) => controls,
+            Err(err) => {
+                debug!(
+                    thread_id = %self.conversation_id,
+                    error = %err,
+                    "failed to load overwatch controllers for completed turn"
+                );
+                return;
+            }
+        };
+        for control in controls {
+            if control.mode != StateThreadControlMode::Router || control.released_at.is_some() {
+                continue;
+            }
+            if let Err(err) = self
+                .services
+                .orchestrator_supervision
+                .note_watched_session_event(control.thread_id, self.conversation_id, &status)
+                .await
+            {
+                debug!(
+                    orchestrator_thread_id = %control.thread_id,
+                    target_thread_id = %self.conversation_id,
+                    error = %err,
+                    "failed to record watched session terminal turn"
+                );
+            }
+        }
     }
 
     /// Sends the standard completion envelope from a spawned MultiAgentV2 child to its parent.
@@ -2989,6 +3054,14 @@ impl Session {
             .enabled
         {
             developer_sections.push(ScratchpadInstructions::new().render());
+            if turn_context.config.resume.inject_scratchpad
+                && let Some(active_scratchpad) = Self::build_active_scratchpad_context(
+                    &turn_context.config.codex_home,
+                    self.conversation_id,
+                )
+            {
+                developer_sections.push(active_scratchpad);
+            }
         }
         if turn_context
             .config
@@ -3821,6 +3894,40 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
             message: err.message.clone(),
         })
         .collect()
+}
+
+fn compact_active_scratchpad_summary(value: &Value) -> Value {
+    let mut summary = serde_json::Map::new();
+    for key in [
+        "scratchpad_id",
+        "objective",
+        "status",
+        "completed",
+        "next_steps",
+        "pending_waits",
+        "resume_instructions",
+        "final_guard",
+        "updated_at",
+        "archived_at",
+    ] {
+        if let Some(item) = value.get(key) {
+            summary.insert(key.to_string(), item.clone());
+        }
+    }
+    if let Some(notes) = value.get("notes").and_then(Value::as_array) {
+        let recent_notes = notes
+            .iter()
+            .rev()
+            .take(/*n*/ 5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>();
+        summary.insert("recent_notes".to_string(), Value::Array(recent_notes));
+        summary.insert("notes_count".to_string(), serde_json::json!(notes.len()));
+    }
+    Value::Object(summary)
 }
 
 use crate::memories::prompts::build_memory_tool_developer_instructions;

@@ -117,6 +117,41 @@ INSERT INTO thread_control_targets (
         self.get_thread_control(thread_id).await
     }
 
+    pub async fn list_active_thread_controls_targeting(
+        &self,
+        target_thread_id: ThreadId,
+    ) -> anyhow::Result<Vec<crate::ThreadControlRecord>> {
+        let rows = sqlx::query(
+            r#"
+SELECT
+    thread_controls.thread_id,
+    thread_controls.mode,
+    thread_controls.reason,
+    thread_controls.release_channel,
+    thread_controls.watch_interval_seconds,
+    thread_controls.released_at,
+    thread_controls.updated_at
+FROM thread_control_targets
+JOIN thread_controls ON thread_controls.thread_id = thread_control_targets.thread_id
+WHERE thread_control_targets.target_thread_id = ?
+  AND thread_controls.released_at IS NULL
+ORDER BY thread_controls.updated_at DESC
+            "#,
+        )
+        .bind(target_thread_id.to_string())
+        .fetch_all(self.pool.as_ref())
+        .await?;
+
+        let mut controls = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut control = crate::model::ThreadControlRow::try_from_row(&row)
+                .and_then(crate::ThreadControlRecord::try_from)?;
+            control.target_thread_ids = self.list_thread_control_targets(control.thread_id).await?;
+            controls.push(control);
+        }
+        Ok(controls)
+    }
+
     async fn list_thread_control_targets(
         &self,
         thread_id: ThreadId,
@@ -210,8 +245,25 @@ mod tests {
                 watch_interval_seconds: Some(45),
                 released_at: None,
                 updated_at,
-                target_thread_ids,
+                target_thread_ids: target_thread_ids.clone(),
             })
+        );
+
+        assert_eq!(
+            runtime
+                .list_active_thread_controls_targeting(target_thread_ids[0])
+                .await
+                .expect("load controls targeting first target"),
+            vec![crate::ThreadControlRecord {
+                thread_id,
+                mode: crate::ThreadControlMode::Router,
+                reason: "Keep supervising spawned sessions".to_string(),
+                release_channel: Some("imessage".to_string()),
+                watch_interval_seconds: Some(45),
+                released_at: None,
+                updated_at,
+                target_thread_ids: target_thread_ids.clone(),
+            }]
         );
 
         let released_at = Utc
@@ -230,6 +282,13 @@ mod tests {
                 .await
                 .expect("load released active control"),
             None
+        );
+        assert_eq!(
+            runtime
+                .list_active_thread_controls_targeting(target_thread_ids[0])
+                .await
+                .expect("released control should not be active"),
+            Vec::<crate::ThreadControlRecord>::new()
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;

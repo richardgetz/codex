@@ -116,6 +116,9 @@ const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
 const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
 const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str = "codex.mcp.tools.fetch_uncached.duration_ms";
 const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str = "codex.mcp.tools.cache_write.duration_ms";
+const CANCELLED_STARTUP_RETRY_WINDOW: Duration = Duration::from_secs(60);
+const CANCELLED_STARTUP_MAX_RETRIES_PER_WINDOW: u8 = 3;
+const CANCELLED_STARTUP_MAX_RETRIES_PER_REQUEST: u8 = 1;
 
 type ManagedClientStartup = Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>;
 type ManagedClientStartupFactory = Arc<dyn Fn() -> ManagedClientStartup + Send + Sync>;
@@ -694,7 +697,37 @@ struct AsyncManagedClient {
     start_on_startup: bool,
     cancel_token: CancellationToken,
     ready_client_identity: Arc<StdMutex<Option<Arc<RmcpClient>>>>,
+    cancelled_startup_retry_budget: Arc<StdMutex<CancelledStartupRetryBudget>>,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
+}
+
+#[derive(Default)]
+struct CancelledStartupRetryBudget {
+    window_started_at: Option<Instant>,
+    retries_used: u8,
+}
+
+impl CancelledStartupRetryBudget {
+    fn allow_retry(&mut self, now: Instant) -> bool {
+        if self.window_started_at.is_none_or(|window_started_at| {
+            now.duration_since(window_started_at) > CANCELLED_STARTUP_RETRY_WINDOW
+        }) {
+            self.window_started_at = Some(now);
+            self.retries_used = 0;
+        }
+
+        if self.retries_used >= CANCELLED_STARTUP_MAX_RETRIES_PER_WINDOW {
+            return false;
+        }
+
+        self.retries_used += 1;
+        true
+    }
+
+    fn reset(&mut self) {
+        self.window_started_at = None;
+        self.retries_used = 0;
+    }
 }
 
 impl AsyncManagedClient {
@@ -737,8 +770,6 @@ impl AsyncManagedClient {
         };
         let startup_complete_for_factory = Arc::clone(&startup_complete);
         let startup_factory: ManagedClientStartupFactory = Arc::new({
-            let tool_filter = tool_filter;
-            let shared_key = shared_key;
             move || {
                 startup_complete_for_factory.store(false, Ordering::Release);
                 let server_name = server_name.clone();
@@ -835,6 +866,9 @@ impl AsyncManagedClient {
             start_on_startup,
             cancel_token,
             ready_client_identity: Arc::new(StdMutex::new(None)),
+            cancelled_startup_retry_budget: Arc::new(StdMutex::new(
+                CancelledStartupRetryBudget::default(),
+            )),
             tool_plugin_provenance,
         }
     }
@@ -842,6 +876,22 @@ impl AsyncManagedClient {
     fn request_start(&self) -> bool {
         let was_requested = self.start_requested.swap(true, Ordering::AcqRel);
         !self.start_on_startup && !was_requested
+    }
+
+    fn allow_cancelled_startup_retry(&self) -> bool {
+        let mut guard = self
+            .cancelled_startup_retry_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.allow_retry(Instant::now())
+    }
+
+    fn reset_cancelled_startup_retry_budget(&self) {
+        let mut guard = self
+            .cancelled_startup_retry_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.reset();
     }
 
     async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
@@ -1260,23 +1310,36 @@ impl McpConnectionManager {
         server_name: &str,
         managed_client: &AsyncManagedClient,
     ) -> Result<ManagedClient, StartupOutcomeError> {
-        let emit_lazy_startup_status = managed_client.request_start();
-        if emit_lazy_startup_status && let Some(emitter) = &self.startup_event_emitter {
-            emitter
-                .emit_status(server_name, McpStartupStatus::Starting)
-                .await;
-        }
+        let mut cancelled_retries_this_request = 0;
+        loop {
+            let emit_lazy_startup_status = managed_client.request_start();
+            if emit_lazy_startup_status && let Some(emitter) = &self.startup_event_emitter {
+                emitter
+                    .emit_status(server_name, McpStartupStatus::Starting)
+                    .await;
+            }
 
-        let outcome = managed_client.await_client().await;
-        if emit_lazy_startup_status && let Some(emitter) = &self.startup_event_emitter {
-            emitter
-                .emit_status(
-                    server_name,
-                    emitter.status_for_outcome(server_name, &outcome),
-                )
-                .await;
+            let outcome = managed_client.await_client().await;
+            if outcome.is_ok() {
+                managed_client.reset_cancelled_startup_retry_budget();
+            }
+            if matches!(outcome, Err(StartupOutcomeError::Cancelled))
+                && cancelled_retries_this_request < CANCELLED_STARTUP_MAX_RETRIES_PER_REQUEST
+                && managed_client.allow_cancelled_startup_retry()
+            {
+                cancelled_retries_this_request += 1;
+                continue;
+            }
+            if emit_lazy_startup_status && let Some(emitter) = &self.startup_event_emitter {
+                emitter
+                    .emit_status(
+                        server_name,
+                        emitter.status_for_outcome(server_name, &outcome),
+                    )
+                    .await;
+            }
+            return outcome;
         }
-        outcome
     }
 
     fn evict_failed_shared_client(&self, server_name: &str, failed_client: &ManagedClient) {
@@ -1708,16 +1771,18 @@ impl McpConnectionManager {
         let all_tools = self.list_all_tools().await;
         if let Some(tool) = all_tools
             .into_values()
-            .find(|tool| tool.canonical_tool_name() == *tool_name)
+            .find(|tool| tool_name_matches_canonical(tool_name, tool))
         {
             return Some(tool);
         }
 
-        let server_name = self.server_name_from_tool_namespace(tool_name)?;
+        let server_name = self
+            .server_name_from_tool_namespace(tool_name)
+            .or_else(|| self.server_name_from_plain_mcp_tool(tool_name))?;
         let tools = self.list_tools_for_server(server_name).await.ok()?;
         tools
             .into_values()
-            .find(|tool| tool.canonical_tool_name() == *tool_name)
+            .find(|tool| tool_name_matches_canonical(tool_name, tool))
     }
 
     fn server_name_from_tool_namespace(&self, tool_name: &ToolName) -> Option<&str> {
@@ -1732,6 +1797,27 @@ impl McpConnectionManager {
                     .map(|(server_name, _)| server_name.as_str())
             })
     }
+
+    fn server_name_from_plain_mcp_tool(&self, tool_name: &ToolName) -> Option<&str> {
+        if tool_name.namespace.is_some() {
+            return None;
+        }
+        let namespaces = qualify_server_namespaces(self.clients.keys());
+        namespaces
+            .into_iter()
+            .filter(|(_, callable_namespace)| {
+                tool_name.name.starts_with(callable_namespace)
+                    && tool_name.name.len() > callable_namespace.len()
+            })
+            .max_by_key(|(_, callable_namespace)| callable_namespace.len())
+            .and_then(|(server_name, _)| self.clients.get_key_value(&server_name))
+            .map(|(server_name, _)| server_name.as_str())
+    }
+}
+
+fn tool_name_matches_canonical(tool_name: &ToolName, tool: &ToolInfo) -> bool {
+    let canonical = tool.canonical_tool_name();
+    canonical == *tool_name || canonical.display() == tool_name.display()
 }
 
 async fn emit_update(

@@ -678,6 +678,30 @@ impl AgentControl {
         result
     }
 
+    pub(crate) async fn send_user_input_to_thread(
+        &self,
+        thread_id: ThreadId,
+        input: Vec<UserInput>,
+    ) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        state
+            .send_op(
+                thread_id,
+                Op::UserInput {
+                    items: input,
+                    environments: None,
+                    final_output_json_schema: None,
+                    responsesapi_client_metadata: None,
+                },
+            )
+            .await
+    }
+
+    pub(crate) async fn live_thread_ids(&self) -> CodexResult<Vec<ThreadId>> {
+        let state = self.upgrade()?;
+        Ok(state.list_thread_ids().await)
+    }
+
     /// Append a prebuilt message to an existing agent thread outside the normal user-input path.
     #[cfg(test)]
     pub(crate) async fn append_message(

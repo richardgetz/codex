@@ -6,6 +6,10 @@ use super::remove_generated_memory_files;
 use super::summary_path;
 use super::types::AggregatedMemoryItem;
 use super::types::AggregatedMemorySnapshot;
+use super::types::MemoryBucket;
+use super::types::MemoryEvent;
+use super::types::MemoryOperation;
+use super::types::MemorySignal;
 use crate::agent::AgentStatus;
 use crate::config::Config;
 use crate::orchestrator_memory::live::consolidate_preferences;
@@ -36,6 +40,7 @@ use tracing::warn;
 const MAX_EVENT_LINES: usize = 64;
 const EVENTS_TOKEN_LIMIT: usize = 4_000;
 const EXISTING_MEMORY_TOKEN_LIMIT: usize = 1_500;
+const CLEANUP_EVENTS_TOKEN_LIMIT: usize = 12_000;
 const CONSOLIDATION_TIMEOUT_SECONDS: u64 = 120;
 
 static ORCHESTRATOR_MEMORY_CONSOLIDATION_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
@@ -52,6 +57,20 @@ struct ConsolidationPayload {
     summary_markdown: String,
     profile_markdown: String,
     should_clear: bool,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+struct CleanupPayload {
+    events: Vec<CleanupPayloadEvent>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+struct CleanupPayloadEvent {
+    bucket: MemoryBucket,
+    key: String,
+    candidate: String,
+    #[serde(default)]
+    source_excerpt: String,
 }
 
 pub(super) async fn consolidate_with_model(
@@ -161,7 +180,86 @@ pub(super) async fn consolidate_with_fallback(
     Ok(())
 }
 
-fn build_consolidation_agent_config(
+pub(super) async fn cleanup_events_with_model(
+    session: &Arc<Session>,
+    config: &Arc<Config>,
+    raw_events: String,
+) -> anyhow::Result<Vec<MemoryEvent>> {
+    let prompt = build_cleanup_prompt(super::root(&config.codex_home).as_path(), &raw_events);
+    let agent_config = build_consolidation_agent_config(
+        config,
+        session
+            .services
+            .auth_manager
+            .auth_cached()
+            .as_ref()
+            .is_some_and(codex_login::CodexAuth::is_chatgpt_auth),
+    )?;
+    let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
+    let agent_control = session.services.agent_control.detached_registry();
+    let thread_id = agent_control
+        .spawn_agent(
+            agent_config,
+            vec![UserInput::Text {
+                text: prompt,
+                text_elements: vec![],
+            }]
+            .into(),
+            Some(source),
+        )
+        .await
+        .context("spawn orchestrator-memory cleanup agent")?;
+
+    let final_status = wait_for_final_status(&agent_control, thread_id).await;
+
+    if !matches!(final_status, AgentStatus::Shutdown | AgentStatus::NotFound) {
+        let agent_control = agent_control.clone();
+        tokio::spawn(async move {
+            if let Err(err) = agent_control.shutdown_live_agent(thread_id).await {
+                warn!("failed to auto-close orchestrator memory cleanup agent {thread_id}: {err}");
+            }
+        });
+    }
+
+    match final_status {
+        AgentStatus::Completed(message) => {
+            let payload = parse_cleanup_payload(message.as_deref())?;
+            let observed_at = chrono::Utc::now();
+            Ok(payload
+                .events
+                .into_iter()
+                .filter_map(|event| {
+                    let key = event.key.trim();
+                    let candidate = event.candidate.trim();
+                    if key.is_empty() || candidate.is_empty() {
+                        return None;
+                    }
+                    Some(MemoryEvent {
+                        observed_at,
+                        thread_id: "orchestrator-memory-cleanup".to_string(),
+                        turn_id: "scheduled-cleanup-model".to_string(),
+                        bucket: event.bucket,
+                        operation: MemoryOperation::Upsert,
+                        signal: MemorySignal::ModelClassified,
+                        key: key.to_string(),
+                        candidate: candidate.to_string(),
+                        source_excerpt: if event.source_excerpt.trim().is_empty() {
+                            candidate.to_string()
+                        } else {
+                            event.source_excerpt.trim().to_string()
+                        },
+                        confidence: 0.85,
+                    })
+                })
+                .collect())
+        }
+        other => {
+            anyhow::bail!("orchestrator memory cleanup agent did not complete: {other:?}")
+        }
+    }
+}
+
+pub(super) fn build_consolidation_agent_config(
     base: &Arc<Config>,
     is_chatgpt_auth: bool,
 ) -> anyhow::Result<Config> {
@@ -246,6 +344,47 @@ fn build_consolidation_prompt(
         })
 }
 
+fn build_cleanup_prompt(root: &Path, raw_events: &str) -> String {
+    let root = root.display();
+    let selected_events = truncate_text(
+        raw_events,
+        TruncationPolicy::Tokens(CLEANUP_EVENTS_TOKEN_LIMIT),
+    );
+    format!(
+        r#"## Orchestrator Memory Semantic Cleanup
+
+You are cleaning user-level Orchestrator continuity memory in `{root}`.
+
+Return a compact canonical event set that preserves durable user value while removing semantic near-duplicates.
+
+Rules:
+- Merge near-duplicates even when keys are not exact matches.
+- If two entries each contain useful detail, combine them into one clearer candidate.
+- Keep distinct memories separate when they would support different future behavior.
+- Drop stale, low-value, repo-specific, or purely temporary implementation details.
+- Preserve explicit user preferences, personal context, relational attunement, operator playbook lessons, ongoing threads, and follow-up state.
+- Do not invent facts not supported by the events.
+- Do not include forget/delete tombstones in the returned events; they have already been applied mechanically.
+- Use only these bucket values: durable_preference, personal_context, relational_attunement, operator_playbook, ongoing_threads, followup_state.
+
+Input compacted JSONL events:
+{selected_events}
+
+Return strict JSON only:
+{{
+  "events": [
+    {{
+      "bucket": "durable_preference",
+      "key": "normalized stable key",
+      "candidate": "single durable memory sentence",
+      "source_excerpt": "short evidence or same as candidate"
+    }}
+  ]
+}}
+"#
+    )
+}
+
 async fn read_existing_memory_file(path: AbsolutePathBuf) -> String {
     match fs::read_to_string(path).await {
         Ok(text) => text,
@@ -281,7 +420,7 @@ async fn wait_for_final_status(
 
     let wait = async {
         loop {
-            let status = rx.borrow().clone();
+            let status = { rx.borrow().clone() };
             if crate::agent::status::is_final(&status) {
                 return status;
             }
@@ -315,6 +454,22 @@ fn parse_consolidation_payload(text: Option<&str>) -> anyhow::Result<Consolidati
         return Ok(serde_json::from_str::<ConsolidationPayload>(slice)?);
     }
     anyhow::bail!("orchestrator memory consolidation payload was not valid JSON")
+}
+
+fn parse_cleanup_payload(text: Option<&str>) -> anyhow::Result<CleanupPayload> {
+    let Some(text) = text else {
+        anyhow::bail!("orchestrator memory cleanup completed without a payload");
+    };
+    if let Ok(payload) = serde_json::from_str::<CleanupPayload>(text) {
+        return Ok(payload);
+    }
+    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}'))
+        && start < end
+        && let Some(slice) = text.get(start..=end)
+    {
+        return Ok(serde_json::from_str::<CleanupPayload>(slice)?);
+    }
+    anyhow::bail!("orchestrator memory cleanup payload was not valid JSON")
 }
 
 fn apply_heuristic_guarantees(

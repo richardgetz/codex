@@ -51,12 +51,17 @@ use codex_config::types::Notifications;
 use codex_config::types::OrchestratorConfig;
 use codex_config::types::OrchestratorEscalationMode;
 use codex_config::types::OrchestratorEscalationToml;
+use codex_config::types::OrchestratorMemoryCleanupConfig;
+use codex_config::types::OrchestratorMemoryCleanupToml;
 use codex_config::types::OrchestratorMemoryConfig;
 use codex_config::types::OrchestratorMemoryToml;
 use codex_config::types::OrchestratorPrimaryContactScheduleToml;
 use codex_config::types::OrchestratorPrimaryContactToml;
 use codex_config::types::OrchestratorThreadControlToml;
 use codex_config::types::OrchestratorToml;
+use codex_config::types::ResumeConfig;
+use codex_config::types::ResumeStrategy;
+use codex_config::types::ResumeToml;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::ScheduleConfig;
 use codex_config::types::ScheduleModeToml;
@@ -323,6 +328,15 @@ recent_turn_window = 6
 max_summary_items = 10
 model_on_heuristic_miss = true
 model_consolidation = true
+
+[orchestrator_memory.cleanup]
+enabled = true
+schedule = "04:15"
+run_missed_on_startup = true
+dedupe_raw_events = true
+deep_consolidation = false
+model_consolidation = false
+retain_forget_events_days = 14
 "#;
     let orchestrator_memory_cfg = toml::from_str::<ConfigToml>(orchestrator_memory)
         .expect("TOML deserialization should succeed");
@@ -336,6 +350,15 @@ model_consolidation = true
             max_summary_items: Some(10),
             model_on_heuristic_miss: Some(true),
             model_consolidation: Some(true),
+            cleanup: Some(OrchestratorMemoryCleanupToml {
+                enabled: Some(true),
+                schedule: Some("04:15".to_string()),
+                run_missed_on_startup: Some(true),
+                dedupe_raw_events: Some(true),
+                deep_consolidation: Some(false),
+                model_consolidation: Some(false),
+                retain_forget_events_days: Some(14),
+            }),
         }),
         orchestrator_memory_cfg.orchestrator_memory
     );
@@ -358,6 +381,15 @@ model_consolidation = true
             max_summary_items: 10,
             model_on_heuristic_miss: true,
             model_consolidation: true,
+            cleanup: OrchestratorMemoryCleanupConfig {
+                enabled: true,
+                schedule: "04:15".to_string(),
+                run_missed_on_startup: true,
+                dedupe_raw_events: true,
+                deep_consolidation: false,
+                model_consolidation: false,
+                retain_forget_events_days: 14,
+            },
         }
     );
 
@@ -596,6 +628,8 @@ fn parses_mode_scoped_scratchpad_config() {
 [scratchpad]
 enabled = true
 recover_after_compaction = true
+auto_archive_after_days = 14
+delete_archived_after_days = 120
 
 [scratchpad.modes.plan]
 enabled = false
@@ -612,6 +646,8 @@ recover_after_compaction = false
         Some(ScratchpadToml {
             enabled: Some(true),
             recover_after_compaction: Some(true),
+            auto_archive_after_days: Some(14),
+            delete_archived_after_days: Some(120),
             modes: [
                 (
                     ModeKind::Plan,
@@ -698,6 +734,8 @@ recover_after_compaction = true
     assert!(config.scratchpad.for_mode(ModeKind::Continuous).enabled);
     assert!(config.scratchpad.for_mode(ModeKind::Orchestrator).enabled);
     assert!(config.scratchpad.for_mode(ModeKind::Plan).enabled);
+    assert_eq!(config.scratchpad.auto_archive_after_days, 30);
+    assert_eq!(config.scratchpad.delete_archived_after_days, 90);
     assert!(
         config
             .scratchpad
@@ -975,6 +1013,47 @@ fn config_toml_deserializes_model_availability_nux() {
 }
 
 #[tokio::test]
+async fn config_toml_deserializes_resume_settings() {
+    let resume = r#"
+[resume]
+strategy = "full"
+visible_turn_limit = 24
+lazy_hydrate_history = false
+load_timeout_seconds = 12
+inject_scratchpad = false
+"#;
+    let resume_cfg =
+        toml::from_str::<ConfigToml>(resume).expect("TOML deserialization should succeed");
+    assert_eq!(
+        Some(ResumeToml {
+            strategy: Some(ResumeStrategy::Full),
+            visible_turn_limit: 24,
+            lazy_hydrate_history: false,
+            load_timeout_seconds: 12,
+            inject_scratchpad: false,
+        }),
+        resume_cfg.resume
+    );
+    let config = Config::load_from_base_config_with_overrides(
+        resume_cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config from resume settings");
+    assert_eq!(
+        config.resume,
+        ResumeConfig {
+            strategy: ResumeStrategy::Full,
+            visible_turn_limit: 24,
+            lazy_hydrate_history: false,
+            load_timeout_seconds: 12,
+            inject_scratchpad: false,
+        }
+    );
+}
+
+#[tokio::test]
 async fn runtime_config_defaults_model_availability_nux() {
     let cfg = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
@@ -1208,6 +1287,8 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
     let memories_root = codex_home.path().join("memories").abs();
     let orchestrator_memory_root = codex_home.path().join("orchestrator_memory").abs();
     let orchestrator_supervision_root = codex_home.path().join("orchestrator_supervision").abs();
+    let scratchpad_root = codex_home.path().join("scratchpad").abs();
+    let schedule_root = codex_home.path().join("schedule").abs();
     assert_eq!(
         config.permissions.file_system_sandbox_policy,
         FileSystemSandboxPolicy::restricted(vec![
@@ -1247,6 +1328,18 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                 },
                 access: FileSystemAccessMode::Write,
             },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: scratchpad_root.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: schedule_root.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
         ]),
     );
     assert_eq!(
@@ -1255,7 +1348,9 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
             writable_roots: vec![
                 memories_root,
                 orchestrator_memory_root,
-                orchestrator_supervision_root
+                orchestrator_supervision_root,
+                scratchpad_root,
+                schedule_root
             ],
             read_only_access: ReadOnlyAccess::Restricted {
                 include_platform_defaults: true,
@@ -5800,6 +5895,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             orchestrator_memory: OrchestratorMemoryConfig::default(),
             scratchpad: ScratchpadConfig::default(),
             schedule: ScheduleConfig::default(),
+            resume: ResumeConfig::default(),
             orchestrator: OrchestratorConfig::default(),
             thread_control: ThreadControlConfig::default(),
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -6004,6 +6100,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         orchestrator_memory: OrchestratorMemoryConfig::default(),
         scratchpad: ScratchpadConfig::default(),
         schedule: ScheduleConfig::default(),
+        resume: ResumeConfig::default(),
         orchestrator: OrchestratorConfig::default(),
         thread_control: ThreadControlConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -6162,6 +6259,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         orchestrator_memory: OrchestratorMemoryConfig::default(),
         scratchpad: ScratchpadConfig::default(),
         schedule: ScheduleConfig::default(),
+        resume: ResumeConfig::default(),
         orchestrator: OrchestratorConfig::default(),
         thread_control: ThreadControlConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -6305,6 +6403,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         orchestrator_memory: OrchestratorMemoryConfig::default(),
         scratchpad: ScratchpadConfig::default(),
         schedule: ScheduleConfig::default(),
+        resume: ResumeConfig::default(),
         orchestrator: OrchestratorConfig::default(),
         thread_control: ThreadControlConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,

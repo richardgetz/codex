@@ -756,6 +756,9 @@ pub enum Op {
     /// Trigger a single pass of the startup memory pipeline.
     UpdateMemories,
 
+    /// Trigger a single manual orchestrator-memory cleanup/consolidation pass.
+    ConsolidateOrchestratorMemory,
+
     /// Set a user-facing thread name in the persisted rollout metadata.
     /// This is a local-only operation handled by codex-core; it does not
     /// involve the model.
@@ -897,6 +900,7 @@ impl Op {
             Self::Compact => "compact",
             Self::DropMemories => "drop_memories",
             Self::UpdateMemories => "update_memories",
+            Self::ConsolidateOrchestratorMemory => "consolidate_orchestrator_memory",
             Self::SetThreadName { .. } => "set_thread_name",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::Undo => "undo",
@@ -1681,6 +1685,7 @@ pub enum EventMsg {
     SkillsUpdateAvailable,
 
     PlanUpdate(UpdatePlanArgs),
+    ScratchpadUpdate(ScratchpadUpdateEvent),
 
     TurnAborted(TurnAbortedEvent),
 
@@ -2085,6 +2090,18 @@ pub struct PlanDeltaEvent {
     pub turn_id: String,
     pub item_id: String,
     pub delta: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ScratchpadUpdateEvent {
+    pub scratchpad_id: String,
+    pub objective: String,
+    pub status: String,
+    pub completed: Vec<String>,
+    pub next_steps: Vec<String>,
+    pub pending_waits: Vec<String>,
+    pub updated_at: String,
+    pub archived_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]

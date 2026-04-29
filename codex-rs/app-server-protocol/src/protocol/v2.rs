@@ -6360,6 +6360,22 @@ impl From<CorePlanStepStatus> for TurnPlanStepStatus {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnScratchpadUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub scratchpad_id: String,
+    pub objective: String,
+    pub status: String,
+    pub completed: Vec<String>,
+    pub next_steps: Vec<String>,
+    pub pending_waits: Vec<String>,
+    pub updated_at: String,
+    pub archived_at: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

@@ -4,6 +4,7 @@ use crate::session::turn_context::TurnContext;
 use codex_config::types::MemoriesScope;
 use codex_config::types::OrchestratorMemoryConfig;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::protocol::SessionSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
@@ -17,6 +18,8 @@ use tracing::warn;
 
 #[path = "orchestrator_memory/classifier.rs"]
 mod classifier;
+#[path = "orchestrator_memory/cleanup.rs"]
+mod cleanup;
 #[path = "orchestrator_memory/heuristics.rs"]
 mod heuristics;
 #[path = "orchestrator_memory/live.rs"]
@@ -61,6 +64,10 @@ pub(crate) fn profile_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
 
 pub(crate) fn preferences_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
     root(codex_home).join("preferences.jsonl")
+}
+
+fn cleanup_state_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+    root(codex_home).join("cleanup_state.json")
 }
 
 fn bucket_dir_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
@@ -146,6 +153,21 @@ pub(crate) fn maybe_learn_from_completed_turn(
     }
 
     live::schedule_learning(session, turn_context, last_agent_message);
+}
+
+pub(crate) fn start_scheduled_cleanup_task(
+    session: &Arc<Session>,
+    config: &Arc<Config>,
+    session_source: &SessionSource,
+) {
+    cleanup::start_scheduled_cleanup_task(session, config, session_source);
+}
+
+pub(crate) async fn run_cleanup_now_for_session(
+    session: &Arc<Session>,
+    config: &Arc<Config>,
+) -> std::io::Result<cleanup::CleanupResult> {
+    cleanup::run_cleanup_now_for_session(session, config).await
 }
 
 async fn read_summary_source(codex_home: &AbsolutePathBuf) -> Option<(AbsolutePathBuf, String)> {

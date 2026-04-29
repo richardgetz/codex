@@ -19,6 +19,7 @@ use crate::memories::memory_root;
 use crate::orchestrator_memory::root as orchestrator_memory_root;
 use crate::orchestrator_supervision::root as orchestrator_supervision_root;
 use crate::path_utils::normalize_for_native_workdir;
+use crate::tools::handlers::builtin_scratchpad::run_lifecycle_cleanup as run_scratchpad_lifecycle_cleanup;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
@@ -49,6 +50,7 @@ use codex_config::types::OrchestratorToml;
 use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
+use codex_config::types::ResumeConfig;
 use codex_config::types::ScheduleConfig;
 use codex_config::types::ScratchpadConfig;
 use codex_config::types::ScratchpadToml;
@@ -97,6 +99,8 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_rollout::ResumeLoadOptions;
+use codex_rollout::ResumeLoadStrategy as RolloutResumeLoadStrategy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
@@ -465,6 +469,9 @@ pub struct Config {
 
     /// Built-in schedule subsystem settings.
     pub schedule: ScheduleConfig,
+
+    /// Session resume behavior for large rollout files.
+    pub resume: ResumeConfig,
 
     /// Managed account-alias settings for auth storage selection.
     pub accounts: AccountsConfig,
@@ -842,6 +849,25 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    pub fn resume_load_options(&self) -> ResumeLoadOptions {
+        let strategy = if self.resume.lazy_hydrate_history {
+            self.resume.strategy
+        } else {
+            codex_config::types::ResumeStrategy::Full
+        };
+        let strategy = match strategy {
+            codex_config::types::ResumeStrategy::LatestCompaction => {
+                RolloutResumeLoadStrategy::LatestCompaction
+            }
+            codex_config::types::ResumeStrategy::Full => RolloutResumeLoadStrategy::Full,
+        };
+        ResumeLoadOptions {
+            strategy,
+            visible_turn_limit: self.resume.visible_turn_limit,
+            load_timeout: std::time::Duration::from_secs(self.resume.load_timeout_seconds),
+        }
+    }
+
     pub fn active_account_alias(&self) -> Option<&str> {
         self.accounts.active.as_deref()
     }
@@ -2428,6 +2454,16 @@ impl Config {
             } else {
                 NetworkSandboxPolicy::from(&effective_sandbox_policy)
             };
+        let orchestrator_memory: OrchestratorMemoryConfig =
+            cfg.orchestrator_memory.unwrap_or_default().into();
+        let scratchpad = resolve_scratchpad_config(cfg.scratchpad, cfg.orchestrator.as_ref());
+        if let Err(err) = run_scratchpad_lifecycle_cleanup(
+            codex_home.as_path(),
+            scratchpad.auto_archive_after_days,
+            scratchpad.delete_archived_after_days,
+        ) {
+            tracing::warn!(error = %err, "failed to run built-in scratchpad lifecycle cleanup");
+        }
         let config = Self {
             model,
             service_tier,
@@ -2499,9 +2535,10 @@ impl Config {
             agent_max_depth,
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
-            orchestrator_memory: cfg.orchestrator_memory.unwrap_or_default().into(),
-            scratchpad: resolve_scratchpad_config(cfg.scratchpad, cfg.orchestrator.as_ref()),
+            orchestrator_memory,
+            scratchpad,
             schedule: cfg.schedule.unwrap_or_default().into(),
+            resume: cfg.resume.unwrap_or_default().into(),
             accounts: cfg.accounts.unwrap_or_default().into(),
             orchestrator: cfg.orchestrator.unwrap_or_default().into(),
             thread_control: cfg.thread_control.unwrap_or_default().into(),

@@ -4021,6 +4021,26 @@
           "properties": {
             "method": {
               "enum": [
+                "turn/scratchpad/updated"
+              ],
+              "title": "Turn/scratchpad/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/TurnScratchpadUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Turn/scratchpad/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "item/started"
               ],
               "title": "Item/startedNotificationMethod",
@@ -17220,6 +17240,66 @@
           "turnId"
         ],
         "title": "TurnPlanUpdatedNotification",
+        "type": "object"
+      },
+      "TurnScratchpadUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "archivedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "nextSteps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "objective": {
+            "type": "string"
+          },
+          "pendingWaits": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scratchpadId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "completed",
+          "nextSteps",
+          "objective",
+          "pendingWaits",
+          "scratchpadId",
+          "status",
+          "threadId",
+          "turnId",
+          "updatedAt"
+        ],
+        "title": "TurnScratchpadUpdatedNotification",
         "type": "object"
       },
       "TurnStartParams": {

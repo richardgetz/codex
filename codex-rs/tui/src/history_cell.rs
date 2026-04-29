@@ -68,6 +68,7 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::ScratchpadUpdateEvent;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
@@ -2558,6 +2559,10 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     PlanUpdateCell { explanation, plan }
 }
 
+pub(crate) fn new_scratchpad_update(update: ScratchpadUpdateEvent) -> ScratchpadUpdateCell {
+    ScratchpadUpdateCell { update }
+}
+
 /// Create a proposed-plan cell that snapshots the session cwd for later markdown rendering.
 pub(crate) fn new_proposed_plan(plan_markdown: String, cwd: &Path) -> ProposedPlanCell {
     ProposedPlanCell {
@@ -2684,6 +2689,132 @@ impl HistoryCell for PlanUpdateCell {
 
         lines
     }
+}
+
+#[derive(Debug)]
+pub(crate) struct ScratchpadUpdateCell {
+    update: ScratchpadUpdateEvent,
+}
+
+impl HistoryCell for ScratchpadUpdateCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = vec![vec!["• ".dim(), "Scratchpad".bold()].into()];
+        let mut body = Vec::new();
+
+        let objective = self.update.objective.trim();
+        if !objective.is_empty() {
+            body.extend(wrap_scratchpad_line(
+                width,
+                "Working on: ",
+                objective,
+                Style::default().bold(),
+            ));
+        }
+
+        let status = self.update.status.trim();
+        if !status.is_empty() {
+            let status_text = if self.update.archived_at.is_some() {
+                format!("{status} (archived)")
+            } else {
+                status.to_string()
+            };
+            body.extend(wrap_scratchpad_line(
+                width,
+                "Status: ",
+                status_text.as_str(),
+                Style::default().cyan(),
+            ));
+        }
+
+        append_scratchpad_section(
+            &mut body,
+            width,
+            "Completed",
+            &self.update.completed,
+            ScratchpadSectionStyle::Completed,
+        );
+        append_scratchpad_section(
+            &mut body,
+            width,
+            "Next up",
+            &self.update.next_steps,
+            ScratchpadSectionStyle::Next,
+        );
+        append_scratchpad_section(
+            &mut body,
+            width,
+            "Waiting",
+            &self.update.pending_waits,
+            ScratchpadSectionStyle::Waiting,
+        );
+
+        if body.is_empty() {
+            body.push(Line::from("(scratchpad updated)".dim().italic()));
+        }
+        lines.extend(prefix_lines(body, "  └ ".dim(), "    ".into()));
+        lines
+    }
+}
+
+enum ScratchpadSectionStyle {
+    Completed,
+    Next,
+    Waiting,
+}
+
+fn append_scratchpad_section(
+    lines: &mut Vec<Line<'static>>,
+    width: u16,
+    label: &str,
+    items: &[String],
+    style: ScratchpadSectionStyle,
+) {
+    if items.is_empty() {
+        return;
+    }
+
+    lines.push(Line::from(format!("{label}:").bold()));
+    let max_visible = 5;
+    let skipped = items.len().saturating_sub(max_visible);
+    let visible_items = if matches!(style, ScratchpadSectionStyle::Completed) && skipped > 0 {
+        &items[skipped..]
+    } else {
+        &items[..items.len().min(max_visible)]
+    };
+
+    for item in visible_items {
+        let (marker, item_style) = match style {
+            ScratchpadSectionStyle::Completed => ("✔ ", Style::default().dim().crossed_out()),
+            ScratchpadSectionStyle::Next => ("□ ", Style::default().cyan().bold()),
+            ScratchpadSectionStyle::Waiting => ("□ ", Style::default().dim()),
+        };
+        let opts = RtOptions::new(width.saturating_sub(6).max(1) as usize)
+            .initial_indent(marker.into())
+            .subsequent_indent("  ".into());
+        let item_line = Line::from(item.clone().set_style(item_style));
+        let wrapped = adaptive_wrap_line(&item_line, opts);
+        push_owned_lines(&wrapped, lines);
+    }
+
+    if skipped > 0 {
+        let more = if matches!(style, ScratchpadSectionStyle::Completed) {
+            format!("… {skipped} earlier completed")
+        } else {
+            format!("… {skipped} more")
+        };
+        lines.push(Line::from(more.dim().italic()));
+    }
+}
+
+fn wrap_scratchpad_line(width: u16, label: &str, text: &str, style: Style) -> Vec<Line<'static>> {
+    let opts = RtOptions::new(width.saturating_sub(4).max(1) as usize)
+        .initial_indent(label.bold().into())
+        .subsequent_indent("  ".into());
+    let line = Line::from(text.to_string().set_style(style));
+    let wrapped = adaptive_wrap_line(&line, opts);
+    let mut out = Vec::new();
+    push_owned_lines(&wrapped, &mut out);
+    out
 }
 
 /// Create a new `PendingPatch` cell that lists the file‑level summary of

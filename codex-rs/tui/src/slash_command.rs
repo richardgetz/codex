@@ -46,6 +46,9 @@ pub enum SlashCommand {
     Mcp,
     #[strum(serialize = "orchestrator-memory-forget")]
     OrchestratorMemoryForget,
+    #[strum(serialize = "orchestrator-memory-consolidate")]
+    OrchestratorMemoryConsolidate,
+    Scratchpad,
     Apps,
     Plugins,
     Account,
@@ -122,6 +125,10 @@ impl SlashCommand {
             SlashCommand::OrchestratorMemoryForget => {
                 "remove matching entries from orchestrator memory and reconsolidate"
             }
+            SlashCommand::OrchestratorMemoryConsolidate => {
+                "run orchestrator memory cleanup and consolidation now"
+            }
+            SlashCommand::Scratchpad => "show the built-in scratchpad for this session",
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
             SlashCommand::Account => "show or switch the session account alias",
@@ -198,6 +205,8 @@ impl SlashCommand {
             | SlashCommand::Stop
             | SlashCommand::Mcp
             | SlashCommand::OrchestratorMemoryForget
+            | SlashCommand::OrchestratorMemoryConsolidate
+            | SlashCommand::Scratchpad
             | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Feedback

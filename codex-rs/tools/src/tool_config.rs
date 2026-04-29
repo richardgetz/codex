@@ -110,6 +110,7 @@ pub struct ToolsConfig {
     pub default_mode_request_user_input: bool,
     pub builtin_scratchpad_enabled: bool,
     pub builtin_schedule_enabled: bool,
+    pub builtin_session_overwatch_enabled: bool,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
@@ -233,6 +234,7 @@ impl ToolsConfig {
             default_mode_request_user_input: include_default_mode_request_user_input,
             builtin_scratchpad_enabled: true,
             builtin_schedule_enabled: false,
+            builtin_session_overwatch_enabled: false,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
@@ -270,6 +272,14 @@ impl ToolsConfig {
 
     pub fn with_builtin_schedule_enabled(mut self, builtin_schedule_enabled: bool) -> Self {
         self.builtin_schedule_enabled = builtin_schedule_enabled;
+        self
+    }
+
+    pub fn with_builtin_session_overwatch_enabled(
+        mut self,
+        builtin_session_overwatch_enabled: bool,
+    ) -> Self {
+        self.builtin_session_overwatch_enabled = builtin_session_overwatch_enabled;
         self
     }
 

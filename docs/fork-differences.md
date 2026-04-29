@@ -56,6 +56,27 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   relayed instead of being treated as inert watch state. Memory extraction and
   consolidation agents are excluded from these hooks to avoid feedback loops.
 
+### Orchestrator session overwatch
+
+- Orchestrator mode exposes a built-in `session_overwatch` namespace for
+  supervising Codex sessions that were not necessarily launched by the current
+  orchestrator thread.
+- The namespace includes `list_sessions`, `watch_session`, `unwatch_session`,
+  and `message_session`.
+- Watches are recorded in the local state database as Router thread-control
+  targets, so already-started sessions can emit durable completion signals back
+  to the watching orchestrator when a turn completes or aborts.
+- Watched sessions also appear in the orchestrator supervision summary so idle
+  check-ins can stay model-light unless a watched session changes state.
+- `message_session` delivers immediately to sessions that are live in the same
+  Codex process. If the target session belongs to another CLI process, the
+  message is queued in the durable session inbox and the target CLI injects it
+  mechanically as normal user input when its inbox poller sees it.
+- Cross-process delivery is not a hard interrupt while the target process is
+  inside a model request. It is a model-less durable inbox handoff that lets
+  separate running CLIs communicate once the target session drains pending
+  input.
+
 ### Primary contact channel
 
 - Orchestrator mode can start a configured communication MCP at session boot
@@ -115,6 +136,15 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   scope = "orchestrator"
   model_on_heuristic_miss = false
   model_consolidation = false
+
+  [orchestrator_memory.cleanup]
+  enabled = true
+  schedule = "03:30"
+  run_missed_on_startup = true
+  dedupe_raw_events = true
+  deep_consolidation = true
+  model_consolidation = true
+  retain_forget_events_days = 30
   ```
 
 - The memory classifier is broader than task reminders: it should retain durable
@@ -122,6 +152,9 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   other continuity notes when the user signals they matter later.
 - `/orchestrator-memory-forget <needle>` removes matching orchestrator-memory
   entries without touching mainline memory stores.
+- `/orchestrator-memory-consolidate` triggers the configured orchestrator-memory
+  cleanup/consolidation path immediately, which is useful for testing cleanup
+  behavior without changing the configured schedule.
 - Explicit forget requests such as `forget this: ...` are treated as memory
   removal requests.
 - To avoid silent background model spend, heuristic misses do not invoke a
@@ -130,7 +163,13 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   `model_consolidation = true` to restore those model-assisted paths.
 - Memory events are mirrored into bucket-specific files under
   `<codex_home>/orchestrator_memory/buckets/` for easier inspection while
-  preserving `preferences.jsonl` as the compatibility event log.
+  preserving `preferences.jsonl` as the canonical event log.
+- Scheduled cleanup runs at most once per day by local time, executes on the next
+  startup if the scheduled time was missed, compacts duplicate raw events,
+  retains recent forget tombstones, and resyncs bucket mirrors. By default it
+  also runs a `Memory [memory builder]` sub-agent to merge semantic
+  near-duplicates before regenerating summary/profile artifacts; set
+  `cleanup.model_consolidation = false` for mechanical-only cleanup.
 - Legacy memory events that predate bucketed schemas are migrated on the next
   read or consolidation, with a `preferences.jsonl.pre-bucket-migration` backup.
 
@@ -146,6 +185,9 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   tool namespace and guidance are both omitted for that mode.
 - Built-in scratchpads are JSON-backed under `<codex_home>/scratchpad/entries`
   unless a tool call provides `state_home`.
+- A generated `<codex_home>/scratchpad/index.json` manifest lists scratchpads by
+  id, objective, status, session key, creation time, update time, and archive
+  time so recent work can be found without manually scanning every entry file.
 - `<codex_home>/scratchpad` is created and added to workspace-write writable
   roots automatically, alongside memory and supervision roots.
 - `open_scratchpad` defaults `scratchpad_id` to the current Codex
@@ -154,6 +196,14 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   creating a replacement; archived pads require `include_archived = true`.
 - Built-in scratchpad supports active and archived lookup, archive/unarchive,
   next-step and pending-wait updates, action-policy checks, and wait check-ins.
+- `/scratchpad` renders the current session's built-in scratchpad on demand,
+  including current objective, status, completed work, next steps, and waits.
+- When a session resumes and the thread-id scratchpad already exists, Codex
+  injects the scratchpad id and compact scratchpad state into hidden developer
+  context so the agent can continue the same recovery ledger without searching.
+- Scratchpad lifecycle cleanup runs mechanically during config load. By
+  default, non-archived pads are archived after 30 days without updates, and
+  archived pads are deleted after 90 days in the archive.
 - After a live context compaction item is observed in a scratchpad-enabled mode,
   the fork can mechanically read the built-in scratchpad for the active thread
   id and inject the recovered state into the next model turn. Replayed history
@@ -165,6 +215,8 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   [scratchpad]
   enabled = true
   recover_after_compaction = true
+  auto_archive_after_days = 30
+  delete_archived_after_days = 90
 
   [scratchpad.modes.plan]
   enabled = false
@@ -177,6 +229,28 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
 - The legacy `[orchestrator].recover_scratchpad_after_compaction` key remains
   supported as an Orchestrator-only compatibility alias.
+
+### Fast resume
+
+- Session resume remains compatible with upstream/mainline rollout JSONL files;
+  the fork does not require a sidecar cache or migration.
+- By default, resume reverse-scans the existing rollout from the end, finds the
+  newest compaction item with `replacement_history`, and reconstructs from that
+  compacted baseline plus the surviving tail instead of parsing the whole file.
+- If no safe replacement compaction exists, Codex falls back to full replay.
+- The app-server thread response lazily hydrates visible turns by default so
+  very large sessions do not need to render their entire historical UI payload
+  before becoming usable.
+- Config:
+
+  ```toml
+  [resume]
+  strategy = "latest_compaction" # or "full"
+  visible_turn_limit = 80
+  lazy_hydrate_history = true
+  load_timeout_seconds = 60
+  inject_scratchpad = true
+  ```
 
 ### Built-in schedule
 
@@ -227,6 +301,16 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - The prompt includes current MCP availability context so agents can answer
   questions about which MCPs are usable in the exact running harness instead of
   relying on stale docs.
+- If Codex sees `MCP startup cancelled` while resolving a configured MCP, it
+  retries startup in a bounded way instead of leaving the cancelled startup
+  memoized for the rest of the session.
+- If a model calls a previously seen MCP tool through an unavailable placeholder
+  name such as `mcp__aws_auth_guard__auth_guard_status`, Codex maps that plain
+  placeholder back to the configured MCP server, forces a server tool-list/start
+  path, and resolves the real MCP tool when the daemon is available.
+- That recovery is intentionally bounded to configured MCP servers in the
+  current session. It does not create arbitrary MCP servers from unknown tool
+  names.
 
 ### Fork-aware help
 

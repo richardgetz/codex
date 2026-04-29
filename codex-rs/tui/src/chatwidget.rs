@@ -204,6 +204,7 @@ use codex_protocol::protocol::RateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
+use codex_protocol::protocol::ScratchpadUpdateEvent;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
 #[cfg(test)]
 use codex_protocol::protocol::StreamErrorEvent;
@@ -3748,6 +3749,10 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
+    fn on_scratchpad_update(&mut self, update: ScratchpadUpdateEvent) {
+        self.add_to_history(history_cell::new_scratchpad_update(update));
+    }
+
     fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(
@@ -5919,6 +5924,57 @@ impl ChatWidget {
         );
     }
 
+    pub(crate) fn submit_hidden_external_user_message(&mut self, text: String) {
+        if !self.is_session_configured() {
+            tracing::warn!("cannot submit hidden user message before session is configured");
+            return;
+        }
+        if text.trim().is_empty() {
+            return;
+        }
+        let effective_mode = self.effective_collaboration_mode();
+        if effective_mode.model().trim().is_empty() {
+            tracing::warn!("cannot submit hidden user message before thread model is available");
+            return;
+        }
+        let collaboration_mode = if self.collaboration_modes_enabled() {
+            self.active_collaboration_mask
+                .as_ref()
+                .map(|_| effective_mode.clone())
+        } else {
+            None
+        };
+        let personality = self
+            .config
+            .personality
+            .filter(|_| self.config.features.enabled(Feature::Personality))
+            .filter(|_| self.current_model_supports_personality());
+        let service_tier = match self.config.service_tier {
+            Some(service_tier) => Some(Some(service_tier)),
+            None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
+            None => None,
+        };
+        let op = AppCommand::user_turn(
+            vec![UserInput::Text {
+                text,
+                text_elements: Vec::new(),
+            }],
+            self.config.cwd.to_path_buf(),
+            self.config.permissions.approval_policy.value(),
+            self.config.permissions.sandbox_policy.get().clone(),
+            effective_mode.model().to_string(),
+            effective_mode.reasoning_effort(),
+            /*summary*/ None,
+            service_tier,
+            /*final_output_json_schema*/ None,
+            collaboration_mode,
+            personality,
+        );
+        if self.submit_op(op) && !self.agent_turn_running {
+            self.user_turn_pending_start = true;
+        }
+    }
+
     fn maybe_submit_scratchpad_recovery_after_compaction(&mut self) {
         if !self
             .config
@@ -6749,6 +6805,18 @@ impl ChatWidget {
                         .collect(),
                 })
             }
+            ServerNotification::TurnScratchpadUpdated(notification) => {
+                self.on_scratchpad_update(ScratchpadUpdateEvent {
+                    scratchpad_id: notification.scratchpad_id,
+                    objective: notification.objective,
+                    status: notification.status,
+                    completed: notification.completed,
+                    next_steps: notification.next_steps,
+                    pending_waits: notification.pending_waits,
+                    updated_at: notification.updated_at,
+                    archived_at: notification.archived_at,
+                })
+            }
             ServerNotification::HookStarted(notification) => {
                 self.on_hook_started(hook_started_event_from_notification(notification));
             }
@@ -7335,6 +7403,7 @@ impl ChatWidget {
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
+            EventMsg::ScratchpadUpdate(update) => self.on_scratchpad_update(update),
             EventMsg::ExecApprovalRequest(ev) => {
                 // For replayed events, synthesize an empty id (these should not occur).
                 self.on_exec_approval_request(id.unwrap_or_default(), ev)

@@ -54,6 +54,8 @@ pub use list::rollout_date_parts;
 pub use metadata::builder_from_items;
 pub use policy::EventPersistenceMode;
 pub use policy::should_persist_response_item_for_memories;
+pub use recorder::ResumeLoadOptions;
+pub use recorder::ResumeLoadStrategy;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
 pub use recorder::append_rollout_item_to_path;

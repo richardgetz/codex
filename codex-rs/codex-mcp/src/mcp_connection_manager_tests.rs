@@ -78,6 +78,9 @@ fn test_async_managed_client(
         start_on_startup,
         cancel_token,
         ready_client_identity: Arc::new(StdMutex::new(None)),
+        cancelled_startup_retry_budget: Arc::new(StdMutex::new(
+            CancelledStartupRetryBudget::default(),
+        )),
         tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
     }
 }
@@ -659,6 +662,9 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
             start_on_startup: true,
             cancel_token: CancellationToken::new(),
             ready_client_identity: Arc::new(StdMutex::new(None)),
+            cancelled_startup_retry_budget: Arc::new(StdMutex::new(
+                CancelledStartupRetryBudget::default(),
+            )),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         },
     );
@@ -690,6 +696,9 @@ async fn resolve_tool_info_accepts_canonical_namespaced_tool_names() {
             start_on_startup: true,
             cancel_token: CancellationToken::new(),
             ready_client_identity: Arc::new(StdMutex::new(None)),
+            cancelled_startup_retry_budget: Arc::new(StdMutex::new(
+                CancelledStartupRetryBudget::default(),
+            )),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         },
     );
@@ -729,6 +738,9 @@ async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot(
             start_on_startup: true,
             cancel_token: CancellationToken::new(),
             ready_client_identity: Arc::new(StdMutex::new(None)),
+            cancelled_startup_retry_budget: Arc::new(StdMutex::new(
+                CancelledStartupRetryBudget::default(),
+            )),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         },
     );
@@ -756,6 +768,9 @@ async fn lazy_unstarted_client_is_discoverable_without_blocking_list_all_tools()
             start_on_startup: false,
             cancel_token: CancellationToken::new(),
             ready_client_identity: Arc::new(StdMutex::new(None)),
+            cancelled_startup_retry_budget: Arc::new(StdMutex::new(
+                CancelledStartupRetryBudget::default(),
+            )),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         },
     );
@@ -863,6 +878,32 @@ async fn server_name_from_tool_namespace_accepts_sanitized_lazy_namespace() {
             "get_strudel_guide",
         )),
         Some("music-studio")
+    );
+}
+
+#[tokio::test]
+async fn server_name_from_plain_mcp_tool_accepts_unavailable_placeholder_name() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    manager.clients.insert(
+        "aws-auth-guard".to_string(),
+        test_async_managed_client(
+            ManagedClientStartupState::Fixed(pending_client),
+            /*start_requested*/ false,
+            /*start_on_startup*/ false,
+            CancellationToken::new(),
+        ),
+    );
+
+    assert_eq!(
+        manager.server_name_from_plain_mcp_tool(&ToolName::plain(
+            "mcp__aws_auth_guard__auth_guard_status",
+        )),
+        Some("aws-auth-guard")
     );
 }
 
@@ -984,6 +1025,9 @@ async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty(
             start_on_startup: true,
             cancel_token: CancellationToken::new(),
             ready_client_identity: Arc::new(StdMutex::new(None)),
+            cancelled_startup_retry_budget: Arc::new(StdMutex::new(
+                CancelledStartupRetryBudget::default(),
+            )),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         },
     );
@@ -1021,6 +1065,9 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
             start_on_startup: true,
             cancel_token: CancellationToken::new(),
             ready_client_identity: Arc::new(StdMutex::new(None)),
+            cancelled_startup_retry_budget: Arc::new(StdMutex::new(
+                CancelledStartupRetryBudget::default(),
+            )),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         },
     );
@@ -1068,6 +1115,85 @@ async fn startup_started_client_retries_after_cancelled_startup() {
         client.client().await,
         Err(StartupOutcomeError::Failed { error }) if error == "retry reached startup factory"
     ));
+    assert_eq!(attempts.load(Ordering::Acquire), 2);
+}
+
+#[tokio::test]
+async fn manager_retries_cancelled_startup_before_returning_tool_list_error() {
+    let attempts = Arc::new(AtomicU64::new(0));
+    let startup_factory: ManagedClientStartupFactory = Arc::new({
+        let attempts = Arc::clone(&attempts);
+        move || {
+            let attempt = attempts.fetch_add(1, Ordering::AcqRel);
+            futures::future::ready::<Result<ManagedClient, StartupOutcomeError>>(Err(
+                if attempt == 0 {
+                    StartupOutcomeError::Cancelled
+                } else {
+                    StartupOutcomeError::Failed {
+                        error: "retry reached startup factory".to_string(),
+                    }
+                },
+            ))
+            .boxed()
+            .shared()
+        }
+    });
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    manager.clients.insert(
+        "imessage".to_string(),
+        test_async_managed_client(
+            ManagedClientStartupState::Retryable(RetryableManagedClientStartup::new(
+                startup_factory,
+            )),
+            /*start_requested*/ true,
+            /*start_on_startup*/ true,
+            CancellationToken::new(),
+        ),
+    );
+
+    let result = manager.list_tools_for_server("imessage").await;
+
+    assert!(matches!(
+        result,
+        Err(error) if error.to_string() == "MCP startup failed: retry reached startup factory"
+    ));
+    assert_eq!(attempts.load(Ordering::Acquire), 2);
+}
+
+#[tokio::test]
+async fn manager_limits_cancelled_startup_retries_per_request() {
+    let attempts = Arc::new(AtomicU64::new(0));
+    let startup_factory: ManagedClientStartupFactory = Arc::new({
+        let attempts = Arc::clone(&attempts);
+        move || {
+            attempts.fetch_add(1, Ordering::AcqRel);
+            futures::future::ready::<Result<ManagedClient, StartupOutcomeError>>(Err(
+                StartupOutcomeError::Cancelled,
+            ))
+            .boxed()
+            .shared()
+        }
+    });
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    manager.clients.insert(
+        "imessage".to_string(),
+        test_async_managed_client(
+            ManagedClientStartupState::Retryable(RetryableManagedClientStartup::new(
+                startup_factory,
+            )),
+            /*start_requested*/ true,
+            /*start_on_startup*/ true,
+            CancellationToken::new(),
+        ),
+    );
+
+    let result = manager.list_tools_for_server("imessage").await;
+
+    assert!(matches!(result, Err(error) if error.to_string() == "MCP startup cancelled"));
     assert_eq!(attempts.load(Ordering::Acquire), 2);
 }
 
