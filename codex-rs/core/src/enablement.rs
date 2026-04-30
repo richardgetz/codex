@@ -346,6 +346,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn app_connector_filter_allows_connector_tools_without_allowing_codex_apps_inventory() {
+        let mut config = test_config().await;
+        config.enablement.modes.insert(
+            ModeKind::Orchestrator,
+            codex_config::ModeEnablementConfig {
+                mcps: Some(EnablementFilterConfig {
+                    mode: EnablementFilterMode::Include,
+                    items: vec!["calendar".to_string()],
+                }),
+                ..Default::default()
+            },
+        );
+
+        let calendar_tool = make_mcp_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "calendar_list",
+            Some("calendar"),
+        );
+
+        assert!(mcp_tool_allowed_in_mode(
+            &config,
+            ModeKind::Orchestrator,
+            &calendar_tool
+        ));
+        assert!(!mcp_server_allowed_in_mode(
+            &config,
+            ModeKind::Orchestrator,
+            CODEX_APPS_MCP_SERVER_NAME
+        ));
+    }
+
+    #[tokio::test]
     async fn include_wildcard_keeps_all_mcp_tools() {
         let mut config = test_config().await;
         config.enablement.modes.insert(

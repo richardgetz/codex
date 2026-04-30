@@ -16,6 +16,7 @@ use crate::context::TurnAborted;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
 use crate::session::turn::build_prompt;
+use crate::session::turn::built_tools;
 use crate::shell::default_user_shell;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
@@ -187,6 +188,28 @@ fn assistant_message(text: &str) -> ResponseItem {
         end_turn: None,
         phase: None,
     }
+}
+
+fn test_mcp_refresh_config(mcp_servers: serde_json::Value) -> McpServerRefreshConfig {
+    McpServerRefreshConfig {
+        mcp_servers,
+        mcp_oauth_credentials_store_mode: serde_json::to_value(
+            codex_config::types::OAuthCredentialsStoreMode::default(),
+        )
+        .expect("serialize store mode"),
+    }
+}
+
+async fn refresh_test_mcp_servers(
+    session: &Arc<Session>,
+    turn_context: &TurnContext,
+    mcp_servers: serde_json::Value,
+) {
+    {
+        let mut guard = session.pending_mcp_server_refresh_config.lock().await;
+        *guard = Some(test_mcp_refresh_config(mcp_servers));
+    }
+    session.refresh_mcp_servers_if_requested(turn_context).await;
 }
 
 fn test_session_telemetry_without_metadata() -> SessionTelemetry {
@@ -6700,26 +6723,18 @@ async fn build_initial_context_lists_eager_mcp_server_when_tool_listing_is_unava
         |_config| {},
     )
     .await;
-    let refresh_config = McpServerRefreshConfig {
-        mcp_servers: serde_json::json!({
+    refresh_test_mcp_servers(
+        &session,
+        turn_context.as_ref(),
+        serde_json::json!({
             "imessage": {
                 "command": "__codex_missing_imessage_test__",
                 "startup": "eager",
                 "startup_timeout_sec": 1
             }
         }),
-        mcp_oauth_credentials_store_mode: serde_json::to_value(
-            codex_config::types::OAuthCredentialsStoreMode::default(),
-        )
-        .expect("serialize store mode"),
-    };
-    {
-        let mut guard = session.pending_mcp_server_refresh_config.lock().await;
-        *guard = Some(refresh_config);
-    }
-    session
-        .refresh_mcp_servers_if_requested(&turn_context)
-        .await;
+    )
+    .await;
 
     let initial_context = session.build_initial_context(turn_context.as_ref()).await;
     let developer_texts = developer_input_texts(&initial_context).join("\n");
@@ -6741,26 +6756,18 @@ async fn build_initial_context_keeps_unstarted_lazy_mcp_server_in_lazy_inventory
         |_config| {},
     )
     .await;
-    let refresh_config = McpServerRefreshConfig {
-        mcp_servers: serde_json::json!({
+    refresh_test_mcp_servers(
+        &session,
+        turn_context.as_ref(),
+        serde_json::json!({
             "playwright": {
                 "command": "__codex_missing_playwright_test__",
                 "startup": "lazy",
                 "startup_timeout_sec": 1
             }
         }),
-        mcp_oauth_credentials_store_mode: serde_json::to_value(
-            codex_config::types::OAuthCredentialsStoreMode::default(),
-        )
-        .expect("serialize store mode"),
-    };
-    {
-        let mut guard = session.pending_mcp_server_refresh_config.lock().await;
-        *guard = Some(refresh_config);
-    }
-    session
-        .refresh_mcp_servers_if_requested(&turn_context)
-        .await;
+    )
+    .await;
 
     let initial_context = session.build_initial_context(turn_context.as_ref()).await;
     let developer_texts = developer_input_texts(&initial_context).join("\n");
@@ -6797,8 +6804,10 @@ async fn build_initial_context_filters_direct_mcp_inventory_by_mode() {
         },
     )
     .await;
-    let refresh_config = McpServerRefreshConfig {
-        mcp_servers: serde_json::json!({
+    refresh_test_mcp_servers(
+        &session,
+        turn_context.as_ref(),
+        serde_json::json!({
             "imessage": {
                 "command": "__codex_missing_imessage_test__",
                 "startup": "eager",
@@ -6810,18 +6819,8 @@ async fn build_initial_context_filters_direct_mcp_inventory_by_mode() {
                 "startup_timeout_sec": 1
             }
         }),
-        mcp_oauth_credentials_store_mode: serde_json::to_value(
-            codex_config::types::OAuthCredentialsStoreMode::default(),
-        )
-        .expect("serialize store mode"),
-    };
-    {
-        let mut guard = session.pending_mcp_server_refresh_config.lock().await;
-        *guard = Some(refresh_config);
-    }
-    session
-        .refresh_mcp_servers_if_requested(&turn_context)
-        .await;
+    )
+    .await;
 
     let initial_context = session.build_initial_context(turn_context.as_ref()).await;
     let developer_texts = developer_input_texts(&initial_context).join("\n");
@@ -6832,6 +6831,136 @@ async fn build_initial_context_filters_direct_mcp_inventory_by_mode() {
     assert!(
         !developer_texts.contains("- `playwright`"),
         "mode MCP filter should hide playwright from direct inventory, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_updates_mcp_inventory_after_active_session_refresh() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |_config| {},
+    )
+    .await;
+    refresh_test_mcp_servers(
+        &session,
+        turn_context.as_ref(),
+        serde_json::json!({
+            "imessage": {
+                "command": "__codex_missing_imessage_test__",
+                "startup": "eager",
+                "startup_timeout_sec": 1
+            }
+        }),
+    )
+    .await;
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+    assert!(
+        developer_texts.contains("- `imessage`"),
+        "expected first refresh to list imessage, got {developer_texts:?}"
+    );
+
+    refresh_test_mcp_servers(
+        &session,
+        turn_context.as_ref(),
+        serde_json::json!({
+            "display-info": {
+                "command": "__codex_missing_display_info_test__",
+                "startup": "eager",
+                "startup_timeout_sec": 1
+            },
+            "playwright": {
+                "command": "__codex_missing_playwright_test__",
+                "startup": "lazy",
+                "startup_timeout_sec": 1
+            }
+        }),
+    )
+    .await;
+
+    let refreshed_context = session.build_initial_context(turn_context.as_ref()).await;
+    let developer_texts = developer_input_texts(&refreshed_context).join("\n");
+    assert!(
+        developer_texts.contains("### Direct MCP servers"),
+        "expected refreshed MCP inventory to include direct servers, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts.contains("- `display-info`"),
+        "expected refreshed direct inventory to include display-info, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts.contains("### Lazy MCP servers"),
+        "expected refreshed MCP inventory to include lazy servers, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts.contains("- `playwright`"),
+        "expected refreshed lazy inventory to include playwright, got {developer_texts:?}"
+    );
+    assert!(
+        !developer_texts.contains("- `imessage`"),
+        "active-session MCP refresh should remove stale imessage inventory, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn built_tools_keeps_unavailable_mcp_placeholder_when_inventory_lists_server() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::UnavailableDummyTools)
+                .expect("enable unavailable dummy tools");
+        },
+    )
+    .await;
+    refresh_test_mcp_servers(
+        &session,
+        turn_context.as_ref(),
+        serde_json::json!({
+            "imessage": {
+                "command": "__codex_missing_imessage_test__",
+                "startup": "eager",
+                "startup_timeout_sec": 1
+            }
+        }),
+    )
+    .await;
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+    assert!(
+        developer_texts.contains("- `imessage`"),
+        "expected eager imessage server in inventory, got {developer_texts:?}"
+    );
+
+    let previous_call = ResponseItem::FunctionCall {
+        id: None,
+        name: "mcp__imessage__imessage_get_config".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "call-imessage-get-config".to_string(),
+    };
+    let router = built_tools(
+        session.as_ref(),
+        turn_context.as_ref(),
+        &[previous_call],
+        &HashSet::new(),
+        /*skills_outcome*/ None,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("build tools");
+    let tool_names = router
+        .model_visible_specs()
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        tool_names.contains(&"mcp__imessage__imessage_get_config".to_string()),
+        "inventory text must not suppress unavailable placeholder routing, got {tool_names:?}"
     );
 }
 
@@ -6988,6 +7117,68 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
     let mut expected_history = vec![compacted_summary];
     expected_history.extend(session.build_initial_context(&turn_context).await);
     assert_eq!(history.raw_items().to_vec(), expected_history);
+}
+
+#[tokio::test]
+async fn record_context_updates_and_set_reference_context_item_reinjects_mcp_inventory_after_clear()
+{
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |_config| {},
+    )
+    .await;
+    refresh_test_mcp_servers(
+        &session,
+        turn_context.as_ref(),
+        serde_json::json!({
+            "imessage": {
+                "command": "__codex_missing_imessage_test__",
+                "startup": "eager",
+                "startup_timeout_sec": 1
+            }
+        }),
+    )
+    .await;
+    let compacted_summary = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: format!("{}\nsummary", crate::compact::SUMMARY_PREFIX),
+        }],
+        end_turn: None,
+        phase: None,
+    };
+    session
+        .record_into_history(
+            std::slice::from_ref(&compacted_summary),
+            turn_context.as_ref(),
+        )
+        .await;
+    session
+        .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+        .await;
+    {
+        let mut state = session.state.lock().await;
+        state.set_reference_context_item(/*item*/ None);
+    }
+    session
+        .replace_history(
+            vec![compacted_summary.clone()],
+            /*reference_context_item*/ None,
+        )
+        .await;
+
+    session
+        .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+        .await;
+
+    let history = session.clone_history().await;
+    let developer_texts = developer_input_texts(history.raw_items()).join("\n");
+    assert!(
+        developer_texts.contains("- `imessage`"),
+        "context reconstruction after compaction clear should reinject MCP inventory, got {developer_texts:?}"
+    );
 }
 
 #[tokio::test]
