@@ -62,6 +62,10 @@ stable/mainline is pulled in.
     `mcp__aws_auth_guard__auth_guard_status` are mapped back to configured MCP
     servers, forcing a server tool-list/start path and resolving the real MCP
     tool when the daemon is available.
+  - The model-visible MCP inventory is based on configured/started direct
+    servers plus unstarted lazy servers, not only successful tool listings, so
+    eager MCPs remain visible even when their current tool list is temporarily
+    unavailable.
 - Orchestrator session overwatch:
   - Built-in namespace: `session_overwatch`
   - Tools: `list_sessions`, `watch_session`, `unwatch_session`,
@@ -164,9 +168,10 @@ stable/mainline is pulled in.
   `[orchestrator].allowed_spawn_modes`.
 - Verify explicitly enabled Orchestrator MCPs remain callable inline for
   communication/state workflows.
-- Verify cancelled MCP startup can retry, and a plain unavailable MCP
-  placeholder call can recover the configured server namespace instead of
-  permanently reporting the tool unavailable.
+- Verify cancelled MCP startup can retry, a plain unavailable MCP placeholder
+  call can recover the configured server namespace instead of permanently
+  reporting the tool unavailable, and eager MCP servers remain listed in the
+  model-visible inventory even if tool listing is temporarily unavailable.
 - Verify `session_overwatch` lists sessions, can watch/unwatch existing thread
   ids, records watched sessions in the supervision summary, and can queue
   cross-process `message_session` input that the target CLI later injects.

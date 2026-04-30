@@ -35,6 +35,7 @@ use crate::default_skill_metadata_budget;
 use crate::enablement::filter_connectors_for_mode;
 use crate::enablement::filter_lazy_mcp_servers_for_mode;
 use crate::enablement::filter_plugins_for_mode;
+use crate::enablement::mcp_server_allowed_in_mode;
 use crate::environment_selection::selected_primary_environment;
 use crate::environment_selection::validate_environment_selections;
 use crate::exec_policy::ExecPolicyManager;
@@ -3181,17 +3182,15 @@ impl Session {
             }
 
             let direct_mcp_server_names = mcp_connection_manager
-                .list_all_tools()
-                .await
-                .into_values()
-                .filter(|tool| {
-                    crate::enablement::mcp_tool_allowed_in_mode(
+                .direct_server_names()
+                .into_iter()
+                .filter(|server_name| {
+                    mcp_server_allowed_in_mode(
                         &turn_context.config,
                         turn_context.collaboration_mode.mode,
-                        tool,
+                        server_name,
                     )
                 })
-                .map(|tool| tool.server_name)
                 .collect::<Vec<_>>();
             let lazy_mcp_server_names = filter_lazy_mcp_servers_for_mode(
                 &turn_context.config,

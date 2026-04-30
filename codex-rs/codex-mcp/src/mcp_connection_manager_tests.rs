@@ -789,6 +789,81 @@ async fn lazy_unstarted_client_is_discoverable_without_blocking_list_all_tools()
     );
 }
 
+#[test]
+fn direct_server_names_include_eager_clients_without_waiting_for_tools() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    manager.clients.insert(
+        "imessage".to_string(),
+        test_async_managed_client(
+            ManagedClientStartupState::Fixed(pending_client),
+            /*start_requested*/ true,
+            /*start_on_startup*/ true,
+            CancellationToken::new(),
+        ),
+    );
+
+    assert_eq!(manager.direct_server_names(), vec!["imessage".to_string()]);
+    assert!(manager.lazy_server_infos().is_empty());
+}
+
+#[test]
+fn direct_server_names_exclude_unstarted_lazy_clients() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    manager.clients.insert(
+        "playwright".to_string(),
+        test_async_managed_client(
+            ManagedClientStartupState::Fixed(pending_client),
+            /*start_requested*/ false,
+            /*start_on_startup*/ false,
+            CancellationToken::new(),
+        ),
+    );
+
+    assert!(manager.direct_server_names().is_empty());
+    assert_eq!(
+        manager.lazy_server_infos(),
+        vec![LazyMcpServerInfo {
+            server_name: "playwright".to_string(),
+            description: None,
+        }]
+    );
+}
+
+#[test]
+fn direct_server_names_include_lazy_clients_after_start_is_requested() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    manager.clients.insert(
+        "playwright".to_string(),
+        test_async_managed_client(
+            ManagedClientStartupState::Fixed(pending_client),
+            /*start_requested*/ true,
+            /*start_on_startup*/ false,
+            CancellationToken::new(),
+        ),
+    );
+
+    assert_eq!(
+        manager.direct_server_names(),
+        vec!["playwright".to_string()]
+    );
+    assert!(manager.lazy_server_infos().is_empty());
+}
+
 #[tokio::test]
 async fn wait_for_server_ready_does_not_start_lazy_unstarted_client() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()

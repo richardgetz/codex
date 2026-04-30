@@ -92,6 +92,17 @@ pub(crate) fn mcp_tool_allowed_in_mode(config: &Config, mode: ModeKind, tool: &T
     filter_allows(filter, &candidates)
 }
 
+pub(crate) fn mcp_server_allowed_in_mode(
+    config: &Config,
+    mode: ModeKind,
+    server_name: &str,
+) -> bool {
+    let Some(filter) = mcp_filter(config, mode) else {
+        return true;
+    };
+    filter_allows(filter, &[server_name])
+}
+
 pub(crate) fn filter_mcp_tools_for_mode(
     config: &Config,
     mode: ModeKind,
@@ -109,10 +120,7 @@ pub(crate) fn lazy_mcp_server_allowed_in_mode(
     mode: ModeKind,
     server: &LazyMcpServerInfo,
 ) -> bool {
-    let Some(filter) = mcp_filter(config, mode) else {
-        return true;
-    };
-    filter_allows(filter, &[server.server_name.as_str()])
+    mcp_server_allowed_in_mode(config, mode, server.server_name.as_str())
 }
 
 pub(crate) fn filter_lazy_mcp_servers_for_mode(
@@ -309,6 +317,32 @@ mod tests {
                 "mcp__scratchpad__get".to_string(),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn filters_mcp_server_names_by_mode_enablement() {
+        let mut config = test_config().await;
+        config.enablement.modes.insert(
+            ModeKind::Orchestrator,
+            codex_config::ModeEnablementConfig {
+                mcps: Some(EnablementFilterConfig {
+                    mode: EnablementFilterMode::Include,
+                    items: vec!["imessage".to_string()],
+                }),
+                ..Default::default()
+            },
+        );
+
+        assert!(mcp_server_allowed_in_mode(
+            &config,
+            ModeKind::Orchestrator,
+            "imessage"
+        ));
+        assert!(!mcp_server_allowed_in_mode(
+            &config,
+            ModeKind::Orchestrator,
+            "playwright"
+        ));
     }
 
     #[tokio::test]

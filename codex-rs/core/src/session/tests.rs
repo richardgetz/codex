@@ -6693,6 +6693,149 @@ async fn build_initial_context_injects_fork_help_inventory() {
 }
 
 #[tokio::test]
+async fn build_initial_context_lists_eager_mcp_server_when_tool_listing_is_unavailable() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |_config| {},
+    )
+    .await;
+    let refresh_config = McpServerRefreshConfig {
+        mcp_servers: serde_json::json!({
+            "imessage": {
+                "command": "__codex_missing_imessage_test__",
+                "startup": "eager",
+                "startup_timeout_sec": 1
+            }
+        }),
+        mcp_oauth_credentials_store_mode: serde_json::to_value(
+            codex_config::types::OAuthCredentialsStoreMode::default(),
+        )
+        .expect("serialize store mode"),
+    };
+    {
+        let mut guard = session.pending_mcp_server_refresh_config.lock().await;
+        *guard = Some(refresh_config);
+    }
+    session
+        .refresh_mcp_servers_if_requested(&turn_context)
+        .await;
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+    assert!(
+        developer_texts.contains("### Direct MCP servers"),
+        "expected MCP inventory to include direct servers, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts.contains("- `imessage`"),
+        "expected eager imessage server to remain in inventory even when tool listing is unavailable, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_keeps_unstarted_lazy_mcp_server_in_lazy_inventory() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |_config| {},
+    )
+    .await;
+    let refresh_config = McpServerRefreshConfig {
+        mcp_servers: serde_json::json!({
+            "playwright": {
+                "command": "__codex_missing_playwright_test__",
+                "startup": "lazy",
+                "startup_timeout_sec": 1
+            }
+        }),
+        mcp_oauth_credentials_store_mode: serde_json::to_value(
+            codex_config::types::OAuthCredentialsStoreMode::default(),
+        )
+        .expect("serialize store mode"),
+    };
+    {
+        let mut guard = session.pending_mcp_server_refresh_config.lock().await;
+        *guard = Some(refresh_config);
+    }
+    session
+        .refresh_mcp_servers_if_requested(&turn_context)
+        .await;
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+    assert!(
+        developer_texts.contains("### Lazy MCP servers"),
+        "expected MCP inventory to include lazy servers, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts.contains("- `playwright`"),
+        "expected unstarted lazy playwright server to remain in lazy inventory, got {developer_texts:?}"
+    );
+    assert!(
+        !developer_texts.contains("### Direct MCP servers"),
+        "unstarted lazy server should not be listed as direct, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_filters_direct_mcp_inventory_by_mode() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.enablement.modes.insert(
+                ModeKind::Default,
+                codex_config::ModeEnablementConfig {
+                    mcps: Some(codex_config::EnablementFilterConfig {
+                        mode: codex_config::EnablementFilterMode::Include,
+                        items: vec!["imessage".to_string()],
+                    }),
+                    ..Default::default()
+                },
+            );
+        },
+    )
+    .await;
+    let refresh_config = McpServerRefreshConfig {
+        mcp_servers: serde_json::json!({
+            "imessage": {
+                "command": "__codex_missing_imessage_test__",
+                "startup": "eager",
+                "startup_timeout_sec": 1
+            },
+            "playwright": {
+                "command": "__codex_missing_playwright_test__",
+                "startup": "eager",
+                "startup_timeout_sec": 1
+            }
+        }),
+        mcp_oauth_credentials_store_mode: serde_json::to_value(
+            codex_config::types::OAuthCredentialsStoreMode::default(),
+        )
+        .expect("serialize store mode"),
+    };
+    {
+        let mut guard = session.pending_mcp_server_refresh_config.lock().await;
+        *guard = Some(refresh_config);
+    }
+    session
+        .refresh_mcp_servers_if_requested(&turn_context)
+        .await;
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+    assert!(
+        developer_texts.contains("- `imessage`"),
+        "expected enabled direct imessage server in inventory, got {developer_texts:?}"
+    );
+    assert!(
+        !developer_texts.contains("- `playwright`"),
+        "mode MCP filter should hide playwright from direct inventory, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
 async fn build_initial_context_injects_orchestrator_supervision_in_orchestrator_mode() {
     let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
