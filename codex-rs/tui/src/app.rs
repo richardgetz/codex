@@ -162,7 +162,6 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::path::Path;
@@ -194,7 +193,6 @@ mod loaded_threads;
 mod pending_interactive_replay;
 mod platform_actions;
 mod replay_filter;
-mod scratchpad_recovery;
 mod session_lifecycle;
 mod side;
 mod startup_prompts;
@@ -618,7 +616,6 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     primary_contact_startup: Option<PrimaryContactStartupState>,
     primary_contact_polling: Option<PrimaryContactPollingState>,
-    pending_scratchpad_recoveries: HashSet<ThreadId>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
     // Serialize plugin enablement writes per plugin so stale completions cannot
@@ -1006,7 +1003,6 @@ impl App {
             primary_session_configured: None,
             primary_contact_startup: None,
             primary_contact_polling: None,
-            pending_scratchpad_recoveries: HashSet::new(),
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),

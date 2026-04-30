@@ -205,18 +205,19 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   next-step and pending-wait updates, action-policy checks, and wait check-ins.
 - `/scratchpad` renders the current session's built-in scratchpad on demand,
   including current objective, status, completed work, next steps, and waits.
-- When a session resumes and the thread-id scratchpad already exists, Codex
-  injects the scratchpad id and compact scratchpad state into hidden developer
-  context so the agent can continue the same recovery ledger without searching.
+- When a session resumes and the thread-id scratchpad already exists with
+  uncompleted work (`next_steps` or `pending_waits`), Codex injects the
+  scratchpad id and compact scratchpad state into hidden developer context so
+  the agent can continue the same recovery ledger without searching. Completed
+  and archived scratchpads are skipped.
 - Scratchpad lifecycle cleanup runs mechanically during config load. By
   default, non-archived pads are archived after 30 days without updates, and
   archived pads are deleted after 90 days in the archive.
-- After a live context compaction item is observed in a scratchpad-enabled mode,
-  the fork can mechanically read the built-in scratchpad for the active thread
-  id and inject the recovered state into the next model turn. Replayed history
-  does not fire this hook.
-- Built-in scratchpad and compaction recovery are controlled globally and per
-  mode with:
+- After context compaction, actionable built-in scratchpad state is looped back
+  through hidden developer context, using the same model-visible hidden-context
+  path as other post-compaction recovery state rather than a synthetic user
+  turn.
+- Built-in scratchpad availability is controlled globally and per mode with:
 
   ```toml
   [scratchpad]

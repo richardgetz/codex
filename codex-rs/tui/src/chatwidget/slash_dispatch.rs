@@ -175,7 +175,9 @@ impl ChatWidget {
             Ok(text) => text,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 self.add_info_message(
-                    "No built-in scratchpad exists for this session yet.".to_string(),
+                    format!(
+                        "No built-in scratchpad exists for this session yet (id: {scratchpad_id})."
+                    ),
                     Some(
                         "Ask Codex to open/update the scratchpad, or use the built-in scratchpad tools during ongoing work."
                             .to_string(),

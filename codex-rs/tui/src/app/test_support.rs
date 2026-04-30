@@ -55,7 +55,6 @@ pub(super) async fn make_test_app() -> App {
         primary_session_configured: None,
         primary_contact_startup: None,
         primary_contact_polling: None,
-        pending_scratchpad_recoveries: HashSet::new(),
         pending_primary_events: VecDeque::new(),
         pending_app_server_requests: PendingAppServerRequests::default(),
         pending_plugin_enabled_writes: HashMap::new(),

@@ -384,6 +384,24 @@ fn developer_input_texts(items: &[ResponseItem]) -> Vec<&str> {
         .collect()
 }
 
+fn write_thread_scratchpad(
+    turn_context: &TurnContext,
+    thread_id: ThreadId,
+    value: serde_json::Value,
+) {
+    let entries = turn_context
+        .config
+        .codex_home
+        .join("scratchpad")
+        .join("entries");
+    std::fs::create_dir_all(&entries).expect("create scratchpad entries");
+    std::fs::write(
+        entries.join(format!("{thread_id}.json")),
+        serde_json::to_string_pretty(&value).expect("serialize scratchpad"),
+    )
+    .expect("write thread scratchpad");
+}
+
 fn user_input_texts(items: &[ResponseItem]) -> Vec<&str> {
     items
         .iter()
@@ -6118,6 +6136,79 @@ async fn build_initial_context_injects_builtin_scratchpad_in_enabled_modes() {
 }
 
 #[tokio::test]
+async fn build_initial_context_injects_active_scratchpad_when_uncompleted_work_exists() {
+    let (session, turn_context) = make_session_and_context().await;
+    write_thread_scratchpad(
+        &turn_context,
+        session.conversation_id,
+        serde_json::json!({
+            "scratchpad_id": session.conversation_id.to_string(),
+            "objective": "recover active work",
+            "status": "active",
+            "completed": ["found root cause"],
+            "next_steps": ["ship fix"],
+            "pending_waits": [],
+            "created_at": "2026-04-29T00:00:00Z",
+            "updated_at": "2026-04-29T00:00:00Z",
+            "archived_at": null
+        }),
+    );
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+
+    assert!(developer_texts.contains("<active_scratchpad>"));
+    assert!(developer_texts.contains("recover active work"));
+    assert!(developer_texts.contains("ship fix"));
+}
+
+#[tokio::test]
+async fn build_initial_context_omits_completed_or_archived_scratchpad_loopback() {
+    let (session, turn_context) = make_session_and_context().await;
+    write_thread_scratchpad(
+        &turn_context,
+        session.conversation_id,
+        serde_json::json!({
+            "scratchpad_id": session.conversation_id.to_string(),
+            "objective": "already shipped",
+            "status": "archived",
+            "completed": ["opened PR"],
+            "next_steps": [],
+            "pending_waits": [],
+            "created_at": "2026-04-29T00:00:00Z",
+            "updated_at": "2026-04-29T00:00:00Z",
+            "archived_at": "2026-04-29T00:05:00Z"
+        }),
+    );
+
+    let archived_context = session.build_initial_context(&turn_context).await;
+    let archived_developer_texts = developer_input_texts(&archived_context).join("\n");
+    assert!(!archived_developer_texts.contains("<active_scratchpad>"));
+    assert!(!archived_developer_texts.contains("already shipped"));
+
+    write_thread_scratchpad(
+        &turn_context,
+        session.conversation_id,
+        serde_json::json!({
+            "scratchpad_id": session.conversation_id.to_string(),
+            "objective": "complete but retained",
+            "status": "completed",
+            "completed": ["opened PR"],
+            "next_steps": [],
+            "pending_waits": [],
+            "created_at": "2026-04-29T00:00:00Z",
+            "updated_at": "2026-04-29T00:05:00Z",
+            "archived_at": null
+        }),
+    );
+
+    let completed_context = session.build_initial_context(&turn_context).await;
+    let completed_developer_texts = developer_input_texts(&completed_context).join("\n");
+    assert!(!completed_developer_texts.contains("<active_scratchpad>"));
+    assert!(!completed_developer_texts.contains("complete but retained"));
+}
+
+#[tokio::test]
 async fn build_initial_context_omits_builtin_scratchpad_in_plan_mode_by_default() {
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.collaboration_mode.mode = ModeKind::Plan;
@@ -6598,6 +6689,149 @@ async fn build_initial_context_injects_fork_help_inventory() {
             .iter()
             .any(|text| text.contains("/account <alias>")),
         "expected fork delta inventory to mention account alias switching, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_lists_eager_mcp_server_when_tool_listing_is_unavailable() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |_config| {},
+    )
+    .await;
+    let refresh_config = McpServerRefreshConfig {
+        mcp_servers: serde_json::json!({
+            "imessage": {
+                "command": "__codex_missing_imessage_test__",
+                "startup": "eager",
+                "startup_timeout_sec": 1
+            }
+        }),
+        mcp_oauth_credentials_store_mode: serde_json::to_value(
+            codex_config::types::OAuthCredentialsStoreMode::default(),
+        )
+        .expect("serialize store mode"),
+    };
+    {
+        let mut guard = session.pending_mcp_server_refresh_config.lock().await;
+        *guard = Some(refresh_config);
+    }
+    session
+        .refresh_mcp_servers_if_requested(&turn_context)
+        .await;
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+    assert!(
+        developer_texts.contains("### Direct MCP servers"),
+        "expected MCP inventory to include direct servers, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts.contains("- `imessage`"),
+        "expected eager imessage server to remain in inventory even when tool listing is unavailable, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_keeps_unstarted_lazy_mcp_server_in_lazy_inventory() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |_config| {},
+    )
+    .await;
+    let refresh_config = McpServerRefreshConfig {
+        mcp_servers: serde_json::json!({
+            "playwright": {
+                "command": "__codex_missing_playwright_test__",
+                "startup": "lazy",
+                "startup_timeout_sec": 1
+            }
+        }),
+        mcp_oauth_credentials_store_mode: serde_json::to_value(
+            codex_config::types::OAuthCredentialsStoreMode::default(),
+        )
+        .expect("serialize store mode"),
+    };
+    {
+        let mut guard = session.pending_mcp_server_refresh_config.lock().await;
+        *guard = Some(refresh_config);
+    }
+    session
+        .refresh_mcp_servers_if_requested(&turn_context)
+        .await;
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+    assert!(
+        developer_texts.contains("### Lazy MCP servers"),
+        "expected MCP inventory to include lazy servers, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts.contains("- `playwright`"),
+        "expected unstarted lazy playwright server to remain in lazy inventory, got {developer_texts:?}"
+    );
+    assert!(
+        !developer_texts.contains("### Direct MCP servers"),
+        "unstarted lazy server should not be listed as direct, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_filters_direct_mcp_inventory_by_mode() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.enablement.modes.insert(
+                ModeKind::Default,
+                codex_config::ModeEnablementConfig {
+                    mcps: Some(codex_config::EnablementFilterConfig {
+                        mode: codex_config::EnablementFilterMode::Include,
+                        items: vec!["imessage".to_string()],
+                    }),
+                    ..Default::default()
+                },
+            );
+        },
+    )
+    .await;
+    let refresh_config = McpServerRefreshConfig {
+        mcp_servers: serde_json::json!({
+            "imessage": {
+                "command": "__codex_missing_imessage_test__",
+                "startup": "eager",
+                "startup_timeout_sec": 1
+            },
+            "playwright": {
+                "command": "__codex_missing_playwright_test__",
+                "startup": "eager",
+                "startup_timeout_sec": 1
+            }
+        }),
+        mcp_oauth_credentials_store_mode: serde_json::to_value(
+            codex_config::types::OAuthCredentialsStoreMode::default(),
+        )
+        .expect("serialize store mode"),
+    };
+    {
+        let mut guard = session.pending_mcp_server_refresh_config.lock().await;
+        *guard = Some(refresh_config);
+    }
+    session
+        .refresh_mcp_servers_if_requested(&turn_context)
+        .await;
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+    assert!(
+        developer_texts.contains("- `imessage`"),
+        "expected enabled direct imessage server in inventory, got {developer_texts:?}"
+    );
+    assert!(
+        !developer_texts.contains("- `playwright`"),
+        "mode MCP filter should hide playwright from direct inventory, got {developer_texts:?}"
     );
 }
 

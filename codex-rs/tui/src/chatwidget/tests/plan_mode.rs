@@ -1682,6 +1682,7 @@ async fn scratchpad_update_renders_history_cell() {
         blob.contains("Scratchpad"),
         "missing scratchpad header: {blob:?}"
     );
+    assert!(blob.contains("id: thread-1"));
     assert!(blob.contains("Ship visible scratchpad UX"));
     assert!(blob.contains("Trace plan rendering"));
     assert!(blob.contains("Add scratchpad history cell"));

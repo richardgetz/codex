@@ -23,7 +23,12 @@ stable/mainline is pulled in.
   - Default model/reasoning when no override is set:
     `gpt-5.3-codex-spark` + `low`
   - Fallback on ChatGPT-account unsupported-model errors:
-    `gpt-5.4-mini` + `low`
+    `gpt-5.5` + `low`
+  - Coding-task subagents should prefer `gpt-5.5`, selecting reasoning effort
+    by task difficulty: `low` for exploration/mechanical work, `medium` for
+    clear implementation and straightforward fixes, `high` for complex or
+    unclear work, and `xhigh` only for extreme or explicitly requested cases
+    after checking with the user unless already instructed.
 - Orchestrator memory defaults:
   - `[orchestrator_memory]`
   - `enabled = true`
@@ -57,6 +62,10 @@ stable/mainline is pulled in.
     `mcp__aws_auth_guard__auth_guard_status` are mapped back to configured MCP
     servers, forcing a server tool-list/start path and resolving the real MCP
     tool when the daemon is available.
+  - The model-visible MCP inventory is based on configured/started direct
+    servers plus unstarted lazy servers, not only successful tool listings, so
+    eager MCPs remain visible even when their current tool list is temporarily
+    unavailable.
 - Orchestrator session overwatch:
   - Built-in namespace: `session_overwatch`
   - Tools: `list_sessions`, `watch_session`, `unwatch_session`,
@@ -100,7 +109,8 @@ stable/mainline is pulled in.
   - Slash command: `/scratchpad` renders the current session scratchpad on
     demand using the same status-card UI as live scratchpad updates.
   - Resume injects the active thread scratchpad id and compact scratchpad state
-    into hidden developer context when the thread-id scratchpad exists.
+    into hidden developer context when the thread-id scratchpad exists with
+    uncompleted work (`next_steps` or `pending_waits`).
   - Supports active/archived lookup, archive/unarchive, next-step and
     pending-wait updates, action-policy checks, and wait check-ins.
   - Lifecycle cleanup runs during config load. Defaults: archive non-archived
@@ -110,9 +120,10 @@ stable/mainline is pulled in.
   - Config: `[scratchpad].recover_after_compaction` and
     `[scratchpad.modes.<mode>].recover_after_compaction`
   - Default: `true`
-  - In scratchpad-enabled modes, live compaction events mechanically read the
-    built-in scratchpad for the active thread id and inject recovered state into
-    the next model turn; replayed history does not.
+  - In scratchpad-enabled modes, actionable built-in scratchpad state is looped
+    back through hidden developer context after compaction. Completed or
+    archived scratchpads are not looped back, and the TUI does not synthesize a
+    user turn for recovery state.
   - Legacy `[orchestrator].recover_scratchpad_after_compaction` remains
     supported as an Orchestrator-only compatibility alias.
 - Fast resume:
@@ -157,9 +168,10 @@ stable/mainline is pulled in.
   `[orchestrator].allowed_spawn_modes`.
 - Verify explicitly enabled Orchestrator MCPs remain callable inline for
   communication/state workflows.
-- Verify cancelled MCP startup can retry, and a plain unavailable MCP
-  placeholder call can recover the configured server namespace instead of
-  permanently reporting the tool unavailable.
+- Verify cancelled MCP startup can retry, a plain unavailable MCP placeholder
+  call can recover the configured server namespace instead of permanently
+  reporting the tool unavailable, and eager MCP servers remain listed in the
+  model-visible inventory even if tool listing is temporarily unavailable.
 - Verify `session_overwatch` lists sessions, can watch/unwatch existing thread
   ids, records watched sessions in the supervision summary, and can queue
   cross-process `message_session` input that the target CLI later injects.
@@ -173,7 +185,8 @@ stable/mainline is pulled in.
   requires explicit `include_archived = true` for archived pads.
 - Verify configured scratchpad MCPs do not shadow the built-in scratchpad
   namespace.
-- Verify live compaction events mechanically recover built-in scratchpad state
-  while replayed compaction history does not.
+- Verify post-compaction built-in scratchpad loopback is hidden from the TUI and
+  only injects actionable scratchpads with `next_steps` or `pending_waits`, not
+  completed or archived scratchpads.
 - Verify memory helper naming still shows `Memory [extractor]` and
   `Memory [memory builder]`.

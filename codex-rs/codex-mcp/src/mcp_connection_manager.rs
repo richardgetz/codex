@@ -1427,6 +1427,17 @@ impl McpConnectionManager {
         qualify_tools(tools)
     }
 
+    pub fn direct_server_names(&self) -> Vec<String> {
+        let mut servers = self
+            .clients
+            .iter()
+            .filter(|(_, client)| !client.is_lazy_unstarted())
+            .map(|(server_name, _)| server_name.clone())
+            .collect::<Vec<_>>();
+        servers.sort();
+        servers
+    }
+
     pub fn lazy_server_infos(&self) -> Vec<LazyMcpServerInfo> {
         let mut servers = self
             .clients

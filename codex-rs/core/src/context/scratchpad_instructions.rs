@@ -27,7 +27,7 @@ Expected use:\n\
 - Before waiting, delegating, ending a follow-up channel, merging, deploying, or stopping, update the scratchpad with the exact next recovery step.\n\
 - Use `set_action_policy`, `check_action_allowed`, and `mark_wait_checked` when the task has safety constraints or long-running waits.\n\
 - Archive the scratchpad when the objective is finished; use `resume_scratchpad` or `lookup_scratchpads` when asked to recover older state.\n\n\
-After context compaction, the harness may mechanically read the active thread scratchpad and loop a compact recovery summary back into the model. Treat that recovery summary as authoritative working state and continue keeping the scratchpad updated.\n".to_string()
+After context compaction, the harness may mechanically read the active thread scratchpad and loop a compact recovery summary back into the model when it still has uncompleted work (`next_steps` or `pending_waits`). Treat that recovery summary as authoritative working state and continue keeping the scratchpad updated.\n".to_string()
     }
 }
 

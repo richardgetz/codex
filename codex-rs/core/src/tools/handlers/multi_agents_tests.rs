@@ -103,15 +103,15 @@ fn thread_manager() -> ThreadManager {
 fn resolve_spawn_agent_model_falls_back_for_chatgpt_accounts() {
     assert_eq!(
         resolve_spawn_agent_model("gpt-5.3-codex-spark", /*is_chatgpt_auth*/ true),
-        "gpt-5.4-mini"
+        "gpt-5.5"
     );
     assert_eq!(
         resolve_spawn_agent_model("gpt-5.3-codex-spark", /*is_chatgpt_auth*/ false),
         "gpt-5.3-codex-spark"
     );
     assert_eq!(
-        resolve_spawn_agent_model("gpt-5.4-mini", /*is_chatgpt_auth*/ true),
-        "gpt-5.4-mini"
+        resolve_spawn_agent_model("gpt-5.5", /*is_chatgpt_auth*/ true),
+        "gpt-5.5"
     );
 }
 

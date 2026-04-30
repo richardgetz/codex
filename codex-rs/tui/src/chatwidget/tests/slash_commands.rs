@@ -1410,6 +1410,7 @@ async fn slash_scratchpad_renders_current_session_scratchpad() {
         AppEvent::InsertHistoryCell(cell) => {
             let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
             assert!(rendered.contains("Scratchpad"));
+            assert!(rendered.contains(&format!("id: {thread_id}")));
             assert!(rendered.contains("Working on: Ship visible scratchpad state"));
             assert!(rendered.contains("✔ trace event route"));
             assert!(rendered.contains("□ render command output"));
@@ -1430,7 +1431,8 @@ async fn slash_scratchpad_reports_missing_session_scratchpad() {
     match rx.try_recv().expect("expected missing scratchpad message") {
         AppEvent::InsertHistoryCell(cell) => {
             let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
-            assert!(rendered.contains("No built-in scratchpad exists for this session yet."));
+            assert!(rendered.contains("No built-in scratchpad exists for this session yet"));
+            assert!(rendered.contains("id: "));
         }
         other => panic!("expected InsertHistoryCell info, got {other:?}"),
     }

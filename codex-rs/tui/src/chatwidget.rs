@@ -5940,82 +5940,6 @@ impl ChatWidget {
         );
     }
 
-    pub(crate) fn submit_hidden_external_user_message(&mut self, text: String) {
-        if !self.is_session_configured() {
-            tracing::warn!("cannot submit hidden user message before session is configured");
-            return;
-        }
-        if text.trim().is_empty() {
-            return;
-        }
-        let effective_mode = self.effective_collaboration_mode();
-        if effective_mode.model().trim().is_empty() {
-            tracing::warn!("cannot submit hidden user message before thread model is available");
-            return;
-        }
-        let collaboration_mode = if self.collaboration_modes_enabled() {
-            self.active_collaboration_mask
-                .as_ref()
-                .map(|_| effective_mode.clone())
-        } else {
-            None
-        };
-        let personality = self
-            .config
-            .personality
-            .filter(|_| self.config.features.enabled(Feature::Personality))
-            .filter(|_| self.current_model_supports_personality());
-        let service_tier = match self.config.service_tier {
-            Some(service_tier) => Some(Some(service_tier)),
-            None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
-            None => None,
-        };
-        let permission_profile = if matches!(
-            self.config.permissions.sandbox_policy.get(),
-            SandboxPolicy::ExternalSandbox { .. }
-        ) {
-            None
-        } else {
-            Some(self.config.permissions.permission_profile())
-        };
-        let op = AppCommand::user_turn(
-            vec![UserInput::Text {
-                text,
-                text_elements: Vec::new(),
-            }],
-            self.config.cwd.to_path_buf(),
-            self.config.permissions.approval_policy.value(),
-            self.config.permissions.sandbox_policy.get().clone(),
-            permission_profile,
-            effective_mode.model().to_string(),
-            effective_mode.reasoning_effort(),
-            /*summary*/ None,
-            service_tier,
-            /*final_output_json_schema*/ None,
-            collaboration_mode,
-            personality,
-        );
-        if self.submit_op(op) && !self.agent_turn_running {
-            self.user_turn_pending_start = true;
-        }
-    }
-
-    fn maybe_submit_scratchpad_recovery_after_compaction(&mut self) {
-        if !self
-            .config
-            .scratchpad
-            .for_mode(self.active_mode_kind())
-            .recover_after_compaction
-        {
-            return;
-        }
-        let Some(thread_id) = self.thread_id else {
-            return;
-        };
-        self.app_event_tx
-            .send(AppEvent::RecoverScratchpadAfterCompaction { thread_id });
-    }
-
     fn submit_user_message_with_shell_escape_policy(
         &mut self,
         user_message: UserMessage,
@@ -6649,9 +6573,6 @@ impl ChatWidget {
             }
             ThreadItem::ContextCompaction { .. } => {
                 self.add_info_message("Context compacted".to_string(), /*hint*/ None);
-                if !from_replay {
-                    self.maybe_submit_scratchpad_recovery_after_compaction();
-                }
             }
             ThreadItem::HookPrompt { .. } => {}
             ThreadItem::CollabAgentToolCall {

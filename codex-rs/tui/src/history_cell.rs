@@ -2698,7 +2698,17 @@ pub(crate) struct ScratchpadUpdateCell {
 
 impl HistoryCell for ScratchpadUpdateCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = vec![vec!["• ".dim(), "Scratchpad".bold()].into()];
+        let header = if self.update.scratchpad_id.trim().is_empty() {
+            vec!["• ".dim(), "Scratchpad".bold()].into()
+        } else {
+            vec![
+                "• ".dim(),
+                "Scratchpad".bold(),
+                format!(" (id: {})", self.update.scratchpad_id).dim(),
+            ]
+            .into()
+        };
+        let mut lines: Vec<Line<'static>> = vec![header];
         let mut body = Vec::new();
 
         let objective = self.update.objective.trim();
