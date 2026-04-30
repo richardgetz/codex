@@ -20,6 +20,7 @@ impl AvailableMcpInstructions {
         lazy_servers.retain(|name| name != CODEX_APPS_MCP_SERVER_NAME);
         direct_servers.sort();
         direct_servers.dedup();
+        lazy_servers.retain(|name| direct_servers.binary_search(name).is_err());
         lazy_servers.sort();
         lazy_servers.dedup();
 
@@ -104,6 +105,18 @@ mod tests {
             vec!["agent-state".to_string(), "imessage".to_string()]
         );
         assert_eq!(instructions.lazy_servers, vec!["scratchpad".to_string()]);
+    }
+
+    #[test]
+    fn new_prefers_direct_inventory_when_server_is_also_lazy() {
+        let instructions = AvailableMcpInstructions::new(
+            vec!["playwright".to_string()],
+            vec!["playwright".to_string(), "semgrep".to_string()],
+        )
+        .expect("inventory should be rendered");
+
+        assert_eq!(instructions.direct_servers, vec!["playwright".to_string()]);
+        assert_eq!(instructions.lazy_servers, vec!["semgrep".to_string()]);
     }
 
     #[test]
