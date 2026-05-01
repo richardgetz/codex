@@ -28,6 +28,7 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
 use futures::TryFutureExt;
@@ -148,14 +149,6 @@ async fn run_remote_compact_task_inner_impl(
     // compact endpoint. The checkpoint below records it separately from the next sampling request,
     // whose prompt will repeat current developer/context prefix items.
     let trace_input_history = history.raw_items().to_vec();
-    // Required to keep `/undo` available after compaction
-    let ghost_snapshots: Vec<ResponseItem> = history
-        .raw_items()
-        .iter()
-        .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
-        .cloned()
-        .collect();
-
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
     let compact_model_slug = resolve_remote_compact_model_slug(
         &turn_context.model_info.slug,
@@ -224,9 +217,6 @@ async fn run_remote_compact_task_inner_impl(
     )
     .await;
 
-    if !ghost_snapshots.is_empty() {
-        new_history.extend(ghost_snapshots);
-    }
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
@@ -234,6 +224,14 @@ async fn run_remote_compact_task_inner_impl(
     let compacted_item = CompactedItem {
         message: String::new(),
         replacement_history: Some(new_history.clone()),
+    };
+    let previous_reference_context_item = if matches!(
+        initial_context_injection,
+        InitialContextInjection::DoNotInject
+    ) {
+        sess.reference_context_item().await
+    } else {
+        None
     };
     // Install is the semantic boundary where the compact endpoint's output becomes live
     // thread history. Keep it distinct from the later inference request so the reducer can
@@ -244,6 +242,10 @@ async fn run_remote_compact_task_inner_impl(
     });
     sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
+    if let Some(previous_reference_context_item) = previous_reference_context_item {
+        sess.persist_rollout_items(&[RolloutItem::TurnContext(previous_reference_context_item)])
+            .await;
+    }
     sess.recompute_token_usage(turn_context).await;
 
     sess.emit_turn_item_completed(turn_context, compaction_item)
@@ -321,7 +323,6 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
-        | ResponseItem::GhostSnapshot { .. }
         | ResponseItem::Other => false,
     }
 }

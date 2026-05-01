@@ -1,11 +1,15 @@
 ---
 source: core/tests/suite/compact_resume_fork.rs
+assertion_line: 625
 expression: "context_snapshot::format_labeled_requests_snapshot(\"rollback trims pre-turn override context updates before the follow-up request\",\n&[(\"rolled-back turn request\", &requests[1]),\n(\"follow-up request after rollback\", &requests[2]),],\n&ContextSnapshotOptions::default().strip_capability_instructions().render_mode(ContextSnapshotRenderMode::KindWithTextPrefix\n{ max_chars: 96 }),)"
 ---
 Scenario: rollback trims pre-turn override context updates before the follow-up request
 
 ## rolled-back turn request
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+00:message/developer[3]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <scratchpad_instructions>\n## Built-in Scratchpad\nThe built-in `scratchpad` tool namespace is a...
+    [03] <fork_help>\n## Rick Fork Guidance\nThis build includes fork-only behavior beyond upstream/mainl...
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:turn 1 user
 03:message/assistant:turn 1 assistant
@@ -14,7 +18,10 @@ Scenario: rollback trims pre-turn override context updates before the follow-up 
 06:message/user:turn 2 user
 
 ## follow-up request after rollback
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+00:message/developer[3]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <scratchpad_instructions>\n## Built-in Scratchpad\nThe built-in `scratchpad` tool namespace is a...
+    [03] <fork_help>\n## Rick Fork Guidance\nThis build includes fork-only behavior beyond upstream/mainl...
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:turn 1 user
 03:message/assistant:turn 1 assistant

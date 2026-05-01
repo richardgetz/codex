@@ -91,7 +91,10 @@ impl ToolHandler for Handler {
             args.collaboration_mode,
             args.model.as_deref(),
             args.reasoning_effort,
-            &session.services.models_manager.list_collaboration_modes(),
+            &session
+                .services
+                .models_manager
+                .list_collaboration_modes(config.collaboration_modes_config()),
         )?;
 
         let result = Box::pin(

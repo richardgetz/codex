@@ -1,4 +1,5 @@
 use super::*;
+use crate::app_command::AppCommand;
 use pretty_assertions::assert_eq;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -68,7 +69,7 @@ async fn live_orchestrator_compaction_does_not_submit_scratchpad_recovery_prompt
 
     while let Ok(event) = rx.try_recv() {
         assert!(
-            !matches!(event, AppEvent::CodexOp(Op::UserTurn { .. })),
+            !matches!(event, AppEvent::CodexOp(AppCommand::UserTurn { .. })),
             "did not expect live compaction to submit a synthetic user turn"
         );
     }
@@ -91,7 +92,7 @@ async fn live_default_compaction_does_not_submit_scratchpad_recovery_prompt() {
 
     while let Ok(event) = rx.try_recv() {
         assert!(
-            !matches!(event, AppEvent::CodexOp(Op::UserTurn { .. })),
+            !matches!(event, AppEvent::CodexOp(AppCommand::UserTurn { .. })),
             "did not expect live compaction to submit a synthetic user turn"
         );
     }
@@ -116,7 +117,7 @@ async fn live_plan_compaction_does_not_submit_scratchpad_recovery_prompt() {
 
     while let Ok(event) = rx.try_recv() {
         assert!(
-            !matches!(event, AppEvent::CodexOp(Op::UserTurn { .. })),
+            !matches!(event, AppEvent::CodexOp(AppCommand::UserTurn { .. })),
             "did not expect live compaction to submit a synthetic user turn"
         );
     }

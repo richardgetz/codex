@@ -31,6 +31,7 @@ struct ActiveReplaySegment<'a> {
     turn_id: Option<String>,
     counts_as_user_turn: bool,
     previous_turn_settings: Option<PreviousTurnSettings>,
+    previous_turn_settings_from_checkpoint_tail: bool,
     reference_context_item: TurnReferenceContextItem,
     base_replacement_history: Option<&'a [ResponseItem]>,
 }
@@ -66,7 +67,13 @@ fn finalize_active_segment<'a>(
     }
 
     // `previous_turn_settings` come from the newest surviving user turn that established them.
-    if previous_turn_settings.is_none() && active_segment.counts_as_user_turn {
+    // Fast resume may start at a replacement-history compaction checkpoint, so also accept the
+    // checkpoint turn's context when the older user turn context was intentionally not loaded.
+    if previous_turn_settings.is_none()
+        && (active_segment.counts_as_user_turn
+            || (active_segment.base_replacement_history.is_some()
+                && active_segment.previous_turn_settings_from_checkpoint_tail))
+    {
         *previous_turn_settings = active_segment.previous_turn_settings;
     }
 
@@ -124,6 +131,8 @@ impl Session {
                         && let Some(replacement_history) = &compacted.replacement_history
                     {
                         active_segment.base_replacement_history = Some(replacement_history);
+                        active_segment.previous_turn_settings_from_checkpoint_tail |=
+                            active_segment.previous_turn_settings.is_some();
                         rollout_suffix = &rollout_items[index + 1..];
                     }
                 }
@@ -167,21 +176,21 @@ impl Session {
                     if active_segment.turn_id.is_none() {
                         active_segment.turn_id = ctx.turn_id.clone();
                     }
-                    if turn_ids_are_compatible(
-                        active_segment.turn_id.as_deref(),
-                        ctx.turn_id.as_deref(),
-                    ) {
+                    if active_segment.previous_turn_settings.is_none() {
                         active_segment.previous_turn_settings = Some(PreviousTurnSettings {
                             model: ctx.model.clone(),
                             realtime_active: ctx.realtime_active,
                         });
-                        if matches!(
-                            active_segment.reference_context_item,
-                            TurnReferenceContextItem::NeverSet
-                        ) {
-                            active_segment.reference_context_item =
-                                TurnReferenceContextItem::Latest(Box::new(ctx.clone()));
-                        }
+                    }
+                    if turn_ids_are_compatible(
+                        active_segment.turn_id.as_deref(),
+                        ctx.turn_id.as_deref(),
+                    ) && matches!(
+                        active_segment.reference_context_item,
+                        TurnReferenceContextItem::NeverSet
+                    ) {
+                        active_segment.reference_context_item =
+                            TurnReferenceContextItem::Latest(Box::new(ctx.clone()));
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {

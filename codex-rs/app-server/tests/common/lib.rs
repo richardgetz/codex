@@ -7,6 +7,8 @@ mod models_cache;
 mod responses;
 mod rollout;
 
+use std::future::Future;
+
 pub use analytics_server::start_analytics_events_server;
 pub use auth_fixtures::ChatGptAuthFixture;
 pub use auth_fixtures::ChatGptIdTokenClaims;
@@ -25,6 +27,7 @@ pub use core_test_support::test_path_buf_with_windows;
 pub use core_test_support::test_tmp_path;
 pub use core_test_support::test_tmp_path_buf;
 pub use mcp_process::DEFAULT_CLIENT_NAME;
+pub use mcp_process::DISABLE_PLUGIN_STARTUP_TASKS_ARG;
 pub use mcp_process::McpProcess;
 pub use mock_model_server::create_mock_responses_server_repeating_assistant;
 pub use mock_model_server::create_mock_responses_server_sequence;
@@ -48,4 +51,31 @@ pub fn to_response<T: DeserializeOwned>(response: JSONRPCResponse) -> anyhow::Re
     let value = serde_json::to_value(response.result)?;
     let codex_response = serde_json::from_value(value)?;
     Ok(codex_response)
+}
+
+pub fn run_current_thread_test_with_stack<F>(name: &str, future: F) -> anyhow::Result<()>
+where
+    F: Future<Output = anyhow::Result<()>> + Send + 'static,
+{
+    const TEST_STACK_SIZE_BYTES: usize = 4 * 1024 * 1024;
+
+    std::thread::Builder::new()
+        .name(name.to_string())
+        .stack_size(TEST_STACK_SIZE_BYTES)
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(future)
+        })?
+        .join()
+        .map_err(|panic| {
+            if let Some(message) = panic.downcast_ref::<&str>() {
+                anyhow::anyhow!("test thread panicked: {message}")
+            } else if let Some(message) = panic.downcast_ref::<String>() {
+                anyhow::anyhow!("test thread panicked: {message}")
+            } else {
+                anyhow::anyhow!("test thread panicked")
+            }
+        })?
 }

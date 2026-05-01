@@ -26,6 +26,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -35,7 +36,6 @@ use tokio::time::timeout;
 use super::connection_handling_websocket::DEFAULT_READ_TIMEOUT;
 use super::connection_handling_websocket::assert_no_message;
 use super::connection_handling_websocket::connect_websocket;
-use super::connection_handling_websocket::create_config_toml;
 use super::connection_handling_websocket::read_jsonrpc_message;
 use super::connection_handling_websocket::send_initialize_request;
 use super::connection_handling_websocket::send_request;
@@ -199,6 +199,10 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
 
 #[tokio::test]
 async fn command_exec_accepts_permission_profile() -> Result<()> {
+    if !macos_sandbox_exec_available() {
+        return Ok(());
+    }
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -246,7 +250,11 @@ async fn command_exec_accepts_permission_profile() -> Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn command_exec_permission_profile_cwd_uses_command_cwd() -> Result<()> {
+async fn command_exec_permission_profile_project_roots_use_command_cwd() -> Result<()> {
+    if !macos_sandbox_exec_available() {
+        return Ok(());
+    }
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     let command_dir = codex_home.path().join("command-cwd");
@@ -264,7 +272,7 @@ async fn command_exec_permission_profile_cwd_uses_command_cwd() -> Result<()> {
     };
     entries.push(FileSystemSandboxEntry {
         path: FileSystemPath::Special {
-            value: FileSystemSpecialPath::CurrentWorkingDirectory,
+            value: FileSystemSpecialPath::ProjectRoots { subpath: None },
         },
         access: FileSystemAccessMode::Write,
     });
@@ -298,7 +306,7 @@ async fn command_exec_permission_profile_cwd_uses_command_cwd() -> Result<()> {
     let response: CommandExecResponse = to_response(response)?;
     assert_eq!(
         response.exit_code, 0,
-        "parent cwd write should fail under command-cwd-scoped profile: {response:?}"
+        "parent cwd write should fail under command project-root profile: {response:?}"
     );
     assert_eq!(
         std::fs::read_to_string(command_dir.join("child.txt"))?,
@@ -306,7 +314,7 @@ async fn command_exec_permission_profile_cwd_uses_command_cwd() -> Result<()> {
     );
     assert!(
         !codex_home.path().join("parent.txt").exists(),
-        "permissionProfile :cwd write should not grant the server cwd when command cwd differs"
+        "permissionProfile :project_roots write should not grant the server cwd when command cwd differs"
     );
 
     Ok(())
@@ -854,12 +862,7 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let marker = format!(
-        "codex-command-exec-marker-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos()
-    );
+    let marker_path = codex_home.path().join("command-exec-marker.pid");
 
     let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
 
@@ -879,8 +882,8 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
             "command": [
                 "python3",
                 "-c",
-                "import time; print('ready', flush=True); time.sleep(30)",
-                marker,
+                "import os, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); print('ready', flush=True); time.sleep(30)",
+                marker_path,
             ],
             "processId": "shared-process",
             "streamStdoutStderr": true,
@@ -895,7 +898,7 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
         |output, _delta| output.stdout.contains("ready\n"),
     )
     .await?;
-    wait_for_process_marker(&marker, /*should_exist*/ true).await?;
+    wait_for_process_marker(&marker_path, /*should_exist*/ true).await?;
 
     send_request(
         &mut ws2,
@@ -919,12 +922,12 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
         terminate_error.error.message,
         "no active command/exec for process id \"shared-process\""
     );
-    wait_for_process_marker(&marker, /*should_exist*/ true).await?;
+    wait_for_process_marker(&marker_path, /*should_exist*/ true).await?;
 
     assert_no_message(&mut ws2, Duration::from_millis(250)).await?;
     ws1.close(None).await?;
 
-    wait_for_process_marker(&marker, /*should_exist*/ false).await?;
+    wait_for_process_marker(&marker_path, /*should_exist*/ false).await?;
 
     process
         .kill()
@@ -1076,6 +1079,46 @@ fn root_read_only_permission_profile() -> PermissionProfile {
     }
 }
 
+pub(super) fn create_config_toml(
+    codex_home: &Path,
+    server_uri: &str,
+    approval_policy: &str,
+) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "{approval_policy}"
+sandbox_mode = "danger-full-access"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#
+        ),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn macos_sandbox_exec_available() -> bool {
+    std::process::Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", "(version 1)", "/usr/bin/true"])
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_sandbox_exec_available() -> bool {
+    true
+}
+
 async fn read_initialize_response(
     stream: &mut super::connection_handling_websocket::WsClient,
     request_id: i64,
@@ -1090,25 +1133,34 @@ async fn read_initialize_response(
     }
 }
 
-async fn wait_for_process_marker(marker: &str, should_exist: bool) -> Result<()> {
+async fn wait_for_process_marker(marker_path: &Path, should_exist: bool) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if process_with_marker_exists(marker)? == should_exist {
+        if process_with_marker_exists(marker_path)? == should_exist {
             return Ok(());
         }
         if Instant::now() >= deadline {
             let expectation = if should_exist { "appear" } else { "exit" };
-            anyhow::bail!("process marker {marker:?} did not {expectation} before timeout");
+            anyhow::bail!(
+                "process marker {} did not {expectation} before timeout",
+                marker_path.display()
+            );
         }
         sleep(Duration::from_millis(50)).await;
     }
 }
 
-fn process_with_marker_exists(marker: &str) -> Result<bool> {
-    let output = std::process::Command::new("ps")
-        .args(["-axo", "command"])
-        .output()
-        .context("spawn ps -axo command")?;
-    let stdout = String::from_utf8(output.stdout).context("decode ps output")?;
-    Ok(stdout.lines().any(|line| line.contains(marker)))
+fn process_with_marker_exists(marker_path: &Path) -> Result<bool> {
+    let Ok(pid) = std::fs::read_to_string(marker_path) else {
+        return Ok(false);
+    };
+    let pid = pid.trim();
+    if pid.is_empty() {
+        return Ok(false);
+    }
+    let status = std::process::Command::new("kill")
+        .args(["-0", pid])
+        .status()
+        .context("spawn kill -0 command")?;
+    Ok(status.success())
 }

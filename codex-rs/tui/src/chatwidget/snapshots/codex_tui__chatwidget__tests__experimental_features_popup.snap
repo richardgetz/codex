@@ -1,11 +1,12 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: popup
 ---
   Experimental features
   Toggle experimental features. Changes are saved to config.toml.
 
-› [ ] Ghost snapshots  Capture undo snapshots each turn.
-  [x] Shell tool       Allow the model to run shell commands.
+› [ ] Terminal resize reflow  Rebuild Codex-owned transcript scrollback when
+                              the terminal width changes.
+  [x] Shell tool              Allow the model to run shell commands.
 
   Press space to select or enter to save for next conversation

@@ -122,7 +122,10 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     /// List collaboration mode presets.
     ///
     /// Returns a static set of presets seeded with the configured model.
-    fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask>;
+    fn list_collaboration_modes(
+        &self,
+        collaboration_modes_config: CollaborationModesConfig,
+    ) -> Vec<CollaborationModeMask>;
 
     /// Attempt to list models without blocking, using the current cached state.
     ///
@@ -180,7 +183,6 @@ pub type SharedModelsManager = Arc<dyn ModelsManager>;
 #[derive(Debug)]
 pub struct OpenAiModelsManager {
     remote_models: RwLock<Vec<ModelInfo>>,
-    collaboration_modes_config: CollaborationModesConfig,
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
     endpoint_client: SharedModelsEndpointClient,
@@ -191,7 +193,6 @@ pub struct OpenAiModelsManager {
 #[derive(Debug)]
 pub struct StaticModelsManager {
     remote_models: Vec<ModelInfo>,
-    collaboration_modes_config: CollaborationModesConfig,
     auth_manager: Option<Arc<AuthManager>>,
 }
 
@@ -201,14 +202,12 @@ impl OpenAiModelsManager {
         codex_home: PathBuf,
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
-        collaboration_modes_config: CollaborationModesConfig,
     ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         let remote_models = load_remote_models_from_file().unwrap_or_default();
         Self {
             remote_models: RwLock::new(remote_models),
-            collaboration_modes_config,
             etag: RwLock::new(None),
             cache_manager,
             endpoint_client,
@@ -219,14 +218,9 @@ impl OpenAiModelsManager {
 
 impl StaticModelsManager {
     /// Construct a static model manager from an authoritative catalog.
-    pub fn new(
-        auth_manager: Option<Arc<AuthManager>>,
-        model_catalog: ModelsResponse,
-        collaboration_modes_config: CollaborationModesConfig,
-    ) -> Self {
+    pub fn new(auth_manager: Option<Arc<AuthManager>>, model_catalog: ModelsResponse) -> Self {
         Self {
             remote_models: model_catalog.models,
-            collaboration_modes_config,
             auth_manager,
         }
     }
@@ -255,8 +249,11 @@ impl ModelsManager for OpenAiModelsManager {
         self.auth_manager.as_deref()
     }
 
-    fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        builtin_collaboration_mode_presets(self.collaboration_modes_config)
+    fn list_collaboration_modes(
+        &self,
+        collaboration_modes_config: CollaborationModesConfig,
+    ) -> Vec<CollaborationModeMask> {
+        builtin_collaboration_mode_presets(collaboration_modes_config)
     }
 
     async fn refresh_if_new_etag(&self, etag: String) {
@@ -390,8 +387,11 @@ impl ModelsManager for StaticModelsManager {
         self.auth_manager.as_deref()
     }
 
-    fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        builtin_collaboration_mode_presets(self.collaboration_modes_config)
+    fn list_collaboration_modes(
+        &self,
+        collaboration_modes_config: CollaborationModesConfig,
+    ) -> Vec<CollaborationModeMask> {
+        builtin_collaboration_mode_presets(collaboration_modes_config)
     }
 
     async fn refresh_if_new_etag(&self, _etag: String) {}

@@ -191,7 +191,7 @@ async fn live_app_server_warning_notification_renders_message() {
     chat.handle_server_notification(
         ServerNotification::Warning(WarningNotification {
             thread_id: None,
-            message: "Warning: Exceeded skills context budget of 2%. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list.".to_string(),
+            message: "Exceeded skills context budget of 2%. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list.".to_string(),
         }),
         /*replay_kind*/ None,
     );
@@ -201,7 +201,7 @@ async fn live_app_server_warning_notification_renders_message() {
     let rendered = lines_to_single_string(&cells[0]);
     let normalized = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        normalized.contains("Warning: Exceeded skills context budget of 2%."),
+        normalized.contains("Exceeded skills context budget of 2%."),
         "expected warning notification message, got {rendered}"
     );
     assert!(
@@ -349,25 +349,6 @@ async fn live_app_server_command_execution_strips_shell_wrapper() {
     );
 }
 
-#[test]
-fn app_server_patch_changes_to_core_preserves_diffs() {
-    let changes = app_server_patch_changes_to_core(vec![FileUpdateChange {
-        path: "foo.txt".to_string(),
-        kind: PatchChangeKind::Add,
-        diff: "hello\n".to_string(),
-    }]);
-
-    assert_eq!(
-        changes,
-        HashMap::from([(
-            PathBuf::from("foo.txt"),
-            FileChange::Add {
-                content: "hello\n".to_string(),
-            },
-        )])
-    );
-}
-
 #[tokio::test]
 async fn live_app_server_collab_wait_items_render_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -412,7 +393,7 @@ async fn live_app_server_collab_wait_items_render_history() {
 
     assert!(chat.bottom_pane.is_task_running());
     assert!(!chat.bottom_pane.slash_command_task_running());
-    assert_eq!(chat.terminal_title_status_text(), "Waiting on agents");
+    assert_eq!(chat.run_state_status_text(), "Waiting on agents");
     assert_eq!(
         chat.terminal_title_spinner_text_at(chat.terminal_title_animation_origin)
             .as_deref(),
@@ -463,7 +444,7 @@ async fn live_app_server_collab_wait_items_render_history() {
     );
 
     assert!(!chat.bottom_pane.is_task_running());
-    assert_eq!(chat.terminal_title_status_text(), "Ready");
+    assert_eq!(chat.run_state_status_text(), "Ready");
 
     let combined = drain_insert_history(&mut rx)
         .into_iter()

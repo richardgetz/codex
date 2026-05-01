@@ -1,8 +1,13 @@
 #![cfg(not(debug_assertions))]
 
 use crate::legacy_core::config::Config;
+use crate::npm_registry;
+use crate::npm_registry::NpmPackageInfo;
 use crate::update_action;
 use crate::update_action::UpdateAction;
+use crate::update_versions::extract_version_from_latest_tag;
+use crate::update_versions::is_newer;
+use crate::update_versions::is_source_build_version;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
@@ -19,6 +24,7 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
         return None;
     }
 
+    let action = update_action::get_update_action();
     let version_file = version_filepath(config);
     let info = read_version_info(&version_file).ok();
 
@@ -30,7 +36,7 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
         // isn’t blocked by a network call. The UI reads the previously cached
         // value (if any) for this run; the next run shows the banner if needed.
         tokio::spawn(async move {
-            check_for_update(&version_file)
+            check_for_update(&version_file, action)
                 .await
                 .inspect_err(|e| tracing::error!("Failed to update version: {e}"))
         });
@@ -78,8 +84,8 @@ fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
     Ok(serde_json::from_str(&contents)?)
 }
 
-async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
-    let latest_version = match update_action::get_update_action() {
+async fn check_for_update(version_file: &Path, action: Option<UpdateAction>) -> anyhow::Result<()> {
+    let latest_version = match action {
         Some(UpdateAction::BrewUpgrade) => {
             let HomebrewCaskInfo { version } = create_client()
                 .get(HOMEBREW_CASK_API_URL)
@@ -90,17 +96,20 @@ async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
                 .await?;
             version
         }
-        _ => {
-            let ReleaseInfo {
-                tag_name: latest_tag_name,
-            } = create_client()
-                .get(LATEST_RELEASE_URL)
+        Some(UpdateAction::NpmGlobalLatest) | Some(UpdateAction::BunGlobalLatest) => {
+            let latest_version = fetch_latest_github_release_version().await?;
+            let package_info = create_client()
+                .get(npm_registry::PACKAGE_URL)
                 .send()
                 .await?
                 .error_for_status()?
-                .json::<ReleaseInfo>()
+                .json::<NpmPackageInfo>()
                 .await?;
-            extract_version_from_latest_tag(&latest_tag_name)?
+            npm_registry::ensure_version_ready(&package_info, &latest_version)?;
+            latest_version
+        }
+        Some(UpdateAction::StandaloneUnix) | Some(UpdateAction::StandaloneWindows) | None => {
+            fetch_latest_github_release_version().await?
         }
     };
 
@@ -120,18 +129,17 @@ async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn is_newer(latest: &str, current: &str) -> Option<bool> {
-    match (parse_version(latest), parse_version(current)) {
-        (Some(l), Some(c)) => Some(l > c),
-        _ => None,
-    }
-}
-
-fn extract_version_from_latest_tag(latest_tag_name: &str) -> anyhow::Result<String> {
-    latest_tag_name
-        .strip_prefix("rust-v")
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))
+async fn fetch_latest_github_release_version() -> anyhow::Result<String> {
+    let ReleaseInfo {
+        tag_name: latest_tag_name,
+    } = create_client()
+        .get(LATEST_RELEASE_URL)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<ReleaseInfo>()
+        .await?;
+    extract_version_from_latest_tag(&latest_tag_name)
 }
 
 /// Returns the latest version to show in a popup, if it should be shown.

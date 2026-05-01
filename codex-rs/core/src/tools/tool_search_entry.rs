@@ -3,6 +3,7 @@ use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::LoadableToolSpec;
 use codex_tools::ToolSearchResultSource;
+use codex_tools::ToolsConfig;
 use codex_tools::dynamic_tool_to_loadable_tool_spec;
 use codex_tools::tool_search_result_source_to_loadable_tool_spec;
 use std::collections::HashMap;
@@ -62,6 +63,25 @@ pub(crate) fn build_tool_search_entries(
     }
 
     entries
+}
+
+pub(crate) fn build_tool_search_entries_for_config(
+    config: &ToolsConfig,
+    mcp_tools: Option<&HashMap<String, ToolInfo>>,
+    lazy_mcp_servers: &[LazyMcpServerInfo],
+    dynamic_tools: &[DynamicToolSpec],
+) -> Vec<ToolSearchEntry> {
+    let mcp_tools = if config.namespace_tools {
+        mcp_tools
+    } else {
+        None
+    };
+    let dynamic_tools = dynamic_tools
+        .iter()
+        .filter(|tool| config.namespace_tools || tool.namespace.is_none())
+        .cloned()
+        .collect::<Vec<_>>();
+    build_tool_search_entries(mcp_tools, lazy_mcp_servers, &dynamic_tools)
 }
 
 fn mcp_tool_search_entry(info: &ToolInfo) -> Result<ToolSearchEntry, serde_json::Error> {

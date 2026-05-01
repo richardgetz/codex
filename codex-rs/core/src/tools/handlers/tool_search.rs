@@ -169,6 +169,10 @@ impl ToolSearchHandler {
                         }
                     };
                     drop(manager);
+                    let mcp_tools = mcp_tools
+                        .into_iter()
+                        .map(|tool| (tool.canonical_tool_name().display(), tool))
+                        .collect::<std::collections::HashMap<_, _>>();
                     let entries = crate::tools::tool_search_entry::build_tool_search_entries(
                         Some(&mcp_tools),
                         &[],
