@@ -103,6 +103,10 @@ impl McpConnectionManager {
         !self.clients.is_empty()
     }
 
+    pub fn has_server(&self, server_name: &str) -> bool {
+        self.clients.contains_key(server_name)
+    }
+
     pub fn direct_server_names(&self) -> Vec<String> {
         let mut names = self
             .clients

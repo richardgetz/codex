@@ -7219,6 +7219,119 @@ async fn built_tools_keeps_unavailable_mcp_placeholder_when_inventory_lists_serv
 }
 
 #[tokio::test]
+async fn unavailable_mcp_placeholder_routes_to_configured_mcp_server_when_tools_missing() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::UnavailableDummyTools)
+                .expect("enable unavailable dummy tools");
+        },
+    )
+    .await;
+    refresh_test_mcp_servers(
+        &session,
+        turn_context.as_ref(),
+        serde_json::json!({
+            "imessage": {
+                "command": "__codex_missing_imessage_test__",
+                "startup": "eager",
+                "startup_timeout_sec": 1
+            }
+        }),
+    )
+    .await;
+
+    let call = ToolRouter::build_tool_call(
+        session.as_ref(),
+        turn_context.as_ref(),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "mcp__imessage__imessage_get_config".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-imessage-get-config".to_string(),
+        },
+    )
+    .await
+    .expect("build tool call")
+    .expect("tool call present");
+
+    assert_eq!(
+        call.tool_name,
+        ToolName::namespaced("mcp__imessage__", "imessage_get_config")
+    );
+    match call.payload {
+        ToolPayload::Mcp {
+            server,
+            tool,
+            raw_arguments,
+        } => {
+            assert_eq!(server, "imessage");
+            assert_eq!(tool, "imessage_get_config");
+            assert_eq!(raw_arguments, "{}");
+        }
+        other => panic!("expected MCP payload, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn unavailable_mcp_placeholder_respects_mode_mcp_filters() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.enablement.modes.insert(
+                ModeKind::Default,
+                codex_config::ModeEnablementConfig {
+                    mcps: Some(codex_config::EnablementFilterConfig {
+                        mode: codex_config::EnablementFilterMode::Exclude,
+                        items: vec!["imessage_get_config".to_string()],
+                    }),
+                    ..Default::default()
+                },
+            );
+        },
+    )
+    .await;
+    refresh_test_mcp_servers(
+        &session,
+        turn_context.as_ref(),
+        serde_json::json!({
+            "imessage": {
+                "command": "__codex_missing_imessage_test__",
+                "startup": "eager",
+                "startup_timeout_sec": 1
+            }
+        }),
+    )
+    .await;
+
+    let call = ToolRouter::build_tool_call(
+        session.as_ref(),
+        turn_context.as_ref(),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "mcp__imessage__imessage_get_config".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-imessage-get-config".to_string(),
+        },
+    )
+    .await
+    .expect("build tool call")
+    .expect("tool call present");
+
+    assert_eq!(
+        call.tool_name,
+        ToolName::plain("mcp__imessage__imessage_get_config")
+    );
+    assert!(matches!(call.payload, ToolPayload::Function { .. }));
+}
+
+#[tokio::test]
 async fn build_initial_context_injects_orchestrator_supervision_in_orchestrator_mode() {
     let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
@@ -9063,7 +9176,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         input: "{}".to_string(),
     };
 
-    let call = ToolRouter::build_tool_call(session.as_ref(), item.clone())
+    let call = ToolRouter::build_tool_call(session.as_ref(), turn_context.as_ref(), item.clone())
         .await
         .expect("build tool call")
         .expect("tool call present");

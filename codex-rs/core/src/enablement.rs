@@ -103,6 +103,19 @@ pub(crate) fn mcp_server_allowed_in_mode(
     filter_allows(filter, &[server_name])
 }
 
+pub(crate) fn mcp_tool_parts_allowed_in_mode(
+    config: &Config,
+    mode: ModeKind,
+    server_name: &str,
+    callable_namespace: &str,
+    callable_name: &str,
+) -> bool {
+    let Some(filter) = mcp_filter(config, mode) else {
+        return true;
+    };
+    filter_allows(filter, &[server_name, callable_namespace, callable_name])
+}
+
 pub(crate) fn filter_mcp_tools_for_mode(
     config: &Config,
     mode: ModeKind,
@@ -342,6 +355,36 @@ mod tests {
             &config,
             ModeKind::Orchestrator,
             "playwright"
+        ));
+    }
+
+    #[tokio::test]
+    async fn filters_mcp_tool_parts_by_mode_enablement() {
+        let mut config = test_config().await;
+        config.enablement.modes.insert(
+            ModeKind::Orchestrator,
+            codex_config::ModeEnablementConfig {
+                mcps: Some(EnablementFilterConfig {
+                    mode: EnablementFilterMode::Exclude,
+                    items: vec!["imessage_get_config".to_string()],
+                }),
+                ..Default::default()
+            },
+        );
+
+        assert!(!mcp_tool_parts_allowed_in_mode(
+            &config,
+            ModeKind::Orchestrator,
+            "imessage",
+            "mcp__imessage__",
+            "imessage_get_config"
+        ));
+        assert!(mcp_tool_parts_allowed_in_mode(
+            &config,
+            ModeKind::Orchestrator,
+            "imessage",
+            "mcp__imessage__",
+            "imessage_send_message"
         ));
     }
 

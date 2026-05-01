@@ -56,7 +56,10 @@ impl ToolHandler for ToolSearchHandler {
         invocation: ToolInvocation,
     ) -> Result<ToolSearchOutput, FunctionCallError> {
         let ToolInvocation {
-            payload, session, ..
+            payload,
+            session,
+            turn,
+            ..
         } = invocation;
 
         let args = match payload {
@@ -88,7 +91,7 @@ impl ToolHandler for ToolSearchHandler {
         }
 
         let tools = self
-            .search(query, limit, requested_limit.is_none(), &session)
+            .search(query, limit, requested_limit.is_none(), &session, &turn)
             .await?;
 
         Ok(ToolSearchOutput { tools })
@@ -102,10 +105,11 @@ impl ToolSearchHandler {
         limit: usize,
         use_default_limit: bool,
         session: &'a std::sync::Arc<crate::session::session::Session>,
+        turn: &'a std::sync::Arc<crate::session::turn_context::TurnContext>,
     ) -> BoxFuture<'a, Result<Vec<LoadableToolSpec>, FunctionCallError>> {
         async move {
             let results = self.search_result_entries(query, limit, use_default_limit);
-            self.search_output_tools(results, query, limit, use_default_limit, session)
+            self.search_output_tools(results, query, limit, use_default_limit, session, turn)
                 .await
         }
         .boxed()
@@ -152,14 +156,17 @@ impl ToolSearchHandler {
         limit: usize,
         use_default_limit: bool,
         session: &std::sync::Arc<crate::session::session::Session>,
+        turn: &std::sync::Arc<crate::session::turn_context::TurnContext>,
     ) -> Result<Vec<LoadableToolSpec>, FunctionCallError> {
         let mut tools = Vec::new();
         for entry in results {
             match &entry.output {
                 ToolSearchEntryOutput::Tool(tool) => tools.push(tool.clone()),
                 ToolSearchEntryOutput::LazyMcpServer { server_name } => {
-                    let manager = session.services.mcp_connection_manager.read().await;
-                    let mcp_tools = match manager.list_tools_for_server(server_name).await {
+                    let mcp_tools = match session
+                        .list_tools_for_server_with_reconnect(turn, server_name)
+                        .await
+                    {
                         Ok(tools) => tools,
                         Err(err) => {
                             tracing::warn!(
@@ -168,7 +175,6 @@ impl ToolSearchHandler {
                             continue;
                         }
                     };
-                    drop(manager);
                     let mcp_tools = mcp_tools
                         .into_iter()
                         .map(|tool| (tool.canonical_tool_name().display(), tool))
@@ -180,7 +186,7 @@ impl ToolSearchHandler {
                     );
                     let handler = ToolSearchHandler::new(entries);
                     let mut started_tools = handler
-                        .search(query, limit, use_default_limit, session)
+                        .search(query, limit, use_default_limit, session, turn)
                         .await?;
                     if started_tools.is_empty() {
                         started_tools =
