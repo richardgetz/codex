@@ -2624,7 +2624,17 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
 }
 
 pub(crate) fn new_scratchpad_update(update: ScratchpadUpdateEvent) -> ScratchpadUpdateCell {
-    ScratchpadUpdateCell { update }
+    ScratchpadUpdateCell {
+        update,
+        display: ScratchpadDisplay::Compact,
+    }
+}
+
+pub(crate) fn new_scratchpad_snapshot(update: ScratchpadUpdateEvent) -> ScratchpadUpdateCell {
+    ScratchpadUpdateCell {
+        update,
+        display: ScratchpadDisplay::Full,
+    }
 }
 
 /// Create a proposed-plan cell that snapshots the session cwd for later markdown rendering.
@@ -2775,6 +2785,13 @@ impl HistoryCell for PlanUpdateCell {
 #[derive(Debug)]
 pub(crate) struct ScratchpadUpdateCell {
     update: ScratchpadUpdateEvent,
+    display: ScratchpadDisplay,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ScratchpadDisplay {
+    Compact,
+    Full,
 }
 
 impl HistoryCell for ScratchpadUpdateCell {
@@ -2823,6 +2840,7 @@ impl HistoryCell for ScratchpadUpdateCell {
             "Completed",
             &self.update.completed,
             ScratchpadSectionStyle::Completed,
+            self.display,
         );
         append_scratchpad_section(
             &mut body,
@@ -2830,6 +2848,7 @@ impl HistoryCell for ScratchpadUpdateCell {
             "Next up",
             &self.update.next_steps,
             ScratchpadSectionStyle::Next,
+            self.display,
         );
         append_scratchpad_section(
             &mut body,
@@ -2837,6 +2856,7 @@ impl HistoryCell for ScratchpadUpdateCell {
             "Waiting",
             &self.update.pending_waits,
             ScratchpadSectionStyle::Waiting,
+            self.display,
         );
 
         if body.is_empty() {
@@ -2859,6 +2879,7 @@ fn append_scratchpad_section(
     label: &str,
     items: &[String],
     style: ScratchpadSectionStyle,
+    display: ScratchpadDisplay,
 ) {
     if items.is_empty() {
         return;
@@ -2866,11 +2887,18 @@ fn append_scratchpad_section(
 
     lines.push(Line::from(format!("{label}:").bold()));
     let max_visible = 5;
-    let skipped = items.len().saturating_sub(max_visible);
+    let skipped = match display {
+        ScratchpadDisplay::Compact => items.len().saturating_sub(max_visible),
+        ScratchpadDisplay::Full => 0,
+    };
     let visible_items = if matches!(style, ScratchpadSectionStyle::Completed) && skipped > 0 {
         &items[skipped..]
     } else {
-        &items[..items.len().min(max_visible)]
+        let visible_len = match display {
+            ScratchpadDisplay::Compact => items.len().min(max_visible),
+            ScratchpadDisplay::Full => items.len(),
+        };
+        &items[..visible_len]
     };
 
     for item in visible_items {

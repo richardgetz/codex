@@ -216,7 +216,7 @@ impl ChatWidget {
             ));
             return;
         };
-        self.on_scratchpad_update(update);
+        self.add_to_history(history_cell::new_scratchpad_snapshot(update));
     }
 
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
