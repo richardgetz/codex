@@ -3,7 +3,7 @@ pub(crate) mod apply_patch;
 pub(crate) mod builtin_schedule;
 pub(crate) mod builtin_scratchpad;
 mod dynamic;
-mod js_repl;
+mod goal;
 mod list_dir;
 mod mcp;
 mod mcp_resource;
@@ -40,8 +40,7 @@ pub use apply_patch::ApplyPatchHandler;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;
-pub use js_repl::JsReplHandler;
-pub use js_repl::JsReplResetHandler;
+pub use goal::GoalHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
@@ -358,7 +357,7 @@ mod tests {
                 entries: vec![
                     FileSystemSandboxEntry {
                         path: FileSystemPath::Special {
-                            value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                         },
                         access: FileSystemAccessMode::Write,
                     },

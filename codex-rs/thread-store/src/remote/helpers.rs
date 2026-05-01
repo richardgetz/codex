@@ -129,6 +129,7 @@ pub(super) fn proto_session_source(source: &SessionSource) -> proto::SessionSour
             sub_agent_other: Some(other.clone()),
             ..Default::default()
         },
+        SessionSource::Internal(_) => proto_source(proto::SessionSourceKind::Unknown),
         SessionSource::Unknown => proto_source(proto::SessionSourceKind::Unknown),
     }
 }

@@ -360,9 +360,19 @@ jobs:
             python3 -c 'import re, sys; text = sys.stdin.read(); text = re.sub(r"(_authToken=)[^\\s&\\\"]+", r"\\1***REDACTED***", text); text = re.sub(r"(Bearer\\s+)[A-Za-z0-9._~-]+", r"\\1***REDACTED***", text); print(text, end="")'
           }
 
-          tarballs=(dist/npm/*-"${VERSION}".tgz)
+          platform_tarballs=(dist/npm/codex-npm-*-"${VERSION}".tgz)
+          root_tarball="dist/npm/codex-npm-${VERSION}.tgz"
+          tarballs=("${platform_tarballs[@]}")
+          if [[ -f "${root_tarball}" ]]; then
+            tarballs+=("${root_tarball}")
+          fi
+
           if [[ ${#tarballs[@]} -eq 0 ]]; then
             echo "No npm tarballs found for ${VERSION}"
+            exit 1
+          fi
+          if [[ ! -f "${root_tarball}" ]]; then
+            echo "No root npm tarball found for ${VERSION}"
             exit 1
           fi
 

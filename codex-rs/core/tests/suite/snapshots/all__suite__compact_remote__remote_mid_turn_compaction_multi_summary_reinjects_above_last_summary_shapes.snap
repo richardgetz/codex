@@ -11,6 +11,9 @@ Scenario: After a prior manual /compact produced an older remote compaction item
 ## Second Turn Request (After Compaction)
 00:message/user:USER_ONE
 01:compaction:encrypted=true
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/developer[3]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <scratchpad_instructions>\n## Built-in Scratchpad\nThe built-in ...
+    [03] <fork_help>\n## Rick Fork Guidance\nThis build includes fork-onl...
 03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 04:message/user:USER_TWO

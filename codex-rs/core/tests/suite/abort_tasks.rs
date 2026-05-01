@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -95,6 +96,11 @@ async fn interrupt_tool_records_history_entries() {
 
     let fixture = test_codex()
         .with_model("gpt-5.4")
+        .with_config(|config| {
+            config
+                .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess)
+                .expect("danger-full-access sandbox should be accepted");
+        })
         .build(&server)
         .await
         .unwrap();
@@ -197,6 +203,11 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
 
     let fixture = test_codex()
         .with_model("gpt-5.4")
+        .with_config(|config| {
+            config
+                .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess)
+                .expect("danger-full-access sandbox should be accepted");
+        })
         .build(&server)
         .await
         .unwrap();

@@ -49,12 +49,6 @@ impl ToolHandler for Handler {
         let session_source = turn.session_source.clone();
         reject_recursive_subagent_spawn(&session_source)?;
         let child_depth = next_thread_spawn_depth(&session_source);
-        let max_depth = turn.config.agent_max_depth;
-        if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
-            return Err(FunctionCallError::RespondToModel(
-                "Agent depth limit reached. Solve the task yourself.".to_string(),
-            ));
-        }
         session
             .send_event(
                 &turn,
@@ -99,7 +93,10 @@ impl ToolHandler for Handler {
             args.collaboration_mode,
             args.model.as_deref(),
             args.reasoning_effort,
-            &session.services.models_manager.list_collaboration_modes(),
+            &session
+                .services
+                .models_manager
+                .list_collaboration_modes(config.collaboration_modes_config()),
         )?;
         config.developer_instructions = Some(
             if let Some(mut existing_instructions) = config.developer_instructions.take() {

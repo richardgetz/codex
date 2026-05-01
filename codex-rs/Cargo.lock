@@ -402,7 +402,7 @@ checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
 
 [[package]]
 name = "app_test_support"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1749,8 +1749,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-agent-graph-store"
+version = "0.128.0"
+dependencies = [
+ "async-trait",
+ "codex-protocol",
+ "codex-state",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "codex-agent-identity"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1758,6 +1773,7 @@ dependencies = [
  "codex-protocol",
  "crypto_box",
  "ed25519-dalek",
+ "jsonwebtoken",
  "pretty_assertions",
  "rand 0.9.3",
  "reqwest",
@@ -1768,7 +1784,7 @@ dependencies = [
 
 [[package]]
 name = "codex-analytics"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-app-server-protocol",
  "codex-git-utils",
@@ -1788,7 +1804,7 @@ dependencies = [
 
 [[package]]
 name = "codex-ansi-escape"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "ansi-to-tui",
  "ratatui",
@@ -1797,7 +1813,7 @@ dependencies = [
 
 [[package]]
 name = "codex-api"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -1831,7 +1847,7 @@ dependencies = [
 
 [[package]]
 name = "codex-app-server"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "app_test_support",
@@ -1852,12 +1868,16 @@ dependencies = [
  "codex-core-plugins",
  "codex-device-key",
  "codex-exec-server",
+ "codex-external-agent-migration",
+ "codex-external-agent-sessions",
  "codex-features",
  "codex-feedback",
  "codex-file-search",
  "codex-git-utils",
+ "codex-hooks",
  "codex-login",
  "codex-mcp",
+ "codex-memories-write",
  "codex-model-provider",
  "codex-model-provider-info",
  "codex-models-manager",
@@ -1879,6 +1899,7 @@ dependencies = [
  "codex-utils-rustls-provider",
  "constant_time_eq 0.3.1",
  "core_test_support",
+ "flate2",
  "futures",
  "gethostname",
  "hmac",
@@ -1894,6 +1915,7 @@ dependencies = [
  "serial_test",
  "sha2",
  "shlex",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "time",
@@ -1912,7 +1934,7 @@ dependencies = [
 
 [[package]]
 name = "codex-app-server-client"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-app-server",
  "codex-app-server-protocol",
@@ -1936,7 +1958,7 @@ dependencies = [
 
 [[package]]
 name = "codex-app-server-protocol"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1963,7 +1985,7 @@ dependencies = [
 
 [[package]]
 name = "codex-app-server-test-client"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1984,7 +2006,7 @@ dependencies = [
 
 [[package]]
 name = "codex-apply-patch"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2003,7 +2025,7 @@ dependencies = [
 
 [[package]]
 name = "codex-arg0"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "codex-apply-patch",
@@ -2020,7 +2042,7 @@ dependencies = [
 
 [[package]]
 name = "codex-async-utils"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "async-trait",
  "pretty_assertions",
@@ -2030,7 +2052,7 @@ dependencies = [
 
 [[package]]
 name = "codex-aws-auth"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "aws-config",
  "aws-credential-types",
@@ -2045,7 +2067,7 @@ dependencies = [
 
 [[package]]
 name = "codex-backend-client"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "codex-api",
@@ -2062,7 +2084,7 @@ dependencies = [
 
 [[package]]
 name = "codex-backend-openapi-models"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2071,11 +2093,11 @@ dependencies = [
 
 [[package]]
 name = "codex-build-info"
-version = "0.125.0"
+version = "0.128.0"
 
 [[package]]
 name = "codex-chatgpt"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2096,14 +2118,13 @@ dependencies = [
 
 [[package]]
 name = "codex-cli"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
  "assert_matches",
  "clap",
  "clap_complete",
- "codex-api",
  "codex-app-server",
  "codex-app-server-protocol",
  "codex-app-server-test-client",
@@ -2121,7 +2142,7 @@ dependencies = [
  "codex-login",
  "codex-mcp",
  "codex-mcp-server",
- "codex-model-provider",
+ "codex-memories-write",
  "codex-models-manager",
  "codex-protocol",
  "codex-responses-api-proxy",
@@ -2155,7 +2176,7 @@ dependencies = [
 
 [[package]]
 name = "codex-client"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2185,7 +2206,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cloud-requirements"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2210,7 +2231,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cloud-tasks"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2242,7 +2263,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cloud-tasks-client"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2257,7 +2278,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cloud-tasks-mock-client"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2267,7 +2288,7 @@ dependencies = [
 
 [[package]]
 name = "codex-code-mode"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -2284,23 +2305,28 @@ dependencies = [
 
 [[package]]
 name = "codex-collaboration-mode-templates"
-version = "0.125.0"
+version = "0.128.0"
 
 [[package]]
 name = "codex-config"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "codex-app-server-protocol",
  "codex-execpolicy",
  "codex-features",
+ "codex-file-system",
+ "codex-git-utils",
  "codex-model-provider-info",
  "codex-network-proxy",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-path",
+ "core-foundation 0.9.4",
  "dns-lookup",
+ "dunce",
  "futures",
  "gethostname",
  "libc",
@@ -2324,11 +2350,12 @@ dependencies = [
  "tracing",
  "wildmatch",
  "winapi-util",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
 name = "codex-connectors"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "codex-app-server-protocol",
@@ -2340,7 +2367,7 @@ dependencies = [
 
 [[package]]
 name = "codex-core"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2370,6 +2397,7 @@ dependencies = [
  "codex-hooks",
  "codex-login",
  "codex-mcp",
+ "codex-memories-read",
  "codex-model-provider",
  "codex-model-provider-info",
  "codex-models-manager",
@@ -2382,7 +2410,6 @@ dependencies = [
  "codex-rollout",
  "codex-rollout-trace",
  "codex-sandboxing",
- "codex-secrets",
  "codex-shell-command",
  "codex-shell-escalation",
  "codex-state",
@@ -2404,7 +2431,6 @@ dependencies = [
  "codex-utils-string",
  "codex-utils-template",
  "codex-windows-sandbox",
- "core-foundation 0.9.4",
  "core_test_support",
  "csv",
  "ctor 0.6.3",
@@ -2455,14 +2481,30 @@ dependencies = [
  "walkdir",
  "which 8.0.0",
  "whoami",
- "windows-sys 0.52.0",
  "wiremock",
  "zstd 0.13.3",
 ]
 
 [[package]]
+name = "codex-core-api"
+version = "0.128.0"
+dependencies = [
+ "codex-analytics",
+ "codex-arg0",
+ "codex-config",
+ "codex-core",
+ "codex-exec-server",
+ "codex-features",
+ "codex-login",
+ "codex-model-provider-info",
+ "codex-models-manager",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+]
+
+[[package]]
 name = "codex-core-plugins"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2479,11 +2521,13 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-plugins",
  "dirs",
+ "flate2",
  "libc",
  "pretty_assertions",
  "reqwest",
  "serde",
  "serde_json",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -2496,7 +2540,7 @@ dependencies = [
 
 [[package]]
 name = "codex-core-skills"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "codex-analytics",
@@ -2527,7 +2571,7 @@ dependencies = [
 
 [[package]]
 name = "codex-debug-client"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2539,7 +2583,7 @@ dependencies = [
 
 [[package]]
 name = "codex-device-key"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2555,7 +2599,7 @@ dependencies = [
 
 [[package]]
 name = "codex-exec"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2565,6 +2609,7 @@ dependencies = [
  "codex-apply-patch",
  "codex-arg0",
  "codex-cloud-requirements",
+ "codex-config",
  "codex-core",
  "codex-feedback",
  "codex-git-utils",
@@ -2599,7 +2644,7 @@ dependencies = [
 
 [[package]]
 name = "codex-exec-server"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2608,7 +2653,7 @@ dependencies = [
  "bytes",
  "codex-app-server-protocol",
  "codex-client",
- "codex-config",
+ "codex-file-system",
  "codex-protocol",
  "codex-sandboxing",
  "codex-test-binary-support",
@@ -2633,7 +2678,7 @@ dependencies = [
 
 [[package]]
 name = "codex-execpolicy"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2650,7 +2695,7 @@ dependencies = [
 
 [[package]]
 name = "codex-execpolicy-legacy"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "allocative",
  "anyhow",
@@ -2670,7 +2715,7 @@ dependencies = [
 
 [[package]]
 name = "codex-experimental-api-macros"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2678,8 +2723,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-external-agent-migration"
+version = "0.128.0"
+dependencies = [
+ "codex-hooks",
+ "pretty_assertions",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "toml 0.9.11+spec-1.1.0",
+]
+
+[[package]]
+name = "codex-external-agent-sessions"
+version = "0.128.0"
+dependencies = [
+ "chrono",
+ "codex-app-server-protocol",
+ "codex-protocol",
+ "codex-utils-output-truncation",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "codex-features"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-otel",
  "codex-protocol",
@@ -2692,7 +2763,7 @@ dependencies = [
 
 [[package]]
 name = "codex-feedback"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "codex-login",
@@ -2705,7 +2776,7 @@ dependencies = [
 
 [[package]]
 name = "codex-file-search"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2720,13 +2791,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-file-system"
+version = "0.128.0"
+dependencies = [
+ "async-trait",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "serde",
+]
+
+[[package]]
 name = "codex-git-utils"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
- "assert_matches",
  "chrono",
- "codex-exec-server",
+ "codex-file-system",
  "codex-protocol",
  "codex-utils-absolute-path",
  "futures",
@@ -2746,11 +2826,12 @@ dependencies = [
 
 [[package]]
 name = "codex-hooks"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "chrono",
  "codex-config",
+ "codex-plugin",
  "codex-protocol",
  "codex-utils-absolute-path",
  "futures",
@@ -2765,7 +2846,7 @@ dependencies = [
 
 [[package]]
 name = "codex-install-context"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-utils-home-dir",
  "pretty_assertions",
@@ -2774,7 +2855,7 @@ dependencies = [
 
 [[package]]
 name = "codex-keyring-store"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "keyring",
  "tracing",
@@ -2782,12 +2863,12 @@ dependencies = [
 
 [[package]]
 name = "codex-linux-sandbox"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "cc",
  "clap",
- "codex-config",
  "codex-core",
+ "codex-process-hardening",
  "codex-protocol",
  "codex-sandboxing",
  "codex-utils-absolute-path",
@@ -2806,7 +2887,7 @@ dependencies = [
 
 [[package]]
 name = "codex-lmstudio"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-core",
  "codex-model-provider-info",
@@ -2820,7 +2901,7 @@ dependencies = [
 
 [[package]]
 name = "codex-login"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2837,6 +2918,7 @@ dependencies = [
  "codex-terminal-detection",
  "codex-utils-template",
  "core_test_support",
+ "jsonwebtoken",
  "keyring",
  "once_cell",
  "os_info",
@@ -2861,7 +2943,7 @@ dependencies = [
 
 [[package]]
 name = "codex-mcp"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -2875,7 +2957,6 @@ dependencies = [
  "codex-plugin",
  "codex-protocol",
  "codex-rmcp-client",
- "codex-utils-absolute-path",
  "codex-utils-plugins",
  "futures",
  "pretty_assertions",
@@ -2894,16 +2975,14 @@ dependencies = [
 
 [[package]]
 name = "codex-mcp-server"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "codex-arg0",
  "codex-config",
  "codex-core",
  "codex-exec-server",
- "codex-features",
  "codex-login",
- "codex-models-manager",
  "codex-protocol",
  "codex-shell-command",
  "codex-utils-absolute-path",
@@ -2926,8 +3005,57 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-memories-read"
+version = "0.128.0"
+dependencies = [
+ "codex-protocol",
+ "codex-shell-command",
+ "codex-utils-absolute-path",
+ "codex-utils-output-truncation",
+ "codex-utils-template",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "codex-memories-write"
+version = "0.128.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "codex-backend-client",
+ "codex-config",
+ "codex-core",
+ "codex-features",
+ "codex-git-utils",
+ "codex-login",
+ "codex-models-manager",
+ "codex-otel",
+ "codex-protocol",
+ "codex-rollout",
+ "codex-rollout-trace",
+ "codex-secrets",
+ "codex-state",
+ "codex-terminal-detection",
+ "codex-utils-absolute-path",
+ "codex-utils-output-truncation",
+ "codex-utils-template",
+ "core_test_support",
+ "futures",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "codex-model-provider"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "async-trait",
  "codex-agent-identity",
@@ -2951,7 +3079,7 @@ dependencies = [
 
 [[package]]
 name = "codex-model-provider-info"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-api",
  "codex-app-server-protocol",
@@ -2968,7 +3096,7 @@ dependencies = [
 
 [[package]]
 name = "codex-models-manager"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2989,7 +3117,7 @@ dependencies = [
 
 [[package]]
 name = "codex-network-proxy"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3020,7 +3148,7 @@ dependencies = [
 
 [[package]]
 name = "codex-ollama"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "assert_matches",
  "async-stream",
@@ -3039,7 +3167,7 @@ dependencies = [
 
 [[package]]
 name = "codex-otel"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "chrono",
  "codex-api",
@@ -3071,8 +3199,9 @@ dependencies = [
 
 [[package]]
 name = "codex-plugin"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
+ "codex-config",
  "codex-utils-absolute-path",
  "codex-utils-plugins",
  "thiserror 2.0.18",
@@ -3080,7 +3209,7 @@ dependencies = [
 
 [[package]]
 name = "codex-process-hardening"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "libc",
  "pretty_assertions",
@@ -3088,7 +3217,7 @@ dependencies = [
 
 [[package]]
 name = "codex-protocol"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "chardetng",
@@ -3124,11 +3253,12 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+ "wildmatch",
 ]
 
 [[package]]
 name = "codex-realtime-webrtc"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "libwebrtc",
  "thiserror 2.0.18",
@@ -3137,7 +3267,7 @@ dependencies = [
 
 [[package]]
 name = "codex-response-debug-context"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "base64 0.22.1",
  "codex-api",
@@ -3148,7 +3278,7 @@ dependencies = [
 
 [[package]]
 name = "codex-responses-api-proxy"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3165,7 +3295,7 @@ dependencies = [
 
 [[package]]
 name = "codex-rmcp-client"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3202,7 +3332,7 @@ dependencies = [
 
 [[package]]
 name = "codex-rollout"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3227,7 +3357,7 @@ dependencies = [
 
 [[package]]
 name = "codex-rollout-trace"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "codex-code-mode",
@@ -3242,7 +3372,7 @@ dependencies = [
 
 [[package]]
 name = "codex-sandboxing"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3263,7 +3393,7 @@ dependencies = [
 
 [[package]]
 name = "codex-secrets"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "age",
  "anyhow",
@@ -3284,7 +3414,7 @@ dependencies = [
 
 [[package]]
 name = "codex-shell-command"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3304,7 +3434,7 @@ dependencies = [
 
 [[package]]
 name = "codex-shell-escalation"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3325,7 +3455,7 @@ dependencies = [
 
 [[package]]
 name = "codex-skills"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-utils-absolute-path",
  "include_dir",
@@ -3334,7 +3464,7 @@ dependencies = [
 
 [[package]]
 name = "codex-state"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3357,7 +3487,7 @@ dependencies = [
 
 [[package]]
 name = "codex-stdio-to-uds"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "codex-uds",
@@ -3369,7 +3499,7 @@ dependencies = [
 
 [[package]]
 name = "codex-terminal-detection"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "pretty_assertions",
  "tracing",
@@ -3377,15 +3507,25 @@ dependencies = [
 
 [[package]]
 name = "codex-test-binary-support"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-arg0",
  "tempfile",
 ]
 
 [[package]]
+name = "codex-thread-manager-sample"
+version = "0.128.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-core-api",
+ "tracing",
+]
+
+[[package]]
 name = "codex-thread-store"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3410,7 +3550,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tools"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-app-server-protocol",
  "codex-code-mode",
@@ -3427,7 +3567,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tui"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3533,7 +3673,7 @@ dependencies = [
 
 [[package]]
 name = "codex-uds"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "async-io",
  "pretty_assertions",
@@ -3545,7 +3685,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-absolute-path"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "dirs",
  "dunce",
@@ -3559,14 +3699,14 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-approval-presets"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-protocol",
 ]
 
 [[package]]
 name = "codex-utils-cache"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "lru 0.16.3",
  "sha1",
@@ -3575,7 +3715,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-cargo-bin"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "assert_cmd",
  "runfiles",
@@ -3584,7 +3724,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-cli"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "clap",
  "codex-protocol",
@@ -3595,15 +3735,15 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-elapsed"
-version = "0.125.0"
+version = "0.128.0"
 
 [[package]]
 name = "codex-utils-fuzzy-match"
-version = "0.125.0"
+version = "0.128.0"
 
 [[package]]
 name = "codex-utils-home-dir"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-utils-absolute-path",
  "dirs",
@@ -3613,7 +3753,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-image"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "base64 0.22.1",
  "codex-utils-cache",
@@ -3625,7 +3765,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-json-to-toml"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "pretty_assertions",
  "serde_json",
@@ -3634,7 +3774,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-oss"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-core",
  "codex-lmstudio",
@@ -3644,7 +3784,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-output-truncation"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-protocol",
  "codex-utils-string",
@@ -3653,7 +3793,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-path"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-utils-absolute-path",
  "dunce",
@@ -3663,7 +3803,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-plugins"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-exec-server",
  "codex-login",
@@ -3676,7 +3816,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-pty"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "filedescriptor",
@@ -3692,7 +3832,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-readiness"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "assert_matches",
  "async-trait",
@@ -3703,14 +3843,14 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-rustls-provider"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "rustls",
 ]
 
 [[package]]
 name = "codex-utils-sandbox-summary"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "codex-core",
  "codex-model-provider-info",
@@ -3721,7 +3861,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-sleep-inhibitor"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "core-foundation 0.9.4",
  "libc",
@@ -3731,29 +3871,31 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-stream-parser"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "pretty_assertions",
 ]
 
 [[package]]
 name = "codex-utils-string"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "pretty_assertions",
  "regex-lite",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
 name = "codex-utils-template"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "pretty_assertions",
 ]
 
 [[package]]
 name = "codex-v8-poc"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "pretty_assertions",
  "v8",
@@ -3761,7 +3903,7 @@ dependencies = [
 
 [[package]]
 name = "codex-windows-sandbox"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4011,12 +4153,13 @@ dependencies = [
 
 [[package]]
 name = "core_test_support"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
  "base64 0.22.1",
  "codex-arg0",
+ "codex-config",
  "codex-core",
  "codex-exec-server",
  "codex-features",
@@ -8190,7 +8333,7 @@ dependencies = [
 
 [[package]]
 name = "mcp_test_support"
-version = "0.125.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "codex-login",
@@ -12235,6 +12378,16 @@ name = "tagptr"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
+
+[[package]]
+name = "tar"
+version = "0.4.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22692a6476a21fa75fdfc11d452fda482af402c008cdbaf3476414e122040973"
+dependencies = [
+ "filetime",
+ "libc",
+]
 
 [[package]]
 name = "target-lexicon"

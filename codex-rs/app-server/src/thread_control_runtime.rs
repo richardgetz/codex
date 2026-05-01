@@ -283,7 +283,7 @@ fn build_router_tick_turn(
         cwd: config_snapshot.cwd.clone().to_path_buf(),
         approval_policy: config_snapshot.approval_policy,
         approvals_reviewer: Some(config_snapshot.approvals_reviewer),
-        sandbox_policy: config_snapshot.sandbox_policy.clone(),
+        sandbox_policy: config_snapshot.sandbox_policy(),
         permission_profile: Some(config_snapshot.permission_profile.clone()),
         model: model.to_string(),
         effort: reasoning_effort,
@@ -377,8 +377,8 @@ Check supervised sessions directly for new progress, blockers, or operator instr
             service_tier: None,
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: codex_protocol::models::PermissionProfile::default(),
+            permission_profile: codex_protocol::models::PermissionProfile::Disabled,
+            active_permission_profile: None,
             cwd: codex_utils_absolute_path::AbsolutePathBuf::try_from(std::path::PathBuf::from(
                 "/tmp/router",
             ))

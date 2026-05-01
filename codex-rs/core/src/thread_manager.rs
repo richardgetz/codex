@@ -2,6 +2,7 @@ use crate::SkillsManager;
 use crate::agent::AgentControl;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
+use crate::config::ThreadStoreConfig;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::selected_primary_environment;
 use crate::environment_selection::validate_environment_selections;
@@ -17,6 +18,7 @@ use crate::session::INITIAL_SUBMIT_ID;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
+use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
@@ -52,6 +54,8 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::RolloutConfig;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
+#[cfg(debug_assertions)]
+use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::RemoteThreadStore;
 use codex_thread_store::ThreadStore;
@@ -220,14 +224,26 @@ pub struct ThreadManager {
     _test_codex_home_guard: Option<TempCodexHomeGuard>,
 }
 
-pub struct StartThreadWithToolsOptions {
+pub struct StartThreadOptions {
     pub config: Config,
+    pub thread_store: Arc<dyn ThreadStore>,
     pub initial_history: InitialHistory,
+    pub session_source: Option<SessionSource>,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub persist_extended_history: bool,
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Vec<TurnEnvironmentSelection>,
+}
+
+pub(crate) struct ResumeThreadFromRolloutOptions {
+    pub(crate) config: Config,
+    pub(crate) thread_store: Arc<dyn ThreadStore>,
+    pub(crate) rollout_path: PathBuf,
+    pub(crate) agent_control: AgentControl,
+    pub(crate) session_source: SessionSource,
+    pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+    pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
 }
 
 /// Shared, `Arc`-owned state for [`ThreadManager`]. This `Arc` is required to have a single
@@ -252,21 +268,23 @@ pub(crate) struct ThreadManagerState {
 pub fn build_models_manager(
     config: &Config,
     auth_manager: Arc<AuthManager>,
-    collaboration_modes_config: CollaborationModesConfig,
 ) -> SharedModelsManager {
     let provider = create_model_provider(config.model_provider.clone(), Some(auth_manager));
     provider.models_manager(
         config.codex_home.to_path_buf(),
         config.model_catalog.clone(),
-        collaboration_modes_config,
     )
 }
 
-fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
-    if let Some(endpoint) = config.experimental_thread_store_endpoint.as_deref() {
-        return Arc::new(RemoteThreadStore::new(endpoint));
+pub fn thread_store_from_config(config: &Config) -> Arc<dyn ThreadStore> {
+    match &config.experimental_thread_store {
+        ThreadStoreConfig::Local => {
+            Arc::new(LocalThreadStore::new(RolloutConfig::from_view(config)))
+        }
+        ThreadStoreConfig::Remote { endpoint } => Arc::new(RemoteThreadStore::new(endpoint)),
+        #[cfg(debug_assertions)]
+        ThreadStoreConfig::InMemory { id } => InMemoryThreadStore::for_id(id),
     }
-    Arc::new(LocalThreadStore::new(RolloutConfig::from_view(config)))
 }
 
 impl ThreadManager {
@@ -274,7 +292,6 @@ impl ThreadManager {
         config: &Config,
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
-        collaboration_modes_config: CollaborationModesConfig,
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
     ) -> Self {
@@ -296,11 +313,7 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: build_models_manager(
-                    config,
-                    auth_manager.clone(),
-                    collaboration_modes_config,
-                ),
+                models_manager: build_models_manager(config, auth_manager.clone()),
                 environment_manager,
                 skills_manager,
                 plugins_manager,
@@ -371,11 +384,7 @@ impl ThreadManager {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: create_model_provider(provider, Some(auth_manager.clone()))
-                    .models_manager(
-                        codex_home,
-                        /*config_model_catalog*/ None,
-                        CollaborationModesConfig::default(),
-                    ),
+                    .models_manager(codex_home, /*config_model_catalog*/ None),
                 environment_manager,
                 skills_manager,
                 plugins_manager,
@@ -440,8 +449,13 @@ impl ThreadManager {
             .await
     }
 
-    pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        self.state.models_manager.list_collaboration_modes()
+    pub fn list_collaboration_modes(
+        &self,
+        collaboration_modes_config: CollaborationModesConfig,
+    ) -> Vec<CollaborationModeMask> {
+        self.state
+            .models_manager
+            .list_collaboration_modes(collaboration_modes_config)
     }
 
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {
@@ -524,11 +538,16 @@ impl ThreadManager {
         Ok(subtree_thread_ids)
     }
 
-    pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
+    pub async fn start_thread(
+        &self,
+        config: Config,
+        thread_store: Arc<dyn ThreadStore>,
+    ) -> CodexResult<NewThread> {
         // Box delegated thread-spawn futures so these convenience wrappers do
         // not inline the full spawn path into every caller's async state.
         Box::pin(self.start_thread_with_tools(
             config,
+            thread_store,
             Vec::new(),
             /*persist_extended_history*/ false,
         ))
@@ -538,6 +557,7 @@ impl ThreadManager {
     pub async fn start_thread_with_tools(
         &self,
         config: Config,
+        thread_store: Arc<dyn ThreadStore>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
@@ -545,35 +565,40 @@ impl ThreadManager {
             self.state.environment_manager.as_ref(),
             &config.cwd,
         );
-        Box::pin(
-            self.start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
-                config,
-                initial_history: InitialHistory::New,
-                dynamic_tools,
-                persist_extended_history,
-                metrics_service_name: None,
-                parent_trace: None,
-                environments,
-            }),
-        )
+        Box::pin(self.start_thread_with_options(StartThreadOptions {
+            config,
+            thread_store,
+            initial_history: InitialHistory::New,
+            session_source: None,
+            dynamic_tools,
+            persist_extended_history,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments,
+        }))
         .await
     }
 
-    pub async fn start_thread_with_tools_and_service_name(
+    pub async fn start_thread_with_options(
         &self,
-        options: StartThreadWithToolsOptions,
+        options: StartThreadOptions,
     ) -> CodexResult<NewThread> {
-        let thread_store = configured_thread_store(&options.config);
-        Box::pin(self.state.spawn_thread(
+        let session_source = options
+            .session_source
+            .unwrap_or_else(|| self.state.session_source.clone());
+        Box::pin(self.state.spawn_thread_with_source(
             options.config,
             /*initial_collaboration_mode*/ None,
-            thread_store,
+            options.thread_store,
             options.initial_history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
+            session_source,
             options.dynamic_tools,
             options.persist_extended_history,
             options.metrics_service_name,
+            /*inherited_shell_snapshot*/ None,
+            /*inherited_exec_policy*/ None,
             options.parent_trace,
             options.environments,
             /*user_shell_override*/ None,
@@ -584,6 +609,7 @@ impl ThreadManager {
     pub async fn resume_thread_from_rollout(
         &self,
         config: Config,
+        thread_store: Arc<dyn ThreadStore>,
         rollout_path: PathBuf,
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
@@ -595,6 +621,7 @@ impl ThreadManager {
         .await?;
         Box::pin(self.resume_thread_with_history(
             config,
+            thread_store,
             initial_history,
             auth_manager,
             /*persist_extended_history*/ false,
@@ -606,12 +633,12 @@ impl ThreadManager {
     pub async fn resume_thread_with_history(
         &self,
         config: Config,
+        thread_store: Arc<dyn ThreadStore>,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
-        let thread_store = configured_thread_store(&config);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -636,9 +663,9 @@ impl ThreadManager {
     pub(crate) async fn start_thread_with_user_shell_override_for_tests(
         &self,
         config: Config,
+        thread_store: Arc<dyn ThreadStore>,
         user_shell_override: crate::shell::Shell,
     ) -> CodexResult<NewThread> {
-        let thread_store = configured_thread_store(&config);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -663,6 +690,7 @@ impl ThreadManager {
     pub(crate) async fn resume_thread_from_rollout_with_user_shell_override_for_tests(
         &self,
         config: Config,
+        thread_store: Arc<dyn ThreadStore>,
         rollout_path: PathBuf,
         auth_manager: Arc<AuthManager>,
         user_shell_override: crate::shell::Shell,
@@ -672,7 +700,6 @@ impl ThreadManager {
             config.resume_load_options(),
         )
         .await?;
-        let thread_store = configured_thread_store(&config);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -760,6 +787,7 @@ impl ThreadManager {
         &self,
         snapshot: S,
         config: Config,
+        thread_store: Arc<dyn ThreadStore>,
         path: PathBuf,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
@@ -769,25 +797,52 @@ impl ThreadManager {
     {
         let snapshot = snapshot.into();
         let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let snapshot_state = snapshot_turn_state(&history);
-        let history = match snapshot {
-            ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
-                truncate_before_nth_user_message(history, nth_user_message, &snapshot_state)
-            }
-            ForkSnapshot::Interrupted => {
-                let history = match history {
-                    InitialHistory::New => InitialHistory::New,
-                    InitialHistory::Cleared => InitialHistory::Cleared,
-                    InitialHistory::Forked(history) => InitialHistory::Forked(history),
-                    InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
-                };
-                if snapshot_state.ends_mid_turn {
-                    append_interrupted_boundary(history, snapshot_state.active_turn_id)
-                } else {
-                    history
-                }
-            }
-        };
+        self.fork_thread_from_history(
+            snapshot,
+            config,
+            thread_store,
+            history,
+            persist_extended_history,
+            parent_trace,
+        )
+        .await
+    }
+
+    /// Fork an existing thread from already-loaded store history.
+    pub async fn fork_thread_from_history<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        thread_store: Arc<dyn ThreadStore>,
+        history: InitialHistory,
+        persist_extended_history: bool,
+        parent_trace: Option<W3cTraceContext>,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
+        self.fork_thread_with_initial_history(
+            snapshot.into(),
+            config,
+            thread_store,
+            history,
+            persist_extended_history,
+            parent_trace,
+        )
+        .await
+    }
+
+    async fn fork_thread_with_initial_history(
+        &self,
+        snapshot: ForkSnapshot,
+        config: Config,
+        thread_store: Arc<dyn ThreadStore>,
+        history: InitialHistory,
+        persist_extended_history: bool,
+        parent_trace: Option<W3cTraceContext>,
+    ) -> CodexResult<NewThread> {
+        let interrupted_marker = InterruptedTurnHistoryMarker::from_config(&config);
+        let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let initial_collaboration_mode = latest_collaboration_mode_from_rollout_items(
             &history.get_rollout_items(),
         )
@@ -798,7 +853,6 @@ impl ThreadManager {
                 /*developer_instructions*/ None,
             )
         });
-        let thread_store = configured_thread_store(&config);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -836,16 +890,23 @@ impl ThreadManager {
 
 impl ThreadManagerState {
     pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
-        self.threads.read().await.keys().copied().collect()
+        self.threads
+            .read()
+            .await
+            .iter()
+            .filter_map(|(thread_id, thread)| {
+                (!thread.session_source.is_internal()).then_some(*thread_id)
+            })
+            .collect()
     }
 
     /// Fetch a thread by ID or return ThreadNotFound.
     pub(crate) async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
         let threads = self.threads.read().await;
-        threads
-            .get(&thread_id)
-            .cloned()
-            .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))
+        match threads.get(&thread_id) {
+            Some(thread) if !thread.session_source.is_internal() => Ok(thread.clone()),
+            Some(_) | None => Err(CodexErr::ThreadNotFound(thread_id)),
+        }
     }
 
     /// Send an operation to a thread by ID.
@@ -879,10 +940,12 @@ impl ThreadManagerState {
     pub(crate) async fn spawn_new_thread(
         &self,
         config: Config,
+        thread_store: Arc<dyn ThreadStore>,
         agent_control: AgentControl,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_new_thread_with_source(
             config,
+            thread_store,
             agent_control,
             self.session_source.clone(),
             /*initial_collaboration_mode*/ None,
@@ -899,6 +962,7 @@ impl ThreadManagerState {
     pub(crate) async fn spawn_new_thread_with_source(
         &self,
         config: Config,
+        thread_store: Arc<dyn ThreadStore>,
         agent_control: AgentControl,
         session_source: SessionSource,
         initial_collaboration_mode: Option<CollaborationMode>,
@@ -908,7 +972,6 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
-        let thread_store = configured_thread_store(&config);
         let environments = environments.unwrap_or_else(|| {
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
         });
@@ -934,19 +997,22 @@ impl ThreadManagerState {
 
     pub(crate) async fn resume_thread_from_rollout_with_source(
         &self,
-        config: Config,
-        rollout_path: PathBuf,
-        agent_control: AgentControl,
-        session_source: SessionSource,
-        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
-        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        options: ResumeThreadFromRolloutOptions,
     ) -> CodexResult<NewThread> {
+        let ResumeThreadFromRolloutOptions {
+            config,
+            thread_store,
+            rollout_path,
+            agent_control,
+            session_source,
+            inherited_shell_snapshot,
+            inherited_exec_policy,
+        } = options;
         let initial_history = RolloutRecorder::get_rollout_history_with_options(
             &rollout_path,
             config.resume_load_options(),
         )
         .await?;
-        let thread_store = configured_thread_store(&config);
         let environments =
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd);
         Box::pin(self.spawn_thread_with_source(
@@ -973,6 +1039,7 @@ impl ThreadManagerState {
     pub(crate) async fn fork_thread_with_source(
         &self,
         config: Config,
+        thread_store: Arc<dyn ThreadStore>,
         initial_history: InitialHistory,
         agent_control: AgentControl,
         session_source: SessionSource,
@@ -982,7 +1049,6 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
-        let thread_store = configured_thread_store(&config);
         let environments = environments.unwrap_or_else(|| {
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
         });
@@ -1062,6 +1128,7 @@ impl ThreadManagerState {
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
+        let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         let environment =
             selected_primary_environment(self.environment_manager.as_ref(), &environments)?;
         let watch_registration = match environment.as_ref() {
@@ -1080,6 +1147,7 @@ impl ThreadManagerState {
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
+        let tracked_session_source = session_source.clone();
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
@@ -1108,14 +1176,22 @@ impl ThreadManagerState {
             thread_store,
         })
         .await?;
-        self.finalize_thread_spawn(codex, thread_id, watch_registration)
-            .await
+        let new_thread = self
+            .finalize_thread_spawn(codex, thread_id, tracked_session_source, watch_registration)
+            .await?;
+        if is_resumed_thread
+            && let Err(err) = new_thread.thread.apply_goal_resume_runtime_effects().await
+        {
+            warn!("failed to apply goal resume runtime effects: {err}");
+        }
+        Ok(new_thread)
     }
 
     async fn finalize_thread_spawn(
         &self,
         codex: Codex,
         thread_id: ThreadId,
+        session_source: SessionSource,
         watch_registration: crate::file_watcher::WatchRegistration,
     ) -> CodexResult<NewThread> {
         let event = codex.next_event().await?;
@@ -1132,6 +1208,7 @@ impl ThreadManagerState {
         let thread = Arc::new(CodexThread::new(
             codex,
             session_configured.rollout_path.clone(),
+            session_source,
             watch_registration,
         ));
         let mut threads = self.threads.write().await;
@@ -1272,10 +1349,44 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
     }
 }
 
+fn fork_history_from_snapshot(
+    snapshot: ForkSnapshot,
+    history: InitialHistory,
+    interrupted_marker: InterruptedTurnHistoryMarker,
+) -> InitialHistory {
+    let snapshot_state = snapshot_turn_state(&history);
+    match snapshot {
+        ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
+            truncate_before_nth_user_message(history, nth_user_message, &snapshot_state)
+        }
+        ForkSnapshot::Interrupted => {
+            let history = match history {
+                InitialHistory::New => InitialHistory::New,
+                InitialHistory::Cleared => InitialHistory::Cleared,
+                InitialHistory::Forked(history) => InitialHistory::Forked(history),
+                InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
+            };
+            if snapshot_state.ends_mid_turn {
+                append_interrupted_boundary(
+                    history,
+                    snapshot_state.active_turn_id,
+                    interrupted_marker,
+                )
+            } else {
+                history
+            }
+        }
+    }
+}
+
 /// Append the same persisted interrupt boundary used by the live interrupt path
 /// to an existing fork snapshot after the source thread has been confirmed to
 /// be mid-turn.
-fn append_interrupted_boundary(history: InitialHistory, turn_id: Option<String>) -> InitialHistory {
+fn append_interrupted_boundary(
+    history: InitialHistory,
+    turn_id: Option<String>,
+    interrupted_marker: InterruptedTurnHistoryMarker,
+) -> InitialHistory {
     let aborted_event = RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
         turn_id,
         reason: TurnAbortReason::Interrupted,
@@ -1284,19 +1395,25 @@ fn append_interrupted_boundary(history: InitialHistory, turn_id: Option<String>)
     }));
 
     match history {
-        InitialHistory::New | InitialHistory::Cleared => InitialHistory::Forked(vec![
-            RolloutItem::ResponseItem(interrupted_turn_history_marker()),
-            aborted_event,
-        ]),
+        InitialHistory::New | InitialHistory::Cleared => {
+            let mut history = Vec::new();
+            if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
+                history.push(RolloutItem::ResponseItem(marker));
+            }
+            history.push(aborted_event);
+            InitialHistory::Forked(history)
+        }
         InitialHistory::Forked(mut history) => {
-            history.push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
+            if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
+                history.push(RolloutItem::ResponseItem(marker));
+            }
             history.push(aborted_event);
             InitialHistory::Forked(history)
         }
         InitialHistory::Resumed(mut resumed) => {
-            resumed
-                .history
-                .push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
+            if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
+                resumed.history.push(RolloutItem::ResponseItem(marker));
+            }
             resumed.history.push(aborted_event);
             InitialHistory::Forked(resumed.history)
         }

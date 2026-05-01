@@ -12,8 +12,6 @@ use crate::session::session::Session;
 use anyhow::Context;
 use codex_config::Constrained;
 use codex_features::Feature;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
@@ -81,9 +79,9 @@ pub(super) async fn classify_with_model(
             .is_some_and(codex_login::CodexAuth::is_chatgpt_auth),
     )?;
     let source = SessionSource::SubAgent(SubAgentSource::MemoryExtraction);
-    let agent_control = session.services.agent_control.detached_registry();
+    let agent_control = session.services.agent_control.clone();
     let thread_id = agent_control
-        .spawn_agent(
+        .spawn_agent_with_metadata(
             agent_config,
             vec![UserInput::Text {
                 text: prompt,
@@ -91,8 +89,10 @@ pub(super) async fn classify_with_model(
             }]
             .into(),
             Some(source),
+            crate::agent::control::SpawnAgentOptions::default(),
         )
         .await
+        .map(|agent| agent.thread_id)
         .context("spawn orchestrator-memory classification agent")?;
 
     let final_status = wait_for_final_status(&agent_control, thread_id).await;
@@ -190,22 +190,14 @@ fn build_classification_agent_config(
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![root],
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
     agent_config
         .permissions
-        .sandbox_policy
-        .set(sandbox_policy.clone())
+        .set_legacy_sandbox_policy(sandbox_policy, agent_config.cwd.as_path())
         .context("set orchestrator memory classifier sandbox policy")?;
-    agent_config.permissions.file_system_sandbox_policy =
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy(
-            &sandbox_policy,
-            agent_config.cwd.as_path(),
-        );
-    agent_config.permissions.network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
 
     agent_config.model = Some(super::model::resolve_orchestrator_memory_model(
         base,
