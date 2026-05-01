@@ -360,8 +360,8 @@ impl ChatWidget {
 
     fn dispatch_outcomes_command(&mut self, args: Option<&str>) {
         match args.map(str::trim).filter(|value| !value.is_empty()) {
-            Some("on") => self.set_outcomes_tracking_enabled(true),
-            Some("off") => self.set_outcomes_tracking_enabled(false),
+            Some("on") => self.set_outcomes_tracking_enabled(/*enabled*/ true),
+            Some("off") => self.set_outcomes_tracking_enabled(/*enabled*/ false),
             Some("status") => self.add_outcomes_tracking_status(),
             Some(_) => self.add_error_message(OUTCOMES_USAGE.to_string()),
             None => self.add_current_outcomes_output(),
@@ -483,10 +483,10 @@ impl ChatWidget {
                 self.set_current_scratchpad_continuous_policy(enabled);
             }
             Some("on" | "enable" | "enabled") => {
-                self.set_current_scratchpad_continuous_policy(true);
+                self.set_current_scratchpad_continuous_policy(/*enabled*/ true);
             }
             Some("off" | "disable" | "disabled") => {
-                self.set_current_scratchpad_continuous_policy(false);
+                self.set_current_scratchpad_continuous_policy(/*enabled*/ false);
             }
             Some("status") => self.add_current_continuous_status(),
             Some(_) => self.add_error_message(CONTINUOUS_USAGE.to_string()),

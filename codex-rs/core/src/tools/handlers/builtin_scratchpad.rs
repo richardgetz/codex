@@ -1806,7 +1806,8 @@ mod tests {
     #[test]
     fn set_thread_continuous_policy_creates_pad_and_forces_safe_fallback() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let created = set_thread_continuous_policy(tmp.path(), "thread-123", true).unwrap();
+        let created =
+            set_thread_continuous_policy(tmp.path(), "thread-123", /*enabled*/ true).unwrap();
 
         assert_eq!(
             created["scratchpad"]["run_policy"]["continuous"]["enabled"],
@@ -1825,7 +1826,8 @@ mod tests {
         );
         store.write(&scratchpad).unwrap();
 
-        let disabled = set_thread_continuous_policy(tmp.path(), "thread-123", false).unwrap();
+        let disabled =
+            set_thread_continuous_policy(tmp.path(), "thread-123", /*enabled*/ false).unwrap();
 
         assert_eq!(
             disabled["scratchpad"]["run_policy"]["continuous"]["enabled"],

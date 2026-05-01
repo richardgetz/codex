@@ -246,6 +246,8 @@ pub(crate) enum AppEvent {
     /// Result of refreshing rate limits.
     RateLimitsLoaded {
         origin: RateLimitRefreshOrigin,
+        account_alias: Option<String>,
+        account_generation: u64,
         result: Result<Vec<RateLimitSnapshot>, String>,
     },
 
