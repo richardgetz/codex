@@ -53,6 +53,8 @@ pub enum SlashCommand {
     #[strum(serialize = "orchestrator-memory-consolidate")]
     OrchestratorMemoryConsolidate,
     Scratchpad,
+    Outcomes,
+    Continuous,
     Apps,
     Plugins,
     Account,
@@ -136,6 +138,8 @@ impl SlashCommand {
                 "run orchestrator memory cleanup and consolidation now"
             }
             SlashCommand::Scratchpad => "show the built-in scratchpad for this session",
+            SlashCommand::Outcomes => "export measured outcomes for this session scratchpad",
+            SlashCommand::Continuous => "toggle scratchpad-backed continuous run policy",
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
             SlashCommand::Account => "show or switch the session account alias",
@@ -161,6 +165,8 @@ impl SlashCommand {
                 | SlashCommand::Goal
                 | SlashCommand::Fast
                 | SlashCommand::Mcp
+                | SlashCommand::Continuous
+                | SlashCommand::Outcomes
                 | SlashCommand::Side
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
@@ -217,6 +223,8 @@ impl SlashCommand {
             | SlashCommand::OrchestratorMemoryForget
             | SlashCommand::OrchestratorMemoryConsolidate
             | SlashCommand::Scratchpad
+            | SlashCommand::Outcomes
+            | SlashCommand::Continuous
             | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Title

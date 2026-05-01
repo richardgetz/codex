@@ -664,6 +664,12 @@ impl App {
                     .await?;
                 Ok(true)
             }
+            AppCommandView::Other(Op::SetScratchpadContinuousPolicy { enabled }) => {
+                app_server
+                    .thread_scratchpad_continuous_policy_set(thread_id, *enabled)
+                    .await?;
+                Ok(true)
+            }
             AppCommandView::ThreadRollback { num_turns } => {
                 let response = match app_server.thread_rollback(thread_id, num_turns).await {
                     Ok(response) => response,

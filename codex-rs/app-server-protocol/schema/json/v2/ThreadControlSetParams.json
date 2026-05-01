@@ -3,7 +3,6 @@
   "definitions": {
     "ThreadControlMode": {
       "enum": [
-        "continuous",
         "orchestrator"
       ],
       "type": "string"

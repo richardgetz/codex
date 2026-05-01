@@ -3876,7 +3876,15 @@ impl ChatWidget {
     }
 
     fn on_scratchpad_update(&mut self, update: ScratchpadUpdateEvent) {
-        self.add_to_history(history_cell::new_scratchpad_update(update));
+        let view = self.config.scratchpad.view;
+        if !view.enabled {
+            return;
+        }
+        self.add_to_history(history_cell::new_scratchpad_update(update, view));
+    }
+
+    fn on_scratchpad_update_verbose(&mut self, update: ScratchpadUpdateEvent) {
+        self.add_to_history(history_cell::new_scratchpad_update_verbose(update));
     }
 
     fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
@@ -10956,7 +10964,6 @@ impl ChatWidget {
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
-            ModeKind::Continuous => Some(CollaborationModeIndicator::Continuous),
             ModeKind::Orchestrator => Some(CollaborationModeIndicator::Orchestrator),
             ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => None,
         }
@@ -11770,6 +11777,15 @@ impl ChatWidget {
     }
 
     pub(crate) fn prepare_local_op_submission(&mut self, op: &AppCommand) {
+        if matches!(
+            op.view(),
+            crate::app_command::AppCommandView::UserTurn { .. }
+        ) {
+            self.set_status_header(String::from("Working"));
+            self.bottom_pane.set_task_running(/*running*/ true);
+            self.user_turn_pending_start = true;
+            self.request_redraw();
+        }
         if matches!(op.view(), crate::app_command::AppCommandView::Interrupt)
             && self.agent_turn_running
         {

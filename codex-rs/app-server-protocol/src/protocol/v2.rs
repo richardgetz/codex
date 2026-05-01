@@ -4009,6 +4009,19 @@ pub struct ThreadUnarchiveParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadSetNameResponse {}
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadScratchpadContinuousPolicySetParams {
+    pub thread_id: String,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadScratchpadContinuousPolicySetResponse {}
+
 v2_enum_from_core! {
     pub enum ThreadGoalStatus from CoreThreadGoalStatus {
         Active,
@@ -4165,14 +4178,12 @@ pub struct ThreadMetadataUpdateResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum ThreadControlMode {
-    Continuous,
     Orchestrator,
 }
 
 impl ThreadControlMode {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Continuous => "continuous",
             Self::Orchestrator => "orchestrator",
         }
     }

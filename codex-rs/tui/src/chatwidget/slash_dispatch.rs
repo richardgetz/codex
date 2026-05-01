@@ -31,6 +31,8 @@ const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
 const GOAL_USAGE: &str = "Usage: /goal <objective>";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
+const CONTINUOUS_USAGE: &str = "Usage: /continuous [on|off|status]";
+const OUTCOMES_USAGE: &str = "Usage: /outcomes [on|off|status]";
 
 fn scratchpad_update_event_from_value(value: &serde_json::Value) -> Option<ScratchpadUpdateEvent> {
     Some(ScratchpadUpdateEvent {
@@ -89,6 +91,67 @@ fn format_pending_wait(wait: &serde_json::Value) -> String {
         .find_map(|key| object.get(*key).and_then(serde_json::Value::as_str))
         .unwrap_or("pending wait")
         .to_string()
+}
+
+fn outcomes_markdown(
+    thread_id: ThreadId,
+    objective: &str,
+    outcomes: &[serde_json::Value],
+) -> String {
+    let mut lines = vec![
+        format!("# Outcomes for {objective}"),
+        String::new(),
+        format!("Scratchpad: `{thread_id}`"),
+        String::new(),
+    ];
+    if outcomes.is_empty() {
+        lines.push("No outcomes recorded.".to_string());
+        return lines.join("\n");
+    }
+
+    for outcome in outcomes {
+        let object = outcome.as_object();
+        let scope = object
+            .and_then(|object| object.get("scope"))
+            .map(format_outcome_value)
+            .unwrap_or_else(|| "general".to_string());
+        let metric = object
+            .and_then(|object| object.get("metric"))
+            .map(format_outcome_value)
+            .unwrap_or_else(|| "metric".to_string());
+        lines.push(format!("## {scope} - {metric}"));
+        for key in [
+            "baseline",
+            "current",
+            "delta",
+            "unit",
+            "summary",
+            "tradeoffs",
+            "commit",
+            "pr",
+            "recorded_at",
+        ] {
+            if let Some(value) = object.and_then(|object| object.get(key)) {
+                lines.push(format!("- {key}: {}", format_outcome_value(value)));
+            }
+        }
+        if let Some(provenance) = object.and_then(|object| object.get("provenance")) {
+            lines.push(format!(
+                "- provenance: {}",
+                format_outcome_value(provenance)
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    lines.join("\n")
+}
+
+fn format_outcome_value(value: &serde_json::Value) -> String {
+    value
+        .as_str()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| value.to_string())
 }
 
 impl ChatWidget {
@@ -216,7 +279,218 @@ impl ChatWidget {
             ));
             return;
         };
-        self.on_scratchpad_update(update);
+        self.on_scratchpad_update_verbose(update);
+    }
+
+    fn add_current_outcomes_output(&mut self) {
+        let Some((thread_id, path)) = self.current_scratchpad_path() else {
+            self.add_error_message(
+                "'/outcomes' is unavailable before the session starts.".to_string(),
+            );
+            return;
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                self.add_info_message(
+                    format!("No outcomes are available because scratchpad `{thread_id}` does not exist yet."),
+                    Some("Record outcomes with the built-in scratchpad record_outcome tool during measurable work.".to_string()),
+                );
+                return;
+            }
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Could not read built-in scratchpad `{thread_id}`: {err}"
+                ));
+                return;
+            }
+        };
+        let value = match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(value) => value,
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Built-in scratchpad `{thread_id}` is invalid JSON: {err}"
+                ));
+                return;
+            }
+        };
+        let objective = value
+            .get("objective")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Scratchpad outcomes");
+        let outcomes = value
+            .get("outcomes")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let markdown = outcomes_markdown(thread_id, objective, &outcomes);
+        self.add_to_history(history_cell::new_outcomes_export(markdown));
+    }
+
+    fn set_outcomes_tracking_enabled(&mut self, enabled: bool) {
+        match persist_outcomes_tracking_enabled(&self.config.codex_home, enabled) {
+            Ok(()) => {
+                self.config.scratchpad.outcomes_enabled = enabled;
+                self.submit_op(Op::ReloadUserConfig);
+                let state = if enabled { "enabled" } else { "disabled" };
+                self.add_info_message(
+                    format!("Scratchpad outcome tracking {state}."),
+                    Some("Persisted in config.toml for future sessions.".to_string()),
+                );
+            }
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Could not update scratchpad outcome tracking config: {err}"
+                ));
+            }
+        }
+    }
+
+    fn add_outcomes_tracking_status(&mut self) {
+        let state = if self.config.scratchpad.outcomes_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        self.add_info_message(
+            format!("Scratchpad outcome tracking is {state}."),
+            Some(OUTCOMES_USAGE.to_string()),
+        );
+    }
+
+    fn dispatch_outcomes_command(&mut self, args: Option<&str>) {
+        match args.map(str::trim).filter(|value| !value.is_empty()) {
+            Some("on") => self.set_outcomes_tracking_enabled(true),
+            Some("off") => self.set_outcomes_tracking_enabled(false),
+            Some("status") => self.add_outcomes_tracking_status(),
+            Some(_) => self.add_error_message(OUTCOMES_USAGE.to_string()),
+            None => self.add_current_outcomes_output(),
+        }
+    }
+
+    fn current_scratchpad_path(&self) -> Option<(ThreadId, PathBuf)> {
+        let thread_id = self.thread_id?;
+        Some((
+            thread_id,
+            self.config
+                .codex_home
+                .join("scratchpad")
+                .join("entries")
+                .join(format!("{thread_id}.json"))
+                .to_path_buf(),
+        ))
+    }
+
+    fn read_current_scratchpad_value(&mut self) -> Option<serde_json::Value> {
+        let Some((thread_id, path)) = self.current_scratchpad_path() else {
+            self.add_error_message(
+                "'/continuous' is unavailable before the session starts.".to_string(),
+            );
+            return None;
+        };
+        match std::fs::read_to_string(&path) {
+            Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(value) => Some(value),
+                Err(err) => {
+                    self.add_error_message(format!(
+                        "Built-in scratchpad `{thread_id}` is invalid JSON: {err}"
+                    ));
+                    None
+                }
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(serde_json::json!({
+                "scratchpad_id": thread_id.to_string(),
+                "objective": "Session continuous run policy",
+                "status": "active",
+                "completed": [],
+                "next_steps": [],
+                "pending_waits": [],
+                "run_policy": {},
+                "communication_policy": {
+                    "fallback": {
+                        "final_response_on_channel_failure": false
+                    }
+                },
+                "created_at": chrono::Utc::now().to_rfc3339(),
+                "updated_at": chrono::Utc::now().to_rfc3339(),
+                "archived_at": null
+            })),
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Could not read built-in scratchpad `{thread_id}`: {err}"
+                ));
+                None
+            }
+        }
+    }
+
+    fn set_current_scratchpad_continuous_policy(&mut self, enabled: bool) {
+        let Some(thread_id) = self.thread_id else {
+            self.add_error_message(
+                "'/continuous' is unavailable before the session starts.".to_string(),
+            );
+            return;
+        };
+        if !self.submit_op(Op::SetScratchpadContinuousPolicy { enabled }) {
+            self.add_error_message(format!(
+                "Could not submit continuous policy update for scratchpad `{thread_id}`."
+            ));
+            return;
+        }
+        let state = if enabled { "enable" } else { "disable" };
+        self.add_info_message(
+            format!("Continuous run policy {state} requested for scratchpad `{thread_id}`."),
+            Some(CONTINUOUS_USAGE.to_string()),
+        );
+    }
+
+    fn current_scratchpad_continuous_enabled(&mut self) -> Option<bool> {
+        let value = self.read_current_scratchpad_value()?;
+        Some(
+            value
+                .get("run_policy")
+                .and_then(|policy| policy.get("continuous"))
+                .and_then(|continuous| continuous.get("enabled"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+        )
+    }
+
+    fn add_current_continuous_status(&mut self) {
+        let Some((thread_id, _)) = self.current_scratchpad_path() else {
+            self.add_error_message(
+                "'/continuous' is unavailable before the session starts.".to_string(),
+            );
+            return;
+        };
+        let Some(enabled) = self.current_scratchpad_continuous_enabled() else {
+            return;
+        };
+        let state = if enabled { "enabled" } else { "disabled" };
+        self.add_info_message(
+            format!("Continuous run policy is {state} for scratchpad `{thread_id}`."),
+            Some(CONTINUOUS_USAGE.to_string()),
+        );
+    }
+
+    fn dispatch_continuous_command(&mut self, args: Option<&str>) {
+        match args.map(str::trim).filter(|args| !args.is_empty()) {
+            None => {
+                let enabled = self
+                    .current_scratchpad_continuous_enabled()
+                    .map(|enabled| !enabled)
+                    .unwrap_or(false);
+                self.set_current_scratchpad_continuous_policy(enabled);
+            }
+            Some("on" | "enable" | "enabled") => {
+                self.set_current_scratchpad_continuous_policy(true);
+            }
+            Some("off" | "disable" | "disabled") => {
+                self.set_current_scratchpad_continuous_policy(false);
+            }
+            Some("status") => self.add_current_continuous_status(),
+            Some(_) => self.add_error_message(CONTINUOUS_USAGE.to_string()),
+        }
     }
 
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
@@ -519,6 +793,12 @@ impl ChatWidget {
             SlashCommand::Scratchpad => {
                 self.add_current_scratchpad_output();
             }
+            SlashCommand::Outcomes => {
+                self.dispatch_outcomes_command(/*args*/ None);
+            }
+            SlashCommand::Continuous => {
+                self.dispatch_continuous_command(/*args*/ None);
+            }
             SlashCommand::Apps => {
                 self.add_connectors_output();
             }
@@ -719,6 +999,12 @@ impl ChatWidget {
                 "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
                 _ => self.add_error_message("Usage: /mcp [verbose]".to_string()),
             },
+            SlashCommand::Continuous => {
+                self.dispatch_continuous_command(Some(trimmed));
+            }
+            SlashCommand::Outcomes => {
+                self.dispatch_outcomes_command(Some(trimmed));
+            }
             SlashCommand::OrchestratorMemoryForget if !trimmed.is_empty() => {
                 let tx = self.app_event_tx.clone();
                 let needle = args.clone();
@@ -1017,6 +1303,8 @@ impl ChatWidget {
             | SlashCommand::OrchestratorMemoryForget
             | SlashCommand::OrchestratorMemoryConsolidate
             | SlashCommand::Scratchpad
+            | SlashCommand::Outcomes
+            | SlashCommand::Continuous
             | SlashCommand::Account
             | SlashCommand::Apps
             | SlashCommand::Plugins
@@ -1108,4 +1396,42 @@ impl ChatWidget {
         self.bottom_pane.drain_pending_submission_state();
         false
     }
+}
+
+fn persist_outcomes_tracking_enabled(
+    codex_home: &std::path::Path,
+    enabled: bool,
+) -> std::io::Result<()> {
+    use std::io;
+    use toml_edit::DocumentMut;
+
+    let path = codex_home.join(codex_config::CONFIG_TOML_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err),
+    };
+    let mut document = text.parse::<DocumentMut>().map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("config.toml is invalid TOML: {err}"),
+        )
+    })?;
+    document["scratchpad"]["outcomes_enabled"] = toml_edit::value(enabled);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(codex_config::CONFIG_TOML_FILE);
+    let temp_path = path.with_file_name(format!(
+        ".{file_name}.{}.tmp",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::write(&temp_path, document.to_string())?;
+    if cfg!(windows) && path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    std::fs::rename(temp_path, path)
 }

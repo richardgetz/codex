@@ -64,7 +64,7 @@ impl CodexMessageProcessor {
         };
 
         let control = match state_db_ctx.get_active_thread_control(thread_uuid).await {
-            Ok(control) => control.map(thread_control_from_state_record),
+            Ok(control) => control.and_then(thread_control_from_state_record),
             Err(err) => {
                 self.send_internal_error(
                     request_id,
@@ -174,7 +174,6 @@ impl CodexMessageProcessor {
         let control = ThreadControlRecord {
             thread_id: thread_uuid,
             mode: match params.mode {
-                ThreadControlMode::Continuous => StateThreadControlMode::Continuous,
                 ThreadControlMode::Orchestrator => StateThreadControlMode::Router,
             },
             reason,
@@ -211,7 +210,8 @@ impl CodexMessageProcessor {
             .send_response(
                 request_id,
                 ThreadControlSetResponse {
-                    control: thread_control_from_state_record(control),
+                    control: thread_control_from_state_record(control)
+                        .expect("new thread control records are public API modes"),
                 },
             )
             .await;
@@ -248,7 +248,7 @@ impl CodexMessageProcessor {
             .release_thread_control(thread_uuid, Utc::now())
             .await
         {
-            Ok(control) => control.map(thread_control_from_state_record),
+            Ok(control) => control.and_then(thread_control_from_state_record),
             Err(err) => {
                 self.send_internal_error(
                     request_id,
@@ -273,13 +273,16 @@ impl CodexMessageProcessor {
     }
 }
 
-pub(super) fn thread_control_from_state_record(record: ThreadControlRecord) -> ThreadControl {
-    ThreadControl {
+pub(super) fn thread_control_from_state_record(
+    record: ThreadControlRecord,
+) -> Option<ThreadControl> {
+    let mode = match record.mode {
+        StateThreadControlMode::Router => ThreadControlMode::Orchestrator,
+        StateThreadControlMode::Continuous => return None,
+    };
+    Some(ThreadControl {
         thread_id: record.thread_id.to_string(),
-        mode: match record.mode {
-            StateThreadControlMode::Continuous => ThreadControlMode::Continuous,
-            StateThreadControlMode::Router => ThreadControlMode::Orchestrator,
-        },
+        mode,
         reason: record.reason,
         release_channel: record.release_channel,
         watch_interval_seconds: record.watch_interval_seconds,
@@ -292,13 +295,14 @@ pub(super) fn thread_control_from_state_record(record: ThreadControlRecord) -> T
             .into_iter()
             .map(|thread_id| thread_id.to_string())
             .collect(),
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::RouterControlLookup;
     use super::should_keep_loaded_for_router_lookup;
+    use super::thread_control_from_state_record;
     use chrono::TimeZone;
     use chrono::Utc;
     use codex_protocol::ThreadId;
@@ -344,5 +348,12 @@ mod tests {
             should_keep_loaded_for_router_lookup(RouterControlLookup::Loaded(None)),
             false
         );
+    }
+
+    #[test]
+    fn legacy_continuous_control_is_not_reported_as_orchestrator_control() {
+        let continuous = thread_control_record(ThreadControlMode::Continuous);
+
+        assert_eq!(thread_control_from_state_record(continuous), None);
     }
 }

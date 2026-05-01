@@ -12,6 +12,8 @@ use tracing::info_span;
 use crate::session::SteerInputError;
 use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
+use crate::tools::handlers::builtin_scratchpad::scratchpad_update_event_from_result;
+use crate::tools::handlers::builtin_scratchpad::set_thread_continuous_policy;
 
 use crate::config::Config;
 use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
@@ -948,6 +950,33 @@ pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) 
     sess.deliver_event_raw(Event { id: sub_id, msg }).await;
 }
 
+pub async fn set_scratchpad_continuous_policy(sess: &Arc<Session>, sub_id: String, enabled: bool) {
+    let codex_home = sess.codex_home().await;
+    let result =
+        set_thread_continuous_policy(&codex_home, &sess.conversation_id.to_string(), enabled);
+    let result = match result {
+        Ok(result) => result,
+        Err(err) => {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: err.to_string(),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            })
+            .await;
+            return;
+        }
+    };
+    if let Some(event) = scratchpad_update_event_from_result(&result) {
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::ScratchpadUpdate(event),
+        })
+        .await;
+    }
+}
+
 /// Persists thread-level memory mode metadata for the active session.
 ///
 /// This does not involve the model and only affects whether the thread is
@@ -1336,6 +1365,10 @@ pub(super) async fn submission_loop(
                 }
                 Op::SetThreadName { name } => {
                     set_thread_name(&sess, sub.id.clone(), name).await;
+                    false
+                }
+                Op::SetScratchpadContinuousPolicy { enabled } => {
+                    set_scratchpad_continuous_policy(&sess, sub.id.clone(), enabled).await;
                     false
                 }
                 Op::SetThreadMemoryMode { mode } => {

@@ -778,6 +778,11 @@ pub enum Op {
     /// involve the model.
     SetThreadName { name: String },
 
+    /// Toggle the built-in scratchpad continuous run policy for this thread.
+    /// This is a local-only operation handled by codex-core; it does not
+    /// involve the model.
+    SetScratchpadContinuousPolicy { enabled: bool },
+
     /// Set whether the thread remains eligible for memory generation.
     ///
     /// This persists thread-level memory mode metadata without involving the
@@ -920,6 +925,7 @@ impl Op {
             Self::UpdateMemories => "update_memories",
             Self::ConsolidateOrchestratorMemory => "consolidate_orchestrator_memory",
             Self::SetThreadName { .. } => "set_thread_name",
+            Self::SetScratchpadContinuousPolicy { .. } => "set_scratchpad_continuous_policy",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::Undo => "undo",
             Self::ThreadRollback { .. } => "thread_rollback",

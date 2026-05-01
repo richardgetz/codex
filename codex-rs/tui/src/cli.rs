@@ -158,12 +158,11 @@ fn parse_collaboration_mode_cli(input: &str) -> Result<ModeKind, String> {
     match normalized.as_str() {
         "default" | "code" | "custom" | "d" => Ok(ModeKind::Default),
         "plan" | "p" => Ok(ModeKind::Plan),
-        "continuous" | "c" => Ok(ModeKind::Continuous),
         "orchestrator" | "o" => Ok(ModeKind::Orchestrator),
         "pair_programming" | "pair" | "pp" => Ok(ModeKind::PairProgramming),
         "execute" | "e" => Ok(ModeKind::Execute),
         _ => Err(format!(
-            "unknown collaboration mode `{input}`; expected one of: default (d), plan (p), continuous (c), orchestrator (o), pair_programming (pp), execute (e)"
+            "unknown collaboration mode `{input}`; expected one of: default (d), plan (p), orchestrator (o), pair_programming (pp), execute (e)"
         )),
     }
 }

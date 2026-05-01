@@ -587,14 +587,9 @@ fn hide_spawn_agent_metadata_options(properties: &mut BTreeMap<String, JsonSchem
 
 fn spawn_agent_collaboration_mode_schema() -> JsonSchema {
     JsonSchema::string_enum(
-        vec![
-            json!("default"),
-            json!("plan"),
-            json!("continuous"),
-            json!("orchestrator"),
-        ],
+        vec![json!("default"), json!("plan"), json!("orchestrator")],
         Some(
-            "Optional collaboration mode for the new agent. Use `plan` for planning-only work, `continuous` for long-running execution, `default` for normal one-turn work, or `orchestrator` for a delegated coordinator."
+            "Optional collaboration mode for the new agent. Use `plan` for planning-only work, `default` for normal one-turn work, or `orchestrator` for a delegated coordinator."
                 .to_string(),
         ),
     )
@@ -691,7 +686,7 @@ fn spawn_agent_tool_description_v2(
 You are then able to refer to this agent as `task_3` or `/root/task1/task_3` interchangeably. However an agent `/root/task2/task_3` would only be able to communicate with this agent via its canonical name `/root/task1/task_3`.
 The spawned agent will have the same tools as you and the ability to spawn its own subagents.
 {SPAWN_AGENT_INHERITED_MODEL_GUIDANCE}
-Use collaboration_mode to choose how the child should operate: default for normal work, plan for planning, continuous for long-running execution, or orchestrator for a delegated coordinator.
+Use collaboration_mode to choose how the child should operate: default for normal work, plan for planning, or orchestrator for a delegated coordinator.
 It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes.
 The new agent's canonical task name will be provided to it along with the message.
 {concurrency_guidance}"#

@@ -2,6 +2,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
+use std::sync::OnceLock;
 
 use chrono::DateTime;
 use chrono::Duration;
@@ -27,6 +30,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ScratchpadUpdateEvent;
 
 const SCRATCHPAD_NAMESPACE: &str = "scratchpad";
+static SCRATCHPAD_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const TOOL_OPEN: &str = "open_scratchpad";
 const TOOL_RESUME: &str = "resume_scratchpad";
 const TOOL_GET: &str = "get_scratchpad";
@@ -42,6 +46,9 @@ const TOOL_UNARCHIVE: &str = "unarchive_scratchpad";
 const TOOL_LOOKUP: &str = "lookup_scratchpads";
 const TOOL_SCHEMA: &str = "get_scratchpad_schema";
 const TOOL_CHECK_ACTION: &str = "check_action_allowed";
+const TOOL_RECORD_OUTCOME: &str = "record_outcome";
+const TOOL_EXPORT_OUTCOMES: &str = "export_outcomes";
+const TOOL_RECORD_DELEGATION: &str = "record_delegation";
 
 pub(crate) const BUILTIN_SCRATCHPAD_TOOL_NAMES: &[&str] = &[
     TOOL_OPEN,
@@ -59,6 +66,9 @@ pub(crate) const BUILTIN_SCRATCHPAD_TOOL_NAMES: &[&str] = &[
     TOOL_LOOKUP,
     TOOL_SCHEMA,
     TOOL_CHECK_ACTION,
+    TOOL_RECORD_OUTCOME,
+    TOOL_EXPORT_OUTCOMES,
+    TOOL_RECORD_DELEGATION,
 ];
 
 pub(crate) fn scratchpad_namespace_spec() -> ToolSpec {
@@ -117,6 +127,18 @@ pub(crate) fn scratchpad_namespace_spec() -> ToolSpec {
             TOOL_CHECK_ACTION,
             "Check whether an action appears allowed by the scratchpad action policy.",
         ),
+        (
+            TOOL_RECORD_OUTCOME,
+            "Append a measured outcome/progress datapoint with scope, metric, value, provenance, and summary.",
+        ),
+        (
+            TOOL_EXPORT_OUTCOMES,
+            "Export scratchpad outcome measurements as portable JSON plus a markdown summary.",
+        ),
+        (
+            TOOL_RECORD_DELEGATION,
+            "Record or update parent scratchpad lineage for work delegated to a subagent.",
+        ),
     ]
     .into_iter()
     .map(|(name, description)| {
@@ -160,7 +182,13 @@ impl ToolHandler for BuiltinScratchpadHandler {
     async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
         !matches!(
             invocation.tool_name.name.as_str(),
-            TOOL_RESUME | TOOL_GET | TOOL_SUMMARY | TOOL_LOOKUP | TOOL_SCHEMA | TOOL_CHECK_ACTION
+            TOOL_RESUME
+                | TOOL_GET
+                | TOOL_SUMMARY
+                | TOOL_LOOKUP
+                | TOOL_SCHEMA
+                | TOOL_CHECK_ACTION
+                | TOOL_EXPORT_OUTCOMES
         )
     }
 
@@ -205,6 +233,17 @@ impl ToolHandler for BuiltinScratchpadHandler {
             TOOL_LOOKUP => lookup_scratchpads(&store, &args),
             TOOL_SCHEMA => Ok(schema_payload()),
             TOOL_CHECK_ACTION => check_action_allowed(&store, &args),
+            TOOL_RECORD_OUTCOME => {
+                if !config.scratchpad.outcomes_enabled {
+                    Err(FunctionCallError::RespondToModel(
+                        "scratchpad outcome tracking is disabled; enable it with `/outcomes on` or `[scratchpad].outcomes_enabled = true` before recording outcomes.".to_string(),
+                    ))
+                } else {
+                    record_outcome(&store, &args)
+                }
+            }
+            TOOL_EXPORT_OUTCOMES => export_outcomes(&store, &args),
+            TOOL_RECORD_DELEGATION => record_delegation(&store, &args),
             tool_name => Err(FunctionCallError::RespondToModel(format!(
                 "unknown scratchpad tool: {tool_name}"
             ))),
@@ -238,10 +277,11 @@ fn should_emit_scratchpad_update(tool_name: &str) -> bool {
             | TOOL_UPDATE
             | TOOL_ARCHIVE
             | TOOL_UNARCHIVE
+            | TOOL_RECORD_DELEGATION
     )
 }
 
-fn scratchpad_update_event_from_result(result: &Value) -> Option<ScratchpadUpdateEvent> {
+pub(crate) fn scratchpad_update_event_from_result(result: &Value) -> Option<ScratchpadUpdateEvent> {
     let scratchpad = result.get("scratchpad")?;
     Some(ScratchpadUpdateEvent {
         scratchpad_id: scratchpad.get("scratchpad_id")?.as_str()?.to_string(),
@@ -316,6 +356,10 @@ struct Scratchpad {
     #[serde(default)]
     action_policy: BTreeMap<String, Value>,
     #[serde(default)]
+    run_policy: BTreeMap<String, Value>,
+    #[serde(default)]
+    communication_policy: BTreeMap<String, Value>,
+    #[serde(default)]
     completed: Vec<String>,
     #[serde(default)]
     next_steps: Vec<String>,
@@ -335,6 +379,10 @@ struct Scratchpad {
     final_guard: String,
     #[serde(default)]
     last_benchmark: Option<Value>,
+    #[serde(default)]
+    outcomes: Vec<Value>,
+    #[serde(default)]
+    delegations: Vec<Value>,
     #[serde(default)]
     notes: Vec<ScratchpadNote>,
     created_at: String,
@@ -395,7 +443,7 @@ impl ScratchpadStore {
         let text = serde_json::to_string_pretty(scratchpad).map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to serialize scratchpad: {err}"))
         })?;
-        fs::write(path, format!("{text}\n")).map_err(io_error)?;
+        atomic_write_json(&path, &format!("{text}\n"))?;
         self.write_index()
     }
 
@@ -455,8 +503,36 @@ impl ScratchpadStore {
                 "failed to serialize scratchpad index: {err}"
             ))
         })?;
-        fs::write(self.root.join("index.json"), format!("{text}\n")).map_err(io_error)
+        atomic_write_json(&self.root.join("index.json"), &format!("{text}\n"))
     }
+}
+
+fn atomic_write_json(path: &Path, text: &str) -> Result<(), FunctionCallError> {
+    let parent = path.parent().ok_or_else(|| {
+        FunctionCallError::RespondToModel(format!(
+            "scratchpad path `{}` has no parent directory",
+            path.display()
+        ))
+    })?;
+    fs::create_dir_all(parent).map_err(io_error)?;
+    let tmp_path = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("scratchpad"),
+        uuid::Uuid::new_v4().simple()
+    ));
+    fs::write(&tmp_path, text).map_err(io_error)?;
+    if cfg!(windows) && path.exists() {
+        fs::remove_file(path).map_err(|err| {
+            let _ = fs::remove_file(&tmp_path);
+            io_error(err)
+        })?;
+    }
+    fs::rename(&tmp_path, path).map_err(|err| {
+        let _ = fs::remove_file(&tmp_path);
+        io_error(err)
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -488,6 +564,7 @@ pub(crate) fn run_lifecycle_cleanup(
         return Ok(());
     }
 
+    let _guard = scratchpad_write_guard()?;
     let store = ScratchpadStore::new(/*state_home*/ None, codex_home)?;
     let now = Utc::now();
     for mut scratchpad in store.list()? {
@@ -526,11 +603,59 @@ pub(crate) fn run_lifecycle_cleanup(
     store.write_index()
 }
 
+pub(crate) fn set_thread_continuous_policy(
+    codex_home: &Path,
+    scratchpad_id: &str,
+    enabled: bool,
+) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
+    let store = ScratchpadStore::new(/*state_home*/ None, codex_home)?;
+    let mut scratchpad = match store.read(scratchpad_id) {
+        Ok(scratchpad) => scratchpad,
+        Err(FunctionCallError::RespondToModel(message)) if message.contains("not found") => {
+            let now = now();
+            Scratchpad {
+                scratchpad_id: scratchpad_id.to_string(),
+                objective: "Session continuous run policy".to_string(),
+                status: "active".to_string(),
+                session_key: None,
+                worktrees: Vec::new(),
+                active_channels: Vec::new(),
+                active_sessions: BTreeMap::new(),
+                action_policy: BTreeMap::new(),
+                run_policy: BTreeMap::new(),
+                communication_policy: BTreeMap::new(),
+                completed: Vec::new(),
+                next_steps: Vec::new(),
+                pending_waits: Vec::new(),
+                git_refs: Vec::new(),
+                artifacts: Vec::new(),
+                stop_conditions: Vec::new(),
+                resume_instructions: String::new(),
+                interruption_policy: String::new(),
+                final_guard: String::new(),
+                last_benchmark: None,
+                outcomes: Vec::new(),
+                delegations: Vec::new(),
+                notes: Vec::new(),
+                created_at: now.clone(),
+                updated_at: now,
+                archived_at: None,
+            }
+        }
+        Err(err) => return Err(err),
+    };
+    set_continuous_policy_fields(&mut scratchpad, enabled);
+    store.write(&scratchpad)?;
+    Ok(serde_json::json!({ "scratchpad": scratchpad }))
+}
+
 fn open_scratchpad(
     store: &ScratchpadStore,
     args: &Value,
     default_scratchpad_id: &str,
 ) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let objective = string_arg(args, "objective")?;
     let session_key = optional_string_arg(args, "session_key");
     if let Some(existing) = find_existing_active(store, &objective, session_key.as_deref())? {
@@ -549,6 +674,8 @@ fn open_scratchpad(
         active_channels: string_array_arg(args, "active_channels"),
         active_sessions: object_arg(args, "active_sessions"),
         action_policy: object_arg(args, "action_policy"),
+        run_policy: object_arg(args, "run_policy"),
+        communication_policy: object_arg(args, "communication_policy"),
         completed: string_array_arg(args, "completed"),
         next_steps: string_array_arg(args, "next_steps"),
         pending_waits: array_arg(args, "pending_waits"),
@@ -559,6 +686,8 @@ fn open_scratchpad(
         interruption_policy: optional_string_arg(args, "interruption_policy").unwrap_or_default(),
         final_guard: optional_string_arg(args, "final_guard").unwrap_or_default(),
         last_benchmark: args.get("last_benchmark").cloned(),
+        outcomes: array_arg(args, "outcomes"),
+        delegations: array_arg(args, "delegations"),
         notes: Vec::new(),
         created_at: now.clone(),
         updated_at: now,
@@ -615,6 +744,7 @@ fn append_scratchpad_note(
     store: &ScratchpadStore,
     args: &Value,
 ) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     let mut scratchpad = store.read(&scratchpad_id)?;
     scratchpad.notes.push(ScratchpadNote {
@@ -630,6 +760,7 @@ fn append_scratchpad_note(
 }
 
 fn set_next_steps(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     let mut scratchpad = store.read(&scratchpad_id)?;
     scratchpad.next_steps = string_array_arg(args, "next_steps");
@@ -642,6 +773,7 @@ fn set_next_steps(store: &ScratchpadStore, args: &Value) -> Result<Value, Functi
 }
 
 fn set_pending_waits(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     let mut scratchpad = store.read(&scratchpad_id)?;
     scratchpad.pending_waits = array_arg(args, "pending_waits");
@@ -654,6 +786,7 @@ fn set_pending_waits(store: &ScratchpadStore, args: &Value) -> Result<Value, Fun
 }
 
 fn set_action_policy(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     let mut scratchpad = store.read(&scratchpad_id)?;
     scratchpad.action_policy = object_arg(args, "action_policy");
@@ -663,6 +796,7 @@ fn set_action_policy(store: &ScratchpadStore, args: &Value) -> Result<Value, Fun
 }
 
 fn mark_wait_checked(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     let mut scratchpad = store.read(&scratchpad_id)?;
     let wait_id = optional_string_arg(args, "wait_id");
@@ -698,6 +832,7 @@ fn mark_wait_checked(store: &ScratchpadStore, args: &Value) -> Result<Value, Fun
 }
 
 fn update_scratchpad(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     let mut scratchpad = store.read(&scratchpad_id)?;
     merge_update(&mut scratchpad, args);
@@ -706,7 +841,158 @@ fn update_scratchpad(store: &ScratchpadStore, args: &Value) -> Result<Value, Fun
     Ok(serde_json::json!({ "scratchpad": scratchpad }))
 }
 
+fn set_continuous_policy_fields(scratchpad: &mut Scratchpad, enabled: bool) {
+    let updated_at = now();
+    scratchpad.run_policy.insert(
+        "continuous".to_string(),
+        serde_json::json!({
+            "enabled": enabled,
+            "updated_at": updated_at,
+        }),
+    );
+    let fallback = scratchpad
+        .communication_policy
+        .entry("fallback".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !fallback.is_object() {
+        *fallback = serde_json::json!({});
+    }
+    if let Some(fallback) = fallback.as_object_mut() {
+        fallback.insert(
+            "final_response_on_channel_failure".to_string(),
+            Value::Bool(false),
+        );
+    }
+    scratchpad.updated_at = updated_at;
+}
+
+fn record_outcome(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
+    let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    let mut scratchpad = store.read(&scratchpad_id)?;
+    let mut outcome = serde_json::Map::new();
+    outcome.insert(
+        "outcome_id".to_string(),
+        Value::String(format!("outcome-{}", uuid::Uuid::new_v4().simple())),
+    );
+    outcome.insert("recorded_at".to_string(), Value::String(now()));
+    for key in [
+        "scope",
+        "metric",
+        "unit",
+        "baseline",
+        "current",
+        "delta",
+        "change",
+        "summary",
+        "tradeoffs",
+        "provenance",
+        "commit",
+        "pr",
+        "artifacts",
+        "notes",
+    ] {
+        if let Some(value) = args.get(key) {
+            outcome.insert(key.to_string(), value.clone());
+        }
+    }
+    if !outcome.contains_key("scope") {
+        outcome.insert("scope".to_string(), Value::String("general".to_string()));
+    }
+    if !outcome.contains_key("metric") {
+        outcome.insert(
+            "metric".to_string(),
+            string_arg(args, "metric_name")?.into(),
+        );
+    }
+    if let Some(outcome_id) = optional_string_arg(args, "outcome_id") {
+        outcome.insert("outcome_id".to_string(), Value::String(outcome_id.clone()));
+        if let Some(existing) = scratchpad.outcomes.iter_mut().find(|item| {
+            item.get("outcome_id")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value == outcome_id)
+        }) {
+            let mut merged = existing.as_object().cloned().unwrap_or_default();
+            for (key, value) in outcome {
+                merged.insert(key, value);
+            }
+            *existing = Value::Object(merged);
+        } else {
+            scratchpad.outcomes.push(Value::Object(outcome));
+        }
+    } else {
+        scratchpad.outcomes.push(Value::Object(outcome));
+    }
+    touch(&mut scratchpad);
+    store.write(&scratchpad)?;
+    Ok(serde_json::json!({ "scratchpad": scratchpad }))
+}
+
+fn export_outcomes(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+    let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    let scratchpad = store.read(&scratchpad_id)?;
+    let markdown = outcome_markdown(&scratchpad);
+    Ok(serde_json::json!({
+        "scratchpad_id": scratchpad.scratchpad_id,
+        "objective": scratchpad.objective,
+        "outcomes": scratchpad.outcomes,
+        "markdown": markdown,
+    }))
+}
+
+fn record_delegation(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
+    let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    let mut scratchpad = store.read(&scratchpad_id)?;
+    let delegation_id = optional_string_arg(args, "delegation_id")
+        .unwrap_or_else(|| format!("delegation-{}", uuid::Uuid::new_v4().simple()));
+    let now = now();
+    let mut delegation = serde_json::Map::new();
+    delegation.insert(
+        "delegation_id".to_string(),
+        Value::String(delegation_id.clone()),
+    );
+    delegation.insert("updated_at".to_string(), Value::String(now.clone()));
+    for key in [
+        "agent_id",
+        "agent_label",
+        "child_scratchpad_id",
+        "status",
+        "summary",
+        "item_refs",
+        "task_ids",
+        "next_steps",
+        "artifacts",
+        "notes",
+    ] {
+        if let Some(value) = args.get(key) {
+            delegation.insert(key.to_string(), value.clone());
+        }
+    }
+    if !delegation.contains_key("status") {
+        delegation.insert("status".to_string(), Value::String("delegated".to_string()));
+    }
+    if let Some(existing) = scratchpad.delegations.iter_mut().find(|item| {
+        item.get("delegation_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value == delegation_id)
+    }) {
+        let mut merged = existing.as_object().cloned().unwrap_or_default();
+        for (key, value) in delegation {
+            merged.insert(key, value);
+        }
+        *existing = Value::Object(merged);
+    } else {
+        delegation.insert("created_at".to_string(), Value::String(now));
+        scratchpad.delegations.push(Value::Object(delegation));
+    }
+    touch(&mut scratchpad);
+    store.write(&scratchpad)?;
+    Ok(serde_json::json!({ "scratchpad": scratchpad }))
+}
+
 fn archive_scratchpad(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     let mut scratchpad = store.read(&scratchpad_id)?;
     let now = now();
@@ -728,6 +1014,7 @@ fn archive_scratchpad(store: &ScratchpadStore, args: &Value) -> Result<Value, Fu
 }
 
 fn unarchive_scratchpad(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     let mut scratchpad = store.read(&scratchpad_id)?;
     scratchpad.status = optional_string_arg(args, "status").unwrap_or_else(|| "active".to_string());
@@ -799,6 +1086,8 @@ fn schema_payload() -> Value {
             "active_channels",
             "active_sessions",
             "action_policy",
+            "run_policy",
+            "communication_policy",
             "completed",
             "next_steps",
             "pending_waits",
@@ -809,6 +1098,8 @@ fn schema_payload() -> Value {
             "interruption_policy",
             "final_guard",
             "last_benchmark",
+            "outcomes",
+            "delegations",
             "notes",
             "archived_at"
         ],
@@ -829,7 +1120,10 @@ fn schema_payload() -> Value {
             TOOL_UNARCHIVE,
             TOOL_LOOKUP,
             TOOL_SCHEMA,
-            TOOL_CHECK_ACTION
+            TOOL_CHECK_ACTION,
+            TOOL_RECORD_OUTCOME,
+            TOOL_EXPORT_OUTCOMES,
+            TOOL_RECORD_DELEGATION
         ]
     })
 }
@@ -859,6 +1153,12 @@ fn merge_update(scratchpad: &mut Scratchpad, args: &Value) {
     if args.get("action_policy").is_some() {
         scratchpad.action_policy = object_arg(args, "action_policy");
     }
+    if args.get("run_policy").is_some() {
+        scratchpad.run_policy = object_arg(args, "run_policy");
+    }
+    if args.get("communication_policy").is_some() {
+        scratchpad.communication_policy = object_arg(args, "communication_policy");
+    }
     if args.get("completed").is_some() {
         scratchpad.completed = string_array_arg(args, "completed");
     }
@@ -880,6 +1180,12 @@ fn merge_update(scratchpad: &mut Scratchpad, args: &Value) {
     if args.get("last_benchmark").is_some() {
         scratchpad.last_benchmark = args.get("last_benchmark").cloned();
     }
+    if args.get("outcomes").is_some() {
+        scratchpad.outcomes = array_arg(args, "outcomes");
+    }
+    if args.get("delegations").is_some() {
+        scratchpad.delegations = array_arg(args, "delegations");
+    }
 }
 
 fn summary(scratchpad: &Scratchpad) -> Value {
@@ -891,12 +1197,74 @@ fn summary(scratchpad: &Scratchpad) -> Value {
         "next_steps": scratchpad.next_steps,
         "pending_waits": scratchpad.pending_waits,
         "stop_conditions": scratchpad.stop_conditions,
+        "run_policy": scratchpad.run_policy,
+        "communication_policy": scratchpad.communication_policy,
+        "outcomes_count": scratchpad.outcomes.len(),
+        "latest_outcome": scratchpad.outcomes.last(),
+        "delegations": &scratchpad.delegations,
         "resume_instructions": scratchpad.resume_instructions,
         "final_guard": scratchpad.final_guard,
         "notes_count": scratchpad.notes.len(),
         "updated_at": scratchpad.updated_at,
         "archived_at": scratchpad.archived_at,
     })
+}
+
+fn outcome_markdown(scratchpad: &Scratchpad) -> String {
+    let mut lines = vec![
+        format!("# Outcomes for {}", scratchpad.objective),
+        String::new(),
+        format!("Scratchpad: `{}`", scratchpad.scratchpad_id),
+        String::new(),
+    ];
+    if scratchpad.outcomes.is_empty() {
+        lines.push("No outcomes recorded.".to_string());
+        return lines.join("\n");
+    }
+
+    for outcome in &scratchpad.outcomes {
+        let object = outcome.as_object();
+        let scope = object
+            .and_then(|object| object.get("scope"))
+            .map(format_outcome_value)
+            .unwrap_or_else(|| "general".to_string());
+        let metric = object
+            .and_then(|object| object.get("metric"))
+            .map(format_outcome_value)
+            .unwrap_or_else(|| "metric".to_string());
+        lines.push(format!("## {scope} - {metric}"));
+        for key in [
+            "baseline",
+            "current",
+            "delta",
+            "unit",
+            "summary",
+            "tradeoffs",
+            "commit",
+            "pr",
+            "recorded_at",
+        ] {
+            if let Some(value) = object.and_then(|object| object.get(key)) {
+                lines.push(format!("- {key}: {}", format_outcome_value(value)));
+            }
+        }
+        if let Some(provenance) = object.and_then(|object| object.get("provenance")) {
+            lines.push(format!(
+                "- provenance: {}",
+                format_outcome_value(provenance)
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    lines.join("\n")
+}
+
+fn format_outcome_value(value: &Value) -> String {
+    value
+        .as_str()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| value.to_string())
 }
 
 struct ActionPolicyDecision {
@@ -1194,6 +1562,15 @@ fn json_text(value: Value) -> Result<String, FunctionCallError> {
     })
 }
 
+fn scratchpad_write_guard() -> Result<MutexGuard<'static, ()>, FunctionCallError> {
+    SCRATCHPAD_WRITE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| {
+            FunctionCallError::RespondToModel("scratchpad write lock is poisoned".to_string())
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -1298,6 +1675,170 @@ mod tests {
     }
 
     #[test]
+    fn record_and_export_outcomes_round_trip() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(Some(tmp.path().to_str().unwrap()), tmp.path()).unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "Improve vector-search throughput",
+                "scratchpad_id": "sp-outcomes"
+            }),
+            "thread-123",
+        )
+        .unwrap();
+
+        let recorded = record_outcome(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "sp-outcomes",
+                "scope": {
+                    "service": "vector-search",
+                    "surface": "hot query fanout"
+                },
+                "metric": "QPS",
+                "unit": "requests/second",
+                "baseline": 2,
+                "current": 244,
+                "delta": "+242 QPS",
+                "summary": "Removed serialization bottleneck in the hot path.",
+                "tradeoffs": ["Higher batch memory during benchmark windows"],
+                "commit": "abc1234",
+                "pr": "https://github.com/openai/codex/pull/123",
+                "outcome_id": "outcome-hot-query-qps"
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            recorded["scratchpad"]["outcomes"][0]["current"],
+            serde_json::json!(244)
+        );
+
+        let updated = record_outcome(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "sp-outcomes",
+                "outcome_id": "outcome-hot-query-qps",
+                "metric": "QPS",
+                "current": 245,
+                "summary": "Retested with a warm cache."
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            updated["scratchpad"]["outcomes"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(
+            updated["scratchpad"]["outcomes"][0]["current"],
+            serde_json::json!(245)
+        );
+
+        let exported = export_outcomes(
+            &store,
+            &serde_json::json!({ "scratchpad_id": "sp-outcomes" }),
+        )
+        .unwrap();
+        assert_eq!(exported["outcomes"].as_array().unwrap().len(), 1);
+        let markdown = exported["markdown"].as_str().unwrap();
+        assert!(markdown.contains("vector-search"));
+        assert!(markdown.contains("QPS"));
+        assert!(markdown.contains("abc1234"));
+    }
+
+    #[test]
+    fn record_delegation_upserts_subagent_lineage() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(Some(tmp.path().to_str().unwrap()), tmp.path()).unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "Divide up continuous-mode migration",
+                "scratchpad_id": "sp-delegation"
+            }),
+            "thread-123",
+        )
+        .unwrap();
+
+        record_delegation(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "sp-delegation",
+                "delegation_id": "delegation-reviewer-1",
+                "agent_id": "agent-123",
+                "agent_label": "Reviewer 1",
+                "child_scratchpad_id": "child-sp-1",
+                "item_refs": ["next_steps[0]"],
+                "summary": "Review continuous run policy race conditions"
+            }),
+        )
+        .unwrap();
+        let updated = record_delegation(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "sp-delegation",
+                "delegation_id": "delegation-reviewer-1",
+                "agent_id": "agent-123",
+                "status": "complete",
+                "notes": ["No remaining race findings"]
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            updated["scratchpad"]["delegations"],
+            serde_json::json!([{
+                "agent_id": "agent-123",
+                "agent_label": "Reviewer 1",
+                "child_scratchpad_id": "child-sp-1",
+                "created_at": updated["scratchpad"]["delegations"][0]["created_at"],
+                "delegation_id": "delegation-reviewer-1",
+                "item_refs": ["next_steps[0]"],
+                "notes": ["No remaining race findings"],
+                "status": "complete",
+                "summary": "Review continuous run policy race conditions",
+                "updated_at": updated["scratchpad"]["delegations"][0]["updated_at"]
+            }])
+        );
+    }
+
+    #[test]
+    fn set_thread_continuous_policy_creates_pad_and_forces_safe_fallback() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let created = set_thread_continuous_policy(tmp.path(), "thread-123", true).unwrap();
+
+        assert_eq!(
+            created["scratchpad"]["run_policy"]["continuous"]["enabled"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            created["scratchpad"]["communication_policy"]["fallback"]["final_response_on_channel_failure"],
+            serde_json::json!(false)
+        );
+
+        let store = ScratchpadStore::new(/*state_home*/ None, tmp.path()).unwrap();
+        let mut scratchpad = store.read("thread-123").unwrap();
+        scratchpad.communication_policy.insert(
+            "fallback".to_string(),
+            serde_json::json!({ "final_response_on_channel_failure": true }),
+        );
+        store.write(&scratchpad).unwrap();
+
+        let disabled = set_thread_continuous_policy(tmp.path(), "thread-123", false).unwrap();
+
+        assert_eq!(
+            disabled["scratchpad"]["run_policy"]["continuous"]["enabled"],
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            disabled["scratchpad"]["communication_policy"]["fallback"]["final_response_on_channel_failure"],
+            serde_json::json!(false)
+        );
+        assert!(tmp.path().join("scratchpad/index.json").exists());
+    }
+
+    #[test]
     fn lifecycle_cleanup_archives_inactive_and_deletes_old_archived_scratchpads() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = ScratchpadStore::new(/*state_home*/ None, tmp.path()).unwrap();
@@ -1315,6 +1856,8 @@ mod tests {
                 active_channels: Vec::new(),
                 active_sessions: BTreeMap::new(),
                 action_policy: BTreeMap::new(),
+                run_policy: BTreeMap::new(),
+                communication_policy: BTreeMap::new(),
                 completed: Vec::new(),
                 next_steps: Vec::new(),
                 pending_waits: Vec::new(),
@@ -1325,6 +1868,8 @@ mod tests {
                 interruption_policy: String::new(),
                 final_guard: String::new(),
                 last_benchmark: None,
+                outcomes: Vec::new(),
+                delegations: Vec::new(),
                 notes: Vec::new(),
                 created_at: old_updated_at.clone(),
                 updated_at: old_updated_at,
@@ -1341,6 +1886,8 @@ mod tests {
                 active_channels: Vec::new(),
                 active_sessions: BTreeMap::new(),
                 action_policy: BTreeMap::new(),
+                run_policy: BTreeMap::new(),
+                communication_policy: BTreeMap::new(),
                 completed: Vec::new(),
                 next_steps: Vec::new(),
                 pending_waits: Vec::new(),
@@ -1351,6 +1898,8 @@ mod tests {
                 interruption_policy: String::new(),
                 final_guard: String::new(),
                 last_benchmark: None,
+                outcomes: Vec::new(),
+                delegations: Vec::new(),
                 notes: Vec::new(),
                 created_at: old_archived_at.clone(),
                 updated_at: old_archived_at.clone(),
@@ -1367,6 +1916,8 @@ mod tests {
                 active_channels: Vec::new(),
                 active_sessions: BTreeMap::new(),
                 action_policy: BTreeMap::new(),
+                run_policy: BTreeMap::new(),
+                communication_policy: BTreeMap::new(),
                 completed: Vec::new(),
                 next_steps: Vec::new(),
                 pending_waits: Vec::new(),
@@ -1377,6 +1928,8 @@ mod tests {
                 interruption_policy: String::new(),
                 final_guard: String::new(),
                 last_benchmark: None,
+                outcomes: Vec::new(),
+                delegations: Vec::new(),
                 notes: Vec::new(),
                 created_at: recent_archived_at.clone(),
                 updated_at: recent_archived_at.clone(),

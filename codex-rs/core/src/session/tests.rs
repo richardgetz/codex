@@ -2845,51 +2845,6 @@ async fn resolve_router_turn_settings_applies_configured_reasoning_effort() {
 }
 
 #[tokio::test]
-async fn session_update_settings_syncs_continuous_collaboration_mode_control() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let mut continuous_mode = session.collaboration_mode().await;
-    continuous_mode.mode = ModeKind::Continuous;
-
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(continuous_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("continuous mode update should succeed");
-
-    let active_control = session
-        .active_thread_control()
-        .await
-        .expect("continuous control should be active");
-    assert_eq!(
-        active_control,
-        codex_state::ThreadControlRecord {
-            thread_id: session.conversation_id,
-            mode: codex_state::ThreadControlMode::Continuous,
-            reason: Session::CONTINUOUS_MODE_CONTROL_REASON.to_string(),
-            release_channel: None,
-            watch_interval_seconds: None,
-            released_at: None,
-            updated_at: active_control.updated_at,
-            target_thread_ids: Vec::new(),
-        }
-    );
-
-    let mut default_mode = session.collaboration_mode().await;
-    default_mode.mode = ModeKind::Default;
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(default_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("default mode update should succeed");
-
-    assert_eq!(session.active_thread_control().await, None);
-}
-
-#[tokio::test]
 async fn session_update_settings_syncs_orchestrator_collaboration_mode_control() {
     let (session, _turn_context) = make_session_and_context().await;
     let mut orchestrator_mode = session.collaboration_mode().await;
@@ -3083,31 +3038,6 @@ async fn interrupt_task_without_active_turn_keeps_orchestrator_collaboration_mod
 }
 
 #[tokio::test]
-async fn interrupt_task_without_active_turn_releases_continuous_collaboration_mode_control() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let session = Arc::new(session);
-    let mut continuous_mode = session.collaboration_mode().await;
-    continuous_mode.mode = ModeKind::Continuous;
-
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(continuous_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("continuous mode update should succeed");
-
-    assert!(
-        session.active_thread_control().await.is_some(),
-        "expected continuous mode to install control"
-    );
-
-    session.interrupt_task().await;
-
-    assert_eq!(session.active_thread_control().await, None);
-}
-
-#[tokio::test]
 async fn new_turn_with_sub_id_applies_orchestrator_overrides_only_when_entering_mode() {
     let (session, _turn_context) = make_session_and_context().await;
     {
@@ -3158,74 +3088,6 @@ async fn new_turn_with_sub_id_applies_orchestrator_overrides_only_when_entering_
     );
 }
 
-#[tokio::test]
-async fn new_turn_rearms_continuous_control_when_mode_stays_active() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let mut continuous_mode = session.collaboration_mode().await;
-    continuous_mode.mode = ModeKind::Continuous;
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(continuous_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("continuous mode update should succeed");
-
-    session.set_active_thread_control(/*control*/ None).await;
-
-    let _ = session.new_default_turn().await;
-
-    let active_control = session
-        .active_thread_control()
-        .await
-        .expect("continuous control should be re-armed");
-    assert_eq!(
-        active_control,
-        codex_state::ThreadControlRecord {
-            thread_id: session.conversation_id,
-            mode: codex_state::ThreadControlMode::Continuous,
-            reason: Session::CONTINUOUS_MODE_CONTROL_REASON.to_string(),
-            release_channel: None,
-            watch_interval_seconds: None,
-            released_at: None,
-            updated_at: active_control.updated_at,
-            target_thread_ids: Vec::new(),
-        }
-    );
-}
-
-#[tokio::test]
-async fn continuous_mode_preserves_active_router_control() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let router_control = codex_state::ThreadControlRecord {
-        thread_id: session.conversation_id,
-        mode: codex_state::ThreadControlMode::Router,
-        reason: "Router mode is supervising this thread.".to_string(),
-        release_channel: Some("imessage".to_string()),
-        watch_interval_seconds: Some(30),
-        released_at: None,
-        updated_at: Utc::now(),
-        target_thread_ids: vec![
-            ThreadId::from_string("00000000-0000-0000-0000-000000000022")
-                .expect("target thread id"),
-        ],
-    };
-    session
-        .set_active_thread_control(Some(router_control.clone()))
-        .await;
-
-    let mut continuous_mode = session.collaboration_mode().await;
-    continuous_mode.mode = ModeKind::Continuous;
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(continuous_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("continuous mode update should succeed");
-
-    assert_eq!(session.active_thread_control().await, Some(router_control));
-}
 #[test]
 fn falls_back_to_content_when_structured_is_null() {
     let ctr = McpCallToolResult {
@@ -6391,14 +6253,6 @@ async fn build_initial_context_injects_builtin_scratchpad_in_enabled_modes() {
         "expected scratchpad guidance in default mode, got {default_developer_texts:?}"
     );
 
-    turn_context.collaboration_mode.mode = ModeKind::Continuous;
-    let continuous_context = session.build_initial_context(&turn_context).await;
-    let continuous_developer_texts = developer_input_texts(&continuous_context).join("\n");
-    assert!(
-        continuous_developer_texts.contains("Built-in Scratchpad"),
-        "expected scratchpad guidance in continuous mode, got {continuous_developer_texts:?}"
-    );
-
     turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
     let orchestrator_context = session.build_initial_context(&turn_context).await;
     let orchestrator_developer_texts = developer_input_texts(&orchestrator_context).join("\n");
@@ -6433,6 +6287,53 @@ async fn build_initial_context_injects_active_scratchpad_when_uncompleted_work_e
     assert!(developer_texts.contains("<active_scratchpad>"));
     assert!(developer_texts.contains("recover active work"));
     assert!(developer_texts.contains("ship fix"));
+}
+
+#[test]
+fn continuous_run_policy_requires_enabled_policy_and_uncompleted_items() {
+    let enabled_with_work = serde_json::json!({
+        "scratchpad_id": "thread-123",
+        "status": "active",
+        "next_steps": ["ship"],
+        "pending_waits": [],
+        "run_policy": {
+            "continuous": {
+                "enabled": true
+            }
+        }
+    });
+    assert!(super::continuous_run_policy_enabled(&enabled_with_work));
+    assert!(super::scratchpad_has_uncompleted_items(&enabled_with_work));
+
+    let enabled_without_work = serde_json::json!({
+        "scratchpad_id": "thread-123",
+        "status": "active",
+        "next_steps": [],
+        "pending_waits": [],
+        "run_policy": {
+            "continuous": {
+                "enabled": true
+            }
+        }
+    });
+    assert!(super::continuous_run_policy_enabled(&enabled_without_work));
+    assert!(!super::scratchpad_has_uncompleted_items(
+        &enabled_without_work
+    ));
+
+    let disabled_with_work = serde_json::json!({
+        "scratchpad_id": "thread-123",
+        "status": "active",
+        "next_steps": ["ship"],
+        "pending_waits": [],
+        "run_policy": {
+            "continuous": {
+                "enabled": false
+            }
+        }
+    });
+    assert!(!super::continuous_run_policy_enabled(&disabled_with_work));
+    assert!(super::scratchpad_has_uncompleted_items(&disabled_with_work));
 }
 
 #[tokio::test]

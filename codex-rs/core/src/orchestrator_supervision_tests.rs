@@ -78,7 +78,7 @@ async fn register_worker_updates_existing_entry() {
             Some("Arendt".to_string()),
             Some("worker".to_string()),
             "Updated prompt".to_string(),
-            Some(ModeKind::Continuous),
+            Some(ModeKind::Orchestrator),
         )
         .await
         .expect("second register");

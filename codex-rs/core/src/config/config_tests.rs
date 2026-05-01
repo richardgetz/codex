@@ -70,6 +70,8 @@ use codex_config::types::ScheduleToml;
 use codex_config::types::ScratchpadConfig;
 use codex_config::types::ScratchpadModeToml;
 use codex_config::types::ScratchpadToml;
+use codex_config::types::ScratchpadViewConfig;
+use codex_config::types::ScratchpadViewToml;
 use codex_config::types::SkillModeFilterConfig;
 use codex_config::types::SkillModeFilterMode;
 use codex_config::types::SkillsConfig;
@@ -594,7 +596,7 @@ tool = "imessage_send_message"
 
 [orchestrator]
 active_agent_checkin_seconds = 900
-allowed_spawn_modes = ["default", "continuous"]
+allowed_spawn_modes = ["default", "orchestrator"]
 recover_scratchpad_after_compaction = false
 
 [orchestrator.primary_contact]
@@ -654,7 +656,7 @@ check_messages_every_seconds = 1800
             }),
             recover_scratchpad_after_compaction: Some(false),
             active_agent_checkin_seconds: Some(900),
-            allowed_spawn_modes: Some(vec![ModeKind::Default, ModeKind::Continuous]),
+            allowed_spawn_modes: Some(vec![ModeKind::Default, ModeKind::Orchestrator]),
         })
     );
 }
@@ -668,12 +670,20 @@ enabled = true
 recover_after_compaction = true
 auto_archive_after_days = 14
 delete_archived_after_days = 120
+outcomes_enabled = true
+
+[scratchpad.view]
+enabled = true
+show_id = false
+completed_items = 2
+next_steps = 3
+pending_waits = 4
 
 [scratchpad.modes.plan]
 enabled = false
 recover_after_compaction = false
 
-[scratchpad.modes.continuous]
+[scratchpad.modes.orchestrator]
 recover_after_compaction = false
 "#,
     )
@@ -686,6 +696,14 @@ recover_after_compaction = false
             recover_after_compaction: Some(true),
             auto_archive_after_days: Some(14),
             delete_archived_after_days: Some(120),
+            outcomes_enabled: Some(true),
+            view: Some(ScratchpadViewToml {
+                enabled: Some(true),
+                show_id: Some(false),
+                completed_items: Some(2),
+                next_steps: Some(3),
+                pending_waits: Some(4),
+            }),
             modes: [
                 (
                     ModeKind::Plan,
@@ -695,7 +713,7 @@ recover_after_compaction = false
                     },
                 ),
                 (
-                    ModeKind::Continuous,
+                    ModeKind::Orchestrator,
                     ScratchpadModeToml {
                         enabled: None,
                         recover_after_compaction: Some(false),
@@ -760,6 +778,13 @@ enabled = false
 [scratchpad.modes.plan]
 enabled = true
 recover_after_compaction = true
+
+[scratchpad.view]
+enabled = false
+show_id = false
+completed_items = 1
+next_steps = 2
+pending_waits = 3
 "#,
         )
         .expect("TOML deserialization should succeed"),
@@ -769,11 +794,20 @@ recover_after_compaction = true
     .await?;
 
     assert!(!config.scratchpad.for_mode(ModeKind::Default).enabled);
-    assert!(config.scratchpad.for_mode(ModeKind::Continuous).enabled);
     assert!(config.scratchpad.for_mode(ModeKind::Orchestrator).enabled);
     assert!(config.scratchpad.for_mode(ModeKind::Plan).enabled);
     assert_eq!(config.scratchpad.auto_archive_after_days, 30);
     assert_eq!(config.scratchpad.delete_archived_after_days, 90);
+    assert_eq!(
+        config.scratchpad.view,
+        ScratchpadViewConfig {
+            enabled: false,
+            show_id: false,
+            completed_items: 1,
+            next_steps: 2,
+            pending_waits: 3,
+        }
+    );
     assert!(
         config
             .scratchpad
@@ -804,7 +838,6 @@ enabled = false
     .await?;
 
     assert!(config.schedule.for_mode(ModeKind::Default).enabled);
-    assert!(!config.schedule.for_mode(ModeKind::Continuous).enabled);
     assert!(!config.schedule.for_mode(ModeKind::Orchestrator).enabled);
     assert!(!config.schedule.for_mode(ModeKind::Plan).enabled);
     Ok(())

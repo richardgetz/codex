@@ -50,6 +50,9 @@ use crate::plugins::build_plugin_injections;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::SessionSettingsUpdate;
+use crate::session::active_thread_scratchpad;
+use crate::session::continuous_run_policy_enabled;
+use crate::session::scratchpad_has_uncompleted_items;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -105,7 +108,6 @@ use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
-use codex_state::ThreadControlMode as StateThreadControlMode;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -546,19 +548,19 @@ pub(crate) async fn run_turn(
                         | AskForApproval::Granular(_) => "default",
                     }
                     .to_string();
-                    let active_thread_control = sess.active_thread_control().await;
-                    if let Some(control) = active_thread_control
-                        && matches!(control.mode, StateThreadControlMode::Continuous)
-                        && control.released_at.is_none()
-                    {
+                    if let Some(scratchpad) = active_thread_scratchpad(
+                        &turn_context.config.codex_home,
+                        sess.conversation_id,
+                    )
+                    .filter(|scratchpad| {
+                        continuous_run_policy_enabled(scratchpad)
+                            && scratchpad_has_uncompleted_items(scratchpad)
+                    }) {
                         let message = ResponseItem::Message {
                             id: None,
                             role: "user".to_string(),
                             content: vec![ContentItem::InputText {
-                                text: build_continuous_run_block_message(
-                                    &control.reason,
-                                    control.release_channel.as_deref(),
-                                ),
+                                text: build_continuous_run_block_message(&scratchpad),
                             }],
                             phase: None,
                         };
@@ -728,17 +730,18 @@ pub(crate) async fn run_turn(
     last_agent_message
 }
 
-fn build_continuous_run_block_message(reason: &str, release_channel: Option<&str>) -> String {
+fn build_continuous_run_block_message(scratchpad: &serde_json::Value) -> String {
+    let scratchpad_id = scratchpad
+        .get("scratchpad_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("current thread scratchpad");
     let mut lines = vec![
-        "Continuous run mode is still active for this thread.".to_string(),
-        format!("Reason: {reason}"),
+        "Scratchpad continuous run policy is enabled for this thread.".to_string(),
+        format!("Scratchpad: {scratchpad_id}"),
         "You are not allowed to stop, finalize, or hand off a completed answer yet.".to_string(),
     ];
-    if let Some(release_channel) = release_channel {
-        lines.push(format!("Release channel: {release_channel}."));
-    }
     lines.push(
-        "Continue working toward the objective until the user explicitly releases this thread."
+        "Continue working from the scratchpad until its next_steps and pending_waits are complete, or until the user disables /continuous."
             .to_string(),
     );
     lines.join("\n")
@@ -831,17 +834,15 @@ mod thread_control_tests {
     use std::sync::Arc;
 
     #[test]
-    fn continuous_run_block_message_includes_release_channel_when_present() {
+    fn continuous_run_block_message_points_back_to_scratchpad_policy() {
         assert_eq!(
-            build_continuous_run_block_message(
-                "Finish the deployment validation loop",
-                Some("imessage"),
-            ),
-            "Continuous run mode is still active for this thread.\n\
-Reason: Finish the deployment validation loop\n\
+            build_continuous_run_block_message(&serde_json::json!({
+                "scratchpad_id": "thread-123"
+            })),
+            "Scratchpad continuous run policy is enabled for this thread.\n\
+Scratchpad: thread-123\n\
 You are not allowed to stop, finalize, or hand off a completed answer yet.\n\
-Release channel: imessage.\n\
-            Continue working toward the objective until the user explicitly releases this thread."
+Continue working from the scratchpad until its next_steps and pending_waits are complete, or until the user disables /continuous."
         );
     }
 

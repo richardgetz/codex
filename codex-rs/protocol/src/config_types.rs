@@ -488,14 +488,17 @@ pub enum AltScreenMode {
 #[serde(rename_all = "snake_case")]
 pub enum ModeKind {
     Plan,
-    Continuous,
     Orchestrator,
     #[default]
+    // Legacy compatibility only: old config, rollout, and thread-control payloads may still
+    // contain "continuous". Deserializing that value as Default does not enable scratchpad-backed
+    // continuous run policy; `/continuous` owns that runtime behavior.
     #[serde(
         alias = "code",
         alias = "pair_programming",
         alias = "execute",
-        alias = "custom"
+        alias = "custom",
+        alias = "continuous"
     )]
     Default,
     #[doc(hidden)]
@@ -510,18 +513,13 @@ pub enum ModeKind {
     Execute,
 }
 
-pub const TUI_VISIBLE_COLLABORATION_MODES: [ModeKind; 4] = [
-    ModeKind::Default,
-    ModeKind::Plan,
-    ModeKind::Continuous,
-    ModeKind::Orchestrator,
-];
+pub const TUI_VISIBLE_COLLABORATION_MODES: [ModeKind; 3] =
+    [ModeKind::Default, ModeKind::Plan, ModeKind::Orchestrator];
 
 impl ModeKind {
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::Plan => "Plan",
-            Self::Continuous => "Continuous",
             Self::Orchestrator => "Orchestrator",
             Self::Default => "Default",
             Self::PairProgramming => "Pair Programming",
@@ -530,10 +528,7 @@ impl ModeKind {
     }
 
     pub const fn is_tui_visible(self) -> bool {
-        matches!(
-            self,
-            Self::Plan | Self::Default | Self::Continuous | Self::Orchestrator
-        )
+        matches!(self, Self::Plan | Self::Default | Self::Orchestrator)
     }
 
     pub const fn allows_request_user_input(self) -> bool {
@@ -666,7 +661,13 @@ mod tests {
 
     #[test]
     fn mode_kind_deserializes_alias_values_to_default() {
-        for alias in ["code", "pair_programming", "execute", "custom"] {
+        for alias in [
+            "code",
+            "pair_programming",
+            "execute",
+            "custom",
+            "continuous",
+        ] {
             let json = format!("\"{alias}\"");
             let mode: ModeKind = serde_json::from_str(&json).expect("deserialize mode");
             assert_eq!(ModeKind::Default, mode);
@@ -700,12 +701,7 @@ mod tests {
 
     #[test]
     fn tui_visible_collaboration_modes_match_mode_kind_visibility() {
-        let expected = [
-            ModeKind::Default,
-            ModeKind::Plan,
-            ModeKind::Continuous,
-            ModeKind::Orchestrator,
-        ];
+        let expected = [ModeKind::Default, ModeKind::Plan, ModeKind::Orchestrator];
         assert_eq!(expected, TUI_VISIBLE_COLLABORATION_MODES);
 
         for mode in TUI_VISIBLE_COLLABORATION_MODES {

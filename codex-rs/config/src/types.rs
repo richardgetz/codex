@@ -505,9 +505,67 @@ pub struct ScratchpadToml {
     /// Delete archived scratchpads after this many days in the archive.
     /// Set to 0 to disable automatic deletion.
     pub delete_archived_after_days: Option<u64>,
+    /// When true, agents may proactively record measurable outcome datapoints.
+    pub outcomes_enabled: Option<bool>,
+    /// TUI rendering controls for live scratchpad update cards.
+    pub view: Option<ScratchpadViewToml>,
     /// Collaboration-mode-specific overrides.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub modes: HashMap<ModeKind, ScratchpadModeToml>,
+}
+
+/// TUI rendering controls for live scratchpad update cards.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ScratchpadViewToml {
+    /// When false, live scratchpad update cards are hidden in the TUI.
+    pub enabled: Option<bool>,
+    /// When false, the scratchpad id is omitted from the live card title.
+    pub show_id: Option<bool>,
+    /// Maximum completed items to show in live cards.
+    pub completed_items: Option<usize>,
+    /// Maximum next-step items to show in live cards.
+    pub next_steps: Option<usize>,
+    /// Maximum pending-wait items to show in live cards.
+    pub pending_waits: Option<usize>,
+}
+
+/// Effective TUI rendering controls for live scratchpad update cards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScratchpadViewConfig {
+    pub enabled: bool,
+    pub show_id: bool,
+    pub completed_items: usize,
+    pub next_steps: usize,
+    pub pending_waits: usize,
+}
+
+impl Default for ScratchpadViewConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            show_id: true,
+            completed_items: 1,
+            next_steps: 5,
+            pending_waits: 5,
+        }
+    }
+}
+
+impl From<Option<ScratchpadViewToml>> for ScratchpadViewConfig {
+    fn from(toml: Option<ScratchpadViewToml>) -> Self {
+        let defaults = ScratchpadViewConfig::default();
+        let Some(toml) = toml else {
+            return defaults;
+        };
+        Self {
+            enabled: toml.enabled.unwrap_or(defaults.enabled),
+            show_id: toml.show_id.unwrap_or(defaults.show_id),
+            completed_items: toml.completed_items.unwrap_or(defaults.completed_items),
+            next_steps: toml.next_steps.unwrap_or(defaults.next_steps),
+            pending_waits: toml.pending_waits.unwrap_or(defaults.pending_waits),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -524,7 +582,6 @@ impl ScratchpadModeConfig {
                 recover_after_compaction: false,
             },
             ModeKind::Default
-            | ModeKind::Continuous
             | ModeKind::Orchestrator
             | ModeKind::PairProgramming
             | ModeKind::Execute => Self {
@@ -541,6 +598,8 @@ pub struct ScratchpadConfig {
     pub modes: HashMap<ModeKind, ScratchpadModeConfig>,
     pub auto_archive_after_days: u64,
     pub delete_archived_after_days: u64,
+    pub outcomes_enabled: bool,
+    pub view: ScratchpadViewConfig,
 }
 
 impl Default for ScratchpadConfig {
@@ -548,7 +607,6 @@ impl Default for ScratchpadConfig {
         let modes = [
             ModeKind::Default,
             ModeKind::Plan,
-            ModeKind::Continuous,
             ModeKind::Orchestrator,
             ModeKind::PairProgramming,
             ModeKind::Execute,
@@ -560,6 +618,8 @@ impl Default for ScratchpadConfig {
             modes,
             auto_archive_after_days: 30,
             delete_archived_after_days: 90,
+            outcomes_enabled: false,
+            view: ScratchpadViewConfig::default(),
         }
     }
 }
@@ -606,6 +666,8 @@ impl From<ScratchpadToml> for ScratchpadConfig {
             delete_archived_after_days: toml
                 .delete_archived_after_days
                 .unwrap_or(default_delete_archived_after_days),
+            outcomes_enabled: toml.outcomes_enabled.unwrap_or(defaults.outcomes_enabled),
+            view: toml.view.into(),
         }
     }
 }
@@ -638,11 +700,9 @@ impl ScheduleModeConfig {
     const fn default_for_mode(mode: ModeKind) -> Self {
         match mode {
             ModeKind::Orchestrator => Self { enabled: true },
-            ModeKind::Default
-            | ModeKind::Plan
-            | ModeKind::Continuous
-            | ModeKind::PairProgramming
-            | ModeKind::Execute => Self { enabled: false },
+            ModeKind::Default | ModeKind::Plan | ModeKind::PairProgramming | ModeKind::Execute => {
+                Self { enabled: false }
+            }
         }
     }
 }
@@ -658,7 +718,6 @@ impl Default for ScheduleConfig {
         let modes = [
             ModeKind::Default,
             ModeKind::Plan,
-            ModeKind::Continuous,
             ModeKind::Orchestrator,
             ModeKind::PairProgramming,
             ModeKind::Execute,

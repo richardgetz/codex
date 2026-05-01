@@ -1228,7 +1228,7 @@ async fn multi_agent_v2_spawn_can_select_child_collaboration_mode() {
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    SpawnAgentHandlerV2
+    let err = SpawnAgentHandlerV2
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1241,37 +1241,9 @@ async fn multi_agent_v2_spawn_can_select_child_collaboration_mode() {
             })),
         ))
         .await
-        .expect("spawn_agent should accept a child collaboration mode");
-
-    let child_thread_id = session
-        .services
-        .agent_control
-        .resolve_agent_reference(session.conversation_id, &turn.session_source, "runner")
-        .await
-        .expect("relative path should resolve");
-    let child_ops = manager
-        .captured_ops()
-        .into_iter()
-        .filter(|(id, _)| *id == child_thread_id)
-        .map(|(_, op)| op)
-        .collect::<Vec<_>>();
-    let child_thread = manager
-        .get_thread(child_thread_id)
-        .await
-        .expect("child thread should be tracked");
-
-    assert_eq!(
-        child_thread.codex.session.collaboration_mode().await.mode,
-        ModeKind::Continuous
-    );
-    assert!(matches!(
-        child_ops.first(),
-        Some(Op::InterAgentCommunication { communication })
-            if communication.author == AgentPath::root()
-                && communication.recipient.as_str() == "/root/runner"
-                && communication.content == "build continuously until the stop condition"
-                && communication.trigger_turn
-    ));
+        .expect_err("spawn_agent should reject removed continuous collaboration mode");
+    assert!(err.to_string().contains("continuous"));
+    assert!(manager.captured_ops().is_empty());
 }
 
 #[tokio::test]

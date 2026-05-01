@@ -17,6 +17,13 @@ fn submit_composer_text(chat: &mut ChatWidget, text: &str) {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 }
 
+fn submit_composer_text_while_task_running(chat: &mut ChatWidget, text: &str) {
+    chat.bottom_pane
+        .set_composer_text(text.to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+}
+
 fn queue_composer_text_with_tab(chat: &mut ChatWidget, text: &str) {
     chat.bottom_pane
         .set_composer_text(text.to_string(), Vec::new(), Vec::new());
@@ -1995,7 +2002,14 @@ async fn slash_scratchpad_renders_current_session_scratchpad() {
             "scratchpad_id": thread_id.to_string(),
             "objective": "Ship visible scratchpad state",
             "status": "in_progress",
-            "completed": ["trace event route"],
+            "completed": [
+                "open scratchpad",
+                "trace event route",
+                "wire slash rendering",
+                "verify verbose output",
+                "document config",
+                "ship visible scratchpad state"
+            ],
             "next_steps": ["render command output"],
             "pending_waits": [{"summary": "manual UI check"}],
             "created_at": "2026-04-28T20:00:00Z",
@@ -2015,7 +2029,10 @@ async fn slash_scratchpad_renders_current_session_scratchpad() {
             assert!(rendered.contains("Scratchpad"));
             assert!(rendered.contains(&format!("id: {thread_id}")));
             assert!(rendered.contains("Working on: Ship visible scratchpad state"));
+            assert!(rendered.contains("✔ open scratchpad"));
             assert!(rendered.contains("✔ trace event route"));
+            assert!(rendered.contains("✔ ship visible scratchpad state"));
+            assert!(!rendered.contains("earlier completed"));
             assert!(rendered.contains("□ render command output"));
             assert!(rendered.contains("□ manual UI check"));
         }
@@ -2040,6 +2057,134 @@ async fn slash_scratchpad_reports_missing_session_scratchpad() {
         other => panic!("expected InsertHistoryCell info, got {other:?}"),
     }
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_outcomes_exports_current_session_outcomes() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let scratchpad_dir = chat.config.codex_home.join("scratchpad").join("entries");
+    tokio::fs::create_dir_all(&scratchpad_dir)
+        .await
+        .expect("create scratchpad dir");
+    tokio::fs::write(
+        scratchpad_dir.join(format!("{thread_id}.json")),
+        serde_json::json!({
+            "scratchpad_id": thread_id.to_string(),
+            "objective": "Improve vector-search throughput",
+            "status": "active",
+            "outcomes": [{
+                "scope": {"service": "vector-search", "surface": "hot query fanout"},
+                "metric": "QPS",
+                "baseline": 2,
+                "current": 244,
+                "summary": "Removed serialization bottleneck.",
+                "commit": "abc1234"
+            }],
+            "created_at": "2026-04-28T20:00:00Z",
+            "updated_at": "2026-04-28T20:01:00Z",
+            "archived_at": null
+        })
+        .to_string(),
+    )
+    .await
+    .expect("write scratchpad");
+
+    chat.dispatch_command(SlashCommand::Outcomes);
+
+    match rx.try_recv().expect("expected outcomes export") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
+            assert!(rendered.contains("Outcomes for Improve vector-search throughput"));
+            assert!(rendered.contains("vector-search"));
+            assert!(rendered.contains("QPS"));
+            assert!(rendered.contains("244"));
+            assert!(rendered.contains("abc1234"));
+        }
+        other => panic!("expected InsertHistoryCell outcomes export, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_outcomes_toggles_tracking_in_config() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/outcomes on");
+
+    match rx.try_recv().expect("expected outcomes status message") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(rendered.contains("Scratchpad outcome tracking enabled"));
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    assert_matches!(op_rx.try_recv(), Ok(Op::ReloadUserConfig));
+    let text = std::fs::read_to_string(chat.config.codex_home.join("config.toml"))
+        .expect("config should be written");
+    let value: toml::Value = toml::from_str(&text).expect("config should parse");
+    assert_eq!(
+        value["scratchpad"]["outcomes_enabled"].as_bool(),
+        Some(true)
+    );
+    assert!(chat.config.scratchpad.outcomes_enabled);
+
+    submit_composer_text(&mut chat, "/outcomes off");
+
+    match rx.try_recv().expect("expected outcomes status message") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(rendered.contains("Scratchpad outcome tracking disabled"));
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    assert_matches!(op_rx.try_recv(), Ok(Op::ReloadUserConfig));
+    let text = std::fs::read_to_string(chat.config.codex_home.join("config.toml"))
+        .expect("config should be written");
+    let value: toml::Value = toml::from_str(&text).expect("config should parse");
+    assert_eq!(
+        value["scratchpad"]["outcomes_enabled"].as_bool(),
+        Some(false)
+    );
+    assert!(!chat.config.scratchpad.outcomes_enabled);
+}
+
+#[tokio::test]
+async fn slash_continuous_toggles_policy_while_task_is_running() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.on_task_started();
+
+    submit_composer_text_while_task_running(&mut chat, "/continuous on");
+
+    match rx.try_recv().expect("expected continuous status message") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(rendered.contains("Continuous run policy enable requested"));
+            assert!(rendered.contains(&thread_id.to_string()));
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetScratchpadContinuousPolicy { enabled: true })
+    );
+
+    submit_composer_text_while_task_running(&mut chat, "/continuous off");
+
+    match rx.try_recv().expect("expected continuous status message") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(rendered.contains("Continuous run policy disable requested"));
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetScratchpadContinuousPolicy { enabled: false })
+    );
 }
 
 #[tokio::test]

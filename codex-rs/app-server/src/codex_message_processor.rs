@@ -207,6 +207,8 @@ use codex_app_server_protocol::ThreadRealtimeStopResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
+use codex_app_server_protocol::ThreadScratchpadContinuousPolicySetParams;
+use codex_app_server_protocol::ThreadScratchpadContinuousPolicySetResponse;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadShellCommandParams;
@@ -1063,6 +1065,13 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadSetName { request_id, params } => {
                 self.thread_set_name(to_connection_request_id(request_id), params)
                     .await;
+            }
+            ClientRequest::ThreadScratchpadContinuousPolicySet { request_id, params } => {
+                self.thread_scratchpad_continuous_policy_set(
+                    to_connection_request_id(request_id),
+                    params,
+                )
+                .await;
             }
             ClientRequest::ThreadGoalSet { request_id, params } => {
                 self.thread_goal_set(to_connection_request_id(request_id), params)
@@ -3252,6 +3261,31 @@ impl CodexMessageProcessor {
                 .send_server_notification(ServerNotification::ThreadNameUpdated(notification))
                 .await;
         }
+    }
+
+    async fn thread_scratchpad_continuous_policy_set(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadScratchpadContinuousPolicySetParams,
+    ) {
+        let ThreadScratchpadContinuousPolicySetParams { thread_id, enabled } = params;
+        let result = async {
+            let (_, thread) = self.load_thread(&thread_id).await?;
+            self.submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::SetScratchpadContinuousPolicy { enabled },
+            )
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to update scratchpad continuous policy: {err}"
+                ))
+            })?;
+            Ok::<_, JSONRPCErrorError>(ThreadScratchpadContinuousPolicySetResponse {})
+        }
+        .await;
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn thread_set_name_response(
