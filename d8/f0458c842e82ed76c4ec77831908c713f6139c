@@ -1,0 +1,22 @@
+intent:
+  id: intent/2026-05-02/scratchpad-thread-direct-read-gating#d8f0458c842e
+  change_type: fix
+  scope: scratchpad
+  summary: Validate thread ownership on direct scratchpad reads and continuous policy updates.
+  decision: Require direct thread-file reads to have scratchpad_id equal to the current thread and reject mismatched origin_thread_id before post-compaction loopback, active continuous checks, TUI slash rendering/export/toggle paths, or app-server continuous policy mutation can use the file.
+  constraints:
+    - Direct reads of <thread_id>.json must fail closed when the file is foreign-owned, has the wrong scratchpad_id, or omits scratchpad_id.
+    - TUI /scratchpad, /outcomes, and /continuous must not render canaries or send mutation ops for foreign or malformed thread files.
+    - Continuous policy mutation must not overwrite or re-home another thread's scratchpad file.
+    - App-server continuous policy wiring must be covered by a round-trip test.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core/src/session/mod.rs::scratchpad_matches_thread
+    - codex-rs/core/src/session/mod.rs::active_thread_scratchpad
+    - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::set_thread_continuous_policy
+    - codex-rs/tui/src/chatwidget/slash_dispatch.rs::scratchpad_value_matches_thread
+    - codex-rs/app-server/tests/suite/v2/thread_control.rs::thread_scratchpad_continuous_policy_set_round_trip
+  requested_by: '@richardgetz'
+  recorded_by:
+    agent: codex-cli
+    model: gpt-5
