@@ -1696,6 +1696,9 @@ impl Session {
             .join(format!("{scratchpad_id}.json"));
         let text = std::fs::read_to_string(path).ok()?;
         let value = serde_json::from_str::<Value>(&text).ok()?;
+        if !scratchpad_matches_thread(&value, &scratchpad_id) {
+            return None;
+        }
         if !scratchpad_has_uncompleted_items(&value) {
             return None;
         }
@@ -3968,6 +3971,7 @@ fn compact_active_scratchpad_summary(value: &Value) -> Value {
     let mut summary = serde_json::Map::new();
     for key in [
         "scratchpad_id",
+        "origin_thread_id",
         "objective",
         "status",
         "completed",
@@ -4000,6 +4004,24 @@ fn compact_active_scratchpad_summary(value: &Value) -> Value {
         summary.insert("notes_count".to_string(), serde_json::json!(notes.len()));
     }
     Value::Object(summary)
+}
+
+fn scratchpad_matches_thread(value: &Value, thread_id: &str) -> bool {
+    if value
+        .get("scratchpad_id")
+        .and_then(Value::as_str)
+        .is_some_and(|scratchpad_id| scratchpad_id != thread_id)
+    {
+        return false;
+    }
+    if value
+        .get("origin_thread_id")
+        .and_then(Value::as_str)
+        .is_some_and(|origin_thread_id| origin_thread_id != thread_id)
+    {
+        return false;
+    }
+    true
 }
 
 pub(crate) fn scratchpad_has_uncompleted_items(value: &Value) -> bool {

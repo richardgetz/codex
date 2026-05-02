@@ -6289,6 +6289,59 @@ async fn build_initial_context_injects_active_scratchpad_when_uncompleted_work_e
     assert!(developer_texts.contains("ship fix"));
 }
 
+#[tokio::test]
+async fn build_initial_context_omits_scratchpad_loopback_from_different_thread() {
+    let (session, turn_context) = make_session_and_context().await;
+    write_thread_scratchpad(
+        &turn_context,
+        session.conversation_id,
+        serde_json::json!({
+            "scratchpad_id": session.conversation_id.to_string(),
+            "origin_thread_id": "different-thread",
+            "objective": "wrong session work",
+            "status": "active",
+            "next_steps": ["this must not loop back"],
+            "pending_waits": [],
+            "created_at": "2026-04-29T00:00:00Z",
+            "updated_at": "2026-04-29T00:00:00Z",
+            "archived_at": null
+        }),
+    );
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+
+    assert!(!developer_texts.contains("<active_scratchpad>"));
+    assert!(!developer_texts.contains("wrong session work"));
+    assert!(!developer_texts.contains("this must not loop back"));
+}
+
+#[tokio::test]
+async fn build_initial_context_omits_scratchpad_loopback_with_wrong_scratchpad_id() {
+    let (session, turn_context) = make_session_and_context().await;
+    write_thread_scratchpad(
+        &turn_context,
+        session.conversation_id,
+        serde_json::json!({
+            "scratchpad_id": "different-thread",
+            "objective": "wrong id work",
+            "status": "active",
+            "next_steps": ["this must not loop back either"],
+            "pending_waits": [],
+            "created_at": "2026-04-29T00:00:00Z",
+            "updated_at": "2026-04-29T00:00:00Z",
+            "archived_at": null
+        }),
+    );
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+
+    assert!(!developer_texts.contains("<active_scratchpad>"));
+    assert!(!developer_texts.contains("wrong id work"));
+    assert!(!developer_texts.contains("this must not loop back either"));
+}
+
 #[test]
 fn continuous_run_policy_requires_enabled_policy_and_uncompleted_items() {
     let enabled_with_work = serde_json::json!({

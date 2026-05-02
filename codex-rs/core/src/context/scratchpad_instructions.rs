@@ -22,7 +22,7 @@ impl ContextualUserFragment for ScratchpadInstructions {
 The built-in `scratchpad` tool namespace is available in this mode and is the canonical recovery ledger for non-trivial work.\n\
 Use it proactively to keep durable working state across interruptions, compaction, waits, and delegation.\n\n\
 Expected use:\n\
-- Open or resume the scratchpad early for non-trivial tasks. If no explicit id is needed, `open_scratchpad` defaults to the current thread/session id.\n\
+- Open or resume the scratchpad early for non-trivial tasks. If no explicit id is needed, `open_scratchpad` defaults to the current thread/session id; thread-owned scratchpads cannot be rebound or mutated from another thread.\n\
 - Keep `objective`, `status`, `completed`, `next_steps`, `pending_waits`, `run_policy`, `communication_policy`, `outcomes`, `delegations`, `resume_instructions`, `final_guard`, and recent notes current enough that another agent can recover the work.\n\
 - Use `run_policy.continuous.enabled` as the durable continuous-run switch for the current thread. When enabled and unfinished `next_steps` or `pending_waits` remain, the runtime will loop back instead of allowing finalization.\n\
 - Use `communication_policy` for durable communication preferences. A communication channel failure alone should not be treated as permission to stop or fall back to final_response unless the main work is actually blocked.\n\
