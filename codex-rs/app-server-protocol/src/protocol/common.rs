@@ -483,6 +483,11 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadSetNameResponse,
     },
+    ThreadScratchpadContinuousPolicySet => "thread/scratchpad/continuousPolicy/set" {
+        params: v2::ThreadScratchpadContinuousPolicySetParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadScratchpadContinuousPolicySetResponse,
+    },
     #[experimental("thread/goal/set")]
     ThreadGoalSet => "thread/goal/set" {
         params: v2::ThreadGoalSetParams,

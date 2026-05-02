@@ -1334,7 +1334,6 @@
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
-        "continuous",
         "orchestrator",
         "default"
       ],
@@ -2651,8 +2650,53 @@
           "description": "Collaboration-mode-specific overrides.",
           "type": "object"
         },
+        "outcomes_enabled": {
+          "description": "When true, agents may proactively record measurable outcome datapoints.",
+          "type": "boolean"
+        },
         "recover_after_compaction": {
           "description": "Global default for live compaction recovery loopback.",
+          "type": "boolean"
+        },
+        "view": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ScratchpadViewToml"
+            }
+          ],
+          "description": "TUI rendering controls for live scratchpad update cards."
+        }
+      },
+      "type": "object"
+    },
+    "ScratchpadViewToml": {
+      "additionalProperties": false,
+      "description": "TUI rendering controls for live scratchpad update cards.",
+      "properties": {
+        "completed_items": {
+          "description": "Maximum completed items to show in live cards.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "enabled": {
+          "description": "When false, live scratchpad update cards are hidden in the TUI.",
+          "type": "boolean"
+        },
+        "next_steps": {
+          "description": "Maximum next-step items to show in live cards.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "pending_waits": {
+          "description": "Maximum pending-wait items to show in live cards.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "show_id": {
+          "description": "When false, the scratchpad id is omitted from the live card title.",
           "type": "boolean"
         }
       },

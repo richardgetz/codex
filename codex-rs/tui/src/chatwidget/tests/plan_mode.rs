@@ -158,14 +158,14 @@ async fn plan_implementation_popup_no_selected_snapshot() {
 }
 
 #[tokio::test]
-async fn collaboration_modes_popup_snapshot_includes_continuous_and_orchestrator() {
+async fn collaboration_modes_popup_snapshot_includes_orchestrator() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.open_collaboration_modes_popup();
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
-        popup.contains("Continuous"),
-        "expected Continuous mode in popup:\n{popup}"
+        !popup.contains("Continuous"),
+        "unexpected Continuous mode in popup:\n{popup}"
     );
     assert!(
         popup.contains("Orchestrator"),
@@ -1300,10 +1300,6 @@ async fn collab_mode_shift_tab_cycles_only_when_idle() {
     assert_eq!(chat.current_collaboration_mode(), &initial);
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Continuous);
-    assert_eq!(chat.current_collaboration_mode(), &initial);
-
-    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
     assert_eq!(
         chat.active_collaboration_mode_kind(),
         ModeKind::Orchestrator
@@ -1853,10 +1849,17 @@ async fn scratchpad_update_renders_history_cell() {
             scratchpad_id: "thread-1".to_string(),
             objective: "Ship visible scratchpad UX".to_string(),
             status: "in_progress".to_string(),
-            completed: vec!["Trace plan rendering".to_string()],
+            completed: vec![
+                "Open scratchpad".to_string(),
+                "Trace plan rendering".to_string(),
+            ],
             next_steps: vec![
-                "Add scratchpad history cell".to_string(),
-                "Run focused tests".to_string(),
+                "Add scratchpad history cell 1".to_string(),
+                "Add scratchpad history cell 2".to_string(),
+                "Add scratchpad history cell 3".to_string(),
+                "Add scratchpad history cell 4".to_string(),
+                "Add scratchpad history cell 5".to_string(),
+                "Add scratchpad history cell 6".to_string(),
             ],
             pending_waits: vec!["Wait for manual UI feedback".to_string()],
             updated_at: "2026-04-28T19:00:00Z".to_string(),
@@ -1873,7 +1876,60 @@ async fn scratchpad_update_renders_history_cell() {
     );
     assert!(blob.contains("id: thread-1"));
     assert!(blob.contains("Ship visible scratchpad UX"));
+    assert!(!blob.contains("Open scratchpad"));
     assert!(blob.contains("Trace plan rendering"));
-    assert!(blob.contains("Add scratchpad history cell"));
+    assert!(blob.contains("Add scratchpad history cell 1"));
+    assert!(blob.contains("Add scratchpad history cell 5"));
+    assert!(!blob.contains("Add scratchpad history cell 6"));
+    assert!(blob.contains("… 1 more"));
     assert!(blob.contains("Wait for manual UI feedback"));
+}
+
+#[tokio::test]
+async fn scratchpad_update_respects_tui_view_config() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.scratchpad.view = codex_config::types::ScratchpadViewConfig {
+        enabled: true,
+        show_id: false,
+        completed_items: 2,
+        next_steps: 1,
+        pending_waits: 0,
+    };
+
+    let event = Event {
+        id: "sub-1".into(),
+        msg: EventMsg::ScratchpadUpdate(ScratchpadUpdateEvent {
+            scratchpad_id: "thread-1".to_string(),
+            objective: "Tune scratchpad UX".to_string(),
+            status: "in_progress".to_string(),
+            completed: vec![
+                "First completed".to_string(),
+                "Second completed".to_string(),
+                "Third completed".to_string(),
+            ],
+            next_steps: vec!["First next".to_string(), "Second next".to_string()],
+            pending_waits: vec!["Hidden wait".to_string()],
+            updated_at: "2026-04-28T19:00:00Z".to_string(),
+            archived_at: None,
+        }),
+    };
+    chat.handle_codex_event(event.clone());
+
+    let cells = drain_insert_history(&mut rx);
+    let blob = lines_to_single_string(cells.last().expect("expected scratchpad cell"));
+    assert!(blob.contains("Scratchpad"));
+    assert!(!blob.contains("id: thread-1"));
+    assert!(!blob.contains("First completed"));
+    assert!(blob.contains("Second completed"));
+    assert!(blob.contains("Third completed"));
+    assert!(blob.contains("First next"));
+    assert!(!blob.contains("Second next"));
+    assert!(!blob.contains("Hidden wait"));
+
+    chat.config.scratchpad.view.enabled = false;
+    chat.handle_codex_event(event);
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "disabled live scratchpad view should not emit a history cell"
+    );
 }

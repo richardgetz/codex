@@ -828,11 +828,13 @@ pub(crate) struct ChatWidget {
     initial_user_message: Option<UserMessage>,
     status_account_display: Option<StatusAccountDisplay>,
     token_info: Option<TokenUsageInfo>,
+    account_generation: u64,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
     plan_type: Option<PlanType>,
     codex_rate_limit_reached_type: Option<RateLimitReachedType>,
+    accept_untagged_rate_limit_notifications: bool,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     exhausted_account_rotation_aliases: BTreeSet<String>,
@@ -3372,6 +3374,12 @@ impl ChatWidget {
         self.refresh_status_line();
     }
 
+    pub(crate) fn on_untagged_rate_limit_snapshot(&mut self, snapshot: RateLimitSnapshot) {
+        if self.accept_untagged_rate_limit_notifications {
+            self.on_rate_limit_snapshot(Some(snapshot));
+        }
+    }
+
     fn maybe_rotate_account_for_exhausted_usage(&mut self, snapshot: &RateLimitSnapshot) {
         if !Self::rate_limit_snapshot_is_exhausted(snapshot) {
             return;
@@ -3876,7 +3884,15 @@ impl ChatWidget {
     }
 
     fn on_scratchpad_update(&mut self, update: ScratchpadUpdateEvent) {
-        self.add_to_history(history_cell::new_scratchpad_update(update));
+        let view = self.config.scratchpad.view;
+        if !view.enabled {
+            return;
+        }
+        self.add_to_history(history_cell::new_scratchpad_update(update, view));
+    }
+
+    fn on_scratchpad_update_verbose(&mut self, update: ScratchpadUpdateEvent) {
+        self.add_to_history(history_cell::new_scratchpad_update_verbose(update));
     }
 
     fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
@@ -5447,11 +5463,13 @@ impl ChatWidget {
             initial_user_message,
             status_account_display,
             token_info: None,
+            account_generation: 0,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             refreshing_status_outputs: Vec::new(),
             next_status_refresh_request_id: 0,
             plan_type: initial_plan_type,
             codex_rate_limit_reached_type: None,
+            accept_untagged_rate_limit_notifications: true,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             exhausted_account_rotation_aliases: BTreeSet::new(),
@@ -10956,7 +10974,6 @@ impl ChatWidget {
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
-            ModeKind::Continuous => Some(CollaborationModeIndicator::Continuous),
             ModeKind::Orchestrator => Some(CollaborationModeIndicator::Orchestrator),
             ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => None,
         }
@@ -11770,6 +11787,15 @@ impl ChatWidget {
     }
 
     pub(crate) fn prepare_local_op_submission(&mut self, op: &AppCommand) {
+        if matches!(
+            op.view(),
+            crate::app_command::AppCommandView::UserTurn { .. }
+        ) {
+            self.set_status_header(String::from("Working"));
+            self.bottom_pane.set_task_running(/*running*/ true);
+            self.user_turn_pending_start = true;
+            self.request_redraw();
+        }
         if matches!(op.view(), crate::app_command::AppCommandView::Interrupt)
             && self.agent_turn_running
         {
@@ -12159,7 +12185,30 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_active_account_alias(&mut self, alias: Option<String>) {
+        let account_changed = self.config.accounts.active != alias;
         self.config.accounts.active = alias;
+        if account_changed {
+            self.account_generation = self.account_generation.wrapping_add(1);
+            self.rate_limit_snapshots_by_limit_id.clear();
+            self.codex_rate_limit_reached_type = None;
+            self.accept_untagged_rate_limit_notifications = false;
+            self.rate_limit_warnings = RateLimitWarningState::default();
+            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::default();
+            self.refresh_status_line();
+        }
+    }
+
+    pub(crate) fn rate_limit_refresh_matches_active_account(
+        &self,
+        account_alias: Option<&str>,
+        account_generation: u64,
+    ) -> bool {
+        self.account_generation == account_generation
+            && self.config.active_account_alias() == account_alias
+    }
+
+    pub(crate) fn account_generation(&self) -> u64 {
+        self.account_generation
     }
 
     #[cfg(test)]

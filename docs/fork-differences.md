@@ -49,6 +49,8 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - Orchestrator mode can be selected at launch with `--collab orchestrator`.
 - One-letter, case-insensitive collaboration-mode shorthands are supported; for
   example `--collab o` starts Orchestrator mode.
+- Standalone Continuous collaboration mode is removed. Use `/continuous` inside
+  a normal session to enable or disable continuous execution for that thread.
 - Orchestrator mode uses fork-specific model defaults when the config does not
   specify `[thread_control.orchestrator]`.
 - Child agents launched by Orchestrator mode are restricted by
@@ -182,8 +184,15 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
 ### Built-in scratchpad
 
-- Default, Continuous, and Orchestrator modes treat scratchpad as a first-class
+- Default and Orchestrator modes treat scratchpad as a first-class
   recovery ledger. Plan mode does not use built-in scratchpad by default.
+- `/continuous` toggles a scratchpad-backed continuous run policy for the
+  current thread. When `run_policy.continuous.enabled` is true and the
+  scratchpad still has `next_steps` or `pending_waits`, Codex loops back to the
+  scratchpad instead of finalizing.
+- Scratchpads include `communication_policy` for durable communication
+  preferences; channel failure alone is not treated as permission to stop or
+  fall back to a final response.
 - The fork has a canonical built-in `scratchpad` tool namespace. When a
   configured scratchpad MCP exposes the same namespace, the built-in namespace
   stays model-visible and its handlers take precedence.
@@ -197,14 +206,43 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   time so recent work can be found without manually scanning every entry file.
 - `<codex_home>/scratchpad` is created and added to workspace-write writable
   roots automatically, alongside memory and supervision roots.
-- `open_scratchpad` defaults `scratchpad_id` to the current Codex
-  thread/session id when no explicit id is provided.
-- `resume_scratchpad` strictly reopens an existing scratchpad by id without
-  creating a replacement; archived pads require `include_archived = true`.
+- Built-in scratchpad tools are bound to the current Codex thread/session id.
+  `open_scratchpad` defaults `scratchpad_id` to that id when omitted, and
+  model-visible tools reject custom or other-thread scratchpad ids.
+- `resume_scratchpad` strictly reopens the current thread scratchpad without
+  creating a replacement. Archived pads remain readable and editable by their
+  owning thread until lifecycle deletion.
 - Built-in scratchpad supports active and archived lookup, archive/unarchive,
   next-step and pending-wait updates, action-policy checks, and wait check-ins.
+- Scratchpads can record measurable outcomes with `record_outcome`, using
+  portable datapoints scoped to a service, endpoint, function, feature, or other
+  surface. Outcome entries can include metric/unit, baseline/current/delta,
+  summary, tradeoffs, artifacts, commit, and PR provenance.
+- Outcome recording is opt-in and defaults off. Set
+  `[scratchpad].outcomes_enabled = true` or run `/outcomes on` to allow agents
+  to record new outcome datapoints; `/outcomes off` disables it persistently.
+- `/outcomes` renders the current session scratchpad outcomes as a markdown
+  postmortem summary. The same data is exportable through `export_outcomes` as
+  JSON plus markdown for sharing or later visualization.
+- Legacy `continuous` collaboration-mode values in old config or rollout
+  payloads deserialize as `default` for compatibility only; they do not enable
+  continuous policy. Use `/continuous on` for the scratchpad-backed runtime
+  behavior.
+- Scratchpads can record delegated work lineage with `record_delegation`,
+  including the subagent id/label, parent item references, child scratchpad id,
+  status, notes, and artifacts so parent-child work ownership survives restart.
 - `/scratchpad` renders the current session's built-in scratchpad on demand,
   including current objective, status, completed work, next steps, and waits.
+- `/scratchpad-absorb <scratchpad_id>` copies another scratchpad into the
+  current thread scratchpad as contextual history without changing source
+  ownership or importing live control policy. It includes pending waits by
+  default; use `--exclude-pending` to omit them.
+- `/scratchpad-unarchive` clears the archived marker from the current thread
+  scratchpad so it is no longer eligible for archived-pad cleanup.
+- Live TUI scratchpad update cards are compact by default: completed work shows
+  only the newest item, while next steps and waits each show up to five items.
+  `/scratchpad` remains verbose and renders the full scratchpad regardless of
+  live-card limits.
 - When a session resumes and the thread-id scratchpad already exists with
   uncompleted work (`next_steps` or `pending_waits`), Codex injects the
   scratchpad id and compact scratchpad state into hidden developer context so
@@ -225,6 +263,13 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   recover_after_compaction = true
   auto_archive_after_days = 30
   delete_archived_after_days = 90
+
+  [scratchpad.view]
+  enabled = true
+  show_id = true
+  completed_items = 1
+  next_steps = 5
+  pending_waits = 5
 
   [scratchpad.modes.plan]
   enabled = false
@@ -264,8 +309,8 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
 - The fork has a canonical built-in `schedule` tool namespace for durable
   reminders, recurring routines, and conditional future checks.
-- Orchestrator mode exposes it by default. Default and Continuous modes can opt
-  in. Plan mode is disabled by default.
+- Orchestrator mode exposes it by default. Default mode can opt in. Plan mode
+  is disabled by default.
 - Scheduled triggers are JSON-backed under `<codex_home>/schedule/triggers`
   unless a tool call provides `state_home`.
 - `<codex_home>/schedule` is created and added to workspace-write writable roots

@@ -1,3 +1,4 @@
+use crate::enablement::mcp_tool_allowed_in_mode;
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
@@ -184,6 +185,7 @@ impl ToolRouter {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn build_tool_call(
         session: &Session,
+        turn_context: &TurnContext,
         item: ResponseItem,
     ) -> Result<Option<ToolCall>, FunctionCallError> {
         match item {
@@ -195,13 +197,37 @@ impl ToolRouter {
                 ..
             } => {
                 let tool_name = ToolName::new(namespace, name);
-                if let Some(tool_info) = session.resolve_mcp_tool_info(&tool_name).await {
+                if let Some(tool_info) =
+                    session
+                        .resolve_mcp_tool_info(&tool_name)
+                        .await
+                        .filter(|tool_info| {
+                            mcp_tool_allowed_in_mode(
+                                &turn_context.config,
+                                turn_context.collaboration_mode.mode,
+                                tool_info,
+                            )
+                        })
+                {
                     Ok(Some(ToolCall {
                         tool_name: tool_info.canonical_tool_name(),
                         call_id,
                         payload: ToolPayload::Mcp {
                             server: tool_info.server_name,
                             tool: tool_info.tool.name.to_string(),
+                            raw_arguments: arguments,
+                        },
+                    }))
+                } else if let Some((canonical_tool_name, server, tool)) = session
+                    .resolve_configured_mcp_tool_call(turn_context, &tool_name)
+                    .await
+                {
+                    Ok(Some(ToolCall {
+                        tool_name: canonical_tool_name,
+                        call_id,
+                        payload: ToolPayload::Mcp {
+                            server,
+                            tool,
                             raw_arguments: arguments,
                         },
                     }))

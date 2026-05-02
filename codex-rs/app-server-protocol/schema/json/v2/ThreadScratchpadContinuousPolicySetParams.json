@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "enabled": {
+      "type": "boolean"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "enabled",
+    "threadId"
+  ],
+  "title": "ThreadScratchpadContinuousPolicySetParams",
+  "type": "object"
+}

@@ -198,6 +198,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let code_mode_handler = Arc::new(CodeModeExecuteHandler);
     let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
     let unavailable_tool_handler = Arc::new(UnavailableToolHandler);
+    let has_unavailable_mcp_tools = unavailable_called_tools
+        .iter()
+        .any(|tool_name| tool_name.display().starts_with("mcp__"));
     let mut existing_spec_names = plan
         .specs
         .iter()
@@ -210,7 +213,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         .map(|configured_tool| configured_tool.name().to_string())
         .collect::<HashSet<_>>();
 
-    if !lazy_mcp_servers.is_empty() {
+    if has_unavailable_mcp_tools || !lazy_mcp_servers.is_empty() {
         builder.register_fallback_mcp_handler(mcp_handler.clone());
     }
 

@@ -654,8 +654,23 @@ impl App {
                 self.chat_widget
                     .finish_add_credits_nudge_email_request(result);
             }
-            AppEvent::RateLimitsLoaded { origin, result } => match result {
+            AppEvent::RateLimitsLoaded {
+                origin,
+                account_alias,
+                account_generation,
+                result,
+            } => match result {
                 Ok(snapshots) => {
+                    if !self.chat_widget.rate_limit_refresh_matches_active_account(
+                        account_alias.as_deref(),
+                        account_generation,
+                    ) {
+                        if let RateLimitRefreshOrigin::StatusCommand { request_id } = origin {
+                            self.chat_widget
+                                .finish_status_rate_limit_refresh(request_id);
+                        }
+                        return Ok(AppRunControl::Continue);
+                    }
                     for snapshot in snapshots {
                         self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
                     }

@@ -48,6 +48,7 @@ use codex_app_server_protocol::McpServerStatusDetail;
 use codex_config::EnablementFilterConfig;
 use codex_config::EnablementFilterMode;
 use codex_config::types::McpServerTransportConfig;
+use codex_config::types::ScratchpadViewConfig;
 #[cfg(test)]
 use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
@@ -2419,6 +2420,14 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_outcomes_export(markdown: String) -> PlainHistoryCell {
+    let lines = markdown
+        .lines()
+        .map(|line| Line::from(line.to_string()))
+        .collect::<Vec<_>>();
+    PlainHistoryCell { lines }
+}
+
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // Use a hair space (U+200A) to create a subtle, near-invisible separation
     // before the text. VS16 is intentionally omitted to keep spacing tighter
@@ -2623,8 +2632,24 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     PlanUpdateCell { explanation, plan }
 }
 
-pub(crate) fn new_scratchpad_update(update: ScratchpadUpdateEvent) -> ScratchpadUpdateCell {
-    ScratchpadUpdateCell { update }
+pub(crate) fn new_scratchpad_update(
+    update: ScratchpadUpdateEvent,
+    view: ScratchpadViewConfig,
+) -> ScratchpadUpdateCell {
+    ScratchpadUpdateCell { update, view }
+}
+
+pub(crate) fn new_scratchpad_update_verbose(update: ScratchpadUpdateEvent) -> ScratchpadUpdateCell {
+    ScratchpadUpdateCell {
+        update,
+        view: ScratchpadViewConfig {
+            enabled: true,
+            show_id: true,
+            completed_items: usize::MAX,
+            next_steps: usize::MAX,
+            pending_waits: usize::MAX,
+        },
+    }
 }
 
 /// Create a proposed-plan cell that snapshots the session cwd for later markdown rendering.
@@ -2775,11 +2800,12 @@ impl HistoryCell for PlanUpdateCell {
 #[derive(Debug)]
 pub(crate) struct ScratchpadUpdateCell {
     update: ScratchpadUpdateEvent,
+    view: ScratchpadViewConfig,
 }
 
 impl HistoryCell for ScratchpadUpdateCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let header = if self.update.scratchpad_id.trim().is_empty() {
+        let header = if self.update.scratchpad_id.trim().is_empty() || !self.view.show_id {
             vec!["• ".dim(), "Scratchpad".bold()].into()
         } else {
             vec![
@@ -2823,6 +2849,7 @@ impl HistoryCell for ScratchpadUpdateCell {
             "Completed",
             &self.update.completed,
             ScratchpadSectionStyle::Completed,
+            self.view.completed_items,
         );
         append_scratchpad_section(
             &mut body,
@@ -2830,6 +2857,7 @@ impl HistoryCell for ScratchpadUpdateCell {
             "Next up",
             &self.update.next_steps,
             ScratchpadSectionStyle::Next,
+            self.view.next_steps,
         );
         append_scratchpad_section(
             &mut body,
@@ -2837,6 +2865,7 @@ impl HistoryCell for ScratchpadUpdateCell {
             "Waiting",
             &self.update.pending_waits,
             ScratchpadSectionStyle::Waiting,
+            self.view.pending_waits,
         );
 
         if body.is_empty() {
@@ -2859,13 +2888,13 @@ fn append_scratchpad_section(
     label: &str,
     items: &[String],
     style: ScratchpadSectionStyle,
+    max_visible: usize,
 ) {
-    if items.is_empty() {
+    if items.is_empty() || max_visible == 0 {
         return;
     }
 
     lines.push(Line::from(format!("{label}:").bold()));
-    let max_visible = 5;
     let skipped = items.len().saturating_sub(max_visible);
     let visible_items = if matches!(style, ScratchpadSectionStyle::Completed) && skipped > 0 {
         &items[skipped..]

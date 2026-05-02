@@ -81,8 +81,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         Some(&vec![
             json!("default"),
             json!("plan"),
-            json!("continuous"),
-            json!("orchestrator"),
+            json!("orchestrator")
         ])
     );
     assert!(!properties.contains_key("items"));

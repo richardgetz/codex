@@ -2,6 +2,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
+use std::sync::OnceLock;
 
 use chrono::DateTime;
 use chrono::Duration;
@@ -27,6 +30,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ScratchpadUpdateEvent;
 
 const SCRATCHPAD_NAMESPACE: &str = "scratchpad";
+static SCRATCHPAD_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const TOOL_OPEN: &str = "open_scratchpad";
 const TOOL_RESUME: &str = "resume_scratchpad";
 const TOOL_GET: &str = "get_scratchpad";
@@ -42,6 +46,9 @@ const TOOL_UNARCHIVE: &str = "unarchive_scratchpad";
 const TOOL_LOOKUP: &str = "lookup_scratchpads";
 const TOOL_SCHEMA: &str = "get_scratchpad_schema";
 const TOOL_CHECK_ACTION: &str = "check_action_allowed";
+const TOOL_RECORD_OUTCOME: &str = "record_outcome";
+const TOOL_EXPORT_OUTCOMES: &str = "export_outcomes";
+const TOOL_RECORD_DELEGATION: &str = "record_delegation";
 
 pub(crate) const BUILTIN_SCRATCHPAD_TOOL_NAMES: &[&str] = &[
     TOOL_OPEN,
@@ -59,22 +66,75 @@ pub(crate) const BUILTIN_SCRATCHPAD_TOOL_NAMES: &[&str] = &[
     TOOL_LOOKUP,
     TOOL_SCHEMA,
     TOOL_CHECK_ACTION,
+    TOOL_RECORD_OUTCOME,
+    TOOL_EXPORT_OUTCOMES,
+    TOOL_RECORD_DELEGATION,
 ];
+
+const ABSORBED_SCRATCHPAD_ARTIFACT_TYPE: &str = "scratchpad_absorb";
+const ABSORBED_SCRATCHPAD_CONTROL_FIELDS: &[&str] = &[
+    "active_channels",
+    "active_sessions",
+    "action_policy",
+    "communication_policy",
+    "final_guard",
+    "interruption_policy",
+    "resume_instructions",
+    "run_policy",
+    "stop_conditions",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScratchpadAbsorbOptions {
+    pub include_completed: bool,
+    pub include_next_steps: bool,
+    pub include_pending_waits: bool,
+    pub include_notes: bool,
+    pub include_git_refs: bool,
+    pub include_artifacts: bool,
+    pub include_outcomes: bool,
+    pub include_delegations: bool,
+    pub include_worktrees: bool,
+}
+
+impl Default for ScratchpadAbsorbOptions {
+    fn default() -> Self {
+        Self {
+            include_completed: true,
+            include_next_steps: true,
+            include_pending_waits: true,
+            include_notes: true,
+            include_git_refs: true,
+            include_artifacts: true,
+            include_outcomes: true,
+            include_delegations: true,
+            include_worktrees: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScratchpadAbsorbResult {
+    pub source_scratchpad_id: String,
+    pub target_scratchpad_id: String,
+    pub counts: BTreeMap<String, usize>,
+    pub excluded_control_fields: Vec<String>,
+}
 
 pub(crate) fn scratchpad_namespace_spec() -> ToolSpec {
     let tools = [
         (
             TOOL_OPEN,
-            "Open an existing active scratchpad for the same objective/session, or create one.",
+            "Open the current thread scratchpad for the same objective/session, or create it.",
         ),
         (
             TOOL_RESUME,
-            "Resume an existing scratchpad by id without creating a new one.",
+            "Resume the current thread scratchpad without creating a new one.",
         ),
-        (TOOL_GET, "Fetch one scratchpad by id."),
+        (TOOL_GET, "Fetch the current thread scratchpad."),
         (
             TOOL_SUMMARY,
-            "Fetch a compact current-state summary for one scratchpad.",
+            "Fetch a compact current-state summary for the current thread scratchpad.",
         ),
         (
             TOOL_APPEND_NOTE,
@@ -116,6 +176,18 @@ pub(crate) fn scratchpad_namespace_spec() -> ToolSpec {
         (
             TOOL_CHECK_ACTION,
             "Check whether an action appears allowed by the scratchpad action policy.",
+        ),
+        (
+            TOOL_RECORD_OUTCOME,
+            "Append a measured outcome/progress datapoint with scope, metric, value, provenance, and summary.",
+        ),
+        (
+            TOOL_EXPORT_OUTCOMES,
+            "Export scratchpad outcome measurements as portable JSON plus a markdown summary.",
+        ),
+        (
+            TOOL_RECORD_DELEGATION,
+            "Record or update parent scratchpad lineage for work delegated to a subagent.",
         ),
     ]
     .into_iter()
@@ -160,7 +232,13 @@ impl ToolHandler for BuiltinScratchpadHandler {
     async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
         !matches!(
             invocation.tool_name.name.as_str(),
-            TOOL_RESUME | TOOL_GET | TOOL_SUMMARY | TOOL_LOOKUP | TOOL_SCHEMA | TOOL_CHECK_ACTION
+            TOOL_RESUME
+                | TOOL_GET
+                | TOOL_SUMMARY
+                | TOOL_LOOKUP
+                | TOOL_SCHEMA
+                | TOOL_CHECK_ACTION
+                | TOOL_EXPORT_OUTCOMES
         )
     }
 
@@ -191,20 +269,31 @@ impl ToolHandler for BuiltinScratchpadHandler {
         let tool_name = tool_name.name.as_str();
         let result = match tool_name {
             TOOL_OPEN => open_scratchpad(&store, &args, &default_scratchpad_id),
-            TOOL_RESUME => resume_scratchpad(&store, &args),
-            TOOL_GET => get_scratchpad(&store, &args),
-            TOOL_SUMMARY => get_scratchpad_summary(&store, &args),
-            TOOL_APPEND_NOTE => append_scratchpad_note(&store, &args),
-            TOOL_SET_NEXT_STEPS => set_next_steps(&store, &args),
-            TOOL_SET_PENDING_WAITS => set_pending_waits(&store, &args),
-            TOOL_SET_ACTION_POLICY => set_action_policy(&store, &args),
-            TOOL_MARK_WAIT_CHECKED => mark_wait_checked(&store, &args),
-            TOOL_UPDATE => update_scratchpad(&store, &args),
-            TOOL_ARCHIVE => archive_scratchpad(&store, &args),
-            TOOL_UNARCHIVE => unarchive_scratchpad(&store, &args),
-            TOOL_LOOKUP => lookup_scratchpads(&store, &args),
+            TOOL_RESUME => resume_scratchpad(&store, &args, &default_scratchpad_id),
+            TOOL_GET => get_scratchpad(&store, &args, &default_scratchpad_id),
+            TOOL_SUMMARY => get_scratchpad_summary(&store, &args, &default_scratchpad_id),
+            TOOL_APPEND_NOTE => append_scratchpad_note(&store, &args, &default_scratchpad_id),
+            TOOL_SET_NEXT_STEPS => set_next_steps(&store, &args, &default_scratchpad_id),
+            TOOL_SET_PENDING_WAITS => set_pending_waits(&store, &args, &default_scratchpad_id),
+            TOOL_SET_ACTION_POLICY => set_action_policy(&store, &args, &default_scratchpad_id),
+            TOOL_MARK_WAIT_CHECKED => mark_wait_checked(&store, &args, &default_scratchpad_id),
+            TOOL_UPDATE => update_scratchpad(&store, &args, &default_scratchpad_id),
+            TOOL_ARCHIVE => archive_scratchpad(&store, &args, &default_scratchpad_id),
+            TOOL_UNARCHIVE => unarchive_scratchpad(&store, &args, &default_scratchpad_id),
+            TOOL_LOOKUP => lookup_scratchpads(&store, &args, &default_scratchpad_id),
             TOOL_SCHEMA => Ok(schema_payload()),
-            TOOL_CHECK_ACTION => check_action_allowed(&store, &args),
+            TOOL_CHECK_ACTION => check_action_allowed(&store, &args, &default_scratchpad_id),
+            TOOL_RECORD_OUTCOME => {
+                if !config.scratchpad.outcomes_enabled {
+                    Err(FunctionCallError::RespondToModel(
+                        "scratchpad outcome tracking is disabled; enable it with `/outcomes on` or `[scratchpad].outcomes_enabled = true` before recording outcomes.".to_string(),
+                    ))
+                } else {
+                    record_outcome(&store, &args, &default_scratchpad_id)
+                }
+            }
+            TOOL_EXPORT_OUTCOMES => export_outcomes(&store, &args, &default_scratchpad_id),
+            TOOL_RECORD_DELEGATION => record_delegation(&store, &args, &default_scratchpad_id),
             tool_name => Err(FunctionCallError::RespondToModel(format!(
                 "unknown scratchpad tool: {tool_name}"
             ))),
@@ -238,10 +327,11 @@ fn should_emit_scratchpad_update(tool_name: &str) -> bool {
             | TOOL_UPDATE
             | TOOL_ARCHIVE
             | TOOL_UNARCHIVE
+            | TOOL_RECORD_DELEGATION
     )
 }
 
-fn scratchpad_update_event_from_result(result: &Value) -> Option<ScratchpadUpdateEvent> {
+pub(crate) fn scratchpad_update_event_from_result(result: &Value) -> Option<ScratchpadUpdateEvent> {
     let scratchpad = result.get("scratchpad")?;
     Some(ScratchpadUpdateEvent {
         scratchpad_id: scratchpad.get("scratchpad_id")?.as_str()?.to_string(),
@@ -307,6 +397,8 @@ struct Scratchpad {
     objective: String,
     status: String,
     session_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin_thread_id: Option<String>,
     #[serde(default)]
     worktrees: Vec<Value>,
     #[serde(default)]
@@ -315,6 +407,10 @@ struct Scratchpad {
     active_sessions: BTreeMap<String, Value>,
     #[serde(default)]
     action_policy: BTreeMap<String, Value>,
+    #[serde(default)]
+    run_policy: BTreeMap<String, Value>,
+    #[serde(default)]
+    communication_policy: BTreeMap<String, Value>,
     #[serde(default)]
     completed: Vec<String>,
     #[serde(default)]
@@ -335,6 +431,10 @@ struct Scratchpad {
     final_guard: String,
     #[serde(default)]
     last_benchmark: Option<Value>,
+    #[serde(default)]
+    outcomes: Vec<Value>,
+    #[serde(default)]
+    delegations: Vec<Value>,
     #[serde(default)]
     notes: Vec<ScratchpadNote>,
     created_at: String,
@@ -377,16 +477,18 @@ impl ScratchpadStore {
 
     fn read(&self, scratchpad_id: &str) -> Result<Scratchpad, FunctionCallError> {
         let path = self.path(scratchpad_id)?;
-        let text = fs::read_to_string(&path).map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "scratchpad `{scratchpad_id}` not found or unreadable: {err}"
-            ))
+        let text = fs::read_to_string(&path).map_err(|_| {
+            FunctionCallError::RespondToModel("scratchpad not found or unreadable".to_string())
         })?;
-        serde_json::from_str(&text).map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "scratchpad `{scratchpad_id}` is invalid JSON: {err}"
-            ))
-        })
+        let scratchpad = serde_json::from_str::<Scratchpad>(&text).map_err(|_| {
+            FunctionCallError::RespondToModel("scratchpad file is invalid".to_string())
+        })?;
+        if scratchpad.scratchpad_id != scratchpad_id {
+            return Err(FunctionCallError::RespondToModel(
+                "scratchpad file is invalid".to_string(),
+            ));
+        }
+        Ok(scratchpad)
     }
 
     fn write(&self, scratchpad: &Scratchpad) -> Result<(), FunctionCallError> {
@@ -395,7 +497,7 @@ impl ScratchpadStore {
         let text = serde_json::to_string_pretty(scratchpad).map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to serialize scratchpad: {err}"))
         })?;
-        fs::write(path, format!("{text}\n")).map_err(io_error)?;
+        atomic_write_json(&path, &format!("{text}\n"))?;
         self.write_index()
     }
 
@@ -408,13 +510,26 @@ impl ScratchpadStore {
                     if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
                         continue;
                     }
-                    let text = fs::read_to_string(entry.path()).map_err(io_error)?;
-                    let scratchpad = serde_json::from_str::<Scratchpad>(&text).map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
-                            "failed to parse scratchpad file `{}`: {err}",
-                            entry.path().display()
-                        ))
-                    })?;
+                    let Ok(text) = fs::read_to_string(entry.path()) else {
+                        continue;
+                    };
+                    let Ok(scratchpad) = serde_json::from_str::<Scratchpad>(&text) else {
+                        continue;
+                    };
+                    let Some(file_id) = entry
+                        .path()
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .map(ToString::to_string)
+                    else {
+                        continue;
+                    };
+                    let Ok(scratchpad_file_id) = sanitize_id(&scratchpad.scratchpad_id) else {
+                        continue;
+                    };
+                    if scratchpad_file_id != file_id {
+                        continue;
+                    }
                     scratchpads.push(scratchpad);
                 }
             }
@@ -455,8 +570,36 @@ impl ScratchpadStore {
                 "failed to serialize scratchpad index: {err}"
             ))
         })?;
-        fs::write(self.root.join("index.json"), format!("{text}\n")).map_err(io_error)
+        atomic_write_json(&self.root.join("index.json"), &format!("{text}\n"))
     }
+}
+
+fn atomic_write_json(path: &Path, text: &str) -> Result<(), FunctionCallError> {
+    let parent = path.parent().ok_or_else(|| {
+        FunctionCallError::RespondToModel(format!(
+            "scratchpad path `{}` has no parent directory",
+            path.display()
+        ))
+    })?;
+    fs::create_dir_all(parent).map_err(io_error)?;
+    let tmp_path = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("scratchpad"),
+        uuid::Uuid::new_v4().simple()
+    ));
+    fs::write(&tmp_path, text).map_err(io_error)?;
+    if cfg!(windows) && path.exists() {
+        fs::remove_file(path).map_err(|err| {
+            let _ = fs::remove_file(&tmp_path);
+            io_error(err)
+        })?;
+    }
+    fs::rename(&tmp_path, path).map_err(|err| {
+        let _ = fs::remove_file(&tmp_path);
+        io_error(err)
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -488,6 +631,7 @@ pub(crate) fn run_lifecycle_cleanup(
         return Ok(());
     }
 
+    let _guard = scratchpad_write_guard()?;
     let store = ScratchpadStore::new(/*state_home*/ None, codex_home)?;
     let now = Utc::now();
     for mut scratchpad in store.list()? {
@@ -526,29 +670,189 @@ pub(crate) fn run_lifecycle_cleanup(
     store.write_index()
 }
 
+pub(crate) fn set_thread_continuous_policy(
+    codex_home: &Path,
+    scratchpad_id: &str,
+    enabled: bool,
+) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
+    let store = ScratchpadStore::new(/*state_home*/ None, codex_home)?;
+    let mut scratchpad = match store.read(scratchpad_id) {
+        Ok(scratchpad) => scratchpad,
+        Err(FunctionCallError::RespondToModel(message)) if message.contains("not found") => {
+            let now = now();
+            Scratchpad {
+                scratchpad_id: scratchpad_id.to_string(),
+                objective: "Session continuous run policy".to_string(),
+                status: "active".to_string(),
+                session_key: None,
+                origin_thread_id: Some(scratchpad_id.to_string()),
+                worktrees: Vec::new(),
+                active_channels: Vec::new(),
+                active_sessions: BTreeMap::new(),
+                action_policy: BTreeMap::new(),
+                run_policy: BTreeMap::new(),
+                communication_policy: BTreeMap::new(),
+                completed: Vec::new(),
+                next_steps: Vec::new(),
+                pending_waits: Vec::new(),
+                git_refs: Vec::new(),
+                artifacts: Vec::new(),
+                stop_conditions: Vec::new(),
+                resume_instructions: String::new(),
+                interruption_policy: String::new(),
+                final_guard: String::new(),
+                last_benchmark: None,
+                outcomes: Vec::new(),
+                delegations: Vec::new(),
+                notes: Vec::new(),
+                created_at: now.clone(),
+                updated_at: now,
+                archived_at: None,
+            }
+        }
+        Err(err) => return Err(err),
+    };
+    if scratchpad.scratchpad_id != scratchpad_id {
+        return Err(FunctionCallError::RespondToModel(
+            "scratchpad file is invalid".to_string(),
+        ));
+    }
+    ensure_thread_owner(&scratchpad, scratchpad_id)?;
+    if scratchpad.origin_thread_id.is_none() {
+        scratchpad.origin_thread_id = Some(scratchpad_id.to_string());
+    }
+    set_continuous_policy_fields(&mut scratchpad, enabled);
+    store.write(&scratchpad)?;
+    Ok(serde_json::json!({ "scratchpad": scratchpad }))
+}
+
+pub fn absorb_thread_scratchpad_context(
+    codex_home: &Path,
+    current_thread_id: &str,
+    source_scratchpad_id: &str,
+    options: ScratchpadAbsorbOptions,
+) -> Result<ScratchpadAbsorbResult, String> {
+    absorb_scratchpad_context(codex_home, current_thread_id, source_scratchpad_id, options)
+        .map_err(|err| err.to_string())
+}
+
+pub fn unarchive_thread_scratchpad(
+    codex_home: &Path,
+    current_thread_id: &str,
+) -> Result<(), String> {
+    unarchive_current_thread_scratchpad(codex_home, current_thread_id)
+        .map_err(|err| err.to_string())
+}
+
+fn absorb_scratchpad_context(
+    codex_home: &Path,
+    current_thread_id: &str,
+    source_scratchpad_id: &str,
+    options: ScratchpadAbsorbOptions,
+) -> Result<ScratchpadAbsorbResult, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
+    let store = ScratchpadStore::new(/*state_home*/ None, codex_home)?;
+    let source = store.read(source_scratchpad_id)?;
+    let mut target = match read_existing_scratchpad(&store, current_thread_id)? {
+        Some(scratchpad) => scratchpad,
+        None => new_absorb_target_scratchpad(current_thread_id),
+    };
+    prepare_scratchpad_for_write(&mut target, current_thread_id)?;
+
+    let absorbed_at = now();
+    let (included, counts) = absorbed_context(&source, &options);
+    let excluded_control_fields = ABSORBED_SCRATCHPAD_CONTROL_FIELDS
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let artifact = serde_json::json!({
+        "type": ABSORBED_SCRATCHPAD_ARTIFACT_TYPE,
+        "absorbed_at": absorbed_at,
+        "source": {
+            "scratchpad_id": source.scratchpad_id,
+            "objective": source.objective,
+            "status": source.status,
+            "session_key": source.session_key,
+            "origin_thread_id": source.origin_thread_id,
+            "created_at": source.created_at,
+            "updated_at": source.updated_at,
+            "archived_at": source.archived_at,
+        },
+        "included": included,
+        "counts": counts,
+        "excluded_control_fields": excluded_control_fields,
+    });
+    target.artifacts.push(artifact);
+    target.notes.push(ScratchpadNote {
+        note_id: format!("note-{}", uuid::Uuid::new_v4().simple()),
+        ts: now(),
+        category: Some("absorb".to_string()),
+        summary: absorb_note_summary(source_scratchpad_id, &counts),
+        outcome: Some("absorbed".to_string()),
+    });
+    touch(&mut target);
+    store.write(&target)?;
+    Ok(ScratchpadAbsorbResult {
+        source_scratchpad_id: source_scratchpad_id.to_string(),
+        target_scratchpad_id: current_thread_id.to_string(),
+        counts,
+        excluded_control_fields,
+    })
+}
+
+fn unarchive_current_thread_scratchpad(
+    codex_home: &Path,
+    current_thread_id: &str,
+) -> Result<(), FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
+    let store = ScratchpadStore::new(/*state_home*/ None, codex_home)?;
+    let mut scratchpad = store.read(current_thread_id)?;
+    prepare_scratchpad_for_write(&mut scratchpad, current_thread_id)?;
+    scratchpad.status = "active".to_string();
+    scratchpad.archived_at = None;
+    scratchpad.notes.push(ScratchpadNote {
+        note_id: format!("note-{}", uuid::Uuid::new_v4().simple()),
+        ts: now(),
+        category: Some("unarchive".to_string()),
+        summary: "Unarchived current thread scratchpad.".to_string(),
+        outcome: Some("active".to_string()),
+    });
+    touch(&mut scratchpad);
+    store.write(&scratchpad)
+}
+
 fn open_scratchpad(
     store: &ScratchpadStore,
     args: &Value,
     default_scratchpad_id: &str,
 ) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let objective = string_arg(args, "objective")?;
     let session_key = optional_string_arg(args, "session_key");
-    if let Some(existing) = find_existing_active(store, &objective, session_key.as_deref())? {
+    let requested_scratchpad_id = optional_string_arg(args, "scratchpad_id");
+    let scratchpad_id =
+        requested_scratchpad_id.unwrap_or_else(|| default_scratchpad_id.to_string());
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
+    if let Some(existing) = read_existing_scratchpad(store, &scratchpad_id)? {
+        ensure_thread_owner(&existing, default_scratchpad_id)?;
+        ensure_open_compatible(&existing, &objective, session_key.as_deref())?;
         return Ok(serde_json::json!({ "scratchpad": existing }));
     }
 
     let now = now();
-    let scratchpad_id = optional_string_arg(args, "scratchpad_id")
-        .unwrap_or_else(|| default_scratchpad_id.to_string());
     let mut scratchpad = Scratchpad {
         scratchpad_id,
         objective,
         status: optional_string_arg(args, "status").unwrap_or_else(|| "active".to_string()),
         session_key,
+        origin_thread_id: Some(default_scratchpad_id.to_string()),
         worktrees: array_arg(args, "worktrees"),
         active_channels: string_array_arg(args, "active_channels"),
         active_sessions: object_arg(args, "active_sessions"),
         action_policy: object_arg(args, "action_policy"),
+        run_policy: object_arg(args, "run_policy"),
+        communication_policy: object_arg(args, "communication_policy"),
         completed: string_array_arg(args, "completed"),
         next_steps: string_array_arg(args, "next_steps"),
         pending_waits: array_arg(args, "pending_waits"),
@@ -559,6 +863,8 @@ fn open_scratchpad(
         interruption_policy: optional_string_arg(args, "interruption_policy").unwrap_or_default(),
         final_guard: optional_string_arg(args, "final_guard").unwrap_or_default(),
         last_benchmark: args.get("last_benchmark").cloned(),
+        outcomes: array_arg(args, "outcomes"),
+        delegations: array_arg(args, "delegations"),
         notes: Vec::new(),
         created_at: now.clone(),
         updated_at: now,
@@ -569,54 +875,238 @@ fn open_scratchpad(
     Ok(serde_json::json!({ "scratchpad": scratchpad }))
 }
 
-fn find_existing_active(
+fn read_existing_scratchpad(
     store: &ScratchpadStore,
+    scratchpad_id: &str,
+) -> Result<Option<Scratchpad>, FunctionCallError> {
+    if !store.path(scratchpad_id)?.exists() {
+        return Ok(None);
+    }
+    store.read(scratchpad_id).map(Some)
+}
+
+fn new_absorb_target_scratchpad(current_thread_id: &str) -> Scratchpad {
+    let now = now();
+    Scratchpad {
+        scratchpad_id: current_thread_id.to_string(),
+        objective: "Imported scratchpad context".to_string(),
+        status: "active".to_string(),
+        session_key: None,
+        origin_thread_id: Some(current_thread_id.to_string()),
+        worktrees: Vec::new(),
+        active_channels: Vec::new(),
+        active_sessions: BTreeMap::new(),
+        action_policy: BTreeMap::new(),
+        run_policy: BTreeMap::new(),
+        communication_policy: BTreeMap::new(),
+        completed: Vec::new(),
+        next_steps: Vec::new(),
+        pending_waits: Vec::new(),
+        git_refs: Vec::new(),
+        artifacts: Vec::new(),
+        stop_conditions: Vec::new(),
+        resume_instructions: String::new(),
+        interruption_policy: String::new(),
+        final_guard: String::new(),
+        last_benchmark: None,
+        outcomes: Vec::new(),
+        delegations: Vec::new(),
+        notes: Vec::new(),
+        created_at: now.clone(),
+        updated_at: now,
+        archived_at: None,
+    }
+}
+
+fn absorbed_context(
+    source: &Scratchpad,
+    options: &ScratchpadAbsorbOptions,
+) -> (Value, BTreeMap<String, usize>) {
+    let mut included = serde_json::Map::new();
+    let mut counts = BTreeMap::new();
+    if options.include_completed {
+        included.insert("completed".to_string(), serde_json::json!(source.completed));
+        counts.insert("completed".to_string(), source.completed.len());
+    }
+    if options.include_next_steps {
+        included.insert(
+            "next_steps".to_string(),
+            serde_json::json!(source.next_steps),
+        );
+        counts.insert("next_steps".to_string(), source.next_steps.len());
+    }
+    if options.include_pending_waits {
+        included.insert(
+            "pending_waits".to_string(),
+            serde_json::json!(source.pending_waits),
+        );
+        counts.insert("pending_waits".to_string(), source.pending_waits.len());
+    }
+    if options.include_notes {
+        included.insert("notes".to_string(), serde_json::json!(source.notes));
+        counts.insert("notes".to_string(), source.notes.len());
+    }
+    if options.include_git_refs {
+        included.insert("git_refs".to_string(), serde_json::json!(source.git_refs));
+        counts.insert("git_refs".to_string(), source.git_refs.len());
+    }
+    if options.include_artifacts {
+        included.insert("artifacts".to_string(), serde_json::json!(source.artifacts));
+        counts.insert("artifacts".to_string(), source.artifacts.len());
+    }
+    if options.include_outcomes {
+        included.insert("outcomes".to_string(), serde_json::json!(source.outcomes));
+        counts.insert("outcomes".to_string(), source.outcomes.len());
+    }
+    if options.include_delegations {
+        included.insert(
+            "delegations".to_string(),
+            serde_json::json!(source.delegations),
+        );
+        counts.insert("delegations".to_string(), source.delegations.len());
+    }
+    if options.include_worktrees {
+        included.insert("worktrees".to_string(), serde_json::json!(source.worktrees));
+        counts.insert("worktrees".to_string(), source.worktrees.len());
+    }
+    (Value::Object(included), counts)
+}
+
+fn absorb_note_summary(source_scratchpad_id: &str, counts: &BTreeMap<String, usize>) -> String {
+    let imported = counts
+        .iter()
+        .map(|(field, count)| format!("{field} {count}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Absorbed scratchpad `{source_scratchpad_id}` as contextual snapshot: {imported}.")
+}
+
+fn ensure_open_compatible(
+    scratchpad: &Scratchpad,
     objective: &str,
     session_key: Option<&str>,
-) -> Result<Option<Scratchpad>, FunctionCallError> {
-    Ok(store.list()?.into_iter().find(|scratchpad| {
-        scratchpad.archived_at.is_none()
-            && scratchpad.objective == objective
-            && scratchpad.session_key.as_deref() == session_key
-    }))
-}
-
-fn get_scratchpad(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
-    let scratchpad_id = string_arg(args, "scratchpad_id")?;
-    Ok(serde_json::json!({ "scratchpad": store.read(&scratchpad_id)? }))
-}
-
-fn resume_scratchpad(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
-    let scratchpad_id = string_arg(args, "scratchpad_id")?;
-    let scratchpad = store.read(&scratchpad_id)?;
-    let include_archived = bool_arg(args, "include_archived");
-    if scratchpad.archived_at.is_some() && !include_archived {
+) -> Result<(), FunctionCallError> {
+    if scratchpad.objective != objective {
         return Err(FunctionCallError::RespondToModel(format!(
-            "scratchpad `{scratchpad_id}` is archived; pass include_archived=true to inspect it or unarchive_scratchpad to reactivate it"
+            "scratchpad `{}` is already bound to objective `{}` and cannot be rebound to `{objective}`",
+            scratchpad.scratchpad_id, scratchpad.objective
         )));
     }
+    if scratchpad.session_key.as_deref() != session_key {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "scratchpad `{}` is already bound to a different session_key",
+            scratchpad.scratchpad_id
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_current_thread_scratchpad_id(
+    scratchpad_id: &str,
+    default_scratchpad_id: &str,
+) -> Result<(), FunctionCallError> {
+    if scratchpad_id == default_scratchpad_id {
+        return Ok(());
+    }
+    Err(FunctionCallError::RespondToModel(
+        "built-in scratchpad tools are bound to the current thread id; omit scratchpad_id or use the current thread id"
+            .to_string(),
+    ))
+}
+
+fn ensure_thread_owner(
+    scratchpad: &Scratchpad,
+    default_scratchpad_id: &str,
+) -> Result<(), FunctionCallError> {
+    match scratchpad.origin_thread_id.as_deref() {
+        Some(origin_thread_id) if origin_thread_id != default_scratchpad_id => {
+            return Err(FunctionCallError::RespondToModel(
+                "scratchpad is owned by another thread and cannot be accessed from this thread"
+                    .to_string(),
+            ));
+        }
+        Some(_) => {}
+        None if scratchpad.scratchpad_id != default_scratchpad_id => {
+            return Err(FunctionCallError::RespondToModel(
+                "scratchpad has no thread owner metadata and cannot be accessed from this thread"
+                    .to_string(),
+            ));
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+fn scratchpad_visible_to_thread(scratchpad: &Scratchpad, default_scratchpad_id: &str) -> bool {
+    match scratchpad.origin_thread_id.as_deref() {
+        Some(origin_thread_id) => origin_thread_id == default_scratchpad_id,
+        None => scratchpad.scratchpad_id == default_scratchpad_id,
+    }
+}
+
+fn prepare_scratchpad_for_write(
+    scratchpad: &mut Scratchpad,
+    default_scratchpad_id: &str,
+) -> Result<(), FunctionCallError> {
+    ensure_thread_owner(scratchpad, default_scratchpad_id)?;
+    if scratchpad.origin_thread_id.is_none() {
+        scratchpad.origin_thread_id = Some(default_scratchpad_id.to_string());
+    }
+    Ok(())
+}
+
+fn get_scratchpad(
+    store: &ScratchpadStore,
+    args: &Value,
+    default_scratchpad_id: &str,
+) -> Result<Value, FunctionCallError> {
+    let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
+    let scratchpad = store.read(&scratchpad_id)?;
+    ensure_thread_owner(&scratchpad, default_scratchpad_id)?;
+    Ok(serde_json::json!({ "scratchpad": scratchpad }))
+}
+
+fn resume_scratchpad(
+    store: &ScratchpadStore,
+    args: &Value,
+    default_scratchpad_id: &str,
+) -> Result<Value, FunctionCallError> {
+    let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
+    let scratchpad = store.read(&scratchpad_id)?;
+    ensure_thread_owner(&scratchpad, default_scratchpad_id)?;
+    let include_archived = bool_arg(args, "include_archived");
     Ok(serde_json::json!({
         "scratchpad": scratchpad,
         "summary": summary(&scratchpad),
         "resumed": true,
+        "include_archived": include_archived,
     }))
 }
 
 fn get_scratchpad_summary(
     store: &ScratchpadStore,
     args: &Value,
+    default_scratchpad_id: &str,
 ) -> Result<Value, FunctionCallError> {
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let scratchpad = store.read(&scratchpad_id)?;
+    ensure_thread_owner(&scratchpad, default_scratchpad_id)?;
     Ok(serde_json::json!({ "summary": summary(&scratchpad) }))
 }
 
 fn append_scratchpad_note(
     store: &ScratchpadStore,
     args: &Value,
+    default_scratchpad_id: &str,
 ) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
+    prepare_scratchpad_for_write(&mut scratchpad, default_scratchpad_id)?;
     scratchpad.notes.push(ScratchpadNote {
         note_id: format!("note-{}", uuid::Uuid::new_v4().simple()),
         ts: now(),
@@ -629,9 +1119,16 @@ fn append_scratchpad_note(
     Ok(serde_json::json!({ "scratchpad": scratchpad }))
 }
 
-fn set_next_steps(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+fn set_next_steps(
+    store: &ScratchpadStore,
+    args: &Value,
+    default_scratchpad_id: &str,
+) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
+    prepare_scratchpad_for_write(&mut scratchpad, default_scratchpad_id)?;
     scratchpad.next_steps = string_array_arg(args, "next_steps");
     if let Some(status) = optional_string_arg(args, "status") {
         scratchpad.status = status;
@@ -641,9 +1138,16 @@ fn set_next_steps(store: &ScratchpadStore, args: &Value) -> Result<Value, Functi
     Ok(serde_json::json!({ "scratchpad": scratchpad }))
 }
 
-fn set_pending_waits(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+fn set_pending_waits(
+    store: &ScratchpadStore,
+    args: &Value,
+    default_scratchpad_id: &str,
+) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
+    prepare_scratchpad_for_write(&mut scratchpad, default_scratchpad_id)?;
     scratchpad.pending_waits = array_arg(args, "pending_waits");
     if let Some(status) = optional_string_arg(args, "status") {
         scratchpad.status = status;
@@ -653,18 +1157,32 @@ fn set_pending_waits(store: &ScratchpadStore, args: &Value) -> Result<Value, Fun
     Ok(serde_json::json!({ "scratchpad": scratchpad }))
 }
 
-fn set_action_policy(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+fn set_action_policy(
+    store: &ScratchpadStore,
+    args: &Value,
+    default_scratchpad_id: &str,
+) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
+    prepare_scratchpad_for_write(&mut scratchpad, default_scratchpad_id)?;
     scratchpad.action_policy = object_arg(args, "action_policy");
     touch(&mut scratchpad);
     store.write(&scratchpad)?;
     Ok(serde_json::json!({ "scratchpad": scratchpad }))
 }
 
-fn mark_wait_checked(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+fn mark_wait_checked(
+    store: &ScratchpadStore,
+    args: &Value,
+    default_scratchpad_id: &str,
+) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
+    prepare_scratchpad_for_write(&mut scratchpad, default_scratchpad_id)?;
     let wait_id = optional_string_arg(args, "wait_id");
     let target = optional_string_arg(args, "target");
     let index = find_pending_wait_index(
@@ -697,18 +1215,200 @@ fn mark_wait_checked(store: &ScratchpadStore, args: &Value) -> Result<Value, Fun
     Ok(serde_json::json!({ "scratchpad": scratchpad }))
 }
 
-fn update_scratchpad(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+fn update_scratchpad(
+    store: &ScratchpadStore,
+    args: &Value,
+    default_scratchpad_id: &str,
+) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
+    prepare_scratchpad_for_write(&mut scratchpad, default_scratchpad_id)?;
     merge_update(&mut scratchpad, args);
     touch(&mut scratchpad);
     store.write(&scratchpad)?;
     Ok(serde_json::json!({ "scratchpad": scratchpad }))
 }
 
-fn archive_scratchpad(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+fn set_continuous_policy_fields(scratchpad: &mut Scratchpad, enabled: bool) {
+    let updated_at = now();
+    scratchpad.run_policy.insert(
+        "continuous".to_string(),
+        serde_json::json!({
+            "enabled": enabled,
+            "updated_at": updated_at,
+        }),
+    );
+    let fallback = scratchpad
+        .communication_policy
+        .entry("fallback".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !fallback.is_object() {
+        *fallback = serde_json::json!({});
+    }
+    if let Some(fallback) = fallback.as_object_mut() {
+        fallback.insert(
+            "final_response_on_channel_failure".to_string(),
+            Value::Bool(false),
+        );
+    }
+    scratchpad.updated_at = updated_at;
+}
+
+fn record_outcome(
+    store: &ScratchpadStore,
+    args: &Value,
+    default_scratchpad_id: &str,
+) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
+    prepare_scratchpad_for_write(&mut scratchpad, default_scratchpad_id)?;
+    let mut outcome = serde_json::Map::new();
+    outcome.insert(
+        "outcome_id".to_string(),
+        Value::String(format!("outcome-{}", uuid::Uuid::new_v4().simple())),
+    );
+    outcome.insert("recorded_at".to_string(), Value::String(now()));
+    for key in [
+        "scope",
+        "metric",
+        "unit",
+        "baseline",
+        "current",
+        "delta",
+        "change",
+        "summary",
+        "tradeoffs",
+        "provenance",
+        "commit",
+        "pr",
+        "artifacts",
+        "notes",
+    ] {
+        if let Some(value) = args.get(key) {
+            outcome.insert(key.to_string(), value.clone());
+        }
+    }
+    if !outcome.contains_key("scope") {
+        outcome.insert("scope".to_string(), Value::String("general".to_string()));
+    }
+    if !outcome.contains_key("metric") {
+        outcome.insert(
+            "metric".to_string(),
+            string_arg(args, "metric_name")?.into(),
+        );
+    }
+    if let Some(outcome_id) = optional_string_arg(args, "outcome_id") {
+        outcome.insert("outcome_id".to_string(), Value::String(outcome_id.clone()));
+        if let Some(existing) = scratchpad.outcomes.iter_mut().find(|item| {
+            item.get("outcome_id")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value == outcome_id)
+        }) {
+            let mut merged = existing.as_object().cloned().unwrap_or_default();
+            for (key, value) in outcome {
+                merged.insert(key, value);
+            }
+            *existing = Value::Object(merged);
+        } else {
+            scratchpad.outcomes.push(Value::Object(outcome));
+        }
+    } else {
+        scratchpad.outcomes.push(Value::Object(outcome));
+    }
+    touch(&mut scratchpad);
+    store.write(&scratchpad)?;
+    Ok(serde_json::json!({ "scratchpad": scratchpad }))
+}
+
+fn export_outcomes(
+    store: &ScratchpadStore,
+    args: &Value,
+    default_scratchpad_id: &str,
+) -> Result<Value, FunctionCallError> {
+    let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
+    let scratchpad = store.read(&scratchpad_id)?;
+    ensure_thread_owner(&scratchpad, default_scratchpad_id)?;
+    let markdown = outcome_markdown(&scratchpad);
+    Ok(serde_json::json!({
+        "scratchpad_id": scratchpad.scratchpad_id,
+        "objective": scratchpad.objective,
+        "outcomes": scratchpad.outcomes,
+        "markdown": markdown,
+    }))
+}
+
+fn record_delegation(
+    store: &ScratchpadStore,
+    args: &Value,
+    default_scratchpad_id: &str,
+) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
+    let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
+    let mut scratchpad = store.read(&scratchpad_id)?;
+    prepare_scratchpad_for_write(&mut scratchpad, default_scratchpad_id)?;
+    let delegation_id = optional_string_arg(args, "delegation_id")
+        .unwrap_or_else(|| format!("delegation-{}", uuid::Uuid::new_v4().simple()));
+    let now = now();
+    let mut delegation = serde_json::Map::new();
+    delegation.insert(
+        "delegation_id".to_string(),
+        Value::String(delegation_id.clone()),
+    );
+    delegation.insert("updated_at".to_string(), Value::String(now.clone()));
+    for key in [
+        "agent_id",
+        "agent_label",
+        "child_scratchpad_id",
+        "status",
+        "summary",
+        "item_refs",
+        "task_ids",
+        "next_steps",
+        "artifacts",
+        "notes",
+    ] {
+        if let Some(value) = args.get(key) {
+            delegation.insert(key.to_string(), value.clone());
+        }
+    }
+    if !delegation.contains_key("status") {
+        delegation.insert("status".to_string(), Value::String("delegated".to_string()));
+    }
+    if let Some(existing) = scratchpad.delegations.iter_mut().find(|item| {
+        item.get("delegation_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value == delegation_id)
+    }) {
+        let mut merged = existing.as_object().cloned().unwrap_or_default();
+        for (key, value) in delegation {
+            merged.insert(key, value);
+        }
+        *existing = Value::Object(merged);
+    } else {
+        delegation.insert("created_at".to_string(), Value::String(now));
+        scratchpad.delegations.push(Value::Object(delegation));
+    }
+    touch(&mut scratchpad);
+    store.write(&scratchpad)?;
+    Ok(serde_json::json!({ "scratchpad": scratchpad }))
+}
+
+fn archive_scratchpad(
+    store: &ScratchpadStore,
+    args: &Value,
+    default_scratchpad_id: &str,
+) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
+    let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
+    let mut scratchpad = store.read(&scratchpad_id)?;
+    prepare_scratchpad_for_write(&mut scratchpad, default_scratchpad_id)?;
     let now = now();
     scratchpad.status =
         optional_string_arg(args, "status").unwrap_or_else(|| "archived".to_string());
@@ -727,9 +1427,16 @@ fn archive_scratchpad(store: &ScratchpadStore, args: &Value) -> Result<Value, Fu
     Ok(serde_json::json!({ "scratchpad": scratchpad }))
 }
 
-fn unarchive_scratchpad(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+fn unarchive_scratchpad(
+    store: &ScratchpadStore,
+    args: &Value,
+    default_scratchpad_id: &str,
+) -> Result<Value, FunctionCallError> {
+    let _guard = scratchpad_write_guard()?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
+    prepare_scratchpad_for_write(&mut scratchpad, default_scratchpad_id)?;
     scratchpad.status = optional_string_arg(args, "status").unwrap_or_else(|| "active".to_string());
     scratchpad.archived_at = None;
     touch(&mut scratchpad);
@@ -737,7 +1444,11 @@ fn unarchive_scratchpad(store: &ScratchpadStore, args: &Value) -> Result<Value, 
     Ok(serde_json::json!({ "scratchpad": scratchpad }))
 }
 
-fn lookup_scratchpads(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+fn lookup_scratchpads(
+    store: &ScratchpadStore,
+    args: &Value,
+    default_scratchpad_id: &str,
+) -> Result<Value, FunctionCallError> {
     let query = optional_string_arg(args, "query")
         .or_else(|| optional_string_arg(args, "objective"))
         .unwrap_or_default()
@@ -747,6 +1458,7 @@ fn lookup_scratchpads(store: &ScratchpadStore, args: &Value) -> Result<Value, Fu
     let matches = store
         .list()?
         .into_iter()
+        .filter(|scratchpad| scratchpad_visible_to_thread(scratchpad, default_scratchpad_id))
         .filter(|scratchpad| include_archived || scratchpad.archived_at.is_none())
         .filter(|scratchpad| {
             query.is_empty()
@@ -769,9 +1481,15 @@ fn lookup_scratchpads(store: &ScratchpadStore, args: &Value) -> Result<Value, Fu
     Ok(serde_json::json!({ "matches": matches }))
 }
 
-fn check_action_allowed(store: &ScratchpadStore, args: &Value) -> Result<Value, FunctionCallError> {
+fn check_action_allowed(
+    store: &ScratchpadStore,
+    args: &Value,
+    default_scratchpad_id: &str,
+) -> Result<Value, FunctionCallError> {
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
+    ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let scratchpad = store.read(&scratchpad_id)?;
+    ensure_thread_owner(&scratchpad, default_scratchpad_id)?;
     let action = string_arg(args, "action")?.to_ascii_lowercase();
     let decision = evaluate_action_policy(&scratchpad, args, &action);
     Ok(serde_json::json!({
@@ -795,10 +1513,13 @@ fn schema_payload() -> Value {
         "required": ["scratchpad_id", "objective", "status", "created_at", "updated_at"],
         "optional": [
             "session_key",
+            "origin_thread_id",
             "worktrees",
             "active_channels",
             "active_sessions",
             "action_policy",
+            "run_policy",
+            "communication_policy",
             "completed",
             "next_steps",
             "pending_waits",
@@ -809,11 +1530,13 @@ fn schema_payload() -> Value {
             "interruption_policy",
             "final_guard",
             "last_benchmark",
+            "outcomes",
+            "delegations",
             "notes",
             "archived_at"
         ],
         "storage": "Built-in scratchpads are JSON files under <codex_home>/scratchpad/entries unless state_home is provided.",
-        "thread_id_default": "open_scratchpad defaults scratchpad_id to the current Codex thread/session id when scratchpad_id is omitted.",
+        "thread_id_default": "Built-in scratchpad tools are bound to the current Codex thread/session id. open_scratchpad defaults scratchpad_id to that id when omitted, and model-visible tools reject custom or other-thread scratchpad ids. Archived pads remain readable/editable by the owning thread until lifecycle deletion.",
         "tools": [
             TOOL_OPEN,
             TOOL_RESUME,
@@ -829,7 +1552,10 @@ fn schema_payload() -> Value {
             TOOL_UNARCHIVE,
             TOOL_LOOKUP,
             TOOL_SCHEMA,
-            TOOL_CHECK_ACTION
+            TOOL_CHECK_ACTION,
+            TOOL_RECORD_OUTCOME,
+            TOOL_EXPORT_OUTCOMES,
+            TOOL_RECORD_DELEGATION
         ]
     })
 }
@@ -859,6 +1585,12 @@ fn merge_update(scratchpad: &mut Scratchpad, args: &Value) {
     if args.get("action_policy").is_some() {
         scratchpad.action_policy = object_arg(args, "action_policy");
     }
+    if args.get("run_policy").is_some() {
+        scratchpad.run_policy = object_arg(args, "run_policy");
+    }
+    if args.get("communication_policy").is_some() {
+        scratchpad.communication_policy = object_arg(args, "communication_policy");
+    }
     if args.get("completed").is_some() {
         scratchpad.completed = string_array_arg(args, "completed");
     }
@@ -880,6 +1612,12 @@ fn merge_update(scratchpad: &mut Scratchpad, args: &Value) {
     if args.get("last_benchmark").is_some() {
         scratchpad.last_benchmark = args.get("last_benchmark").cloned();
     }
+    if args.get("outcomes").is_some() {
+        scratchpad.outcomes = array_arg(args, "outcomes");
+    }
+    if args.get("delegations").is_some() {
+        scratchpad.delegations = array_arg(args, "delegations");
+    }
 }
 
 fn summary(scratchpad: &Scratchpad) -> Value {
@@ -888,15 +1626,78 @@ fn summary(scratchpad: &Scratchpad) -> Value {
         "objective": scratchpad.objective,
         "status": scratchpad.status,
         "session_key": scratchpad.session_key,
+        "origin_thread_id": scratchpad.origin_thread_id,
         "next_steps": scratchpad.next_steps,
         "pending_waits": scratchpad.pending_waits,
         "stop_conditions": scratchpad.stop_conditions,
+        "run_policy": scratchpad.run_policy,
+        "communication_policy": scratchpad.communication_policy,
+        "outcomes_count": scratchpad.outcomes.len(),
+        "latest_outcome": scratchpad.outcomes.last(),
+        "delegations": &scratchpad.delegations,
         "resume_instructions": scratchpad.resume_instructions,
         "final_guard": scratchpad.final_guard,
         "notes_count": scratchpad.notes.len(),
         "updated_at": scratchpad.updated_at,
         "archived_at": scratchpad.archived_at,
     })
+}
+
+fn outcome_markdown(scratchpad: &Scratchpad) -> String {
+    let mut lines = vec![
+        format!("# Outcomes for {}", scratchpad.objective),
+        String::new(),
+        format!("Scratchpad: `{}`", scratchpad.scratchpad_id),
+        String::new(),
+    ];
+    if scratchpad.outcomes.is_empty() {
+        lines.push("No outcomes recorded.".to_string());
+        return lines.join("\n");
+    }
+
+    for outcome in &scratchpad.outcomes {
+        let object = outcome.as_object();
+        let scope = object
+            .and_then(|object| object.get("scope"))
+            .map(format_outcome_value)
+            .unwrap_or_else(|| "general".to_string());
+        let metric = object
+            .and_then(|object| object.get("metric"))
+            .map(format_outcome_value)
+            .unwrap_or_else(|| "metric".to_string());
+        lines.push(format!("## {scope} - {metric}"));
+        for key in [
+            "baseline",
+            "current",
+            "delta",
+            "unit",
+            "summary",
+            "tradeoffs",
+            "commit",
+            "pr",
+            "recorded_at",
+        ] {
+            if let Some(value) = object.and_then(|object| object.get(key)) {
+                lines.push(format!("- {key}: {}", format_outcome_value(value)));
+            }
+        }
+        if let Some(provenance) = object.and_then(|object| object.get("provenance")) {
+            lines.push(format!(
+                "- provenance: {}",
+                format_outcome_value(provenance)
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    lines.join("\n")
+}
+
+fn format_outcome_value(value: &Value) -> String {
+    value
+        .as_str()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| value.to_string())
 }
 
 struct ActionPolicyDecision {
@@ -1194,14 +1995,55 @@ fn json_text(value: Value) -> Result<String, FunctionCallError> {
     })
 }
 
+fn scratchpad_write_guard() -> Result<MutexGuard<'static, ()>, FunctionCallError> {
+    SCRATCHPAD_WRITE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| {
+            FunctionCallError::RespondToModel("scratchpad write lock is poisoned".to_string())
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
 
+    fn test_scratchpad(scratchpad_id: &str, origin_thread_id: Option<&str>) -> Scratchpad {
+        Scratchpad {
+            scratchpad_id: scratchpad_id.to_string(),
+            objective: format!("objective for {scratchpad_id}"),
+            status: "active".to_string(),
+            session_key: None,
+            origin_thread_id: origin_thread_id.map(ToString::to_string),
+            worktrees: Vec::new(),
+            active_channels: Vec::new(),
+            active_sessions: BTreeMap::new(),
+            action_policy: BTreeMap::new(),
+            run_policy: BTreeMap::new(),
+            communication_policy: BTreeMap::new(),
+            completed: Vec::new(),
+            next_steps: Vec::new(),
+            pending_waits: Vec::new(),
+            git_refs: Vec::new(),
+            artifacts: Vec::new(),
+            stop_conditions: Vec::new(),
+            resume_instructions: String::new(),
+            interruption_policy: String::new(),
+            final_guard: String::new(),
+            last_benchmark: None,
+            outcomes: Vec::new(),
+            delegations: Vec::new(),
+            notes: Vec::new(),
+            created_at: now(),
+            updated_at: now(),
+            archived_at: None,
+        }
+    }
+
     #[test]
-    fn open_defaults_to_thread_id_and_reopens_existing_active_pad() {
+    fn open_defaults_to_thread_id_and_reopens_same_thread_active_pad() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = ScratchpadStore::new(
             /*state_home*/ Some(tmp.path().to_str().unwrap()),
@@ -1215,7 +2057,7 @@ mod tests {
         });
 
         let first = open_scratchpad(&store, &args, "thread-123").unwrap();
-        let second = open_scratchpad(&store, &args, "thread-456").unwrap();
+        let second = open_scratchpad(&store, &args, "thread-123").unwrap();
 
         assert_eq!(
             first["scratchpad"]["scratchpad_id"],
@@ -1228,6 +2070,679 @@ mod tests {
     }
 
     #[test]
+    fn open_scratchpad_does_not_reuse_other_thread_by_objective() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let args = serde_json::json!({
+            "objective": "same objective",
+            "session_key": "session-a",
+            "next_steps": ["ship it"]
+        });
+
+        let first = open_scratchpad(&store, &args, "thread-123").unwrap();
+        let second = open_scratchpad(&store, &args, "thread-456").unwrap();
+
+        assert_eq!(
+            first["scratchpad"]["scratchpad_id"],
+            serde_json::json!("thread-123")
+        );
+        assert_eq!(
+            second["scratchpad"]["scratchpad_id"],
+            serde_json::json!("thread-456")
+        );
+        assert_eq!(store.list().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn unaware_threads_with_same_objective_and_session_key_get_isolated_pads() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let args = serde_json::json!({
+            "objective": "shared live loopback proof objective",
+            "session_key": "shared live loopback proof session"
+        });
+
+        let alpha = open_scratchpad(&store, &args, "thread-alpha").unwrap();
+        append_scratchpad_note(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "thread-alpha",
+                "summary": "CANARY_ALPHA_019DE918_UNAWARE_AGENT"
+            }),
+            "thread-alpha",
+        )
+        .unwrap();
+        let bravo = open_scratchpad(&store, &args, "thread-bravo").unwrap();
+        append_scratchpad_note(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "thread-bravo",
+                "summary": "CANARY_BRAVO_019DE918_UNAWARE_AGENT"
+            }),
+            "thread-bravo",
+        )
+        .unwrap();
+
+        assert_eq!(
+            alpha["scratchpad"]["scratchpad_id"],
+            serde_json::json!("thread-alpha")
+        );
+        assert_eq!(
+            bravo["scratchpad"]["scratchpad_id"],
+            serde_json::json!("thread-bravo")
+        );
+        let alpha_stored = store.read("thread-alpha").unwrap();
+        let bravo_stored = store.read("thread-bravo").unwrap();
+        assert_eq!(
+            alpha_stored.notes,
+            vec![ScratchpadNote {
+                note_id: alpha_stored.notes[0].note_id.clone(),
+                ts: alpha_stored.notes[0].ts.clone(),
+                category: None,
+                summary: "CANARY_ALPHA_019DE918_UNAWARE_AGENT".to_string(),
+                outcome: None,
+            }]
+        );
+        assert_eq!(
+            bravo_stored.notes,
+            vec![ScratchpadNote {
+                note_id: bravo_stored.notes[0].note_id.clone(),
+                ts: bravo_stored.notes[0].ts.clone(),
+                category: None,
+                summary: "CANARY_BRAVO_019DE918_UNAWARE_AGENT".to_string(),
+                outcome: None,
+            }]
+        );
+        assert_eq!(store.list().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn open_scratchpad_rejects_rebinding_thread_default_to_different_objective() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "vector-search benchmark loop",
+                "next_steps": ["continue vector-search tests"]
+            }),
+            "thread-vector",
+        )
+        .unwrap();
+
+        let result = open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "c4game board game build",
+                "next_steps": ["continue c4game UI work"]
+            }),
+            "thread-vector",
+        );
+
+        assert!(result.is_err());
+        let stored = store.read("thread-vector").unwrap();
+        assert_eq!(stored.objective, "vector-search benchmark loop");
+        assert_eq!(
+            stored.next_steps,
+            vec!["continue vector-search tests".to_string()]
+        );
+    }
+
+    #[test]
+    fn open_scratchpad_rejects_explicit_other_thread_id_before_creation() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let current_thread_id = "11111111-1111-1111-1111-111111111111";
+        let other_thread_id = "22222222-2222-2222-2222-222222222222";
+
+        let result = open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": other_thread_id,
+                "objective": "attempt to reserve another thread default id",
+                "next_steps": ["this must not be created"]
+            }),
+            current_thread_id,
+        );
+
+        let message = result
+            .expect_err("other thread id should be rejected")
+            .to_string();
+        assert!(!message.contains(current_thread_id));
+        assert!(!message.contains(other_thread_id));
+        assert!(message.contains("current thread id"));
+        assert!(!store.path(other_thread_id).unwrap().exists());
+    }
+
+    #[test]
+    fn open_scratchpad_rejects_custom_active_id() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+
+        let result = open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "human-readable-debug-id",
+                "objective": "custom ids should not become active pads"
+            }),
+            "thread-123",
+        );
+
+        let message = result
+            .expect_err("custom active id should fail")
+            .to_string();
+        assert!(message.contains("current thread id"));
+        assert!(!store.path("human-readable-debug-id").unwrap().exists());
+    }
+
+    #[test]
+    fn open_scratchpad_cannot_launch_child_as_existing_session_owner() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let session_b_thread_id = "33333333-3333-3333-3333-333333333333";
+        let session_a_child_thread_id = "44444444-4444-4444-4444-444444444444";
+        let session_b_args = serde_json::json!({
+            "objective": "session B real work",
+            "next_steps": ["session B keeps ownership"]
+        });
+        let session_b = open_scratchpad(&store, &session_b_args, session_b_thread_id).unwrap();
+
+        let child_result = open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": session_b_thread_id,
+                "objective": "session A child pretending to be B",
+                "next_steps": ["child should not own B"]
+            }),
+            session_a_child_thread_id,
+        );
+        let session_b_reopened =
+            open_scratchpad(&store, &session_b_args, session_b_thread_id).unwrap();
+
+        assert!(child_result.is_err());
+        assert_eq!(session_b_reopened, session_b);
+        let stored = store.read(session_b_thread_id).unwrap();
+        assert_eq!(
+            stored.origin_thread_id,
+            Some(session_b_thread_id.to_string())
+        );
+        assert_eq!(stored.objective, "session B real work");
+        assert_eq!(stored.next_steps, vec!["session B keeps ownership"]);
+    }
+
+    #[test]
+    fn mutating_scratchpad_tools_reject_other_thread_owner() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "thread a work",
+                "next_steps": ["only thread a should mutate"]
+            }),
+            "thread-a",
+        )
+        .unwrap();
+
+        let result = update_scratchpad(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "thread-a",
+                "next_steps": ["thread b poisoned this"]
+            }),
+            "thread-b",
+        );
+
+        assert!(result.is_err());
+        let stored = store.read("thread-a").unwrap();
+        assert_eq!(
+            stored.next_steps,
+            vec!["only thread a should mutate".to_string()]
+        );
+    }
+
+    #[test]
+    fn read_scratchpad_tools_reject_other_thread_owner() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "thread a private work",
+                "next_steps": ["CANARY_READ_ALPHA_NEXTSTEP_FRESH_BUILD_019DE918"]
+            }),
+            "thread-a",
+        )
+        .unwrap();
+        append_scratchpad_note(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "thread-a",
+                "summary": "CANARY_READ_ALPHA_NOTE_FRESH_BUILD_019DE918"
+            }),
+            "thread-a",
+        )
+        .unwrap();
+
+        assert!(
+            get_scratchpad(
+                &store,
+                &serde_json::json!({ "scratchpad_id": "thread-a" }),
+                "thread-b",
+            )
+            .is_err()
+        );
+        assert!(
+            get_scratchpad_summary(
+                &store,
+                &serde_json::json!({ "scratchpad_id": "thread-a" }),
+                "thread-b",
+            )
+            .is_err()
+        );
+        assert!(
+            resume_scratchpad(
+                &store,
+                &serde_json::json!({ "scratchpad_id": "thread-a" }),
+                "thread-b",
+            )
+            .is_err()
+        );
+        assert!(
+            export_outcomes(
+                &store,
+                &serde_json::json!({ "scratchpad_id": "thread-a" }),
+                "thread-b",
+            )
+            .is_err()
+        );
+        assert!(
+            check_action_allowed(
+                &store,
+                &serde_json::json!({
+                    "scratchpad_id": "thread-a",
+                    "action": "deploy"
+                }),
+                "thread-b",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn open_scratchpad_checks_owner_before_revealing_compatibility() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "sensitive foreign objective",
+                "session_key": "sensitive-session-key"
+            }),
+            "thread-a",
+        )
+        .unwrap();
+
+        let wrong_objective_err = open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "attacker supplied objective",
+                "scratchpad_id": "thread-a",
+                "session_key": "different-session-key"
+            }),
+            "thread-b",
+        )
+        .expect_err("cross-thread reopen should fail before compatibility checks");
+        let message = wrong_objective_err.to_string();
+
+        assert!(!message.contains("sensitive foreign objective"));
+        assert!(!message.contains("sensitive-session-key"));
+        assert!(!message.contains("thread-a"));
+        assert!(!message.contains("thread-b"));
+        assert!(message.contains("current thread id"));
+    }
+
+    #[test]
+    fn cross_thread_denial_errors_do_not_disclose_thread_ids() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let owner_thread_id = "11111111-1111-1111-1111-111111111111";
+        let requester_thread_id = "22222222-2222-2222-2222-222222222222";
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "thread a private work",
+            }),
+            owner_thread_id,
+        )
+        .unwrap();
+        let default_err = get_scratchpad(
+            &store,
+            &serde_json::json!({ "scratchpad_id": owner_thread_id }),
+            requester_thread_id,
+        )
+        .expect_err("cross-thread default read should fail");
+        let default_message = default_err.to_string();
+
+        assert!(!default_message.contains(owner_thread_id));
+        assert!(!default_message.contains(requester_thread_id));
+        assert!(default_message.contains("current thread id"));
+    }
+
+    #[test]
+    fn malformed_scratchpad_errors_do_not_disclose_ids_or_content() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let requested_thread_id = "11111111-1111-1111-1111-111111111111";
+        let embedded_thread_id = "22222222-2222-2222-2222-222222222222";
+        let canary = "MALFORMED_SCRATCHPAD_CANARY_SHOULD_NOT_LEAK";
+        let path = store.path(requested_thread_id).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                r#"{{"scratchpad_id":"{embedded_thread_id}","objective":"{canary}","status":"active","created_at":"2026-05-02T00:00:00Z","updated_at":"2026-05-02T00:00:00Z""#
+            ),
+        )
+        .unwrap();
+
+        let read_err = get_scratchpad(
+            &store,
+            &serde_json::json!({ "scratchpad_id": requested_thread_id }),
+            requested_thread_id,
+        )
+        .expect_err("malformed scratchpad should fail closed");
+        let message = read_err.to_string();
+
+        assert_eq!(message, "scratchpad file is invalid");
+        assert!(!message.contains(requested_thread_id));
+        assert!(!message.contains(embedded_thread_id));
+        assert!(!message.contains(canary));
+    }
+
+    #[test]
+    fn lookup_scratchpads_ignores_malformed_files_without_leaking_content() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let malformed_id = "11111111-1111-1111-1111-111111111111";
+        let canary = "LOOKUP_MALFORMED_CANARY_SHOULD_NOT_LEAK";
+        let path = store.path(malformed_id).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                r#"{{"scratchpad_id":"{malformed_id}","objective":"{canary}","status":"active","created_at":"2026-05-02T00:00:00Z","updated_at":"2026-05-02T00:00:00Z""#
+            ),
+        )
+        .unwrap();
+
+        let lookup = lookup_scratchpads(
+            &store,
+            &serde_json::json!({ "query": canary }),
+            "requester-thread",
+        )
+        .expect("malformed scratchpads should be skipped during lookup");
+
+        assert_eq!(lookup["matches"], serde_json::json!([]));
+        assert!(!lookup.to_string().contains(malformed_id));
+        assert!(!lookup.to_string().contains(canary));
+    }
+
+    #[test]
+    fn mismatched_embedded_id_errors_do_not_disclose_or_write_alias() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let requested_id = "requester-thread";
+        let embedded_id = "embedded-scratchpad";
+        let canary = "MISMATCHED_EMBEDDED_ID_CANARY_SHOULD_NOT_LEAK";
+        let path = store.path(requested_id).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                r#"{{
+  "scratchpad_id": "{embedded_id}",
+  "objective": "{canary}",
+  "status": "active",
+  "origin_thread_id": "requester-thread",
+  "created_at": "2026-05-02T00:00:00Z",
+  "updated_at": "2026-05-02T00:00:00Z"
+}}"#
+            ),
+        )
+        .unwrap();
+
+        let read_message = get_scratchpad(
+            &store,
+            &serde_json::json!({ "scratchpad_id": requested_id }),
+            requested_id,
+        )
+        .expect_err("mismatched embedded scratchpad id should fail closed")
+        .to_string();
+        let write_message = set_next_steps(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": requested_id,
+                "next_steps": ["SHOULD_NOT_WRITE_ALIAS"]
+            }),
+            requested_id,
+        )
+        .expect_err("mismatched embedded scratchpad id should not be writable")
+        .to_string();
+
+        for message in [&read_message, &write_message] {
+            assert_eq!(message, "scratchpad file is invalid");
+            assert!(!message.contains(requested_id));
+            assert!(!message.contains(embedded_id));
+            assert!(!message.contains(canary));
+        }
+        assert!(!store.path(embedded_id).unwrap().exists());
+    }
+
+    #[test]
+    fn lookup_scratchpads_ignores_mismatched_embedded_id_files() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let requested_id = "requested-scratchpad";
+        let embedded_id = "embedded-scratchpad";
+        let canary = "LOOKUP_MISMATCHED_EMBEDDED_ID_CANARY_SHOULD_NOT_LEAK";
+        let path = store.path(requested_id).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                r#"{{
+  "scratchpad_id": "{embedded_id}",
+  "objective": "{canary}",
+  "status": "active",
+  "origin_thread_id": "requester-thread",
+  "created_at": "2026-05-02T00:00:00Z",
+  "updated_at": "2026-05-02T00:00:00Z"
+}}"#
+            ),
+        )
+        .unwrap();
+
+        let lookup = lookup_scratchpads(
+            &store,
+            &serde_json::json!({ "query": canary }),
+            "requester-thread",
+        )
+        .expect("mismatched scratchpads should be skipped during lookup");
+
+        assert_eq!(lookup["matches"], serde_json::json!([]));
+        assert!(!lookup.to_string().contains(requested_id));
+        assert!(!lookup.to_string().contains(embedded_id));
+        assert!(!lookup.to_string().contains(canary));
+    }
+
+    #[test]
+    fn lookup_scratchpads_filters_other_thread_owned_pads() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "FRESH_LIVE_PROOF_LOOKUP_PRIVATE_ALPHA",
+                "next_steps": ["CANARY_LOOKUP_ALPHA_NEXTSTEP_FRESH_BUILD_019DE918"]
+            }),
+            "thread-a",
+        )
+        .unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "FRESH_LIVE_PROOF_LOOKUP_PRIVATE_BRAVO",
+                "next_steps": ["CANARY_LOOKUP_BRAVO_NEXTSTEP_FRESH_BUILD_019DE918"]
+            }),
+            "thread-b",
+        )
+        .unwrap();
+
+        let alpha_lookup = lookup_scratchpads(
+            &store,
+            &serde_json::json!({ "query": "FRESH_LIVE_PROOF_LOOKUP" }),
+            "thread-a",
+        )
+        .unwrap();
+        let bravo_lookup = lookup_scratchpads(
+            &store,
+            &serde_json::json!({ "query": "FRESH_LIVE_PROOF_LOOKUP" }),
+            "thread-b",
+        )
+        .unwrap();
+
+        assert_eq!(
+            alpha_lookup["matches"][0]["scratchpad_id"],
+            serde_json::json!("thread-a")
+        );
+        assert_eq!(alpha_lookup["matches"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            bravo_lookup["matches"][0]["scratchpad_id"],
+            serde_json::json!("thread-b")
+        );
+        assert_eq!(bravo_lookup["matches"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn legacy_unowned_custom_scratchpad_is_not_cross_thread_readable() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        store
+            .write(&Scratchpad {
+                scratchpad_id: "legacy-custom".to_string(),
+                objective: "legacy private work".to_string(),
+                status: "active".to_string(),
+                session_key: None,
+                origin_thread_id: None,
+                worktrees: Vec::new(),
+                active_channels: Vec::new(),
+                active_sessions: BTreeMap::new(),
+                action_policy: BTreeMap::new(),
+                run_policy: BTreeMap::new(),
+                communication_policy: BTreeMap::new(),
+                completed: Vec::new(),
+                next_steps: vec!["CANARY_LEGACY_CUSTOM_FRESH_BUILD_019DE918".to_string()],
+                pending_waits: Vec::new(),
+                git_refs: Vec::new(),
+                artifacts: Vec::new(),
+                stop_conditions: Vec::new(),
+                resume_instructions: String::new(),
+                interruption_policy: String::new(),
+                final_guard: String::new(),
+                last_benchmark: None,
+                outcomes: Vec::new(),
+                delegations: Vec::new(),
+                notes: Vec::new(),
+                created_at: now(),
+                updated_at: now(),
+                archived_at: None,
+            })
+            .unwrap();
+
+        assert!(
+            get_scratchpad(
+                &store,
+                &serde_json::json!({ "scratchpad_id": "legacy-custom" }),
+                "thread-b",
+            )
+            .is_err()
+        );
+        let lookup = lookup_scratchpads(
+            &store,
+            &serde_json::json!({ "query": "legacy private work" }),
+            "thread-b",
+        )
+        .unwrap();
+        assert_eq!(lookup["matches"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
     fn archive_lookup_and_unarchive_round_trip() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = ScratchpadStore::new(
@@ -1235,19 +2750,25 @@ mod tests {
             tmp.path(),
         )
         .unwrap();
-        let args = serde_json::json!({ "objective": "recover me", "scratchpad_id": "sp-test" });
+        let args = serde_json::json!({ "objective": "recover me" });
         open_scratchpad(&store, &args, "thread-123").unwrap();
 
         archive_scratchpad(
             &store,
-            &serde_json::json!({ "scratchpad_id": "sp-test", "summary": "done" }),
+            &serde_json::json!({ "scratchpad_id": "thread-123", "summary": "done" }),
+            "thread-123",
         )
         .unwrap();
-        let active_lookup =
-            lookup_scratchpads(&store, &serde_json::json!({ "query": "recover" })).unwrap();
+        let active_lookup = lookup_scratchpads(
+            &store,
+            &serde_json::json!({ "query": "recover" }),
+            "thread-123",
+        )
+        .unwrap();
         let archived_lookup = lookup_scratchpads(
             &store,
             &serde_json::json!({ "query": "recover", "include_archived": true }),
+            "thread-123",
         )
         .unwrap();
 
@@ -1256,45 +2777,427 @@ mod tests {
 
         unarchive_scratchpad(
             &store,
-            &serde_json::json!({ "scratchpad_id": "sp-test", "status": "active" }),
+            &serde_json::json!({ "scratchpad_id": "thread-123", "status": "active" }),
+            "thread-123",
         )
         .unwrap();
-        let active_lookup =
-            lookup_scratchpads(&store, &serde_json::json!({ "query": "recover" })).unwrap();
+        let active_lookup = lookup_scratchpads(
+            &store,
+            &serde_json::json!({ "query": "recover" }),
+            "thread-123",
+        )
+        .unwrap();
         assert_eq!(active_lookup["matches"].as_array().unwrap().len(), 1);
     }
 
     #[test]
-    fn resume_requires_existing_pad_and_rejects_archived_by_default() {
+    fn resume_allows_same_owner_archived_pad() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = ScratchpadStore::new(Some(tmp.path().to_str().unwrap()), tmp.path()).unwrap();
         let args = serde_json::json!({
             "objective": "resume me",
-            "scratchpad_id": "sp-resume",
             "next_steps": ["continue"]
         });
         open_scratchpad(&store, &args, "thread-123").unwrap();
 
-        let resumed =
-            resume_scratchpad(&store, &serde_json::json!({ "scratchpad_id": "sp-resume" }))
-                .unwrap();
+        let resumed = resume_scratchpad(
+            &store,
+            &serde_json::json!({ "scratchpad_id": "thread-123" }),
+            "thread-123",
+        )
+        .unwrap();
         assert_eq!(
             resumed["summary"]["next_steps"],
             serde_json::json!(["continue"])
         );
         assert_eq!(resumed["resumed"], serde_json::json!(true));
 
-        archive_scratchpad(&store, &serde_json::json!({ "scratchpad_id": "sp-resume" })).unwrap();
-        let archived_default =
-            resume_scratchpad(&store, &serde_json::json!({ "scratchpad_id": "sp-resume" }));
-        assert!(archived_default.is_err());
+        archive_scratchpad(
+            &store,
+            &serde_json::json!({ "scratchpad_id": "thread-123" }),
+            "thread-123",
+        )
+        .unwrap();
+        let archived_default = resume_scratchpad(
+            &store,
+            &serde_json::json!({ "scratchpad_id": "thread-123" }),
+            "thread-123",
+        )
+        .unwrap();
 
         let archived_explicit = resume_scratchpad(
             &store,
-            &serde_json::json!({ "scratchpad_id": "sp-resume", "include_archived": true }),
+            &serde_json::json!({ "scratchpad_id": "thread-123", "include_archived": true }),
+            "thread-123",
         )
         .unwrap();
+        assert!(archived_default["summary"]["archived_at"].is_string());
         assert!(archived_explicit["summary"]["archived_at"].is_string());
+    }
+
+    #[test]
+    fn record_and_export_outcomes_round_trip() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(Some(tmp.path().to_str().unwrap()), tmp.path()).unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "Improve vector-search throughput"
+            }),
+            "thread-123",
+        )
+        .unwrap();
+
+        let recorded = record_outcome(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "thread-123",
+                "scope": {
+                    "service": "vector-search",
+                    "surface": "hot query fanout"
+                },
+                "metric": "QPS",
+                "unit": "requests/second",
+                "baseline": 2,
+                "current": 244,
+                "delta": "+242 QPS",
+                "summary": "Removed serialization bottleneck in the hot path.",
+                "tradeoffs": ["Higher batch memory during benchmark windows"],
+                "commit": "abc1234",
+                "pr": "https://github.com/openai/codex/pull/123",
+                "outcome_id": "outcome-hot-query-qps"
+            }),
+            "thread-123",
+        )
+        .unwrap();
+
+        assert_eq!(
+            recorded["scratchpad"]["outcomes"][0]["current"],
+            serde_json::json!(244)
+        );
+
+        let updated = record_outcome(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "thread-123",
+                "outcome_id": "outcome-hot-query-qps",
+                "metric": "QPS",
+                "current": 245,
+                "summary": "Retested with a warm cache."
+            }),
+            "thread-123",
+        )
+        .unwrap();
+        assert_eq!(
+            updated["scratchpad"]["outcomes"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(
+            updated["scratchpad"]["outcomes"][0]["current"],
+            serde_json::json!(245)
+        );
+
+        let exported = export_outcomes(
+            &store,
+            &serde_json::json!({ "scratchpad_id": "thread-123" }),
+            "thread-123",
+        )
+        .unwrap();
+        assert_eq!(exported["outcomes"].as_array().unwrap().len(), 1);
+        let markdown = exported["markdown"].as_str().unwrap();
+        assert!(markdown.contains("vector-search"));
+        assert!(markdown.contains("QPS"));
+        assert!(markdown.contains("abc1234"));
+    }
+
+    #[test]
+    fn record_delegation_upserts_subagent_lineage() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(Some(tmp.path().to_str().unwrap()), tmp.path()).unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "Divide up continuous-mode migration"
+            }),
+            "thread-123",
+        )
+        .unwrap();
+
+        record_delegation(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "thread-123",
+                "delegation_id": "delegation-reviewer-1",
+                "agent_id": "agent-123",
+                "agent_label": "Reviewer 1",
+                "child_scratchpad_id": "child-sp-1",
+                "item_refs": ["next_steps[0]"],
+                "summary": "Review continuous run policy race conditions"
+            }),
+            "thread-123",
+        )
+        .unwrap();
+        let updated = record_delegation(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "thread-123",
+                "delegation_id": "delegation-reviewer-1",
+                "agent_id": "agent-123",
+                "status": "complete",
+                "notes": ["No remaining race findings"]
+            }),
+            "thread-123",
+        )
+        .unwrap();
+
+        assert_eq!(
+            updated["scratchpad"]["delegations"],
+            serde_json::json!([{
+                "agent_id": "agent-123",
+                "agent_label": "Reviewer 1",
+                "child_scratchpad_id": "child-sp-1",
+                "created_at": updated["scratchpad"]["delegations"][0]["created_at"],
+                "delegation_id": "delegation-reviewer-1",
+                "item_refs": ["next_steps[0]"],
+                "notes": ["No remaining race findings"],
+                "status": "complete",
+                "summary": "Review continuous run policy race conditions",
+                "updated_at": updated["scratchpad"]["delegations"][0]["updated_at"]
+            }])
+        );
+    }
+
+    #[test]
+    fn absorb_scratchpad_context_copies_snapshot_without_rehoming_source() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(/*state_home*/ None, tmp.path()).unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "current session work",
+                "next_steps": ["keep current next step"]
+            }),
+            "thread-123",
+        )
+        .unwrap();
+        let mut source = test_scratchpad("legacy-source", Some("source-thread"));
+        source.objective = "legacy source work".to_string();
+        source.completed = vec!["source completed".to_string()];
+        source.next_steps = vec!["source next".to_string()];
+        source.pending_waits = vec![serde_json::json!({ "summary": "source pending" })];
+        source.notes = vec![ScratchpadNote {
+            note_id: "note-source".to_string(),
+            ts: now(),
+            category: Some("source".to_string()),
+            summary: "source note".to_string(),
+            outcome: None,
+        }];
+        source.run_policy.insert(
+            "continuous".to_string(),
+            serde_json::json!({ "enabled": true }),
+        );
+        source.communication_policy.insert(
+            "fallback".to_string(),
+            serde_json::json!({ "final_response_on_channel_failure": true }),
+        );
+        store.write(&source).unwrap();
+
+        let result = absorb_scratchpad_context(
+            tmp.path(),
+            "thread-123",
+            "legacy-source",
+            ScratchpadAbsorbOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(result.source_scratchpad_id, "legacy-source");
+        assert_eq!(result.target_scratchpad_id, "thread-123");
+        assert_eq!(result.counts["pending_waits"], 1);
+        let target = store.read("thread-123").unwrap();
+        assert_eq!(target.next_steps, vec!["keep current next step"]);
+        assert!(target.run_policy.is_empty());
+        assert!(target.communication_policy.is_empty());
+        let artifact = target.artifacts.last().unwrap();
+        assert_eq!(
+            artifact["type"],
+            serde_json::json!(ABSORBED_SCRATCHPAD_ARTIFACT_TYPE)
+        );
+        assert_eq!(
+            artifact["included"]["pending_waits"],
+            serde_json::json!([{ "summary": "source pending" }])
+        );
+        assert!(artifact["included"].get("run_policy").is_none());
+        assert!(
+            artifact["excluded_control_fields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field.as_str() == Some("run_policy"))
+        );
+        let source_after = store.read("legacy-source").unwrap();
+        assert_eq!(
+            source_after.origin_thread_id,
+            Some("source-thread".to_string())
+        );
+        assert_eq!(source_after.run_policy, source.run_policy);
+    }
+
+    #[test]
+    fn absorb_scratchpad_context_can_exclude_pending_and_attachments() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(/*state_home*/ None, tmp.path()).unwrap();
+        let mut source = test_scratchpad("legacy-source", Some("source-thread"));
+        source.pending_waits = vec![serde_json::json!({ "summary": "source pending" })];
+        source.notes = vec![ScratchpadNote {
+            note_id: "note-source".to_string(),
+            ts: now(),
+            category: None,
+            summary: "source note".to_string(),
+            outcome: None,
+        }];
+        source.artifacts = vec![serde_json::json!({ "path": "artifact.txt" })];
+        store.write(&source).unwrap();
+
+        absorb_scratchpad_context(
+            tmp.path(),
+            "thread-123",
+            "legacy-source",
+            ScratchpadAbsorbOptions {
+                include_pending_waits: false,
+                include_notes: false,
+                include_artifacts: false,
+                ..ScratchpadAbsorbOptions::default()
+            },
+        )
+        .unwrap();
+
+        let target = store.read("thread-123").unwrap();
+        let artifact = target.artifacts.last().unwrap();
+        assert!(artifact["included"].get("pending_waits").is_none());
+        assert!(artifact["included"].get("notes").is_none());
+        assert!(artifact["included"].get("artifacts").is_none());
+    }
+
+    #[test]
+    fn set_thread_continuous_policy_creates_pad_and_forces_safe_fallback() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let created =
+            set_thread_continuous_policy(tmp.path(), "thread-123", /*enabled*/ true).unwrap();
+
+        assert_eq!(
+            created["scratchpad"]["run_policy"]["continuous"]["enabled"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            created["scratchpad"]["communication_policy"]["fallback"]["final_response_on_channel_failure"],
+            serde_json::json!(false)
+        );
+
+        let store = ScratchpadStore::new(/*state_home*/ None, tmp.path()).unwrap();
+        let mut scratchpad = store.read("thread-123").unwrap();
+        scratchpad.communication_policy.insert(
+            "fallback".to_string(),
+            serde_json::json!({ "final_response_on_channel_failure": true }),
+        );
+        store.write(&scratchpad).unwrap();
+
+        let disabled =
+            set_thread_continuous_policy(tmp.path(), "thread-123", /*enabled*/ false).unwrap();
+
+        assert_eq!(
+            disabled["scratchpad"]["run_policy"]["continuous"]["enabled"],
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            disabled["scratchpad"]["communication_policy"]["fallback"]["final_response_on_channel_failure"],
+            serde_json::json!(false)
+        );
+        assert!(tmp.path().join("scratchpad/index.json").exists());
+    }
+
+    #[test]
+    fn set_thread_continuous_policy_rejects_foreign_owned_thread_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(/*state_home*/ None, tmp.path()).unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({ "objective": "poisoned continuous policy" }),
+            "thread-123",
+        )
+        .unwrap();
+        let mut scratchpad = store.read("thread-123").unwrap();
+        scratchpad.origin_thread_id = Some("other-thread".to_string());
+        scratchpad.run_policy.insert(
+            "continuous".to_string(),
+            serde_json::json!({ "enabled": true }),
+        );
+        scratchpad.next_steps = vec!["FOREIGN_CONTINUOUS_CANARY".to_string()];
+        store.write(&scratchpad).unwrap();
+
+        let result = set_thread_continuous_policy(tmp.path(), "thread-123", /*enabled*/ false);
+
+        assert!(result.is_err());
+        let stored = store.read("thread-123").unwrap();
+        assert_eq!(stored.origin_thread_id, Some("other-thread".to_string()));
+        assert_eq!(
+            stored.next_steps,
+            vec!["FOREIGN_CONTINUOUS_CANARY".to_string()]
+        );
+    }
+
+    #[test]
+    fn set_thread_continuous_policy_redacts_mismatched_embedded_id() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(/*state_home*/ None, tmp.path()).unwrap();
+        let requested_thread_id = "11111111-1111-1111-1111-111111111111";
+        let embedded_thread_id = "22222222-2222-2222-2222-222222222222";
+        let corrupt = Scratchpad {
+            scratchpad_id: embedded_thread_id.to_string(),
+            objective: "corrupt continuous policy".to_string(),
+            status: "active".to_string(),
+            session_key: None,
+            origin_thread_id: Some(embedded_thread_id.to_string()),
+            worktrees: Vec::new(),
+            active_channels: Vec::new(),
+            active_sessions: BTreeMap::new(),
+            action_policy: BTreeMap::new(),
+            run_policy: BTreeMap::new(),
+            communication_policy: BTreeMap::new(),
+            completed: Vec::new(),
+            next_steps: vec!["MISMATCHED_CONTINUOUS_CANARY".to_string()],
+            pending_waits: Vec::new(),
+            git_refs: Vec::new(),
+            artifacts: Vec::new(),
+            stop_conditions: Vec::new(),
+            resume_instructions: String::new(),
+            interruption_policy: String::new(),
+            final_guard: String::new(),
+            last_benchmark: None,
+            outcomes: Vec::new(),
+            delegations: Vec::new(),
+            notes: Vec::new(),
+            created_at: now(),
+            updated_at: now(),
+            archived_at: None,
+        };
+        let corrupt_path = store.path(requested_thread_id).unwrap();
+        fs::create_dir_all(corrupt_path.parent().unwrap()).unwrap();
+        fs::write(
+            &corrupt_path,
+            format!("{}\n", serde_json::to_string_pretty(&corrupt).unwrap()),
+        )
+        .unwrap();
+
+        let result =
+            set_thread_continuous_policy(tmp.path(), requested_thread_id, /*enabled*/ false);
+        let message = result
+            .expect_err("mismatched embedded scratchpad id should be rejected")
+            .to_string();
+
+        assert_eq!(message, "scratchpad file is invalid");
+        assert!(!message.contains(requested_thread_id));
+        assert!(!message.contains(embedded_thread_id));
+        assert!(!message.contains("MISMATCHED_CONTINUOUS_CANARY"));
     }
 
     #[test]
@@ -1311,10 +3214,13 @@ mod tests {
                 objective: "inactive".to_string(),
                 status: "active".to_string(),
                 session_key: None,
+                origin_thread_id: None,
                 worktrees: Vec::new(),
                 active_channels: Vec::new(),
                 active_sessions: BTreeMap::new(),
                 action_policy: BTreeMap::new(),
+                run_policy: BTreeMap::new(),
+                communication_policy: BTreeMap::new(),
                 completed: Vec::new(),
                 next_steps: Vec::new(),
                 pending_waits: Vec::new(),
@@ -1325,6 +3231,8 @@ mod tests {
                 interruption_policy: String::new(),
                 final_guard: String::new(),
                 last_benchmark: None,
+                outcomes: Vec::new(),
+                delegations: Vec::new(),
                 notes: Vec::new(),
                 created_at: old_updated_at.clone(),
                 updated_at: old_updated_at,
@@ -1337,10 +3245,13 @@ mod tests {
                 objective: "delete me".to_string(),
                 status: "done".to_string(),
                 session_key: None,
+                origin_thread_id: None,
                 worktrees: Vec::new(),
                 active_channels: Vec::new(),
                 active_sessions: BTreeMap::new(),
                 action_policy: BTreeMap::new(),
+                run_policy: BTreeMap::new(),
+                communication_policy: BTreeMap::new(),
                 completed: Vec::new(),
                 next_steps: Vec::new(),
                 pending_waits: Vec::new(),
@@ -1351,6 +3262,8 @@ mod tests {
                 interruption_policy: String::new(),
                 final_guard: String::new(),
                 last_benchmark: None,
+                outcomes: Vec::new(),
+                delegations: Vec::new(),
                 notes: Vec::new(),
                 created_at: old_archived_at.clone(),
                 updated_at: old_archived_at.clone(),
@@ -1363,10 +3276,13 @@ mod tests {
                 objective: "keep me".to_string(),
                 status: "done".to_string(),
                 session_key: None,
+                origin_thread_id: None,
                 worktrees: Vec::new(),
                 active_channels: Vec::new(),
                 active_sessions: BTreeMap::new(),
                 action_policy: BTreeMap::new(),
+                run_policy: BTreeMap::new(),
+                communication_policy: BTreeMap::new(),
                 completed: Vec::new(),
                 next_steps: Vec::new(),
                 pending_waits: Vec::new(),
@@ -1377,6 +3293,8 @@ mod tests {
                 interruption_policy: String::new(),
                 final_guard: String::new(),
                 last_benchmark: None,
+                outcomes: Vec::new(),
+                delegations: Vec::new(),
                 notes: Vec::new(),
                 created_at: recent_archived_at.clone(),
                 updated_at: recent_archived_at.clone(),
@@ -1419,7 +3337,6 @@ mod tests {
             &store,
             &serde_json::json!({
                 "objective": "guard release",
-                "scratchpad_id": "sp-policy",
                 "status": "active",
                 "action_policy": {
                     "defaults": {
@@ -1440,20 +3357,22 @@ mod tests {
         let merge_decision = check_action_allowed(
             &store,
             &serde_json::json!({
-                "scratchpad_id": "sp-policy",
+                "scratchpad_id": "thread-123",
                 "action": "merge",
                 "target_branch": "main"
             }),
+            "thread-123",
         )
         .unwrap();
         let deploy_decision = check_action_allowed(
             &store,
             &serde_json::json!({
-                "scratchpad_id": "sp-policy",
+                "scratchpad_id": "thread-123",
                 "action": "deploy",
                 "repo": "/Users/example/codex",
                 "env": "prod"
             }),
+            "thread-123",
         )
         .unwrap();
 
@@ -1477,7 +3396,6 @@ mod tests {
             &store,
             &serde_json::json!({
                 "objective": "watch ci",
-                "scratchpad_id": "sp-wait",
                 "pending_waits": [
                     {"wait_id": "ci-1", "target": "ci", "status": "pending"}
                 ]
@@ -1489,11 +3407,12 @@ mod tests {
         let checked = mark_wait_checked(
             &store,
             &serde_json::json!({
-                "scratchpad_id": "sp-wait",
+                "scratchpad_id": "thread-123",
                 "wait_id": "ci-1",
                 "next_check_at": "2026-04-27T12:00:00Z",
                 "reuse_session_id": "agent-1"
             }),
+            "thread-123",
         )
         .unwrap();
         assert!(
@@ -1508,10 +3427,11 @@ mod tests {
         let resolved = mark_wait_checked(
             &store,
             &serde_json::json!({
-                "scratchpad_id": "sp-wait",
+                "scratchpad_id": "thread-123",
                 "target": "ci",
                 "resolved": true
             }),
+            "thread-123",
         )
         .unwrap();
         assert_eq!(

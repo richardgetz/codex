@@ -204,7 +204,7 @@ async fn orchestrator_memory_scope_only_enables_during_orchestrator_mode() -> Re
 
     set_collaboration_mode(&test, ModeKind::Orchestrator).await?;
     wait_for_memory_mode(&state_db, thread_id, Some("enabled")).await?;
-    set_collaboration_mode(&test, ModeKind::Continuous).await?;
+    set_collaboration_mode(&test, ModeKind::Plan).await?;
     wait_for_memory_mode(&state_db, thread_id, Some(ORCHESTRATOR_SCOPED_MEMORY_MODE)).await?;
 
     set_collaboration_mode(&test, ModeKind::Default).await?;

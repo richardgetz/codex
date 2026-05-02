@@ -79,6 +79,8 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadScratchpadContinuousPolicySetParams;
+use codex_app_server_protocol::ThreadScratchpadContinuousPolicySetResponse;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadShellCommandParams;
@@ -653,6 +655,26 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/name/set failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_scratchpad_continuous_policy_set(
+        &mut self,
+        thread_id: ThreadId,
+        enabled: bool,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadScratchpadContinuousPolicySetResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadScratchpadContinuousPolicySet {
+                request_id,
+                params: ThreadScratchpadContinuousPolicySetParams {
+                    thread_id: thread_id.to_string(),
+                    enabled,
+                },
+            })
+            .await
+            .wrap_err("thread/scratchpad/continuousPolicy/set failed in TUI")?;
         Ok(())
     }
 

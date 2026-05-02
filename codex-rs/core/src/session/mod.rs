@@ -720,6 +720,28 @@ impl Codex {
         if sub.trace.is_none() {
             sub.trace = current_span_w3c_trace_context();
         }
+        if let Op::SetScratchpadContinuousPolicy { enabled } = sub.op {
+            let codex_home = self.session.codex_home().await;
+            let result = crate::tools::handlers::builtin_scratchpad::set_thread_continuous_policy(
+                &codex_home,
+                &self.session.conversation_id.to_string(),
+                enabled,
+            )
+            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+            if let Some(event) =
+                crate::tools::handlers::builtin_scratchpad::scratchpad_update_event_from_result(
+                    &result,
+                )
+            {
+                self.session
+                    .send_event_raw(Event {
+                        id: sub.id,
+                        msg: EventMsg::ScratchpadUpdate(event),
+                    })
+                    .await;
+            }
+            return Ok(());
+        }
         self.tx_sub
             .send(sub)
             .await
@@ -1090,11 +1112,6 @@ impl Session {
                 )
         };
         let desired_control = match collaboration_mode.mode {
-            ModeKind::Continuous => Some((
-                StateThreadControlMode::Continuous,
-                Self::CONTINUOUS_MODE_CONTROL_REASON,
-                None,
-            )),
             ModeKind::Orchestrator => Some((
                 StateThreadControlMode::Router,
                 Self::ORCHESTRATOR_MODE_CONTROL_REASON,
@@ -1679,6 +1696,9 @@ impl Session {
             .join(format!("{scratchpad_id}.json"));
         let text = std::fs::read_to_string(path).ok()?;
         let value = serde_json::from_str::<Value>(&text).ok()?;
+        if !scratchpad_matches_thread(&value, &scratchpad_id) {
+            return None;
+        }
         if !scratchpad_has_uncompleted_items(&value) {
             return None;
         }
@@ -3951,11 +3971,16 @@ fn compact_active_scratchpad_summary(value: &Value) -> Value {
     let mut summary = serde_json::Map::new();
     for key in [
         "scratchpad_id",
+        "origin_thread_id",
         "objective",
         "status",
         "completed",
         "next_steps",
         "pending_waits",
+        "run_policy",
+        "communication_policy",
+        "outcomes",
+        "delegations",
         "resume_instructions",
         "final_guard",
         "updated_at",
@@ -3981,7 +4006,21 @@ fn compact_active_scratchpad_summary(value: &Value) -> Value {
     Value::Object(summary)
 }
 
-fn scratchpad_has_uncompleted_items(value: &Value) -> bool {
+fn scratchpad_matches_thread(value: &Value, thread_id: &str) -> bool {
+    if value.get("scratchpad_id").and_then(Value::as_str) != Some(thread_id) {
+        return false;
+    }
+    if value
+        .get("origin_thread_id")
+        .and_then(Value::as_str)
+        .is_some_and(|origin_thread_id| origin_thread_id != thread_id)
+    {
+        return false;
+    }
+    true
+}
+
+pub(crate) fn scratchpad_has_uncompleted_items(value: &Value) -> bool {
     if value.get("archived_at").is_some_and(|item| !item.is_null()) {
         return false;
     }
@@ -4001,6 +4040,26 @@ fn scratchpad_has_uncompleted_items(value: &Value) -> bool {
             .and_then(Value::as_array)
             .is_some_and(|items| !items.is_empty())
     })
+}
+
+pub(crate) fn continuous_run_policy_enabled(value: &Value) -> bool {
+    value
+        .get("run_policy")
+        .and_then(|policy| policy.get("continuous"))
+        .and_then(|continuous| continuous.get("enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+pub(crate) fn active_thread_scratchpad(codex_home: &Path, thread_id: ThreadId) -> Option<Value> {
+    let scratchpad_id = thread_id.to_string();
+    let path = codex_home
+        .join("scratchpad")
+        .join("entries")
+        .join(format!("{scratchpad_id}.json"));
+    let text = std::fs::read_to_string(path).ok()?;
+    let value = serde_json::from_str::<Value>(&text).ok()?;
+    scratchpad_matches_thread(&value, &scratchpad_id).then_some(value)
 }
 
 use crate::orchestrator_memory::build_developer_instructions as build_orchestrator_memory_developer_instructions;

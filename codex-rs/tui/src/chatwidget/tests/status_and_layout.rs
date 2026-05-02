@@ -427,6 +427,75 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
 }
 
 #[tokio::test]
+async fn account_switch_clears_cached_status_line_rate_limits() {
+    let (mut chat, mut rx, _) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 92.0)));
+    drain_insert_history(&mut rx);
+    assert_eq!(
+        chat.status_line_value_for_item(&crate::bottom_pane::StatusLineItem::FiveHourLimit),
+        Some("1h 8%".to_string())
+    );
+
+    chat.set_active_account_alias(Some("personal".to_string()));
+
+    assert_eq!(
+        chat.status_line_value_for_item(&crate::bottom_pane::StatusLineItem::FiveHourLimit),
+        None
+    );
+}
+
+#[tokio::test]
+async fn account_switch_rejects_stale_rate_limit_refresh_alias() {
+    let (mut chat, _, _) = make_chatwidget_manual(/*model_override*/ None).await;
+    let default_generation = chat.account_generation();
+
+    chat.set_active_account_alias(Some("personal".to_string()));
+
+    assert!(!chat.rate_limit_refresh_matches_active_account(
+        /*account_alias*/ None,
+        default_generation
+    ));
+    assert!(!chat.rate_limit_refresh_matches_active_account(
+        /*account_alias*/ Some("personal"),
+        default_generation
+    ));
+    assert!(chat.rate_limit_refresh_matches_active_account(
+        /*account_alias*/ Some("personal"),
+        chat.account_generation()
+    ));
+}
+
+#[tokio::test]
+async fn account_switch_rejects_stale_rate_limit_refresh_after_alias_returns() {
+    let (mut chat, _, _) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_active_account_alias(Some("personal".to_string()));
+    let first_personal_generation = chat.account_generation();
+    chat.set_active_account_alias(Some("work".to_string()));
+    chat.set_active_account_alias(Some("personal".to_string()));
+
+    assert!(!chat.rate_limit_refresh_matches_active_account(
+        /*account_alias*/ Some("personal"),
+        first_personal_generation
+    ));
+}
+
+#[tokio::test]
+async fn account_switch_ignores_untagged_rate_limit_notifications() {
+    let (mut chat, mut rx, _) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_active_account_alias(Some("personal".to_string()));
+    chat.on_untagged_rate_limit_snapshot(snapshot(/*percent*/ 92.0));
+    drain_insert_history(&mut rx);
+
+    assert_eq!(
+        chat.status_line_value_for_item(&crate::bottom_pane::StatusLineItem::FiveHourLimit),
+        None
+    );
+}
+
+#[tokio::test]
 async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
     let (mut chat, _, _) = make_chatwidget_manual(Some(NUDGE_MODEL_SLUG)).await;
     chat.has_chatgpt_account = true;

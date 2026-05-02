@@ -19,6 +19,9 @@ stable/mainline is pulled in.
   - CLI: `codex --collab <mode>`
   - Supports non-case-sensitive values and one-letter shorthands such as `o`
     for `orchestrator`.
+  - Standalone Continuous collaboration mode is removed; continuous execution is
+    controlled per thread by `/continuous` and the built-in scratchpad
+    `run_policy`.
 - Orchestrator defaults:
   - Default model/reasoning when no override is set:
     `gpt-5.3-codex-spark` + `low`
@@ -87,7 +90,7 @@ stable/mainline is pulled in.
     window still appears alive without model calls.
 - Built-in scratchpad:
   - Namespace: `scratchpad`
-  - Default, Continuous, and Orchestrator modes expose it by default; Plan mode
+  - Default and Orchestrator modes expose it by default; Plan mode
     does not.
   - The built-in namespace is canonical; if a configured scratchpad MCP exposes
     the same namespace, the built-in spec remains model-visible and built-in
@@ -103,11 +106,50 @@ stable/mainline is pulled in.
     `[scratchpad.modes.<mode>]`
   - Keys: `enabled`, `recover_after_compaction`,
     `auto_archive_after_days`, `delete_archived_after_days`
-  - `open_scratchpad` defaults `scratchpad_id` to the current thread/session id.
-  - `resume_scratchpad` strictly reopens an existing scratchpad by id without
-    creating a replacement; archived pads require `include_archived = true`.
+  - Built-in scratchpad tools are bound to the current thread/session id:
+    `open_scratchpad` defaults `scratchpad_id` to that id, and model-visible
+    tools reject custom or other-thread scratchpad ids.
+  - `resume_scratchpad` strictly reopens the current thread scratchpad without
+    creating a replacement; archived pads remain readable/editable by their
+    owning thread until lifecycle deletion.
   - Slash command: `/scratchpad` renders the current session scratchpad on
-    demand using the same status-card UI as live scratchpad updates.
+    demand with the full completed, next-step, and pending-wait lists.
+  - Slash command: `/scratchpad-absorb <scratchpad_id>` copies another
+    scratchpad into the current thread scratchpad as contextual history without
+    changing source ownership or importing live control policy. It includes
+    pending waits by default; `--exclude-pending` omits them.
+  - Slash command: `/scratchpad-unarchive` clears the archived marker on the
+    current thread scratchpad so it is no longer eligible for archived-pad
+    cleanup.
+  - Slash command: `/outcomes` renders measured scratchpad outcomes as a
+    markdown postmortem summary.
+  - Built-in scratchpad tools include `record_outcome` and `export_outcomes` for
+    portable, scoped progress measurements with metric/unit,
+    baseline/current/delta, summary, tradeoffs, artifact, commit, and PR
+    provenance.
+  - Live TUI scratchpad update cards are configurable through
+    `[scratchpad.view]`: `enabled`, `show_id`, `completed_items`,
+    `next_steps`, and `pending_waits`. Defaults keep live cards visible, show
+    the id, show only the newest completed item, and show five next steps and
+    waits.
+  - Slash command: `/continuous [on|off|status]` toggles
+    `run_policy.continuous.enabled` on the current thread scratchpad. When it is
+    enabled and the scratchpad still has `next_steps` or `pending_waits`, Codex
+    loops back to continue instead of finalizing.
+  - Scratchpads support standalone `communication_policy` fields for durable
+    communication preferences; channel failure alone must not force a final
+    response while the main work can continue.
+  - Tool: `record_delegation` records parent scratchpad lineage for work
+    delegated to subagents, including subagent id/label, parent item refs,
+    child scratchpad id, status, notes, and artifacts.
+  - Config: `[scratchpad].outcomes_enabled` defaults to `false`; `/outcomes on`
+    and `/outcomes off` persistently toggle it in config.toml. When disabled,
+    `record_outcome` refuses new datapoints while `/outcomes` can still export
+    existing entries.
+  - Legacy `continuous` collaboration-mode values in old config or rollout
+    payloads deserialize as `default` for compatibility only; they do not enable
+    continuous policy. Use `/continuous on` for the scratchpad-backed runtime
+    behavior.
   - Resume injects the active thread scratchpad id and compact scratchpad state
     into hidden developer context when the thread-id scratchpad exists with
     uncompleted work (`next_steps` or `pending_waits`).
@@ -178,11 +220,18 @@ stable/mainline is pulled in.
 - Verify configured primary contact polling starts in Orchestrator mode and does
   not wake the model for empty status responses, while the terminal title shows
   the waiting marker when idle.
-- Verify built-in `scratchpad` remains available in Default, Continuous, and
-  Orchestrator modes, omitted from Plan mode by default, and
+- Verify built-in `scratchpad` remains available in Default and Orchestrator
+  modes, omitted from Plan mode by default, and
   `open_scratchpad` uses the thread id when no id is provided.
-- Verify built-in `resume_scratchpad` refuses to create a new scratchpad and
-  requires explicit `include_archived = true` for archived pads.
+- Verify `/continuous` can be toggled on/off while a model turn is running and
+  updates the current thread scratchpad without queuing a core op.
+- Verify built-in `resume_scratchpad` refuses to create a new scratchpad,
+  archived pads remain same-owner readable/editable, and model-visible
+  scratchpad tools reject custom or other-thread scratchpad ids.
+- Verify `/scratchpad-absorb` writes only to the current thread scratchpad,
+  preserves source ownership, and does not import live control policy.
+- Verify `/scratchpad-unarchive` clears the archived marker only on the current
+  thread scratchpad.
 - Verify configured scratchpad MCPs do not shadow the built-in scratchpad
   namespace.
 - Verify post-compaction built-in scratchpad loopback is hidden from the TUI and

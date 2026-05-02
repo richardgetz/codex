@@ -53,6 +53,12 @@ pub enum SlashCommand {
     #[strum(serialize = "orchestrator-memory-consolidate")]
     OrchestratorMemoryConsolidate,
     Scratchpad,
+    #[strum(serialize = "scratchpad-absorb")]
+    ScratchpadAbsorb,
+    #[strum(serialize = "scratchpad-unarchive")]
+    ScratchpadUnarchive,
+    Outcomes,
+    Continuous,
     Apps,
     Plugins,
     Account,
@@ -136,6 +142,14 @@ impl SlashCommand {
                 "run orchestrator memory cleanup and consolidation now"
             }
             SlashCommand::Scratchpad => "show the built-in scratchpad for this session",
+            SlashCommand::ScratchpadAbsorb => {
+                "copy another scratchpad into this session as contextual history"
+            }
+            SlashCommand::ScratchpadUnarchive => {
+                "clear the archived marker on this session scratchpad"
+            }
+            SlashCommand::Outcomes => "export measured outcomes for this session scratchpad",
+            SlashCommand::Continuous => "toggle scratchpad-backed continuous run policy",
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
             SlashCommand::Account => "show or switch the session account alias",
@@ -161,6 +175,9 @@ impl SlashCommand {
                 | SlashCommand::Goal
                 | SlashCommand::Fast
                 | SlashCommand::Mcp
+                | SlashCommand::Continuous
+                | SlashCommand::Outcomes
+                | SlashCommand::ScratchpadAbsorb
                 | SlashCommand::Side
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
@@ -217,6 +234,10 @@ impl SlashCommand {
             | SlashCommand::OrchestratorMemoryForget
             | SlashCommand::OrchestratorMemoryConsolidate
             | SlashCommand::Scratchpad
+            | SlashCommand::ScratchpadAbsorb
+            | SlashCommand::ScratchpadUnarchive
+            | SlashCommand::Outcomes
+            | SlashCommand::Continuous
             | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Title

@@ -173,13 +173,24 @@ impl App {
         app_server: &AppServerSession,
         origin: RateLimitRefreshOrigin,
     ) {
+        let account_alias = self
+            .chat_widget
+            .config_ref()
+            .active_account_alias()
+            .map(str::to_string);
+        let account_generation = self.chat_widget.account_generation();
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
             let result = fetch_account_rate_limits(request_handle)
                 .await
                 .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::RateLimitsLoaded { origin, result });
+            app_event_tx.send(AppEvent::RateLimitsLoaded {
+                origin,
+                account_alias,
+                account_generation,
+                result,
+            });
         });
     }
 

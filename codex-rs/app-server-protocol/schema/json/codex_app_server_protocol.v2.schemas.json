@@ -1129,6 +1129,30 @@
             },
             "method": {
               "enum": [
+                "thread/scratchpad/continuousPolicy/set"
+              ],
+              "title": "Thread/scratchpad/continuousPolicy/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadScratchpadContinuousPolicySetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/scratchpad/continuousPolicy/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/metadata/update"
               ],
               "title": "Thread/metadata/updateRequestMethod",
@@ -7900,7 +7924,6 @@
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
-        "continuous",
         "orchestrator",
         "default"
       ],
@@ -12985,7 +13008,6 @@
     },
     "ThreadControlMode": {
       "enum": [
-        "continuous",
         "orchestrator"
       ],
       "type": "string"
@@ -14836,6 +14858,28 @@
         "thread"
       ],
       "title": "ThreadRollbackResponse",
+      "type": "object"
+    },
+    "ThreadScratchpadContinuousPolicySetParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "enabled",
+        "threadId"
+      ],
+      "title": "ThreadScratchpadContinuousPolicySetParams",
+      "type": "object"
+    },
+    "ThreadScratchpadContinuousPolicySetResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadScratchpadContinuousPolicySetResponse",
       "type": "object"
     },
     "ThreadSetNameParams": {

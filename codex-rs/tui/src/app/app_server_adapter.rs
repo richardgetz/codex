@@ -178,9 +178,9 @@ impl App {
                 self.refresh_mcp_startup_expected_servers_from_config();
             }
             ServerNotification::AccountRateLimitsUpdated(notification) => {
-                self.chat_widget.on_rate_limit_snapshot(Some(
+                self.chat_widget.on_untagged_rate_limit_snapshot(
                     app_server_rate_limit_snapshot_to_core(notification.rate_limits.clone()),
-                ));
+                );
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {

@@ -12,6 +12,8 @@ use tracing::info_span;
 use crate::session::SteerInputError;
 use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
+use crate::tools::handlers::builtin_scratchpad::scratchpad_update_event_from_result;
+use crate::tools::handlers::builtin_scratchpad::set_thread_continuous_policy;
 
 use crate::config::Config;
 use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
@@ -948,6 +950,33 @@ pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) 
     sess.deliver_event_raw(Event { id: sub_id, msg }).await;
 }
 
+pub async fn set_scratchpad_continuous_policy(sess: &Arc<Session>, sub_id: String, enabled: bool) {
+    let codex_home = sess.codex_home().await;
+    let result =
+        set_thread_continuous_policy(&codex_home, &sess.conversation_id.to_string(), enabled);
+    let result = match result {
+        Ok(result) => result,
+        Err(err) => {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: err.to_string(),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            })
+            .await;
+            return;
+        }
+    };
+    if let Some(event) = scratchpad_update_event_from_result(&result) {
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::ScratchpadUpdate(event),
+        })
+        .await;
+    }
+}
+
 /// Persists thread-level memory mode metadata for the active session.
 ///
 /// This does not involve the model and only affects whether the thread is
@@ -994,78 +1023,6 @@ async fn clear_memory_root_contents(memory_root: &std::path::Path) -> std::io::R
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[tokio::test]
-    async fn clear_memory_root_contents_preserves_root_directory() {
-        let dir = tempdir().expect("tempdir");
-        let root = dir.path().join("memories");
-        let nested_dir = root.join("rollout_summaries");
-        tokio::fs::create_dir_all(&nested_dir)
-            .await
-            .expect("create rollout summaries dir");
-        tokio::fs::write(root.join("MEMORY.md"), "stale memory index\n")
-            .await
-            .expect("write memory index");
-        tokio::fs::write(nested_dir.join("rollout.md"), "stale rollout\n")
-            .await
-            .expect("write rollout summary");
-
-        clear_memory_root_contents(&root)
-            .await
-            .expect("clear memory root contents");
-
-        assert!(
-            tokio::fs::try_exists(&root)
-                .await
-                .expect("check memory root existence"),
-            "memory root should still exist after clearing contents"
-        );
-        let mut entries = tokio::fs::read_dir(&root)
-            .await
-            .expect("read memory root after clear");
-        assert!(
-            entries
-                .next_entry()
-                .await
-                .expect("read next entry")
-                .is_none(),
-            "memory root should be empty after clearing contents"
-        );
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn clear_memory_root_contents_rejects_symlinked_root() {
-        let dir = tempdir().expect("tempdir");
-        let target = dir.path().join("outside");
-        tokio::fs::create_dir_all(&target)
-            .await
-            .expect("create symlink target dir");
-        let target_file = target.join("keep.txt");
-        tokio::fs::write(&target_file, "keep\n")
-            .await
-            .expect("write target file");
-
-        let root = dir.path().join("memories");
-        std::os::unix::fs::symlink(&target, &root).expect("create memory root symlink");
-
-        let err = clear_memory_root_contents(&root)
-            .await
-            .expect_err("symlinked memory root should be rejected");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-        assert!(
-            tokio::fs::try_exists(&target_file)
-                .await
-                .expect("check target file existence"),
-            "rejecting a symlinked memory root should not delete the symlink target"
-        );
-    }
 }
 
 pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
@@ -1338,6 +1295,10 @@ pub(super) async fn submission_loop(
                     set_thread_name(&sess, sub.id.clone(), name).await;
                     false
                 }
+                Op::SetScratchpadContinuousPolicy { enabled } => {
+                    set_scratchpad_continuous_policy(&sess, sub.id.clone(), enabled).await;
+                    false
+                }
                 Op::SetThreadMemoryMode { mode } => {
                     set_thread_memory_mode(&sess, sub.id.clone(), mode).await;
                     false
@@ -1461,4 +1422,76 @@ pub(super) fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
         );
     }
     dispatch_span
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn clear_memory_root_contents_preserves_root_directory() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path().join("memories");
+        let nested_dir = root.join("rollout_summaries");
+        tokio::fs::create_dir_all(&nested_dir)
+            .await
+            .expect("create rollout summaries dir");
+        tokio::fs::write(root.join("MEMORY.md"), "stale memory index\n")
+            .await
+            .expect("write memory index");
+        tokio::fs::write(nested_dir.join("rollout.md"), "stale rollout\n")
+            .await
+            .expect("write rollout summary");
+
+        clear_memory_root_contents(&root)
+            .await
+            .expect("clear memory root contents");
+
+        assert!(
+            tokio::fs::try_exists(&root)
+                .await
+                .expect("check memory root existence"),
+            "memory root should still exist after clearing contents"
+        );
+        let mut entries = tokio::fs::read_dir(&root)
+            .await
+            .expect("read memory root after clear");
+        assert!(
+            entries
+                .next_entry()
+                .await
+                .expect("read next entry")
+                .is_none(),
+            "memory root should be empty after clearing contents"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn clear_memory_root_contents_rejects_symlinked_root() {
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("outside");
+        tokio::fs::create_dir_all(&target)
+            .await
+            .expect("create symlink target dir");
+        let target_file = target.join("keep.txt");
+        tokio::fs::write(&target_file, "keep\n")
+            .await
+            .expect("write target file");
+
+        let root = dir.path().join("memories");
+        std::os::unix::fs::symlink(&target, &root).expect("create memory root symlink");
+
+        let err = clear_memory_root_contents(&root)
+            .await
+            .expect_err("symlinked memory root should be rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            tokio::fs::try_exists(&target_file)
+                .await
+                .expect("check target file existence"),
+            "rejecting a symlinked memory root should not delete the symlink target"
+        );
+    }
 }

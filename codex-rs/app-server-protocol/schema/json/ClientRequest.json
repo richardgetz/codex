@@ -1879,7 +1879,6 @@
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
-        "continuous",
         "orchestrator",
         "default"
       ],
@@ -3386,7 +3385,6 @@
     },
     "ThreadControlMode": {
       "enum": [
-        "continuous",
         "orchestrator"
       ],
       "type": "string"
@@ -3989,6 +3987,21 @@
       },
       "required": [
         "numTurns",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadScratchpadContinuousPolicySetParams": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "enabled",
         "threadId"
       ],
       "type": "object"
@@ -4725,6 +4738,30 @@
         "params"
       ],
       "title": "Thread/name/setRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/scratchpad/continuousPolicy/set"
+          ],
+          "title": "Thread/scratchpad/continuousPolicy/setRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadScratchpadContinuousPolicySetParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/scratchpad/continuousPolicy/setRequest",
       "type": "object"
     },
     {

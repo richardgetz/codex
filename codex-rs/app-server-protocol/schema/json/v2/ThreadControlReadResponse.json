@@ -55,7 +55,6 @@
     },
     "ThreadControlMode": {
       "enum": [
-        "continuous",
         "orchestrator"
       ],
       "type": "string"

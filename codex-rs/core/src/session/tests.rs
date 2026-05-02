@@ -71,6 +71,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::GoalHandler;
 use crate::tools::handlers::ShellHandler;
 use crate::tools::handlers::UnifiedExecHandler;
+use crate::tools::handlers::builtin_scratchpad::BuiltinScratchpadHandler;
 use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -2845,51 +2846,6 @@ async fn resolve_router_turn_settings_applies_configured_reasoning_effort() {
 }
 
 #[tokio::test]
-async fn session_update_settings_syncs_continuous_collaboration_mode_control() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let mut continuous_mode = session.collaboration_mode().await;
-    continuous_mode.mode = ModeKind::Continuous;
-
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(continuous_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("continuous mode update should succeed");
-
-    let active_control = session
-        .active_thread_control()
-        .await
-        .expect("continuous control should be active");
-    assert_eq!(
-        active_control,
-        codex_state::ThreadControlRecord {
-            thread_id: session.conversation_id,
-            mode: codex_state::ThreadControlMode::Continuous,
-            reason: Session::CONTINUOUS_MODE_CONTROL_REASON.to_string(),
-            release_channel: None,
-            watch_interval_seconds: None,
-            released_at: None,
-            updated_at: active_control.updated_at,
-            target_thread_ids: Vec::new(),
-        }
-    );
-
-    let mut default_mode = session.collaboration_mode().await;
-    default_mode.mode = ModeKind::Default;
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(default_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("default mode update should succeed");
-
-    assert_eq!(session.active_thread_control().await, None);
-}
-
-#[tokio::test]
 async fn session_update_settings_syncs_orchestrator_collaboration_mode_control() {
     let (session, _turn_context) = make_session_and_context().await;
     let mut orchestrator_mode = session.collaboration_mode().await;
@@ -3083,31 +3039,6 @@ async fn interrupt_task_without_active_turn_keeps_orchestrator_collaboration_mod
 }
 
 #[tokio::test]
-async fn interrupt_task_without_active_turn_releases_continuous_collaboration_mode_control() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let session = Arc::new(session);
-    let mut continuous_mode = session.collaboration_mode().await;
-    continuous_mode.mode = ModeKind::Continuous;
-
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(continuous_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("continuous mode update should succeed");
-
-    assert!(
-        session.active_thread_control().await.is_some(),
-        "expected continuous mode to install control"
-    );
-
-    session.interrupt_task().await;
-
-    assert_eq!(session.active_thread_control().await, None);
-}
-
-#[tokio::test]
 async fn new_turn_with_sub_id_applies_orchestrator_overrides_only_when_entering_mode() {
     let (session, _turn_context) = make_session_and_context().await;
     {
@@ -3158,74 +3089,6 @@ async fn new_turn_with_sub_id_applies_orchestrator_overrides_only_when_entering_
     );
 }
 
-#[tokio::test]
-async fn new_turn_rearms_continuous_control_when_mode_stays_active() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let mut continuous_mode = session.collaboration_mode().await;
-    continuous_mode.mode = ModeKind::Continuous;
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(continuous_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("continuous mode update should succeed");
-
-    session.set_active_thread_control(/*control*/ None).await;
-
-    let _ = session.new_default_turn().await;
-
-    let active_control = session
-        .active_thread_control()
-        .await
-        .expect("continuous control should be re-armed");
-    assert_eq!(
-        active_control,
-        codex_state::ThreadControlRecord {
-            thread_id: session.conversation_id,
-            mode: codex_state::ThreadControlMode::Continuous,
-            reason: Session::CONTINUOUS_MODE_CONTROL_REASON.to_string(),
-            release_channel: None,
-            watch_interval_seconds: None,
-            released_at: None,
-            updated_at: active_control.updated_at,
-            target_thread_ids: Vec::new(),
-        }
-    );
-}
-
-#[tokio::test]
-async fn continuous_mode_preserves_active_router_control() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let router_control = codex_state::ThreadControlRecord {
-        thread_id: session.conversation_id,
-        mode: codex_state::ThreadControlMode::Router,
-        reason: "Router mode is supervising this thread.".to_string(),
-        release_channel: Some("imessage".to_string()),
-        watch_interval_seconds: Some(30),
-        released_at: None,
-        updated_at: Utc::now(),
-        target_thread_ids: vec![
-            ThreadId::from_string("00000000-0000-0000-0000-000000000022")
-                .expect("target thread id"),
-        ],
-    };
-    session
-        .set_active_thread_control(Some(router_control.clone()))
-        .await;
-
-    let mut continuous_mode = session.collaboration_mode().await;
-    continuous_mode.mode = ModeKind::Continuous;
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(continuous_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("continuous mode update should succeed");
-
-    assert_eq!(session.active_thread_control().await, Some(router_control));
-}
 #[test]
 fn falls_back_to_content_when_structured_is_null() {
     let ctr = McpCallToolResult {
@@ -6391,14 +6254,6 @@ async fn build_initial_context_injects_builtin_scratchpad_in_enabled_modes() {
         "expected scratchpad guidance in default mode, got {default_developer_texts:?}"
     );
 
-    turn_context.collaboration_mode.mode = ModeKind::Continuous;
-    let continuous_context = session.build_initial_context(&turn_context).await;
-    let continuous_developer_texts = developer_input_texts(&continuous_context).join("\n");
-    assert!(
-        continuous_developer_texts.contains("Built-in Scratchpad"),
-        "expected scratchpad guidance in continuous mode, got {continuous_developer_texts:?}"
-    );
-
     turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
     let orchestrator_context = session.build_initial_context(&turn_context).await;
     let orchestrator_developer_texts = developer_input_texts(&orchestrator_context).join("\n");
@@ -6436,6 +6291,217 @@ async fn build_initial_context_injects_active_scratchpad_when_uncompleted_work_e
 }
 
 #[tokio::test]
+async fn build_initial_context_omits_scratchpad_loopback_from_different_thread() {
+    let (session, turn_context) = make_session_and_context().await;
+    write_thread_scratchpad(
+        &turn_context,
+        session.conversation_id,
+        serde_json::json!({
+            "scratchpad_id": session.conversation_id.to_string(),
+            "origin_thread_id": "different-thread",
+            "objective": "wrong session work",
+            "status": "active",
+            "next_steps": ["this must not loop back"],
+            "pending_waits": [],
+            "created_at": "2026-04-29T00:00:00Z",
+            "updated_at": "2026-04-29T00:00:00Z",
+            "archived_at": null
+        }),
+    );
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+
+    assert!(!developer_texts.contains("<active_scratchpad>"));
+    assert!(!developer_texts.contains("wrong session work"));
+    assert!(!developer_texts.contains("this must not loop back"));
+}
+
+#[tokio::test]
+async fn build_initial_context_omits_scratchpad_loopback_with_wrong_scratchpad_id() {
+    let (session, turn_context) = make_session_and_context().await;
+    write_thread_scratchpad(
+        &turn_context,
+        session.conversation_id,
+        serde_json::json!({
+            "scratchpad_id": "different-thread",
+            "objective": "wrong id work",
+            "status": "active",
+            "next_steps": ["this must not loop back either"],
+            "pending_waits": [],
+            "created_at": "2026-04-29T00:00:00Z",
+            "updated_at": "2026-04-29T00:00:00Z",
+            "archived_at": null
+        }),
+    );
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+
+    assert!(!developer_texts.contains("<active_scratchpad>"));
+    assert!(!developer_texts.contains("wrong id work"));
+    assert!(!developer_texts.contains("this must not loop back either"));
+}
+
+#[tokio::test]
+async fn build_initial_context_omits_scratchpad_loopback_without_scratchpad_id() {
+    let (session, turn_context) = make_session_and_context().await;
+    write_thread_scratchpad(
+        &turn_context,
+        session.conversation_id,
+        serde_json::json!({
+            "objective": "missing id work",
+            "status": "active",
+            "next_steps": ["missing id must not loop back"],
+            "pending_waits": [],
+            "created_at": "2026-04-29T00:00:00Z",
+            "updated_at": "2026-04-29T00:00:00Z",
+            "archived_at": null
+        }),
+    );
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+
+    assert!(!developer_texts.contains("<active_scratchpad>"));
+    assert!(!developer_texts.contains("missing id work"));
+    assert!(!developer_texts.contains("missing id must not loop back"));
+}
+
+#[test]
+fn continuous_run_policy_requires_enabled_policy_and_uncompleted_items() {
+    let enabled_with_work = serde_json::json!({
+        "scratchpad_id": "thread-123",
+        "status": "active",
+        "next_steps": ["ship"],
+        "pending_waits": [],
+        "run_policy": {
+            "continuous": {
+                "enabled": true
+            }
+        }
+    });
+    assert!(super::continuous_run_policy_enabled(&enabled_with_work));
+    assert!(super::scratchpad_has_uncompleted_items(&enabled_with_work));
+
+    let enabled_without_work = serde_json::json!({
+        "scratchpad_id": "thread-123",
+        "status": "active",
+        "next_steps": [],
+        "pending_waits": [],
+        "run_policy": {
+            "continuous": {
+                "enabled": true
+            }
+        }
+    });
+    assert!(super::continuous_run_policy_enabled(&enabled_without_work));
+    assert!(!super::scratchpad_has_uncompleted_items(
+        &enabled_without_work
+    ));
+
+    let disabled_with_work = serde_json::json!({
+        "scratchpad_id": "thread-123",
+        "status": "active",
+        "next_steps": ["ship"],
+        "pending_waits": [],
+        "run_policy": {
+            "continuous": {
+                "enabled": false
+            }
+        }
+    });
+    assert!(!super::continuous_run_policy_enabled(&disabled_with_work));
+    assert!(super::scratchpad_has_uncompleted_items(&disabled_with_work));
+}
+
+#[tokio::test]
+async fn active_thread_scratchpad_omits_foreign_owned_thread_file() {
+    let (session, turn_context) = make_session_and_context().await;
+    write_thread_scratchpad(
+        &turn_context,
+        session.conversation_id,
+        serde_json::json!({
+            "scratchpad_id": session.conversation_id.to_string(),
+            "origin_thread_id": "foreign-thread",
+            "status": "active",
+            "next_steps": ["FOREIGN_CONTINUOUS_CANARY"],
+            "pending_waits": [],
+            "run_policy": {
+                "continuous": {
+                    "enabled": true
+                }
+            }
+        }),
+    );
+
+    assert!(
+        super::active_thread_scratchpad(&turn_context.config.codex_home, session.conversation_id)
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn active_thread_scratchpad_omits_thread_file_without_scratchpad_id() {
+    let (session, turn_context) = make_session_and_context().await;
+    write_thread_scratchpad(
+        &turn_context,
+        session.conversation_id,
+        serde_json::json!({
+            "status": "active",
+            "next_steps": ["MISSING_ID_CONTINUOUS_CANARY"],
+            "pending_waits": [],
+            "run_policy": {
+                "continuous": {
+                    "enabled": true
+                }
+            }
+        }),
+    );
+
+    assert!(
+        super::active_thread_scratchpad(&turn_context.config.codex_home, session.conversation_id)
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn builtin_scratchpad_handler_rejects_custom_active_id_with_state_home() {
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+    let state_home = tempfile::tempdir().expect("state home");
+    let handler = BuiltinScratchpadHandler;
+
+    let result = handler
+        .handle(ToolInvocation {
+            session,
+            turn: turn_context,
+            cancellation_token: CancellationToken::new(),
+            tracker,
+            call_id: "scratchpad-open-custom-id".to_string(),
+            tool_name: codex_tools::ToolName::plain("open_scratchpad"),
+            source: ToolCallSource::Direct,
+            payload: ToolPayload::Function {
+                arguments: serde_json::json!({
+                    "state_home": state_home.path(),
+                    "objective": "debug named scratchpad",
+                    "scratchpad_id": "custom-debug-key"
+                })
+                .to_string(),
+            },
+        })
+        .await;
+
+    let Err(FunctionCallError::RespondToModel(message)) = result else {
+        panic!("expected custom scratchpad id to be rejected");
+    };
+    assert!(message.contains("current thread id"));
+    assert!(!state_home.path().join("custom-debug-key.json").exists());
+}
+
+#[tokio::test]
 async fn build_initial_context_omits_completed_or_archived_scratchpad_loopback() {
     let (session, turn_context) = make_session_and_context().await;
     write_thread_scratchpad(
@@ -6446,8 +6512,13 @@ async fn build_initial_context_omits_completed_or_archived_scratchpad_loopback()
             "objective": "already shipped",
             "status": "archived",
             "completed": ["opened PR"],
-            "next_steps": [],
-            "pending_waits": [],
+            "next_steps": ["ARCHIVED_CONTINUOUS_NEXT_STEP_CANARY"],
+            "pending_waits": [{"summary": "ARCHIVED_CONTINUOUS_WAIT_CANARY"}],
+            "run_policy": {
+                "continuous": {
+                    "enabled": true
+                }
+            },
             "created_at": "2026-04-29T00:00:00Z",
             "updated_at": "2026-04-29T00:00:00Z",
             "archived_at": "2026-04-29T00:05:00Z"
@@ -6458,6 +6529,8 @@ async fn build_initial_context_omits_completed_or_archived_scratchpad_loopback()
     let archived_developer_texts = developer_input_texts(&archived_context).join("\n");
     assert!(!archived_developer_texts.contains("<active_scratchpad>"));
     assert!(!archived_developer_texts.contains("already shipped"));
+    assert!(!archived_developer_texts.contains("ARCHIVED_CONTINUOUS_NEXT_STEP_CANARY"));
+    assert!(!archived_developer_texts.contains("ARCHIVED_CONTINUOUS_WAIT_CANARY"));
 
     write_thread_scratchpad(
         &turn_context,
@@ -7216,6 +7289,119 @@ async fn built_tools_keeps_unavailable_mcp_placeholder_when_inventory_lists_serv
         tool_names.contains(&"mcp__imessage__imessage_get_config".to_string()),
         "inventory text must not suppress unavailable placeholder routing, got {tool_names:?}"
     );
+}
+
+#[tokio::test]
+async fn unavailable_mcp_placeholder_routes_to_configured_mcp_server_when_tools_missing() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::UnavailableDummyTools)
+                .expect("enable unavailable dummy tools");
+        },
+    )
+    .await;
+    refresh_test_mcp_servers(
+        &session,
+        turn_context.as_ref(),
+        serde_json::json!({
+            "imessage": {
+                "command": "__codex_missing_imessage_test__",
+                "startup": "eager",
+                "startup_timeout_sec": 1
+            }
+        }),
+    )
+    .await;
+
+    let call = ToolRouter::build_tool_call(
+        session.as_ref(),
+        turn_context.as_ref(),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "mcp__imessage__imessage_get_config".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-imessage-get-config".to_string(),
+        },
+    )
+    .await
+    .expect("build tool call")
+    .expect("tool call present");
+
+    assert_eq!(
+        call.tool_name,
+        ToolName::namespaced("mcp__imessage__", "imessage_get_config")
+    );
+    match call.payload {
+        ToolPayload::Mcp {
+            server,
+            tool,
+            raw_arguments,
+        } => {
+            assert_eq!(server, "imessage");
+            assert_eq!(tool, "imessage_get_config");
+            assert_eq!(raw_arguments, "{}");
+        }
+        other => panic!("expected MCP payload, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn unavailable_mcp_placeholder_respects_mode_mcp_filters() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.enablement.modes.insert(
+                ModeKind::Default,
+                codex_config::ModeEnablementConfig {
+                    mcps: Some(codex_config::EnablementFilterConfig {
+                        mode: codex_config::EnablementFilterMode::Exclude,
+                        items: vec!["imessage_get_config".to_string()],
+                    }),
+                    ..Default::default()
+                },
+            );
+        },
+    )
+    .await;
+    refresh_test_mcp_servers(
+        &session,
+        turn_context.as_ref(),
+        serde_json::json!({
+            "imessage": {
+                "command": "__codex_missing_imessage_test__",
+                "startup": "eager",
+                "startup_timeout_sec": 1
+            }
+        }),
+    )
+    .await;
+
+    let call = ToolRouter::build_tool_call(
+        session.as_ref(),
+        turn_context.as_ref(),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "mcp__imessage__imessage_get_config".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-imessage-get-config".to_string(),
+        },
+    )
+    .await
+    .expect("build tool call")
+    .expect("tool call present");
+
+    assert_eq!(
+        call.tool_name,
+        ToolName::plain("mcp__imessage__imessage_get_config")
+    );
+    assert!(matches!(call.payload, ToolPayload::Function { .. }));
 }
 
 #[tokio::test]
@@ -9063,7 +9249,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         input: "{}".to_string(),
     };
 
-    let call = ToolRouter::build_tool_call(session.as_ref(), item.clone())
+    let call = ToolRouter::build_tool_call(session.as_ref(), turn_context.as_ref(), item.clone())
         .await
         .expect("build tool call")
         .expect("tool call present");
