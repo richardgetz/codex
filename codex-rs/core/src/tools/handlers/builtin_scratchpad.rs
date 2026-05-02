@@ -428,16 +428,18 @@ impl ScratchpadStore {
 
     fn read(&self, scratchpad_id: &str) -> Result<Scratchpad, FunctionCallError> {
         let path = self.path(scratchpad_id)?;
-        let text = fs::read_to_string(&path).map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "scratchpad `{scratchpad_id}` not found or unreadable: {err}"
-            ))
+        let text = fs::read_to_string(&path).map_err(|_| {
+            FunctionCallError::RespondToModel("scratchpad not found or unreadable".to_string())
         })?;
-        serde_json::from_str(&text).map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "scratchpad `{scratchpad_id}` is invalid JSON: {err}"
-            ))
-        })
+        let scratchpad = serde_json::from_str::<Scratchpad>(&text).map_err(|_| {
+            FunctionCallError::RespondToModel("scratchpad file is invalid".to_string())
+        })?;
+        if scratchpad.scratchpad_id != scratchpad_id {
+            return Err(FunctionCallError::RespondToModel(
+                "scratchpad file is invalid".to_string(),
+            ));
+        }
+        Ok(scratchpad)
     }
 
     fn write(&self, scratchpad: &Scratchpad) -> Result<(), FunctionCallError> {
@@ -459,13 +461,26 @@ impl ScratchpadStore {
                     if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
                         continue;
                     }
-                    let text = fs::read_to_string(entry.path()).map_err(io_error)?;
-                    let scratchpad = serde_json::from_str::<Scratchpad>(&text).map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
-                            "failed to parse scratchpad file `{}`: {err}",
-                            entry.path().display()
-                        ))
-                    })?;
+                    let Ok(text) = fs::read_to_string(entry.path()) else {
+                        continue;
+                    };
+                    let Ok(scratchpad) = serde_json::from_str::<Scratchpad>(&text) else {
+                        continue;
+                    };
+                    let Some(file_id) = entry
+                        .path()
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .map(ToString::to_string)
+                    else {
+                        continue;
+                    };
+                    let Ok(scratchpad_file_id) = sanitize_id(&scratchpad.scratchpad_id) else {
+                        continue;
+                    };
+                    if scratchpad_file_id != file_id {
+                        continue;
+                    }
                     scratchpads.push(scratchpad);
                 }
             }
@@ -650,10 +665,9 @@ pub(crate) fn set_thread_continuous_policy(
         Err(err) => return Err(err),
     };
     if scratchpad.scratchpad_id != scratchpad_id {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "scratchpad file `{scratchpad_id}` contains scratchpad `{}` and cannot be used for this thread",
-            scratchpad.scratchpad_id
-        )));
+        return Err(FunctionCallError::RespondToModel(
+            "scratchpad file is invalid".to_string(),
+        ));
     }
     ensure_thread_owner(&scratchpad, scratchpad_id)?;
     if scratchpad.origin_thread_id.is_none() {
@@ -680,13 +694,14 @@ fn open_scratchpad(
         && scratchpad_id != default_scratchpad_id
         && ThreadId::from_string(&scratchpad_id).is_ok()
     {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "scratchpad_id `{scratchpad_id}` looks like another thread id and cannot be opened from thread `{default_scratchpad_id}`"
-        )));
+        return Err(FunctionCallError::RespondToModel(
+            "scratchpad_id looks like another thread id and cannot be opened from this thread"
+                .to_string(),
+        ));
     }
     if let Some(existing) = read_existing_scratchpad(store, &scratchpad_id)? {
-        ensure_open_compatible(&existing, &objective, session_key.as_deref())?;
         ensure_thread_owner(&existing, default_scratchpad_id)?;
+        ensure_open_compatible(&existing, &objective, session_key.as_deref())?;
         return Ok(serde_json::json!({ "scratchpad": existing }));
     }
 
@@ -767,17 +782,17 @@ fn ensure_thread_owner(
 ) -> Result<(), FunctionCallError> {
     match scratchpad.origin_thread_id.as_deref() {
         Some(origin_thread_id) if origin_thread_id != default_scratchpad_id => {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "scratchpad `{}` is owned by thread `{origin_thread_id}` and cannot be accessed from thread `{default_scratchpad_id}`",
-                scratchpad.scratchpad_id
-            )));
+            return Err(FunctionCallError::RespondToModel(
+                "scratchpad is owned by another thread and cannot be accessed from this thread"
+                    .to_string(),
+            ));
         }
         Some(_) => {}
         None if scratchpad.scratchpad_id != default_scratchpad_id => {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "scratchpad `{}` has no thread owner metadata and cannot be accessed from thread `{default_scratchpad_id}`",
-                scratchpad.scratchpad_id
-            )));
+            return Err(FunctionCallError::RespondToModel(
+                "scratchpad has no thread owner metadata and cannot be accessed from this thread"
+                    .to_string(),
+            ));
         }
         None => {}
     }
@@ -1926,7 +1941,12 @@ mod tests {
             current_thread_id,
         );
 
-        assert!(result.is_err());
+        let message = result
+            .expect_err("other thread id should be rejected")
+            .to_string();
+        assert!(!message.contains(current_thread_id));
+        assert!(!message.contains(other_thread_id));
+        assert!(message.contains("another thread id"));
         assert!(!store.path(other_thread_id).unwrap().exists());
     }
 
@@ -2075,6 +2095,256 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn open_scratchpad_checks_owner_before_revealing_compatibility() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "sensitive foreign objective",
+                "scratchpad_id": "shared-explicit-id",
+                "session_key": "sensitive-session-key"
+            }),
+            "thread-a",
+        )
+        .unwrap();
+
+        let wrong_objective_err = open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "attacker supplied objective",
+                "scratchpad_id": "shared-explicit-id",
+                "session_key": "different-session-key"
+            }),
+            "thread-b",
+        )
+        .expect_err("cross-thread reopen should fail before compatibility checks");
+        let message = wrong_objective_err.to_string();
+
+        assert!(!message.contains("sensitive foreign objective"));
+        assert!(!message.contains("sensitive-session-key"));
+        assert!(!message.contains("thread-a"));
+        assert!(!message.contains("thread-b"));
+        assert!(message.contains("owned by another thread"));
+    }
+
+    #[test]
+    fn cross_thread_denial_errors_do_not_disclose_thread_ids() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let owner_thread_id = "11111111-1111-1111-1111-111111111111";
+        let requester_thread_id = "22222222-2222-2222-2222-222222222222";
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "thread a private work",
+                "scratchpad_id": "shared-explicit-id",
+            }),
+            owner_thread_id,
+        )
+        .unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({ "objective": "thread default private work" }),
+            owner_thread_id,
+        )
+        .unwrap();
+
+        let custom_err = get_scratchpad(
+            &store,
+            &serde_json::json!({ "scratchpad_id": "shared-explicit-id" }),
+            requester_thread_id,
+        )
+        .expect_err("cross-thread read should fail");
+        let custom_message = custom_err.to_string();
+        let default_err = get_scratchpad(
+            &store,
+            &serde_json::json!({ "scratchpad_id": owner_thread_id }),
+            requester_thread_id,
+        )
+        .expect_err("cross-thread default read should fail");
+        let default_message = default_err.to_string();
+
+        for message in [&custom_message, &default_message] {
+            assert!(!message.contains(owner_thread_id));
+            assert!(!message.contains(requester_thread_id));
+            assert!(message.contains("owned by another thread"));
+        }
+        assert_eq!(custom_message, default_message);
+    }
+
+    #[test]
+    fn malformed_scratchpad_errors_do_not_disclose_ids_or_content() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let requested_thread_id = "11111111-1111-1111-1111-111111111111";
+        let embedded_thread_id = "22222222-2222-2222-2222-222222222222";
+        let canary = "MALFORMED_SCRATCHPAD_CANARY_SHOULD_NOT_LEAK";
+        let path = store.path(requested_thread_id).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                r#"{{"scratchpad_id":"{embedded_thread_id}","objective":"{canary}","status":"active","created_at":"2026-05-02T00:00:00Z","updated_at":"2026-05-02T00:00:00Z""#
+            ),
+        )
+        .unwrap();
+
+        let read_err = get_scratchpad(
+            &store,
+            &serde_json::json!({ "scratchpad_id": requested_thread_id }),
+            "requester-thread",
+        )
+        .expect_err("malformed scratchpad should fail closed");
+        let message = read_err.to_string();
+
+        assert_eq!(message, "scratchpad file is invalid");
+        assert!(!message.contains(requested_thread_id));
+        assert!(!message.contains(embedded_thread_id));
+        assert!(!message.contains(canary));
+    }
+
+    #[test]
+    fn lookup_scratchpads_ignores_malformed_files_without_leaking_content() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let malformed_id = "11111111-1111-1111-1111-111111111111";
+        let canary = "LOOKUP_MALFORMED_CANARY_SHOULD_NOT_LEAK";
+        let path = store.path(malformed_id).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                r#"{{"scratchpad_id":"{malformed_id}","objective":"{canary}","status":"active","created_at":"2026-05-02T00:00:00Z","updated_at":"2026-05-02T00:00:00Z""#
+            ),
+        )
+        .unwrap();
+
+        let lookup = lookup_scratchpads(
+            &store,
+            &serde_json::json!({ "query": canary }),
+            "requester-thread",
+        )
+        .expect("malformed scratchpads should be skipped during lookup");
+
+        assert_eq!(lookup["matches"], serde_json::json!([]));
+        assert!(!lookup.to_string().contains(malformed_id));
+        assert!(!lookup.to_string().contains(canary));
+    }
+
+    #[test]
+    fn mismatched_embedded_id_errors_do_not_disclose_or_write_alias() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let requested_id = "requested-scratchpad";
+        let embedded_id = "embedded-scratchpad";
+        let canary = "MISMATCHED_EMBEDDED_ID_CANARY_SHOULD_NOT_LEAK";
+        let path = store.path(requested_id).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                r#"{{
+  "scratchpad_id": "{embedded_id}",
+  "objective": "{canary}",
+  "status": "active",
+  "origin_thread_id": "requester-thread",
+  "created_at": "2026-05-02T00:00:00Z",
+  "updated_at": "2026-05-02T00:00:00Z"
+}}"#
+            ),
+        )
+        .unwrap();
+
+        let read_message = get_scratchpad(
+            &store,
+            &serde_json::json!({ "scratchpad_id": requested_id }),
+            "requester-thread",
+        )
+        .expect_err("mismatched embedded scratchpad id should fail closed")
+        .to_string();
+        let write_message = set_next_steps(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": requested_id,
+                "next_steps": ["SHOULD_NOT_WRITE_ALIAS"]
+            }),
+            "requester-thread",
+        )
+        .expect_err("mismatched embedded scratchpad id should not be writable")
+        .to_string();
+
+        for message in [&read_message, &write_message] {
+            assert_eq!(message, "scratchpad file is invalid");
+            assert!(!message.contains(requested_id));
+            assert!(!message.contains(embedded_id));
+            assert!(!message.contains(canary));
+        }
+        assert!(!store.path(embedded_id).unwrap().exists());
+    }
+
+    #[test]
+    fn lookup_scratchpads_ignores_mismatched_embedded_id_files() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let requested_id = "requested-scratchpad";
+        let embedded_id = "embedded-scratchpad";
+        let canary = "LOOKUP_MISMATCHED_EMBEDDED_ID_CANARY_SHOULD_NOT_LEAK";
+        let path = store.path(requested_id).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                r#"{{
+  "scratchpad_id": "{embedded_id}",
+  "objective": "{canary}",
+  "status": "active",
+  "origin_thread_id": "requester-thread",
+  "created_at": "2026-05-02T00:00:00Z",
+  "updated_at": "2026-05-02T00:00:00Z"
+}}"#
+            ),
+        )
+        .unwrap();
+
+        let lookup = lookup_scratchpads(
+            &store,
+            &serde_json::json!({ "query": canary }),
+            "requester-thread",
+        )
+        .expect("mismatched scratchpads should be skipped during lookup");
+
+        assert_eq!(lookup["matches"], serde_json::json!([]));
+        assert!(!lookup.to_string().contains(requested_id));
+        assert!(!lookup.to_string().contains(embedded_id));
+        assert!(!lookup.to_string().contains(canary));
     }
 
     #[test]
@@ -2461,6 +2731,61 @@ mod tests {
             stored.next_steps,
             vec!["FOREIGN_CONTINUOUS_CANARY".to_string()]
         );
+    }
+
+    #[test]
+    fn set_thread_continuous_policy_redacts_mismatched_embedded_id() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(/*state_home*/ None, tmp.path()).unwrap();
+        let requested_thread_id = "11111111-1111-1111-1111-111111111111";
+        let embedded_thread_id = "22222222-2222-2222-2222-222222222222";
+        let corrupt = Scratchpad {
+            scratchpad_id: embedded_thread_id.to_string(),
+            objective: "corrupt continuous policy".to_string(),
+            status: "active".to_string(),
+            session_key: None,
+            origin_thread_id: Some(embedded_thread_id.to_string()),
+            worktrees: Vec::new(),
+            active_channels: Vec::new(),
+            active_sessions: BTreeMap::new(),
+            action_policy: BTreeMap::new(),
+            run_policy: BTreeMap::new(),
+            communication_policy: BTreeMap::new(),
+            completed: Vec::new(),
+            next_steps: vec!["MISMATCHED_CONTINUOUS_CANARY".to_string()],
+            pending_waits: Vec::new(),
+            git_refs: Vec::new(),
+            artifacts: Vec::new(),
+            stop_conditions: Vec::new(),
+            resume_instructions: String::new(),
+            interruption_policy: String::new(),
+            final_guard: String::new(),
+            last_benchmark: None,
+            outcomes: Vec::new(),
+            delegations: Vec::new(),
+            notes: Vec::new(),
+            created_at: now(),
+            updated_at: now(),
+            archived_at: None,
+        };
+        let corrupt_path = store.path(requested_thread_id).unwrap();
+        fs::create_dir_all(corrupt_path.parent().unwrap()).unwrap();
+        fs::write(
+            &corrupt_path,
+            format!("{}\n", serde_json::to_string_pretty(&corrupt).unwrap()),
+        )
+        .unwrap();
+
+        let result =
+            set_thread_continuous_policy(tmp.path(), requested_thread_id, /*enabled*/ false);
+        let message = result
+            .expect_err("mismatched embedded scratchpad id should be rejected")
+            .to_string();
+
+        assert_eq!(message, "scratchpad file is invalid");
+        assert!(!message.contains(requested_thread_id));
+        assert!(!message.contains(embedded_thread_id));
+        assert!(!message.contains("MISMATCHED_CONTINUOUS_CANARY"));
     }
 
     #[test]
