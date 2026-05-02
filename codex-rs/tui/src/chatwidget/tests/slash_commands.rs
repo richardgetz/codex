@@ -2077,6 +2077,86 @@ async fn slash_scratchpad_reports_missing_session_scratchpad() {
 }
 
 #[tokio::test]
+async fn slash_scratchpad_rejects_foreign_owned_thread_file() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let scratchpad_dir = chat.config.codex_home.join("scratchpad").join("entries");
+    tokio::fs::create_dir_all(&scratchpad_dir)
+        .await
+        .expect("create scratchpad dir");
+    tokio::fs::write(
+        scratchpad_dir.join(format!("{thread_id}.json")),
+        serde_json::json!({
+            "scratchpad_id": thread_id.to_string(),
+            "origin_thread_id": "foreign-thread",
+            "objective": "Poisoned scratchpad",
+            "status": "active",
+            "completed": [],
+            "next_steps": ["FOREIGN_SLASH_SCRATCHPAD_CANARY"],
+            "pending_waits": [],
+            "created_at": "2026-04-28T20:00:00Z",
+            "updated_at": "2026-04-28T20:01:00Z",
+            "archived_at": null
+        })
+        .to_string(),
+    )
+    .await
+    .expect("write scratchpad");
+
+    chat.dispatch_command(SlashCommand::Scratchpad);
+
+    match rx.try_recv().expect("expected scratchpad owner error") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
+            assert!(rendered.contains("owned by another thread"));
+            assert!(!rendered.contains("FOREIGN_SLASH_SCRATCHPAD_CANARY"));
+        }
+        other => panic!("expected InsertHistoryCell owner error, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_scratchpad_rejects_thread_file_without_scratchpad_id() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let scratchpad_dir = chat.config.codex_home.join("scratchpad").join("entries");
+    tokio::fs::create_dir_all(&scratchpad_dir)
+        .await
+        .expect("create scratchpad dir");
+    tokio::fs::write(
+        scratchpad_dir.join(format!("{thread_id}.json")),
+        serde_json::json!({
+            "objective": "Poisoned scratchpad",
+            "status": "active",
+            "completed": [],
+            "next_steps": ["MISSING_ID_SLASH_SCRATCHPAD_CANARY"],
+            "pending_waits": [],
+            "created_at": "2026-04-28T20:00:00Z",
+            "updated_at": "2026-04-28T20:01:00Z",
+            "archived_at": null
+        })
+        .to_string(),
+    )
+    .await
+    .expect("write scratchpad");
+
+    chat.dispatch_command(SlashCommand::Scratchpad);
+
+    match rx.try_recv().expect("expected scratchpad owner error") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
+            assert!(rendered.contains("owned by another thread"));
+            assert!(!rendered.contains("MISSING_ID_SLASH_SCRATCHPAD_CANARY"));
+        }
+        other => panic!("expected InsertHistoryCell owner error, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
 async fn slash_outcomes_exports_current_session_outcomes() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
@@ -2120,6 +2200,88 @@ async fn slash_outcomes_exports_current_session_outcomes() {
             assert!(rendered.contains("abc1234"));
         }
         other => panic!("expected InsertHistoryCell outcomes export, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_outcomes_rejects_foreign_owned_thread_file() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let scratchpad_dir = chat.config.codex_home.join("scratchpad").join("entries");
+    tokio::fs::create_dir_all(&scratchpad_dir)
+        .await
+        .expect("create scratchpad dir");
+    tokio::fs::write(
+        scratchpad_dir.join(format!("{thread_id}.json")),
+        serde_json::json!({
+            "scratchpad_id": thread_id.to_string(),
+            "origin_thread_id": "foreign-thread",
+            "objective": "Poisoned outcomes",
+            "status": "active",
+            "outcomes": [{
+                "metric": "CANARY_METRIC",
+                "current": "FOREIGN_OUTCOMES_CANARY"
+            }],
+            "created_at": "2026-04-28T20:00:00Z",
+            "updated_at": "2026-04-28T20:01:00Z",
+            "archived_at": null
+        })
+        .to_string(),
+    )
+    .await
+    .expect("write scratchpad");
+
+    chat.dispatch_command(SlashCommand::Outcomes);
+
+    match rx.try_recv().expect("expected outcomes owner error") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
+            assert!(rendered.contains("owned by another thread"));
+            assert!(!rendered.contains("FOREIGN_OUTCOMES_CANARY"));
+        }
+        other => panic!("expected InsertHistoryCell owner error, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_outcomes_rejects_thread_file_without_scratchpad_id() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let scratchpad_dir = chat.config.codex_home.join("scratchpad").join("entries");
+    tokio::fs::create_dir_all(&scratchpad_dir)
+        .await
+        .expect("create scratchpad dir");
+    tokio::fs::write(
+        scratchpad_dir.join(format!("{thread_id}.json")),
+        serde_json::json!({
+            "objective": "Poisoned outcomes",
+            "status": "active",
+            "outcomes": [{
+                "metric": "CANARY_METRIC",
+                "current": "MISSING_ID_OUTCOMES_CANARY"
+            }],
+            "created_at": "2026-04-28T20:00:00Z",
+            "updated_at": "2026-04-28T20:01:00Z",
+            "archived_at": null
+        })
+        .to_string(),
+    )
+    .await
+    .expect("write scratchpad");
+
+    chat.dispatch_command(SlashCommand::Outcomes);
+
+    match rx.try_recv().expect("expected outcomes owner error") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
+            assert!(rendered.contains("owned by another thread"));
+            assert!(!rendered.contains("MISSING_ID_OUTCOMES_CANARY"));
+        }
+        other => panic!("expected InsertHistoryCell owner error, got {other:?}"),
     }
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }
@@ -2202,6 +2364,94 @@ async fn slash_continuous_toggles_policy_while_task_is_running() {
         op_rx.try_recv(),
         Ok(Op::SetScratchpadContinuousPolicy { enabled: false })
     );
+}
+
+#[tokio::test]
+async fn slash_continuous_rejects_foreign_owned_thread_file() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let scratchpad_dir = chat.config.codex_home.join("scratchpad").join("entries");
+    tokio::fs::create_dir_all(&scratchpad_dir)
+        .await
+        .expect("create scratchpad dir");
+    tokio::fs::write(
+        scratchpad_dir.join(format!("{thread_id}.json")),
+        serde_json::json!({
+            "scratchpad_id": thread_id.to_string(),
+            "origin_thread_id": "foreign-thread",
+            "objective": "Poisoned continuous policy",
+            "status": "active",
+            "next_steps": ["FOREIGN_CONTINUOUS_CANARY"],
+            "pending_waits": [],
+            "run_policy": {
+                "continuous": {
+                    "enabled": true
+                }
+            },
+            "created_at": "2026-04-28T20:00:00Z",
+            "updated_at": "2026-04-28T20:01:00Z",
+            "archived_at": null
+        })
+        .to_string(),
+    )
+    .await
+    .expect("write scratchpad");
+
+    chat.dispatch_command(SlashCommand::Continuous);
+
+    match rx.try_recv().expect("expected continuous owner error") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
+            assert!(rendered.contains("owned by another thread"));
+            assert!(!rendered.contains("FOREIGN_CONTINUOUS_CANARY"));
+        }
+        other => panic!("expected InsertHistoryCell owner error, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_continuous_rejects_thread_file_without_scratchpad_id() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let scratchpad_dir = chat.config.codex_home.join("scratchpad").join("entries");
+    tokio::fs::create_dir_all(&scratchpad_dir)
+        .await
+        .expect("create scratchpad dir");
+    tokio::fs::write(
+        scratchpad_dir.join(format!("{thread_id}.json")),
+        serde_json::json!({
+            "objective": "Poisoned continuous policy",
+            "status": "active",
+            "next_steps": ["MISSING_ID_CONTINUOUS_CANARY"],
+            "pending_waits": [],
+            "run_policy": {
+                "continuous": {
+                    "enabled": true
+                }
+            },
+            "created_at": "2026-04-28T20:00:00Z",
+            "updated_at": "2026-04-28T20:01:00Z",
+            "archived_at": null
+        })
+        .to_string(),
+    )
+    .await
+    .expect("write scratchpad");
+
+    chat.dispatch_command(SlashCommand::Continuous);
+
+    match rx.try_recv().expect("expected continuous owner error") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
+            assert!(rendered.contains("owned by another thread"));
+            assert!(!rendered.contains("MISSING_ID_CONTINUOUS_CANARY"));
+        }
+        other => panic!("expected InsertHistoryCell owner error, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }
 
 #[tokio::test]

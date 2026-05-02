@@ -84,6 +84,7 @@ use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadRollbackParams;
+use codex_app_server_protocol::ThreadScratchpadContinuousPolicySetParams;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadStartParams;
@@ -457,6 +458,16 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/control/release", params).await
+    }
+
+    /// Send a `thread/scratchpad/continuousPolicy/set` JSON-RPC request.
+    pub async fn send_thread_scratchpad_continuous_policy_set_request(
+        &mut self,
+        params: ThreadScratchpadContinuousPolicySetParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/scratchpad/continuousPolicy/set", params)
+            .await
     }
 
     /// Send a `thread/unsubscribe` JSON-RPC request.

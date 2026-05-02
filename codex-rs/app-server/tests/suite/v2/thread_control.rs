@@ -12,6 +12,8 @@ use codex_app_server_protocol::ThreadControlReleaseParams;
 use codex_app_server_protocol::ThreadControlReleaseResponse;
 use codex_app_server_protocol::ThreadControlSetParams;
 use codex_app_server_protocol::ThreadControlSetResponse;
+use codex_app_server_protocol::ThreadScratchpadContinuousPolicySetParams;
+use codex_app_server_protocol::ThreadScratchpadContinuousPolicySetResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_state::StateRuntime;
@@ -178,12 +180,81 @@ async fn thread_control_set_rejects_orchestrator_mode_for_stored_thread() -> Res
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_scratchpad_continuous_policy_set_round_trip() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let _state_db = init_state_db(codex_home.path()).await?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let set_id = mcp
+        .send_thread_scratchpad_continuous_policy_set_request(
+            ThreadScratchpadContinuousPolicySetParams {
+                thread_id: thread.id.clone(),
+                enabled: true,
+            },
+        )
+        .await?;
+    let set_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
+    )
+    .await??;
+    let ThreadScratchpadContinuousPolicySetResponse {} =
+        to_response::<ThreadScratchpadContinuousPolicySetResponse>(set_resp)?;
+
+    let scratchpad_path = codex_home
+        .path()
+        .join("scratchpad")
+        .join("entries")
+        .join(format!("{}.json", thread.id));
+    let value = wait_for_scratchpad_json(&scratchpad_path).await?;
+    assert_eq!(
+        value["run_policy"]["continuous"]["enabled"],
+        serde_json::json!(true)
+    );
+    assert_eq!(value["origin_thread_id"], serde_json::json!(thread.id));
+    Ok(())
+}
+
 async fn init_state_db(codex_home: &Path) -> Result<Arc<StateRuntime>> {
     let state_db = StateRuntime::init(codex_home.to_path_buf(), "mock_provider".into()).await?;
     state_db
         .mark_backfill_complete(/*last_watermark*/ None)
         .await?;
     Ok(state_db)
+}
+
+async fn wait_for_scratchpad_json(path: &Path) -> Result<serde_json::Value> {
+    let deadline = tokio::time::Instant::now() + DEFAULT_READ_TIMEOUT;
+    loop {
+        match tokio::fs::read_to_string(path).await {
+            Ok(text) => return Ok(serde_json::from_str(&text)?),
+            Err(err)
+                if err.kind() == std::io::ErrorKind::NotFound
+                    && tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
 }
 
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {

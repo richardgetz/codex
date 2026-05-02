@@ -648,6 +648,13 @@ pub(crate) fn set_thread_continuous_policy(
         }
         Err(err) => return Err(err),
     };
+    if scratchpad.scratchpad_id != scratchpad_id {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "scratchpad file `{scratchpad_id}` contains scratchpad `{}` and cannot be used for this thread",
+            scratchpad.scratchpad_id
+        )));
+    }
+    ensure_thread_owner(&scratchpad, scratchpad_id)?;
     if scratchpad.origin_thread_id.is_none() {
         scratchpad.origin_thread_id = Some(scratchpad_id.to_string());
     }
@@ -2349,6 +2356,36 @@ mod tests {
             serde_json::json!(false)
         );
         assert!(tmp.path().join("scratchpad/index.json").exists());
+    }
+
+    #[test]
+    fn set_thread_continuous_policy_rejects_foreign_owned_thread_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(/*state_home*/ None, tmp.path()).unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({ "objective": "poisoned continuous policy" }),
+            "thread-123",
+        )
+        .unwrap();
+        let mut scratchpad = store.read("thread-123").unwrap();
+        scratchpad.origin_thread_id = Some("other-thread".to_string());
+        scratchpad.run_policy.insert(
+            "continuous".to_string(),
+            serde_json::json!({ "enabled": true }),
+        );
+        scratchpad.next_steps = vec!["FOREIGN_CONTINUOUS_CANARY".to_string()];
+        store.write(&scratchpad).unwrap();
+
+        let result = set_thread_continuous_policy(tmp.path(), "thread-123", /*enabled*/ false);
+
+        assert!(result.is_err());
+        let stored = store.read("thread-123").unwrap();
+        assert_eq!(stored.origin_thread_id, Some("other-thread".to_string()));
+        assert_eq!(
+            stored.next_steps,
+            vec!["FOREIGN_CONTINUOUS_CANARY".to_string()]
+        );
     }
 
     #[test]

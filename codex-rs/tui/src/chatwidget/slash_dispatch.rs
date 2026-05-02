@@ -66,6 +66,25 @@ fn scratchpad_update_event_from_value(value: &serde_json::Value) -> Option<Scrat
     })
 }
 
+fn scratchpad_value_matches_thread(value: &serde_json::Value, thread_id: &ThreadId) -> bool {
+    let thread_id = thread_id.to_string();
+    if value
+        .get("scratchpad_id")
+        .and_then(serde_json::Value::as_str)
+        != Some(thread_id.as_str())
+    {
+        return false;
+    }
+    if value
+        .get("origin_thread_id")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|origin_thread_id| origin_thread_id != thread_id)
+    {
+        return false;
+    }
+    true
+}
+
 fn string_array_value(value: Option<&serde_json::Value>) -> Vec<String> {
     value
         .and_then(serde_json::Value::as_array)
@@ -273,6 +292,12 @@ impl ChatWidget {
                 return;
             }
         };
+        if !scratchpad_value_matches_thread(&value, &thread_id) {
+            self.add_error_message(format!(
+                "Built-in scratchpad `{scratchpad_id}` is owned by another thread and cannot be displayed."
+            ));
+            return;
+        }
         let Some(update) = scratchpad_update_event_from_value(&value) else {
             self.add_error_message(format!(
                 "Built-in scratchpad `{scratchpad_id}` is missing required fields."
@@ -314,6 +339,12 @@ impl ChatWidget {
                 return;
             }
         };
+        if !scratchpad_value_matches_thread(&value, &thread_id) {
+            self.add_error_message(format!(
+                "Built-in scratchpad `{thread_id}` is owned by another thread and cannot be exported."
+            ));
+            return;
+        }
         let objective = value
             .get("objective")
             .and_then(serde_json::Value::as_str)
@@ -390,7 +421,15 @@ impl ChatWidget {
         };
         match std::fs::read_to_string(&path) {
             Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
-                Ok(value) => Some(value),
+                Ok(value) => {
+                    if !scratchpad_value_matches_thread(&value, &thread_id) {
+                        self.add_error_message(format!(
+                            "Built-in scratchpad `{thread_id}` is owned by another thread and cannot be used for continuous policy."
+                        ));
+                        return None;
+                    }
+                    Some(value)
+                }
                 Err(err) => {
                     self.add_error_message(format!(
                         "Built-in scratchpad `{thread_id}` is invalid JSON: {err}"
@@ -400,6 +439,7 @@ impl ChatWidget {
             },
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(serde_json::json!({
                 "scratchpad_id": thread_id.to_string(),
+                "origin_thread_id": thread_id.to_string(),
                 "objective": "Session continuous run policy",
                 "status": "active",
                 "completed": [],
@@ -476,11 +516,9 @@ impl ChatWidget {
     fn dispatch_continuous_command(&mut self, args: Option<&str>) {
         match args.map(str::trim).filter(|args| !args.is_empty()) {
             None => {
-                let enabled = self
-                    .current_scratchpad_continuous_enabled()
-                    .map(|enabled| !enabled)
-                    .unwrap_or(false);
-                self.set_current_scratchpad_continuous_policy(enabled);
+                if let Some(enabled) = self.current_scratchpad_continuous_enabled() {
+                    self.set_current_scratchpad_continuous_policy(!enabled);
+                }
             }
             Some("on" | "enable" | "enabled") => {
                 self.set_current_scratchpad_continuous_policy(/*enabled*/ true);

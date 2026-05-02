@@ -4007,11 +4007,7 @@ fn compact_active_scratchpad_summary(value: &Value) -> Value {
 }
 
 fn scratchpad_matches_thread(value: &Value, thread_id: &str) -> bool {
-    if value
-        .get("scratchpad_id")
-        .and_then(Value::as_str)
-        .is_some_and(|scratchpad_id| scratchpad_id != thread_id)
-    {
+    if value.get("scratchpad_id").and_then(Value::as_str) != Some(thread_id) {
         return false;
     }
     if value
@@ -4056,12 +4052,14 @@ pub(crate) fn continuous_run_policy_enabled(value: &Value) -> bool {
 }
 
 pub(crate) fn active_thread_scratchpad(codex_home: &Path, thread_id: ThreadId) -> Option<Value> {
+    let scratchpad_id = thread_id.to_string();
     let path = codex_home
         .join("scratchpad")
         .join("entries")
-        .join(format!("{thread_id}.json"));
+        .join(format!("{scratchpad_id}.json"));
     let text = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str::<Value>(&text).ok()
+    let value = serde_json::from_str::<Value>(&text).ok()?;
+    scratchpad_matches_thread(&value, &scratchpad_id).then_some(value)
 }
 
 use crate::orchestrator_memory::build_developer_instructions as build_orchestrator_memory_developer_instructions;
