@@ -1201,7 +1201,7 @@ async fn builtin_scratchpad_replaces_mcp_scratchpad_namespace() {
     assert!(
         open_scratchpad
             .description
-            .contains("Open an existing active scratchpad"),
+            .contains("Open the current thread scratchpad"),
         "expected built-in scratchpad description, got {}",
         open_scratchpad.description
     );

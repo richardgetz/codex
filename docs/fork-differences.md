@@ -206,10 +206,12 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   time so recent work can be found without manually scanning every entry file.
 - `<codex_home>/scratchpad` is created and added to workspace-write writable
   roots automatically, alongside memory and supervision roots.
-- `open_scratchpad` defaults `scratchpad_id` to the current Codex
-  thread/session id when no explicit id is provided.
-- `resume_scratchpad` strictly reopens an existing scratchpad by id without
-  creating a replacement; archived pads require `include_archived = true`.
+- Built-in scratchpad tools are bound to the current Codex thread/session id.
+  `open_scratchpad` defaults `scratchpad_id` to that id when omitted, and
+  model-visible tools reject custom or other-thread scratchpad ids.
+- `resume_scratchpad` strictly reopens the current thread scratchpad without
+  creating a replacement. Archived pads remain readable and editable by their
+  owning thread until lifecycle deletion.
 - Built-in scratchpad supports active and archived lookup, archive/unarchive,
   next-step and pending-wait updates, action-policy checks, and wait check-ins.
 - Scratchpads can record measurable outcomes with `record_outcome`, using
@@ -231,6 +233,12 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   status, notes, and artifacts so parent-child work ownership survives restart.
 - `/scratchpad` renders the current session's built-in scratchpad on demand,
   including current objective, status, completed work, next steps, and waits.
+- `/scratchpad-absorb <scratchpad_id>` copies another scratchpad into the
+  current thread scratchpad as contextual history without changing source
+  ownership or importing live control policy. It includes pending waits by
+  default; use `--exclude-pending` to omit them.
+- `/scratchpad-unarchive` clears the archived marker from the current thread
+  scratchpad so it is no longer eligible for archived-pad cleanup.
 - Live TUI scratchpad update cards are compact by default: completed work shows
   only the newest item, while next steps and waits each show up to five items.
   `/scratchpad` remains verbose and renders the full scratchpad regardless of

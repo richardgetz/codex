@@ -106,11 +106,21 @@ stable/mainline is pulled in.
     `[scratchpad.modes.<mode>]`
   - Keys: `enabled`, `recover_after_compaction`,
     `auto_archive_after_days`, `delete_archived_after_days`
-  - `open_scratchpad` defaults `scratchpad_id` to the current thread/session id.
-  - `resume_scratchpad` strictly reopens an existing scratchpad by id without
-    creating a replacement; archived pads require `include_archived = true`.
+  - Built-in scratchpad tools are bound to the current thread/session id:
+    `open_scratchpad` defaults `scratchpad_id` to that id, and model-visible
+    tools reject custom or other-thread scratchpad ids.
+  - `resume_scratchpad` strictly reopens the current thread scratchpad without
+    creating a replacement; archived pads remain readable/editable by their
+    owning thread until lifecycle deletion.
   - Slash command: `/scratchpad` renders the current session scratchpad on
     demand with the full completed, next-step, and pending-wait lists.
+  - Slash command: `/scratchpad-absorb <scratchpad_id>` copies another
+    scratchpad into the current thread scratchpad as contextual history without
+    changing source ownership or importing live control policy. It includes
+    pending waits by default; `--exclude-pending` omits them.
+  - Slash command: `/scratchpad-unarchive` clears the archived marker on the
+    current thread scratchpad so it is no longer eligible for archived-pad
+    cleanup.
   - Slash command: `/outcomes` renders measured scratchpad outcomes as a
     markdown postmortem summary.
   - Built-in scratchpad tools include `record_outcome` and `export_outcomes` for
@@ -215,8 +225,13 @@ stable/mainline is pulled in.
   `open_scratchpad` uses the thread id when no id is provided.
 - Verify `/continuous` can be toggled on/off while a model turn is running and
   updates the current thread scratchpad without queuing a core op.
-- Verify built-in `resume_scratchpad` refuses to create a new scratchpad and
-  requires explicit `include_archived = true` for archived pads.
+- Verify built-in `resume_scratchpad` refuses to create a new scratchpad,
+  archived pads remain same-owner readable/editable, and model-visible
+  scratchpad tools reject custom or other-thread scratchpad ids.
+- Verify `/scratchpad-absorb` writes only to the current thread scratchpad,
+  preserves source ownership, and does not import live control policy.
+- Verify `/scratchpad-unarchive` clears the archived marker only on the current
+  thread scratchpad.
 - Verify configured scratchpad MCPs do not shadow the built-in scratchpad
   namespace.
 - Verify post-compaction built-in scratchpad loopback is hidden from the TUI and

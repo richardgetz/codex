@@ -33,6 +33,7 @@ const GOAL_USAGE: &str = "Usage: /goal <objective>";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const CONTINUOUS_USAGE: &str = "Usage: /continuous [on|off|status]";
 const OUTCOMES_USAGE: &str = "Usage: /outcomes [on|off|status]";
+const SCRATCHPAD_ABSORB_USAGE: &str = "Usage: /scratchpad-absorb <scratchpad_id> [--exclude-pending] [--exclude-notes] [--exclude-outcomes] [--exclude-delegations] [--exclude-artifacts] [--exclude-worktrees] [--exclude-completed] [--exclude-next-steps] [--exclude-git-refs]";
 
 fn scratchpad_update_event_from_value(value: &serde_json::Value) -> Option<ScratchpadUpdateEvent> {
     Some(ScratchpadUpdateEvent {
@@ -305,6 +306,69 @@ impl ChatWidget {
             return;
         };
         self.on_scratchpad_update_verbose(update);
+    }
+
+    fn dispatch_scratchpad_absorb_command(&mut self, args: &str) {
+        let Some(thread_id) = self.thread_id else {
+            self.add_error_message(
+                "'/scratchpad-absorb' is unavailable before the session starts.".to_string(),
+            );
+            return;
+        };
+        let (source_scratchpad_id, options) = match parse_scratchpad_absorb_args(args) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                self.add_error_message(err);
+                return;
+            }
+        };
+        match crate::legacy_core::absorb_thread_scratchpad_context(
+            &self.config.codex_home,
+            &thread_id.to_string(),
+            &source_scratchpad_id,
+            options,
+        ) {
+            Ok(result) => {
+                self.add_info_message(
+                    format!(
+                        "Absorbed scratchpad `{}` into current session scratchpad `{}`.",
+                        result.source_scratchpad_id, result.target_scratchpad_id
+                    ),
+                    Some(format!(
+                        "Imported as contextual history only: {}. Live control fields stayed excluded.",
+                        format_absorb_counts(&result.counts)
+                    )),
+                );
+            }
+            Err(err) => {
+                self.add_error_message(format!("Could not absorb scratchpad: {err}"));
+            }
+        }
+    }
+
+    fn unarchive_current_scratchpad(&mut self) {
+        let Some(thread_id) = self.thread_id else {
+            self.add_error_message(
+                "'/scratchpad-unarchive' is unavailable before the session starts.".to_string(),
+            );
+            return;
+        };
+        match crate::legacy_core::unarchive_thread_scratchpad(
+            &self.config.codex_home,
+            &thread_id.to_string(),
+        ) {
+            Ok(()) => {
+                self.add_info_message(
+                    format!("Scratchpad `{thread_id}` unarchived."),
+                    Some("It remains owned by this session and is no longer deletion-eligible as an archived pad.".to_string()),
+                );
+            }
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Could not unarchive scratchpad `{thread_id}`: {err}"
+                ));
+            }
+        }
     }
 
     fn add_current_outcomes_output(&mut self) {
@@ -831,6 +895,12 @@ impl ChatWidget {
             SlashCommand::Scratchpad => {
                 self.add_current_scratchpad_output();
             }
+            SlashCommand::ScratchpadAbsorb => {
+                self.add_error_message(SCRATCHPAD_ABSORB_USAGE.to_string());
+            }
+            SlashCommand::ScratchpadUnarchive => {
+                self.unarchive_current_scratchpad();
+            }
             SlashCommand::Outcomes => {
                 self.dispatch_outcomes_command(/*args*/ None);
             }
@@ -1042,6 +1112,9 @@ impl ChatWidget {
             }
             SlashCommand::Outcomes => {
                 self.dispatch_outcomes_command(Some(trimmed));
+            }
+            SlashCommand::ScratchpadAbsorb => {
+                self.dispatch_scratchpad_absorb_command(trimmed);
             }
             SlashCommand::OrchestratorMemoryForget if !trimmed.is_empty() => {
                 let tx = self.app_event_tx.clone();
@@ -1341,6 +1414,8 @@ impl ChatWidget {
             | SlashCommand::OrchestratorMemoryForget
             | SlashCommand::OrchestratorMemoryConsolidate
             | SlashCommand::Scratchpad
+            | SlashCommand::ScratchpadAbsorb
+            | SlashCommand::ScratchpadUnarchive
             | SlashCommand::Outcomes
             | SlashCommand::Continuous
             | SlashCommand::Account
@@ -1472,4 +1547,49 @@ fn persist_outcomes_tracking_enabled(
         std::fs::remove_file(&path)?;
     }
     std::fs::rename(temp_path, path)
+}
+
+fn parse_scratchpad_absorb_args(
+    args: &str,
+) -> Result<(String, crate::legacy_core::ScratchpadAbsorbOptions), String> {
+    let tokens = shlex::split(args)
+        .filter(|tokens| !tokens.is_empty())
+        .ok_or_else(|| SCRATCHPAD_ABSORB_USAGE.to_string())?;
+    let mut iter = tokens.into_iter();
+    let source_scratchpad_id = iter
+        .next()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| SCRATCHPAD_ABSORB_USAGE.to_string())?;
+    let mut options = crate::legacy_core::ScratchpadAbsorbOptions::default();
+    for flag in iter {
+        match flag.as_str() {
+            "--exclude-completed" => options.include_completed = false,
+            "--exclude-next-steps" => options.include_next_steps = false,
+            "--exclude-pending" => options.include_pending_waits = false,
+            "--exclude-notes" => options.include_notes = false,
+            "--exclude-git-refs" => options.include_git_refs = false,
+            "--exclude-artifacts" => options.include_artifacts = false,
+            "--exclude-outcomes" => options.include_outcomes = false,
+            "--exclude-delegations" => options.include_delegations = false,
+            "--exclude-worktrees" => options.include_worktrees = false,
+            "--help" | "-h" => return Err(SCRATCHPAD_ABSORB_USAGE.to_string()),
+            _ => {
+                return Err(format!(
+                    "Unknown /scratchpad-absorb option `{flag}`. {SCRATCHPAD_ABSORB_USAGE}"
+                ));
+            }
+        }
+    }
+    Ok((source_scratchpad_id, options))
+}
+
+fn format_absorb_counts(counts: &std::collections::BTreeMap<String, usize>) -> String {
+    if counts.is_empty() {
+        return "no fields selected".to_string();
+    }
+    counts
+        .iter()
+        .map(|(field, count)| format!("{field} {count}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

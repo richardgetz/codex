@@ -2157,6 +2157,235 @@ async fn slash_scratchpad_rejects_thread_file_without_scratchpad_id() {
 }
 
 #[tokio::test]
+async fn slash_scratchpad_absorb_imports_context_into_current_thread_pad() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let scratchpad_dir = chat.config.codex_home.join("scratchpad").join("entries");
+    tokio::fs::create_dir_all(&scratchpad_dir)
+        .await
+        .expect("create scratchpad dir");
+    tokio::fs::write(
+        scratchpad_dir.join("legacy-source.json"),
+        serde_json::json!({
+            "scratchpad_id": "legacy-source",
+            "origin_thread_id": "source-thread",
+            "objective": "Legacy source context",
+            "status": "archived",
+            "completed": ["source completed"],
+            "next_steps": ["source next"],
+            "pending_waits": [{"summary": "source pending"}],
+            "run_policy": {
+                "continuous": {
+                    "enabled": true
+                }
+            },
+            "communication_policy": {
+                "fallback": {
+                    "final_response_on_channel_failure": true
+                }
+            },
+            "created_at": "2026-04-28T20:00:00Z",
+            "updated_at": "2026-04-28T20:01:00Z",
+            "archived_at": "2026-04-28T20:02:00Z"
+        })
+        .to_string(),
+    )
+    .await
+    .expect("write source scratchpad");
+
+    submit_composer_text(&mut chat, "/scratchpad-absorb legacy-source");
+
+    match rx.try_recv().expect("expected absorb status") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
+            assert!(rendered.contains("Absorbed scratchpad `legacy-source`"));
+            assert!(rendered.contains(&thread_id.to_string()));
+            assert!(rendered.contains("pending_waits 1"));
+            assert!(rendered.contains("Live control fields stayed excluded"));
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+    let current_text = tokio::fs::read_to_string(scratchpad_dir.join(format!("{thread_id}.json")))
+        .await
+        .expect("read current scratchpad");
+    let current: serde_json::Value =
+        serde_json::from_str(&current_text).expect("current scratchpad JSON");
+    let artifact = current["artifacts"].as_array().unwrap().last().unwrap();
+    assert_eq!(
+        current["scratchpad_id"],
+        serde_json::json!(thread_id.to_string())
+    );
+    assert_eq!(
+        current["origin_thread_id"],
+        serde_json::json!(thread_id.to_string())
+    );
+    assert_eq!(
+        artifact["included"]["pending_waits"],
+        serde_json::json!([{ "summary": "source pending" }])
+    );
+    assert!(artifact["included"].get("run_policy").is_none());
+    assert!(artifact["included"].get("communication_policy").is_none());
+
+    let source_text = tokio::fs::read_to_string(scratchpad_dir.join("legacy-source.json"))
+        .await
+        .expect("read source scratchpad");
+    let source: serde_json::Value =
+        serde_json::from_str(&source_text).expect("source scratchpad JSON");
+    assert_eq!(
+        source["origin_thread_id"],
+        serde_json::json!("source-thread")
+    );
+}
+
+#[tokio::test]
+async fn slash_scratchpad_absorb_can_exclude_pending_context() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let scratchpad_dir = chat.config.codex_home.join("scratchpad").join("entries");
+    tokio::fs::create_dir_all(&scratchpad_dir)
+        .await
+        .expect("create scratchpad dir");
+    tokio::fs::write(
+        scratchpad_dir.join("legacy-source.json"),
+        serde_json::json!({
+            "scratchpad_id": "legacy-source",
+            "origin_thread_id": "source-thread",
+            "objective": "Legacy source context",
+            "status": "active",
+            "pending_waits": [{"summary": "source pending"}],
+            "notes": [{
+                "note_id": "note-source",
+                "ts": "2026-04-28T20:00:00Z",
+                "summary": "source note"
+            }],
+            "created_at": "2026-04-28T20:00:00Z",
+            "updated_at": "2026-04-28T20:01:00Z",
+            "archived_at": null
+        })
+        .to_string(),
+    )
+    .await
+    .expect("write source scratchpad");
+
+    submit_composer_text(
+        &mut chat,
+        "/scratchpad-absorb legacy-source --exclude-pending --exclude-notes",
+    );
+
+    match rx.try_recv().expect("expected absorb status") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
+            assert!(rendered.contains("Absorbed scratchpad `legacy-source`"));
+            assert!(!rendered.contains("pending_waits"));
+            assert!(!rendered.contains("notes"));
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+    let current_text = tokio::fs::read_to_string(scratchpad_dir.join(format!("{thread_id}.json")))
+        .await
+        .expect("read current scratchpad");
+    let current: serde_json::Value =
+        serde_json::from_str(&current_text).expect("current scratchpad JSON");
+    let artifact = current["artifacts"].as_array().unwrap().last().unwrap();
+    assert!(artifact["included"].get("pending_waits").is_none());
+    assert!(artifact["included"].get("notes").is_none());
+}
+
+#[tokio::test]
+async fn slash_scratchpad_absorb_rejects_invalid_args() {
+    let invalid_commands = [
+        (
+            "/scratchpad-absorb",
+            "Usage: /scratchpad-absorb <scratchpad_id>",
+        ),
+        (
+            "/scratchpad-absorb \"unterminated",
+            "Usage: /scratchpad-absorb <scratchpad_id>",
+        ),
+        (
+            "/scratchpad-absorb legacy-source --unknown",
+            "Unknown /scratchpad-absorb option `--unknown`",
+        ),
+        (
+            "/scratchpad-absorb legacy-source extra",
+            "Unknown /scratchpad-absorb option `extra`",
+        ),
+        (
+            "/scratchpad-absorb legacy-source --help",
+            "Usage: /scratchpad-absorb <scratchpad_id>",
+        ),
+    ];
+
+    for (command, expected) in invalid_commands {
+        let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.thread_id = Some(ThreadId::new());
+
+        submit_composer_text(&mut chat, command);
+
+        match rx.try_recv().expect("expected absorb error") {
+            AppEvent::InsertHistoryCell(cell) => {
+                let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
+                assert!(
+                    rendered.contains(expected),
+                    "command {command:?} rendered {rendered:?}"
+                );
+            }
+            other => panic!("expected InsertHistoryCell error, got {other:?}"),
+        }
+        assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+    }
+}
+
+#[tokio::test]
+async fn slash_scratchpad_unarchive_clears_current_thread_archive_marker() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let scratchpad_dir = chat.config.codex_home.join("scratchpad").join("entries");
+    tokio::fs::create_dir_all(&scratchpad_dir)
+        .await
+        .expect("create scratchpad dir");
+    tokio::fs::write(
+        scratchpad_dir.join(format!("{thread_id}.json")),
+        serde_json::json!({
+            "scratchpad_id": thread_id.to_string(),
+            "origin_thread_id": thread_id.to_string(),
+            "objective": "Archived current work",
+            "status": "archived",
+            "created_at": "2026-04-28T20:00:00Z",
+            "updated_at": "2026-04-28T20:01:00Z",
+            "archived_at": "2026-04-28T20:02:00Z"
+        })
+        .to_string(),
+    )
+    .await
+    .expect("write current scratchpad");
+
+    submit_composer_text(&mut chat, "/scratchpad-unarchive");
+
+    match rx.try_recv().expect("expected unarchive status") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
+            assert!(rendered.contains("unarchived"));
+            assert!(rendered.contains(&thread_id.to_string()));
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+    let current_text = tokio::fs::read_to_string(scratchpad_dir.join(format!("{thread_id}.json")))
+        .await
+        .expect("read current scratchpad");
+    let current: serde_json::Value =
+        serde_json::from_str(&current_text).expect("current scratchpad JSON");
+    assert_eq!(current["status"], serde_json::json!("active"));
+    assert_eq!(current["archived_at"], serde_json::json!(null));
+}
+
+#[tokio::test]
 async fn slash_outcomes_exports_current_session_outcomes() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();

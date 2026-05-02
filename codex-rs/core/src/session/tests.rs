@@ -71,6 +71,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::GoalHandler;
 use crate::tools::handlers::ShellHandler;
 use crate::tools::handlers::UnifiedExecHandler;
+use crate::tools::handlers::builtin_scratchpad::BuiltinScratchpadHandler;
 use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -6465,6 +6466,42 @@ async fn active_thread_scratchpad_omits_thread_file_without_scratchpad_id() {
 }
 
 #[tokio::test]
+async fn builtin_scratchpad_handler_rejects_custom_active_id_with_state_home() {
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+    let state_home = tempfile::tempdir().expect("state home");
+    let handler = BuiltinScratchpadHandler;
+
+    let result = handler
+        .handle(ToolInvocation {
+            session,
+            turn: turn_context,
+            cancellation_token: CancellationToken::new(),
+            tracker,
+            call_id: "scratchpad-open-custom-id".to_string(),
+            tool_name: codex_tools::ToolName::plain("open_scratchpad"),
+            source: ToolCallSource::Direct,
+            payload: ToolPayload::Function {
+                arguments: serde_json::json!({
+                    "state_home": state_home.path(),
+                    "objective": "debug named scratchpad",
+                    "scratchpad_id": "custom-debug-key"
+                })
+                .to_string(),
+            },
+        })
+        .await;
+
+    let Err(FunctionCallError::RespondToModel(message)) = result else {
+        panic!("expected custom scratchpad id to be rejected");
+    };
+    assert!(message.contains("current thread id"));
+    assert!(!state_home.path().join("custom-debug-key.json").exists());
+}
+
+#[tokio::test]
 async fn build_initial_context_omits_completed_or_archived_scratchpad_loopback() {
     let (session, turn_context) = make_session_and_context().await;
     write_thread_scratchpad(
@@ -6475,8 +6512,13 @@ async fn build_initial_context_omits_completed_or_archived_scratchpad_loopback()
             "objective": "already shipped",
             "status": "archived",
             "completed": ["opened PR"],
-            "next_steps": [],
-            "pending_waits": [],
+            "next_steps": ["ARCHIVED_CONTINUOUS_NEXT_STEP_CANARY"],
+            "pending_waits": [{"summary": "ARCHIVED_CONTINUOUS_WAIT_CANARY"}],
+            "run_policy": {
+                "continuous": {
+                    "enabled": true
+                }
+            },
             "created_at": "2026-04-29T00:00:00Z",
             "updated_at": "2026-04-29T00:00:00Z",
             "archived_at": "2026-04-29T00:05:00Z"
@@ -6487,6 +6529,8 @@ async fn build_initial_context_omits_completed_or_archived_scratchpad_loopback()
     let archived_developer_texts = developer_input_texts(&archived_context).join("\n");
     assert!(!archived_developer_texts.contains("<active_scratchpad>"));
     assert!(!archived_developer_texts.contains("already shipped"));
+    assert!(!archived_developer_texts.contains("ARCHIVED_CONTINUOUS_NEXT_STEP_CANARY"));
+    assert!(!archived_developer_texts.contains("ARCHIVED_CONTINUOUS_WAIT_CANARY"));
 
     write_thread_scratchpad(
         &turn_context,
