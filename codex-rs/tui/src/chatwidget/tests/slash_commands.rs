@@ -2010,8 +2010,22 @@ async fn slash_scratchpad_renders_current_session_scratchpad() {
                 "document config",
                 "ship visible scratchpad state"
             ],
-            "next_steps": ["render command output"],
-            "pending_waits": [{"summary": "manual UI check"}],
+            "next_steps": [
+                "render command output 1",
+                "render command output 2",
+                "render command output 3",
+                "render command output 4",
+                "render command output 5",
+                "render command output 6"
+            ],
+            "pending_waits": [
+                {"summary": "manual UI check 1"},
+                {"summary": "manual UI check 2"},
+                {"summary": "manual UI check 3"},
+                {"summary": "manual UI check 4"},
+                {"summary": "manual UI check 5"},
+                {"summary": "manual UI check 6"}
+            ],
             "created_at": "2026-04-28T20:00:00Z",
             "updated_at": "2026-04-28T20:01:00Z",
             "archived_at": null
@@ -2033,8 +2047,11 @@ async fn slash_scratchpad_renders_current_session_scratchpad() {
             assert!(rendered.contains("✔ trace event route"));
             assert!(rendered.contains("✔ ship visible scratchpad state"));
             assert!(!rendered.contains("earlier completed"));
-            assert!(rendered.contains("□ render command output"));
-            assert!(rendered.contains("□ manual UI check"));
+            assert!(rendered.contains("□ render command output 1"));
+            assert!(rendered.contains("□ render command output 6"));
+            assert!(rendered.contains("□ manual UI check 1"));
+            assert!(rendered.contains("□ manual UI check 6"));
+            assert!(!rendered.contains("… 1 more"));
         }
         other => panic!("expected InsertHistoryCell scratchpad card, got {other:?}"),
     }

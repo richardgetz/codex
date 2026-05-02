@@ -1854,8 +1854,12 @@ async fn scratchpad_update_renders_history_cell() {
                 "Trace plan rendering".to_string(),
             ],
             next_steps: vec![
-                "Add scratchpad history cell".to_string(),
-                "Run focused tests".to_string(),
+                "Add scratchpad history cell 1".to_string(),
+                "Add scratchpad history cell 2".to_string(),
+                "Add scratchpad history cell 3".to_string(),
+                "Add scratchpad history cell 4".to_string(),
+                "Add scratchpad history cell 5".to_string(),
+                "Add scratchpad history cell 6".to_string(),
             ],
             pending_waits: vec!["Wait for manual UI feedback".to_string()],
             updated_at: "2026-04-28T19:00:00Z".to_string(),
@@ -1874,7 +1878,10 @@ async fn scratchpad_update_renders_history_cell() {
     assert!(blob.contains("Ship visible scratchpad UX"));
     assert!(!blob.contains("Open scratchpad"));
     assert!(blob.contains("Trace plan rendering"));
-    assert!(blob.contains("Add scratchpad history cell"));
+    assert!(blob.contains("Add scratchpad history cell 1"));
+    assert!(blob.contains("Add scratchpad history cell 5"));
+    assert!(!blob.contains("Add scratchpad history cell 6"));
+    assert!(blob.contains("… 1 more"));
     assert!(blob.contains("Wait for manual UI feedback"));
 }
 

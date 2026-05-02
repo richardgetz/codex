@@ -68,12 +68,13 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
 
 #[tokio::test]
 async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()> {
-    let (session, _) = make_session_and_context().await;
+    let (session, turn) = make_session_and_context().await;
     let session = Arc::new(session);
     let tool_name = "create_event".to_string();
 
     let call = ToolRouter::build_tool_call(
         &session,
+        &turn,
         ResponseItem::FunctionCall {
             id: None,
             name: tool_name.clone(),

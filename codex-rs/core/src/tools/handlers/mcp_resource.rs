@@ -271,7 +271,7 @@ async fn handle_list_resources(
                 cursor: Some(value),
             });
             let result = session
-                .list_resources(&server_name, params)
+                .list_resources_with_reconnect(turn.as_ref(), &server_name, params)
                 .await
                 .map_err(|err| {
                     FunctionCallError::RespondToModel(format!("resources/list failed: {err:#}"))
@@ -379,7 +379,7 @@ async fn handle_list_resource_templates(
                 cursor: Some(value),
             });
             let result = session
-                .list_resource_templates(&server_name, params)
+                .list_resource_templates_with_reconnect(turn.as_ref(), &server_name, params)
                 .await
                 .map_err(|err| {
                     FunctionCallError::RespondToModel(format!(
@@ -480,7 +480,8 @@ async fn handle_read_resource(
 
     let payload_result: Result<ReadResourcePayload, FunctionCallError> = async {
         let result = session
-            .read_resource(
+            .read_resource_with_reconnect(
+                turn.as_ref(),
                 &server,
                 ReadResourceRequestParams {
                     meta: None,

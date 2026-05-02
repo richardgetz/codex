@@ -494,10 +494,17 @@ impl CodexThread {
         server: &str,
         uri: &str,
     ) -> anyhow::Result<serde_json::Value> {
+        let mut turn_context = self.codex.session.new_default_turn().await;
+        self.codex
+            .session
+            .refresh_mcp_servers_if_requested(&turn_context)
+            .await;
+        turn_context = self.codex.session.new_default_turn().await;
         let result = self
             .codex
             .session
-            .read_resource(
+            .read_resource_with_reconnect(
+                &turn_context,
                 server,
                 ReadResourceRequestParams {
                     meta: None,
@@ -516,9 +523,15 @@ impl CodexThread {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
+        let mut turn_context = self.codex.session.new_default_turn().await;
         self.codex
             .session
-            .call_tool(server, tool, arguments, meta)
+            .refresh_mcp_servers_if_requested(&turn_context)
+            .await;
+        turn_context = self.codex.session.new_default_turn().await;
+        self.codex
+            .session
+            .call_tool_with_reconnect(&turn_context, server, tool, arguments, meta)
             .await
     }
 

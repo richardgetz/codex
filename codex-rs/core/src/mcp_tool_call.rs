@@ -554,7 +554,8 @@ async fn execute_mcp_tool_call(
 
     loop {
         let result = sess
-            .call_tool(
+            .call_tool_with_reconnect(
+                turn_context,
                 server,
                 tool_name,
                 rewritten_arguments.clone(),
