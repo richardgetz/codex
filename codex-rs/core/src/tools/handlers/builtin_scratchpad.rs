@@ -26,6 +26,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ScratchpadUpdateEvent;
 
@@ -671,8 +672,18 @@ fn open_scratchpad(
     let _guard = scratchpad_write_guard()?;
     let objective = string_arg(args, "objective")?;
     let session_key = optional_string_arg(args, "session_key");
-    let scratchpad_id = optional_string_arg(args, "scratchpad_id")
+    let requested_scratchpad_id = optional_string_arg(args, "scratchpad_id");
+    let scratchpad_id = requested_scratchpad_id
+        .clone()
         .unwrap_or_else(|| default_scratchpad_id.to_string());
+    if requested_scratchpad_id.is_some()
+        && scratchpad_id != default_scratchpad_id
+        && ThreadId::from_string(&scratchpad_id).is_ok()
+    {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "scratchpad_id `{scratchpad_id}` looks like another thread id and cannot be opened from thread `{default_scratchpad_id}`"
+        )));
+    }
     if let Some(existing) = read_existing_scratchpad(store, &scratchpad_id)? {
         ensure_open_compatible(&existing, &objective, session_key.as_deref())?;
         ensure_thread_owner(&existing, default_scratchpad_id)?;
@@ -1892,6 +1903,70 @@ mod tests {
             stored.next_steps,
             vec!["continue vector-search tests".to_string()]
         );
+    }
+
+    #[test]
+    fn open_scratchpad_rejects_explicit_other_thread_id_before_creation() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let current_thread_id = "11111111-1111-1111-1111-111111111111";
+        let other_thread_id = "22222222-2222-2222-2222-222222222222";
+
+        let result = open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": other_thread_id,
+                "objective": "attempt to reserve another thread default id",
+                "next_steps": ["this must not be created"]
+            }),
+            current_thread_id,
+        );
+
+        assert!(result.is_err());
+        assert!(!store.path(other_thread_id).unwrap().exists());
+    }
+
+    #[test]
+    fn open_scratchpad_cannot_launch_child_as_existing_session_owner() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let session_b_thread_id = "33333333-3333-3333-3333-333333333333";
+        let session_a_child_thread_id = "44444444-4444-4444-4444-444444444444";
+        let session_b_args = serde_json::json!({
+            "objective": "session B real work",
+            "next_steps": ["session B keeps ownership"]
+        });
+        let session_b = open_scratchpad(&store, &session_b_args, session_b_thread_id).unwrap();
+
+        let child_result = open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": session_b_thread_id,
+                "objective": "session A child pretending to be B",
+                "next_steps": ["child should not own B"]
+            }),
+            session_a_child_thread_id,
+        );
+        let session_b_reopened =
+            open_scratchpad(&store, &session_b_args, session_b_thread_id).unwrap();
+
+        assert!(child_result.is_err());
+        assert_eq!(session_b_reopened, session_b);
+        let stored = store.read(session_b_thread_id).unwrap();
+        assert_eq!(
+            stored.origin_thread_id,
+            Some(session_b_thread_id.to_string())
+        );
+        assert_eq!(stored.objective, "session B real work");
+        assert_eq!(stored.next_steps, vec!["session B keeps ownership"]);
     }
 
     #[test]
