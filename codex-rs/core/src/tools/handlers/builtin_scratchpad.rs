@@ -1741,6 +1741,73 @@ mod tests {
     }
 
     #[test]
+    fn unaware_threads_with_same_objective_and_session_key_get_isolated_pads() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let args = serde_json::json!({
+            "objective": "shared live loopback proof objective",
+            "session_key": "shared live loopback proof session"
+        });
+
+        let alpha = open_scratchpad(&store, &args, "thread-alpha").unwrap();
+        append_scratchpad_note(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "thread-alpha",
+                "summary": "CANARY_ALPHA_019DE918_UNAWARE_AGENT"
+            }),
+            "thread-alpha",
+        )
+        .unwrap();
+        let bravo = open_scratchpad(&store, &args, "thread-bravo").unwrap();
+        append_scratchpad_note(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "thread-bravo",
+                "summary": "CANARY_BRAVO_019DE918_UNAWARE_AGENT"
+            }),
+            "thread-bravo",
+        )
+        .unwrap();
+
+        assert_eq!(
+            alpha["scratchpad"]["scratchpad_id"],
+            serde_json::json!("thread-alpha")
+        );
+        assert_eq!(
+            bravo["scratchpad"]["scratchpad_id"],
+            serde_json::json!("thread-bravo")
+        );
+        let alpha_stored = store.read("thread-alpha").unwrap();
+        let bravo_stored = store.read("thread-bravo").unwrap();
+        assert_eq!(
+            alpha_stored.notes,
+            vec![ScratchpadNote {
+                note_id: alpha_stored.notes[0].note_id.clone(),
+                ts: alpha_stored.notes[0].ts.clone(),
+                category: None,
+                summary: "CANARY_ALPHA_019DE918_UNAWARE_AGENT".to_string(),
+                outcome: None,
+            }]
+        );
+        assert_eq!(
+            bravo_stored.notes,
+            vec![ScratchpadNote {
+                note_id: bravo_stored.notes[0].note_id.clone(),
+                ts: bravo_stored.notes[0].ts.clone(),
+                category: None,
+                summary: "CANARY_BRAVO_019DE918_UNAWARE_AGENT".to_string(),
+                outcome: None,
+            }]
+        );
+        assert_eq!(store.list().unwrap().len(), 2);
+    }
+
+    #[test]
     fn open_scratchpad_rejects_rebinding_thread_default_to_different_objective() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = ScratchpadStore::new(
