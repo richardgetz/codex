@@ -1228,7 +1228,7 @@ async fn multi_agent_v2_spawn_can_select_child_collaboration_mode() {
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    let err = SpawnAgentHandlerV2
+    SpawnAgentHandlerV2
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1241,9 +1241,23 @@ async fn multi_agent_v2_spawn_can_select_child_collaboration_mode() {
             })),
         ))
         .await
-        .expect_err("spawn_agent should reject removed continuous collaboration mode");
-    assert!(err.to_string().contains("continuous"));
-    assert!(manager.captured_ops().is_empty());
+        .expect("legacy continuous collaboration mode should deserialize as default");
+
+    let child_thread_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.conversation_id, &turn.session_source, "runner")
+        .await
+        .expect("relative path should resolve");
+    let child_thread = manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be tracked");
+
+    assert_eq!(
+        child_thread.codex.session.collaboration_mode().await.mode,
+        ModeKind::Default
+    );
 }
 
 #[tokio::test]
