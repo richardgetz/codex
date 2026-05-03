@@ -1,5 +1,5 @@
 intent:
-  id: "intent/2026-05-03/browser-type-clear-events#auto"
+  id: "intent/2026-05-03/browser-type-clear-events#23535183c"
   change_type: "fix"
   scope: "agent-browser"
   summary: "Dispatch input/change events when clearing fields before typing."
