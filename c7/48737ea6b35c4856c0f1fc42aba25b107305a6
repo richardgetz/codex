@@ -1,0 +1,25 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-visual-measurement#c748737ea6b3"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Reduce temporary allocations while measuring Obscura visual text widths."
+  decision: "Track wrapped-line lengths incrementally and count compacted visual-text length without rebuilding strings for width measurement."
+  constraints:
+    - "Must preserve Obscura visual text whitespace normalization semantics."
+    - "Must keep DOM screenshot output shape and PNG generation behavior unchanged."
+    - "Must keep the optimization isolated to the built-in browser visual renderer."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser_visual.rs::wrap_visual_text"
+    - "codex-rs/core/src/tools/handlers/agent_browser_visual.rs::compact_visual_text_len"
+    - "codex-rs/core/src/tools/handlers/agent_browser_visual.rs::visual_bar_width"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo fmt --all"
+    - "cargo test -p codex-core compact_visual_text_len_matches_compacted_text -- --nocapture"
+    - "cargo check -p codex-core"
+    - "cargo clippy -p codex-core --lib --tests -- -A clippy::large_enum_variant -D warnings"
+    - "git diff --check"
