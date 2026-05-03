@@ -281,6 +281,7 @@ struct BrowserSession {
     cdp: CdpClient,
     process: Option<Child>,
     _profile_dir: Option<TempDir>,
+    overlay_script_registered: bool,
 }
 
 struct CdpClient {
@@ -448,6 +449,7 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
         cdp,
         process: launch.process.take(),
         _profile_dir: launch.profile_dir.take(),
+        overlay_script_registered: false,
     };
 
     let mut manager = manager().lock().await;
@@ -767,7 +769,13 @@ async fn handle_selection(args: SelectionArgs) -> Result<Value, FunctionCallErro
     let mut session = take_session(args.session_id).await?;
     let session_id = session.id.clone();
     let overlay_result = if args.enable_overlay.unwrap_or(true) {
-        inject_overlay(&mut session.cdp).await
+        if session.overlay_script_registered {
+            Ok(())
+        } else {
+            inject_overlay(&mut session.cdp).await.map(|_| {
+                session.overlay_script_registered = true;
+            })
+        }
     } else {
         Ok(())
     };
