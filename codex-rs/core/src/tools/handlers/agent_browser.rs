@@ -295,6 +295,7 @@ struct BrowserSession {
     stealth: bool,
     cdp: CdpClient,
     process: Option<Child>,
+    owned_page_close_url: Option<String>,
     _profile_dir: Option<TempDir>,
     overlay_script_registered: bool,
 }
@@ -462,6 +463,7 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
         stealth: args.stealth,
         cdp,
         process: launch.process.take(),
+        owned_page_close_url: launch.owned_page_close_url.take(),
         _profile_dir: launch.profile_dir.take(),
         overlay_script_registered: false,
     };
@@ -498,6 +500,8 @@ async fn handle_close(args: SessionArgs) -> Result<SimpleResult, FunctionCallErr
 
     if let Some(mut child) = session.process.take() {
         let _ = child.kill().await;
+    } else if let Some(close_url) = session.owned_page_close_url.take() {
+        let _ = reqwest::get(close_url).await;
     }
 
     Ok(SimpleResult {
@@ -1229,6 +1233,7 @@ struct LaunchConnection {
     page_ws_url: String,
     process: Option<Child>,
     profile_dir: Option<TempDir>,
+    owned_page_close_url: Option<String>,
     notes: Vec<String>,
 }
 
@@ -1239,17 +1244,19 @@ async fn attach_connection(remote: &str) -> Result<LaunchConnection, FunctionCal
             page_ws_url: remote.to_string(),
             process: None,
             profile_dir: None,
+            owned_page_close_url: None,
             notes: vec!["attached to explicit websocket endpoint".to_string()],
         });
     }
 
     let endpoint = remote.trim_end_matches('/').to_string();
-    let page_ws_url = first_page_ws_url(&endpoint).await?;
+    let page = first_page(&endpoint).await?;
     Ok(LaunchConnection {
         endpoint,
-        page_ws_url,
+        page_ws_url: page.ws_url,
         process: None,
         profile_dir: None,
+        owned_page_close_url: page.owned_close_url,
         notes: vec!["attached to existing remote debugging endpoint".to_string()],
     })
 }
@@ -1341,20 +1348,20 @@ async fn launch_connection(
         ))
     })?;
 
-    let page_ws_url =
-        match wait_for_first_page_ws_url(&endpoint, &mut process, Some(&browser_stderr_path)).await
-        {
-            Ok(page_ws_url) => page_ws_url,
-            Err(err) => {
-                let _ = process.kill().await;
-                return Err(err);
-            }
-        };
+    let page = match wait_for_first_page(&endpoint, &mut process, Some(&browser_stderr_path)).await
+    {
+        Ok(page) => page,
+        Err(err) => {
+            let _ = process.kill().await;
+            return Err(err);
+        }
+    };
     Ok(LaunchConnection {
         endpoint,
-        page_ws_url,
+        page_ws_url: page.ws_url,
         process: Some(process),
         profile_dir: Some(profile_dir),
+        owned_page_close_url: page.owned_close_url,
         notes: vec![format!("launched {}", binary.display())],
     })
 }
@@ -1365,15 +1372,15 @@ async fn kill_launched_browser(process: &mut Option<Child>) {
     }
 }
 
-async fn wait_for_first_page_ws_url(
+async fn wait_for_first_page(
     endpoint: &str,
     process: &mut Child,
     stderr_path: Option<&Path>,
-) -> Result<String, FunctionCallError> {
+) -> Result<PageTarget, FunctionCallError> {
     let mut last_error = None;
     for _ in 0..80 {
-        match first_page_ws_url(endpoint).await {
-            Ok(ws_url) => return Ok(ws_url),
+        match first_page(endpoint).await {
+            Ok(page) => return Ok(page),
             Err(err) => last_error = Some(err),
         }
         if let Some(status) = process.try_wait().map_err(|err| {
@@ -1424,7 +1431,12 @@ fn browser_stderr_tail(path: &Path) -> String {
     tail
 }
 
-async fn first_page_ws_url(endpoint: &str) -> Result<String, FunctionCallError> {
+struct PageTarget {
+    ws_url: String,
+    owned_close_url: Option<String>,
+}
+
+async fn first_page(endpoint: &str) -> Result<PageTarget, FunctionCallError> {
     #[derive(Deserialize)]
     struct Target {
         #[serde(rename = "type")]
@@ -1454,18 +1466,22 @@ async fn first_page_ws_url(endpoint: &str) -> Result<String, FunctionCallError> 
         .find(|target| target.target_type.as_deref() == Some("page"))
         .and_then(|target| target.web_socket_debugger_url)
     {
-        return Ok(ws_url);
+        return Ok(PageTarget {
+            ws_url,
+            owned_close_url: None,
+        });
     }
 
-    create_page_ws_url(endpoint, &url).await
+    create_page(endpoint, &url).await
 }
 
-async fn create_page_ws_url(
+async fn create_page(
     endpoint: &str,
     target_list_url: &str,
-) -> Result<String, FunctionCallError> {
+) -> Result<PageTarget, FunctionCallError> {
     #[derive(Deserialize)]
     struct Target {
+        id: Option<String>,
         #[serde(rename = "webSocketDebuggerUrl")]
         web_socket_debugger_url: Option<String>,
     }
@@ -1488,10 +1504,17 @@ async fn create_page_ws_url(
             ))
         })?;
 
-    target.web_socket_debugger_url.ok_or_else(|| {
+    let ws_url = target.web_socket_debugger_url.ok_or_else(|| {
         FunctionCallError::RespondToModel(format!(
             "browser target list `{target_list_url}` did not include a page websocket and `{url}` did not create one"
         ))
+    })?;
+    let owned_close_url = target
+        .id
+        .map(|id| format!("{}/json/close/{id}", endpoint.trim_end_matches('/')));
+    Ok(PageTarget {
+        ws_url,
+        owned_close_url,
     })
 }
 
