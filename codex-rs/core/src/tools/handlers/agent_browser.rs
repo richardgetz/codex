@@ -3280,6 +3280,40 @@ mod tests {
         assert!(html.contains("button e1 Run"));
     }
 
+    #[test]
+    fn visual_shell_html_escapes_clamps_and_caps_targets() {
+        let elements: Vec<Value> = (0..162)
+            .map(|index| {
+                json!({
+                    "ref": format!("e<{index}>"),
+                    "tag": "button",
+                    "label": "Run <script>",
+                    "rect": { "x": -5, "y": index, "width": 0, "height": 2 }
+                })
+            })
+            .collect();
+        let snapshot = json!({
+            "url": "https://example.test/?q=<value>&ok=1",
+            "title": "Example <Title>",
+            "text": "Text <body> & more",
+            "elements": elements,
+        });
+
+        let html = agent_browser_visual::visual_shell_html(
+            &snapshot, /*viewport_width*/ 10, /*viewport_height*/ 9_000,
+        );
+
+        assert!(html.contains("width:320px;height:1200px"));
+        assert!(html.contains("Example &lt;Title&gt;"));
+        assert!(html.contains("https://example.test/?q=&lt;value&gt;&amp;ok=1"));
+        assert!(html.contains("Text &lt;body&gt; &amp; more"));
+        assert!(html.contains("button e&lt;0&gt; Run &lt;script&gt;"));
+        assert!(html.contains("left:0px;top:0px;width:1px;height:2px"));
+        assert_eq!(html.matches(r#"class="target""#).count(), 160);
+        assert!(!html.contains("<script>"));
+        assert!(!html.contains("e&lt;160&gt;"));
+    }
+
     #[tokio::test]
     #[ignore = "requires CODEX_AGENT_BROWSER_RUN_CHROME_TESTS=1 and a local Chrome/Chromium binary"]
     async fn headless_benchmark_launches_browser() {
