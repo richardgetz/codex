@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-obscura-backend#7a8681b35"
+  change_type: "feat"
+  scope: "agent-browser"
+  summary: "Add an Obscura-first backend selector for the built-in agent browser."
+  decision: "Expose backend=auto|obscura|chromium, make auto prefer Obscura for headless sessions when the binary is available, keep Chromium as the screenshot/headful fallback, and route both through the existing CDP control and overlay layer."
+  constraints:
+    - "Keep the repo small by launching an installed Obscura binary instead of vendoring its V8/Deno stack in this commit."
+    - "Preserve Chromium and external-CDP compatibility for screenshots and current visual review flows."
+    - "Do not change existing tool names; add only optional backend selection and backend output metadata."
+    - "Document that Obscura screenshots and a Rust-native headful shell remain follow-up work."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::BrowserBackend"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::launch_obscura_connection"
+    - "codex-rs/tools/src/agent_browser_tool.rs::open_schema"
+    - "docs/fork-differences.md::Agent browser"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
