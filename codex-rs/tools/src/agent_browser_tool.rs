@@ -36,37 +36,37 @@ pub fn create_agent_browser_tool() -> ToolSpec {
     let tools = vec![
         tool(
             TOOL_OPEN,
-            "Launch or attach to a built-in agent browser session. Supports headful, headless, and stealth launch profiles.",
+            "Launch or attach to an agent browser session.",
             open_schema(),
         ),
         tool(
             TOOL_CLOSE,
-            "Close an agent browser session and terminate any browser process that Codex launched.",
+            "Close an agent browser session.",
             session_schema(),
         ),
         tool(
             TOOL_NAVIGATE,
-            "Navigate an agent browser session to a URL and wait briefly for the page to become ready.",
+            "Navigate a browser session to a URL.",
             navigate_schema(),
         ),
         tool(
             TOOL_SNAPSHOT,
-            "Return a compact page snapshot with stable element refs, text, URL, title, and selection state.",
+            "Return page text, selection state, and stable element refs.",
             snapshot_schema(),
         ),
         tool(
             TOOL_SCREENSHOT,
-            "Capture the current viewport as a PNG image that the agent can inspect.",
+            "Capture the current viewport as a PNG.",
             screenshot_schema(),
         ),
         tool(
             TOOL_CLICK,
-            "Click a page point or stable element ref from a prior snapshot.",
+            "Click a viewport point or element ref.",
             click_schema(),
         ),
         tool(
             TOOL_TYPE,
-            "Type text into the focused field, active element, or a stable element ref from a prior snapshot.",
+            "Type text into the focused field or element ref.",
             type_schema(),
         ),
         tool(
@@ -76,19 +76,19 @@ pub fn create_agent_browser_tool() -> ToolSpec {
         ),
         tool(
             TOOL_SELECTION,
-            "Inject or read the collaborative selection overlay and return a model-visible overview of the highlighted region.",
+            "Read or enable the collaborative selection overlay.",
             selection_schema(),
         ),
         tool(
             TOOL_BENCHMARK,
-            "Run a local browser latency benchmark for launch, navigation, snapshot, and screenshot operations.",
+            "Benchmark launch, navigation, snapshot, and screenshot latency.",
             benchmark_schema(),
         ),
     ];
 
     ToolSpec::Namespace(ResponsesApiNamespace {
         name: AGENT_BROWSER_NAMESPACE.to_string(),
-        description: "Built-in browser automation for agents. It is designed for authorized UI review and web workflows, with headful/headless modes, compact snapshots, screenshots, and collaborative selection capture.".to_string(),
+        description: "Built-in browser automation with headful/headless modes, snapshots, screenshots, input, and selection capture.".to_string(),
         tools,
     })
 }
@@ -109,19 +109,19 @@ fn open_schema() -> JsonSchema {
         BTreeMap::from([
             (
                 "url".to_string(),
-                nullable_string("Optional URL to open immediately."),
+                nullable_string("URL to open immediately."),
             ),
             (
                 "mode".to_string(),
                 JsonSchema::string_enum(
                     vec![json!("headful"), json!("headless")],
-                    Some("Browser display mode. Defaults to headful.".to_string()),
+                    Some("Display mode. Defaults to headful.".to_string()),
                 ),
             ),
             (
                 "stealth".to_string(),
                 JsonSchema::boolean(Some(
-                    "Enable the built-in low-noise browser profile. Defaults to true.".to_string(),
+                    "Enable stealth profile. Defaults to true.".to_string(),
                 )),
             ),
             (
@@ -134,21 +134,19 @@ fn open_schema() -> JsonSchema {
             ),
             (
                 "locale".to_string(),
-                nullable_string("Browser locale hint such as en-US."),
+                nullable_string("Locale hint such as en-US."),
             ),
             (
                 "timezone".to_string(),
-                nullable_string("Browser timezone id such as America/New_York."),
+                nullable_string("Timezone id such as America/New_York."),
             ),
             (
                 "user_agent".to_string(),
-                nullable_string("Optional explicit user agent override."),
+                nullable_string("User agent override."),
             ),
             (
                 "remote_debugging_url".to_string(),
-                nullable_string(
-                    "Attach to an existing Chrome/Chromium debugging endpoint instead of launching a process.",
-                ),
+                nullable_string("Existing Chrome/Chromium debugging endpoint."),
             ),
         ]),
         None,
@@ -160,7 +158,7 @@ fn session_schema() -> JsonSchema {
     JsonSchema::object(
         BTreeMap::from([(
             "session_id".to_string(),
-            nullable_string("Browser session id. Defaults to the active session."),
+            nullable_string("Session id. Defaults to the active session."),
         )]),
         None,
         Some(AdditionalProperties::Boolean(false)),
@@ -193,15 +191,11 @@ fn snapshot_schema() -> JsonSchema {
             ),
             (
                 "max_text_chars".to_string(),
-                JsonSchema::integer(Some(
-                    "Maximum characters of page text to include. Defaults to 12000.".to_string(),
-                )),
+                JsonSchema::integer(Some("Max page text chars. Defaults to 12000.".to_string())),
             ),
             (
                 "max_elements".to_string(),
-                JsonSchema::integer(Some(
-                    "Maximum interactive element refs to include. Defaults to 80.".to_string(),
-                )),
+                JsonSchema::integer(Some("Max element refs. Defaults to 80.".to_string())),
             ),
         ]),
         None,
@@ -218,9 +212,7 @@ fn screenshot_schema() -> JsonSchema {
             ),
             (
                 "full_page".to_string(),
-                JsonSchema::boolean(Some(
-                    "Capture the full page instead of only the viewport.".to_string(),
-                )),
+                JsonSchema::boolean(Some("Capture full page instead of viewport.".to_string())),
             ),
         ]),
         None,
@@ -237,7 +229,7 @@ fn click_schema() -> JsonSchema {
             ),
             (
                 "ref".to_string(),
-                nullable_string("Stable element ref from a prior snapshot, such as e3."),
+                nullable_string("Stable element ref, such as e3."),
             ),
             (
                 "x".to_string(),
@@ -262,7 +254,7 @@ fn type_schema() -> JsonSchema {
             ),
             (
                 "ref".to_string(),
-                nullable_string("Stable element ref from a prior snapshot, such as e3."),
+                nullable_string("Stable element ref, such as e3."),
             ),
             (
                 "text".to_string(),
@@ -271,7 +263,7 @@ fn type_schema() -> JsonSchema {
             (
                 "clear".to_string(),
                 JsonSchema::boolean(Some(
-                    "Clear the target field before typing. Defaults to false.".to_string(),
+                    "Clear target before typing. Defaults to false.".to_string(),
                 )),
             ),
         ]),
@@ -310,10 +302,7 @@ fn selection_schema() -> JsonSchema {
             ),
             (
                 "enable_overlay".to_string(),
-                JsonSchema::boolean(Some(
-                    "Enable the visible collaborative highlight overlay before reading state."
-                        .to_string(),
-                )),
+                JsonSchema::boolean(Some("Enable overlay before reading state.".to_string())),
             ),
         ]),
         None,
@@ -328,20 +317,18 @@ fn benchmark_schema() -> JsonSchema {
                 "mode".to_string(),
                 JsonSchema::string_enum(
                     vec![json!("headful"), json!("headless")],
-                    Some("Browser display mode to benchmark. Defaults to headless.".to_string()),
+                    Some("Display mode. Defaults to headless.".to_string()),
                 ),
             ),
             (
                 "iterations".to_string(),
                 JsonSchema::integer(Some(
-                    "Number of snapshot/screenshot iterations. Defaults to 3.".to_string(),
+                    "Snapshot/screenshot iterations. Defaults to 3.".to_string(),
                 )),
             ),
             (
                 "stealth".to_string(),
-                JsonSchema::boolean(Some(
-                    "Benchmark with the low-noise browser profile. Defaults to true.".to_string(),
-                )),
+                JsonSchema::boolean(Some("Use stealth profile. Defaults to true.".to_string())),
             ),
         ]),
         None,
