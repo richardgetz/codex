@@ -1,0 +1,32 @@
+intent:
+  id: "intent/2026-05-03/obscura-backend-benchmark#6c91ad7fc"
+  change_type: "test"
+  scope: "agent-browser"
+  summary: "Measure Obscura backend latency separately from Chromium and attached CDP runs."
+  decision: "Add an ignored Obscura benchmark test that uses the existing benchmark harness with an explicit file URL and writes CODEX_AGENT_BROWSER_OBSCURA_BENCHMARK_OUTPUT when requested."
+  constraints:
+    - "Must keep the benchmark harness closing sessions after success or failure."
+    - "Must preserve Chromium and attached-CDP benchmark behavior."
+    - "Must allow benchmarks to target an explicit URL without changing existing defaults."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_benchmark"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::obscura_benchmark_launches_browser"
+    - "codex-rs/tools/src/agent_browser_tool.rs::benchmark_schema"
+    - "docs/fork-differences.md::Agent browser"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo test -p codex-core agent_browser -- --nocapture"
+    - "cargo test -p codex-tools agent_browser"
+    - "cargo check -p codex-core -p codex-tools -p codex-features"
+    - "cargo clippy -p codex-core -p codex-tools -p codex-features --lib --tests -- -A clippy::large_enum_variant -D warnings"
+    - "CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 CODEX_AGENT_BROWSER_OBSCURA_BINARY=/private/tmp/codex-obscura-target/debug/obscura CODEX_AGENT_BROWSER_BENCHMARK_ITERATIONS=5 CODEX_AGENT_BROWSER_OBSCURA_BENCHMARK_OUTPUT=/private/tmp/codex-agent-browser-obscura-benchmark.json cargo test -p codex-core tools::handlers::agent_browser::tests::obscura_benchmark_launches_browser -- --ignored --exact --nocapture"
+    - "CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 CODEX_AGENT_BROWSER_OBSCURA_BINARY=/private/tmp/codex-obscura-target/debug/obscura cargo test -p codex-core tools::handlers::agent_browser::tests::obscura_backend_renders_dom_screenshot -- --ignored --exact --nocapture"
+    - "CODEX_AGENT_BROWSER_RUN_CHROME_TESTS=1 CODEX_AGENT_BROWSER_REMOTE_DEBUGGING_URL=http://127.0.0.1:9349 CODEX_AGENT_BROWSER_BENCHMARK_ITERATIONS=5 CODEX_AGENT_BROWSER_BENCHMARK_OUTPUT=/private/tmp/codex-agent-browser-benchmark.json cargo test -p codex-core tools::handlers::agent_browser::tests::headless_benchmark_launches_browser -- --ignored --exact --nocapture"
+    - "git diff --check"
+  benchmark_results:
+    obscura: "launch 647.20ms; navigate 4.08ms; snapshot avg 1.44ms; screenshot avg 308.80ms"
+    external_cdp: "launch 254.08ms; navigate 25.63ms; snapshot avg 1.38ms; screenshot avg 15.01ms"
