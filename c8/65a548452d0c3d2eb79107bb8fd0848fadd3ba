@@ -1,0 +1,26 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-screenshot-data-url#c865a548452d"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Write screenshot data URLs directly without avoidable temporary strings."
+  decision: "Use shared PNG data URL helpers that reserve final capacity, prefix existing Chromium base64 payloads directly, and encode Obscura PNG bytes into the final data URL buffer."
+  constraints:
+    - "Must preserve the exact image data URL prefix and base64 payload semantics for Chromium and Obscura screenshot outputs."
+    - "Must keep benchmark screenshot size accounting aligned with the generated data URL prefix."
+    - "Must keep the change isolated to built-in agent browser screenshot output helpers."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_screenshot"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::obscura_snapshot_screenshot"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::png_data_url"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::png_base64_data_url"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo fmt --all"
+    - "cargo test -p codex-core png_data_url_helpers_preserve_output -- --nocapture"
+    - "cargo check -p codex-core"
+    - "cargo clippy -p codex-core --lib --tests -- -A clippy::large_enum_variant -D warnings"
+    - "git diff --check"
