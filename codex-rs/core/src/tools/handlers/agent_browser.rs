@@ -1484,6 +1484,20 @@ fn overlay_script() -> &'static str {
 mod tests {
     use super::*;
 
+    #[test]
+    fn browser_stderr_tail_trims_on_character_boundary() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("stderr.log");
+        let stderr = format!("{}{}", "a".repeat(4_050), "é");
+        fs::write(&path, stderr).expect("write stderr");
+
+        let tail = browser_stderr_tail(&path);
+
+        assert!(tail.starts_with("..."));
+        assert!(tail.ends_with('é'));
+        assert!(tail.len() > 4_000);
+    }
+
     #[tokio::test]
     #[ignore = "requires CODEX_AGENT_BROWSER_RUN_CHROME_TESTS=1 and a local Chrome/Chromium binary"]
     async fn headless_benchmark_launches_browser() {
