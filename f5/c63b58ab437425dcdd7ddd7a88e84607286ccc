@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-05-03/remove-browser-schema-stub#auto"
+  change_type: "refactor"
+  scope: "agent-browser"
+  summary: "Remove unused schema scaffolding from the browser runtime handler."
+  decision: "Keep agent browser schema construction only in codex-tools and remove the dead codex-core namespace schema helper/imports."
+  constraints:
+    - "Must not change the model-visible agent_browser schema or runtime behavior."
+    - "Must keep the runtime handler focused on browser execution only."
+  intent_priority: "may"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
