@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-03/browser-ref-pointer-click#auto"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Make element-ref clicks use CDP pointer events instead of DOM click shortcuts."
+  decision: "Resolve a referenced element to its visible center point, then dispatch mousePressed and mouseReleased through CDP."
+  constraints:
+    - "Must preserve coordinate-based click behavior."
+    - "Must report a clear model-visible error when a referenced element is missing or not visible."
+    - "Must make browser automation closer to real user input for UI review."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_click"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::dispatch_click"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
