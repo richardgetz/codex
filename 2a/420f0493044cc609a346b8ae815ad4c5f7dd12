@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-feature-gate#2a420f049"
+  change_type: "feature"
+  scope: "agent-browser"
+  summary: "Allow the built-in agent browser namespace to be enabled from local feature config."
+  decision: "Add Feature::AgentBrowser and thread it through ToolsConfig so the namespace can be exposed when [features].agent_browser is enabled, while preserving model experimental_supported_tools compatibility."
+  constraints:
+    - "Keep the browser disabled by default while it is under development."
+    - "Do not require model preset metadata to expose the local built-in browser."
+    - "Keep handler registration gated on an execution environment."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/features/src/lib.rs::Feature::AgentBrowser"
+    - "codex-rs/tools/src/tool_config.rs::ToolsConfig::agent_browser_tool"
+    - "codex-rs/tools/src/tool_registry_plan.rs::build_tool_registry_plan"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
