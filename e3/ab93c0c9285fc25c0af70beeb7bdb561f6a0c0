@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-05-03/short-browser-tool-descriptions#auto"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Reduce model-visible browser tool description weight."
+  decision: "Shorten agent_browser namespace, tool, and parameter descriptions while preserving the same schemas and tool behavior."
+  constraints:
+    - "Must keep all agent_browser tool names, parameters, required fields, and handlers unchanged."
+    - "Must retain enough description context for the model to choose the right browser operation."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tools/src/agent_browser_tool.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
