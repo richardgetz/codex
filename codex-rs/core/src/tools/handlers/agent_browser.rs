@@ -934,7 +934,13 @@ async fn initialize_page(
 }
 
 async fn browser_user_agent(cdp: &mut CdpClient) -> Result<Option<String>, FunctionCallError> {
-    let version = cdp.call("Browser.getVersion", json!({})).await?;
+    if let Ok(version) = cdp.call("Browser.getVersion", json!({})).await
+        && let Some(user_agent) = version.get("userAgent").and_then(Value::as_str)
+    {
+        return Ok(Some(user_agent.to_string()));
+    }
+
+    let version = evaluate_json(cdp, "(() => ({ userAgent: navigator.userAgent }))()").await?;
     Ok(version
         .get("userAgent")
         .and_then(Value::as_str)
