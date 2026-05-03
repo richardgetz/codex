@@ -3,6 +3,7 @@
 
 import argparse
 from contextlib import contextmanager
+import hashlib
 import json
 import os
 import shutil
@@ -42,6 +43,16 @@ class BinaryComponent:
     targets: tuple[str, ...] | None = None  # limit installation to specific targets
 
 
+@dataclass(frozen=True)
+class ObscuraAsset:
+    target: str
+    archive_name: str
+    archive_format: str
+    archive_member: str
+    digest: str
+    size: int
+
+
 WINDOWS_TARGETS = tuple(target for target in BINARY_TARGETS if "windows" in target)
 
 BINARY_COMPONENTS = {
@@ -79,6 +90,35 @@ RG_TARGET_PLATFORM_PAIRS: list[tuple[str, str]] = [
 ]
 RG_TARGET_TO_PLATFORM = {target: platform for target, platform in RG_TARGET_PLATFORM_PAIRS}
 DEFAULT_RG_TARGETS = [target for target, _ in RG_TARGET_PLATFORM_PAIRS]
+DEFAULT_OBSCURA_VERSION = "v0.1.2"
+OBSCURA_RELEASES: dict[str, dict[str, ObscuraAsset]] = {
+    DEFAULT_OBSCURA_VERSION: {
+        "aarch64-apple-darwin": ObscuraAsset(
+            target="aarch64-apple-darwin",
+            archive_name="obscura-aarch64-macos.tar.gz",
+            archive_format="tar.gz",
+            archive_member="obscura",
+            digest="sha256:ba105ef19ceeb36db0bfa0386c3db5251737fd816cac322cba4f4b85f60749bd",
+            size=38_267_564,
+        ),
+        "x86_64-unknown-linux-musl": ObscuraAsset(
+            target="x86_64-unknown-linux-musl",
+            archive_name="obscura-x86_64-linux.tar.gz",
+            archive_format="tar.gz",
+            archive_member="obscura",
+            digest="sha256:307ce58affea3ff39223bf573cf391c8883e0811d36e9cd7185f8c7c54942802",
+            size=51_687_685,
+        ),
+        "x86_64-pc-windows-msvc": ObscuraAsset(
+            target="x86_64-pc-windows-msvc",
+            archive_name="obscura-x86_64-windows.zip",
+            archive_format="zip",
+            archive_member="obscura.exe",
+            digest="sha256:bb342ea818f3f0208017ccf56314f709c591d0b9e14041f27ff760600490458a",
+            size=35_322_430,
+        ),
+    }
+}
 
 # urllib.request.urlopen() defaults to no timeout (can hang indefinitely), which is painful in CI.
 DOWNLOAD_TIMEOUT_SECS = 60
@@ -138,7 +178,7 @@ def parse_args() -> argparse.Namespace:
         "--component",
         dest="components",
         action="append",
-        choices=tuple(list(BINARY_COMPONENTS) + ["rg"]),
+        choices=tuple(list(BINARY_COMPONENTS) + ["rg", "obscura"]),
         help=(
             "Limit installation to the specified components."
             " May be repeated. Defaults to codex, codex-windows-sandbox-setup,"
@@ -161,6 +201,15 @@ def parse_args() -> argparse.Namespace:
             "repository checkout is used."
         ),
     )
+    parser.add_argument(
+        "--obscura-version",
+        default=DEFAULT_OBSCURA_VERSION,
+        choices=tuple(OBSCURA_RELEASES),
+        help=(
+            "Obscura release version to fetch when --component obscura is selected "
+            f"(default: {DEFAULT_OBSCURA_VERSION})."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -178,29 +227,40 @@ def main() -> int:
         "rg",
     ]
     selected_targets = args.targets or list(BINARY_TARGETS)
+    selected_binary_components = [
+        BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS
+    ]
 
     workflow_url = (args.workflow_url or DEFAULT_WORKFLOW_URL).strip()
     if not workflow_url:
         workflow_url = DEFAULT_WORKFLOW_URL
 
     workflow_id = workflow_url.rstrip("/").split("/")[-1]
-    print(f"Downloading native artifacts from workflow {workflow_id} in {args.repo}...")
+    if selected_binary_components:
+        print(f"Downloading native artifacts from workflow {workflow_id} in {args.repo}...")
 
-    with _gha_group(f"Download native artifacts from workflow {workflow_id}"):
-        with tempfile.TemporaryDirectory(prefix="codex-native-artifacts-") as artifacts_dir_str:
-            artifacts_dir = Path(artifacts_dir_str)
-            _download_artifacts(workflow_id, artifacts_dir, args.repo)
-            install_binary_components(
-                artifacts_dir,
-                vendor_dir,
-                [BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS],
-                selected_targets,
-            )
+        with _gha_group(f"Download native artifacts from workflow {workflow_id}"):
+            with tempfile.TemporaryDirectory(
+                prefix="codex-native-artifacts-"
+            ) as artifacts_dir_str:
+                artifacts_dir = Path(artifacts_dir_str)
+                _download_artifacts(workflow_id, artifacts_dir, args.repo)
+                install_binary_components(
+                    artifacts_dir,
+                    vendor_dir,
+                    selected_binary_components,
+                    selected_targets,
+                )
 
     if "rg" in components:
         with _gha_group("Fetch ripgrep binaries"):
             print("Fetching ripgrep binaries...")
             fetch_rg(vendor_dir, selected_targets, manifest_path=RG_MANIFEST)
+
+    if "obscura" in components:
+        with _gha_group("Fetch Obscura browser binaries"):
+            print(f"Fetching Obscura browser binaries from {args.obscura_version}...")
+            fetch_obscura(vendor_dir, selected_targets, release_version=args.obscura_version)
 
     print(f"Installed native dependencies into {vendor_dir}")
     return 0
@@ -272,6 +332,61 @@ def fetch_rg(
             print(f"  installed ripgrep for {target}")
 
     return [results[target] for target in targets]
+
+
+def fetch_obscura(
+    vendor_dir: Path,
+    targets: Sequence[str] | None = None,
+    *,
+    release_version: str = DEFAULT_OBSCURA_VERSION,
+) -> list[Path]:
+    """Download optional Obscura browser binaries for targets with upstream assets."""
+
+    if targets is None:
+        targets = list(BINARY_TARGETS)
+
+    assets = OBSCURA_RELEASES[release_version]
+    targets = list(targets)
+    selected_assets = [assets[target] for target in targets if target in assets]
+    missing_targets = [target for target in targets if target not in assets]
+    if missing_targets:
+        print(
+            "  no Obscura release asset for targets: " + ", ".join(missing_targets),
+            flush=True,
+        )
+
+    if not selected_assets:
+        raise RuntimeError(
+            f"No Obscura {release_version} release assets match selected targets: "
+            + ", ".join(targets)
+        )
+
+    vendor_dir.mkdir(parents=True, exist_ok=True)
+    results: dict[str, Path] = {}
+    max_workers = min(len(selected_assets), max(1, (os.cpu_count() or 1)))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {
+            executor.submit(
+                _fetch_single_obscura, vendor_dir, release_version, asset
+            ): asset.target
+            for asset in selected_assets
+        }
+        for future in as_completed(future_map):
+            target = future_map[future]
+            try:
+                results[target] = future.result()
+            except Exception as exc:
+                _gha_error(
+                    title="Obscura install failed",
+                    message=f"target={target} release={release_version} error={exc!r}",
+                )
+                raise RuntimeError(
+                    f"Failed to install Obscura {release_version} for target {target}."
+                ) from exc
+            print(f"  installed Obscura for {target}")
+
+    return [results[asset.target] for asset in selected_assets]
 
 
 def _download_artifacts(workflow_id: str, dest_dir: Path, github_repo: str) -> None:
@@ -355,6 +470,33 @@ def _archive_name_for_target(artifact_prefix: str, target: str) -> str:
     return f"{artifact_prefix}-{target}.zst"
 
 
+def _fetch_single_obscura(
+    vendor_dir: Path,
+    release_version: str,
+    asset: ObscuraAsset,
+) -> Path:
+    url = (
+        "https://github.com/h4ckf0r0day/obscura/releases/download/"
+        f"{release_version}/{asset.archive_name}"
+    )
+    binary_name = "obscura.exe" if "windows" in asset.target else "obscura"
+    dest = vendor_dir / asset.target / "browser" / binary_name
+
+    with tempfile.TemporaryDirectory() as tmp_dir_str:
+        tmp_dir = Path(tmp_dir_str)
+        download_path = tmp_dir / asset.archive_name
+        print(f"  downloading Obscura for {asset.target} from {url}", flush=True)
+        _download_file(url, download_path)
+        _verify_download(download_path, expected_digest=asset.digest, expected_size=asset.size)
+        dest.unlink(missing_ok=True)
+        extract_archive(download_path, asset.archive_format, asset.archive_member, dest)
+
+    if "windows" not in asset.target:
+        dest.chmod(0o755)
+
+    return dest
+
+
 def _fetch_single_rg(
     vendor_dir: Path,
     target: str,
@@ -414,6 +556,30 @@ def _fetch_single_rg(
         dest.chmod(0o755)
 
     return dest
+
+
+def _verify_download(
+    path: Path,
+    *,
+    expected_digest: str | None,
+    expected_size: int | None,
+) -> None:
+    if expected_size is not None:
+        actual_size = path.stat().st_size
+        if actual_size != expected_size:
+            raise RuntimeError(
+                f"Downloaded file has size {actual_size}, expected {expected_size}: {path}"
+            )
+
+    if expected_digest:
+        algorithm, _, expected_hex = expected_digest.partition(":")
+        if algorithm != "sha256" or not expected_hex:
+            raise RuntimeError(f"Unsupported digest '{expected_digest}' for {path}.")
+        actual_hex = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual_hex != expected_hex:
+            raise RuntimeError(
+                f"Downloaded file has sha256 {actual_hex}, expected {expected_hex}: {path}"
+            )
 
 
 def _download_file(url: str, dest: Path) -> None:

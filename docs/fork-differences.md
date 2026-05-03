@@ -394,8 +394,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   `Codex.app/Contents/Resources/obscura`. The npm staging and standalone
   installers preserve an optional `vendor/<target>/browser/obscura` resource as
   `codex-resources/obscura` when present. This keeps the Codex Rust crates lean
-  while still letting app distributions ship Obscura as a first-party resource.
-  Use `backend = "chromium"` to force the Chromium launch path.
+  while still letting app distributions ship Obscura as a first-party resource;
+  `codex-cli/scripts/install_native_deps.py --component obscura` hydrates
+  available pinned upstream Obscura release assets into that vendor resource
+  layout. Use `backend = "chromium"` to force the Chromium launch path.
 - When attaching to an existing CDP endpoint, Codex creates an `about:blank`
   page target if `/json/list` has no debuggable page yet, then closes only that
   owned target when the session closes.
