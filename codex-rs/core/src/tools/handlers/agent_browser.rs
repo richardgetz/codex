@@ -22,6 +22,7 @@ use tokio::process::Child;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
+use tokio::time::timeout;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::connect_async;
@@ -51,6 +52,7 @@ const DEFAULT_VIEWPORT_WIDTH: u32 = 1365;
 const DEFAULT_VIEWPORT_HEIGHT: u32 = 900;
 const DEFAULT_LOCALE: &str = "en-US";
 const DEFAULT_TIMEZONE: &str = "America/New_York";
+const CDP_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 static BROWSER_MANAGER: OnceLock<Mutex<BrowserManager>> = OnceLock::new();
 
@@ -99,7 +101,7 @@ impl ToolHandler for AgentBrowserHandler {
 }
 
 fn text_output<T: Serialize>(value: T) -> Result<FunctionToolOutput, FunctionCallError> {
-    let text = serde_json::to_string_pretty(&value).map_err(|err| {
+    let text = serde_json::to_string(&value).map_err(|err| {
         FunctionCallError::RespondToModel(format!(
             "failed to serialize agent_browser result: {err}"
         ))
@@ -297,6 +299,21 @@ impl CdpClient {
     }
 
     async fn call(&mut self, method: &str, params: Value) -> Result<Value, FunctionCallError> {
+        timeout(CDP_CALL_TIMEOUT, self.call_inner(method, params))
+            .await
+            .map_err(|_| {
+                FunctionCallError::RespondToModel(format!(
+                    "browser command `{method}` timed out after {}s",
+                    CDP_CALL_TIMEOUT.as_secs()
+                ))
+            })?
+    }
+
+    async fn call_inner(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, FunctionCallError> {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         let request = json!({
@@ -543,7 +560,7 @@ async fn handle_screenshot(args: ScreenshotArgs) -> Result<FunctionToolOutput, F
             Ok(FunctionToolOutput::from_content(
                 vec![
                     FunctionCallOutputContentItem::InputText {
-                        text: serde_json::to_string_pretty(&summary)
+                        text: serde_json::to_string(&summary)
                             .unwrap_or_else(|_| summary.to_string()),
                     },
                     FunctionCallOutputContentItem::InputImage {
@@ -1483,6 +1500,19 @@ fn overlay_script() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_output_uses_compact_json() {
+        let output = text_output(json!({
+            "ok": true,
+            "nested": {
+                "value": 1
+            }
+        }))
+        .expect("serialize output");
+
+        assert_eq!(output.into_text(), r#"{"nested":{"value":1},"ok":true}"#);
+    }
 
     #[test]
     fn browser_stderr_tail_trims_on_character_boundary() {
