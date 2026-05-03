@@ -2659,16 +2659,22 @@ fn benchmark_html() -> &'static str {
 }
 
 fn urlencoding_like(input: &str) -> String {
-    input
-        .bytes()
-        .flat_map(|byte| match byte {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                vec![byte as char]
+                encoded.push(byte as char);
             }
-            b' ' => vec!['%', '2', '0'],
-            _ => format!("%{byte:02X}").chars().collect(),
-        })
-        .collect()
+            b' ' => encoded.push_str("%20"),
+            _ => {
+                encoded.push('%');
+                encoded.push(HEX[(byte >> 4) as usize] as char);
+                encoded.push(HEX[(byte & 0x0f) as usize] as char);
+            }
+        }
+    }
+    encoded
 }
 
 fn stealth_script(locale: &str) -> String {

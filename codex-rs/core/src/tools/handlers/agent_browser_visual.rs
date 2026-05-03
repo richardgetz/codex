@@ -319,18 +319,25 @@ fn wrap_visual_text(text: &str, max_chars: usize, max_lines: usize) -> Vec<Strin
 }
 
 fn compact_visual_text(text: &str) -> String {
-    text.chars()
-        .map(|ch| {
-            if ch.is_ascii() && !ch.is_control() {
-                ch
-            } else {
-                ' '
-            }
-        })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut compacted = String::with_capacity(text.len());
+    let mut pending_space = false;
+    for ch in text.chars() {
+        let ch = if ch.is_ascii() && !ch.is_control() {
+            ch
+        } else {
+            ' '
+        };
+        if ch.is_whitespace() {
+            pending_space = !compacted.is_empty();
+            continue;
+        }
+        if pending_space {
+            compacted.push(' ');
+            pending_space = false;
+        }
+        compacted.push(ch);
+    }
+    compacted
 }
 
 fn draw_rect(
