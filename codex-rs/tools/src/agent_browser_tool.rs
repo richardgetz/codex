@@ -413,6 +413,12 @@ fn share_schema() -> JsonSchema {
                     Some("Access for the receiving agent. Defaults to read_only.".to_string()),
                 ),
             ),
+            (
+                "lease_seconds".to_string(),
+                JsonSchema::integer(Some(
+                    "Share lifetime in seconds. Defaults to 3600; maximum 43200.".to_string(),
+                )),
+            ),
         ]),
         /*required*/ None,
         Some(AdditionalProperties::Boolean(false)),

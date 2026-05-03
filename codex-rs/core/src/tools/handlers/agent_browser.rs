@@ -124,6 +124,8 @@ impl ToolHandler for AgentBrowserHandler {
 }
 
 const BENCHMARK_DATA_URL_SENTINEL: &str = "data:text/html;charset=utf-8,";
+const DEFAULT_SHARE_LEASE_SECONDS: u64 = 60 * 60;
+const MAX_SHARE_LEASE_SECONDS: u64 = 12 * 60 * 60;
 
 struct BrowserAccessPolicy {
     network: NetworkSandboxPolicy,
@@ -375,6 +377,7 @@ struct ShareArgs {
     session_id: Option<String>,
     #[serde(default)]
     access: ShareAccess,
+    lease_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -482,6 +485,8 @@ struct ShareResult {
     remote_debugging_url: String,
     share_file: String,
     url: String,
+    lease_seconds: u64,
+    expires_at_unix_ms: u128,
     notes: Vec<String>,
     elapsed_ms: f64,
 }
@@ -573,6 +578,8 @@ struct BrowserShare {
     viewport_height: u32,
     stealth: bool,
     created_at_unix_ms: u128,
+    #[serde(default)]
+    expires_at_unix_ms: Option<u128>,
 }
 
 struct PageInitOptions<'a> {
@@ -1440,6 +1447,12 @@ async fn handle_share(args: ShareArgs) -> Result<ShareResult, FunctionCallError>
     let session_id = session.id.clone();
     let share_id = format!("bs-{}", Uuid::new_v4().simple());
     let url = page_url(&mut session.cdp).await.unwrap_or_default();
+    let lease_seconds = args
+        .lease_seconds
+        .unwrap_or(DEFAULT_SHARE_LEASE_SECONDS)
+        .clamp(/*min*/ 60, /*max*/ MAX_SHARE_LEASE_SECONDS);
+    let created_at_unix_ms = unix_ms_now();
+    let expires_at_unix_ms = created_at_unix_ms + u128::from(lease_seconds) * 1000;
     let share = BrowserShare {
         share_id: share_id.clone(),
         access: args.access,
@@ -1451,7 +1464,8 @@ async fn handle_share(args: ShareArgs) -> Result<ShareResult, FunctionCallError>
         viewport_width: session.viewport_width,
         viewport_height: session.viewport_height,
         stealth: session.stealth,
-        created_at_unix_ms: unix_ms_now(),
+        created_at_unix_ms,
+        expires_at_unix_ms: Some(expires_at_unix_ms),
     };
     let share_file = write_browser_share(&share)?;
     let result = ShareResult {
@@ -1465,9 +1479,12 @@ async fn handle_share(args: ShareArgs) -> Result<ShareResult, FunctionCallError>
         remote_debugging_url: session.page_ws_url.clone(),
         share_file: share_file.display().to_string(),
         url,
+        lease_seconds,
+        expires_at_unix_ms,
         notes: vec![
             "pass share_id to agent_browser.open from another agent to attach to this live page"
                 .to_string(),
+            format!("share expires after {lease_seconds} seconds"),
             if args.access == ShareAccess::ReadOnly {
                 "read_only shares allow snapshot and screenshot, but block navigation and input"
                     .to_string()
@@ -1639,6 +1656,7 @@ fn write_browser_share(share: &BrowserShare) -> Result<PathBuf, FunctionCallErro
             dir.display()
         ))
     })?;
+    cleanup_expired_browser_shares(&dir, unix_ms_now());
     let path = browser_share_path(&share.share_id)?;
     let json = serde_json::to_vec(share).map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to serialize browser share: {err}"))
@@ -1660,12 +1678,44 @@ fn read_browser_share(share_id: &str) -> Result<BrowserShare, FunctionCallError>
             path.display()
         ))
     })?;
-    serde_json::from_slice(&json).map_err(|err| {
+    let share: BrowserShare = serde_json::from_slice(&json).map_err(|err| {
         FunctionCallError::RespondToModel(format!(
             "browser share `{}` was invalid: {err}",
             path.display()
         ))
-    })
+    })?;
+    if let Some(expires_at_unix_ms) = share.expires_at_unix_ms
+        && expires_at_unix_ms <= unix_ms_now()
+    {
+        let _ = fs::remove_file(&path);
+        return Err(FunctionCallError::RespondToModel(format!(
+            "browser share `{share_id}` expired; create a fresh share from the owner session"
+        )));
+    }
+    Ok(share)
+}
+
+fn cleanup_expired_browser_shares(dir: &Path, now_unix_ms: u128) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(json) = fs::read(&path) else {
+            continue;
+        };
+        let Ok(share) = serde_json::from_slice::<BrowserShare>(&json) else {
+            continue;
+        };
+        if let Some(expires_at_unix_ms) = share.expires_at_unix_ms
+            && expires_at_unix_ms <= now_unix_ms
+        {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 async fn ensure_obscura_page_session(cdp: &mut CdpClient) -> Result<(), FunctionCallError> {
@@ -3034,6 +3084,7 @@ mod tests {
             viewport_height: 800,
             stealth: true,
             created_at_unix_ms: 1,
+            expires_at_unix_ms: Some(unix_ms_now() + 60_000),
         };
 
         let path = write_browser_share(&share).expect("write browser share");
@@ -3043,6 +3094,31 @@ mod tests {
         assert_eq!(loaded.share_id, share.share_id);
         assert_eq!(loaded.access, ShareAccess::ReadOnly);
         assert_eq!(loaded.target_id.as_deref(), Some("target-1"));
+        assert!(loaded.expires_at_unix_ms.is_some());
+    }
+
+    #[test]
+    fn browser_share_rejects_and_deletes_expired_metadata() {
+        let share = BrowserShare {
+            share_id: format!("bs-expired-{}", Uuid::new_v4().simple()),
+            access: ShareAccess::ReadOnly,
+            engine: BrowserEngine::ExternalCdp,
+            mode: "headless".to_string(),
+            endpoint: "http://127.0.0.1:9222".to_string(),
+            page_ws_url: "ws://127.0.0.1:9222/devtools/page/1".to_string(),
+            target_id: None,
+            viewport_width: 1280,
+            viewport_height: 800,
+            stealth: true,
+            created_at_unix_ms: 1,
+            expires_at_unix_ms: Some(unix_ms_now().saturating_sub(1)),
+        };
+
+        let path = write_browser_share(&share).expect("write expired browser share");
+        let err = read_browser_share(&share.share_id).expect_err("expired share should fail");
+
+        assert!(err.to_string().contains("expired"));
+        assert!(!path.exists());
     }
 
     #[test]
@@ -3325,6 +3401,7 @@ mod tests {
         let share = handle_share(ShareArgs {
             session_id: Some(original_session_id.clone()),
             access: ShareAccess::ReadOnly,
+            lease_seconds: None,
         })
         .await
         .expect("share browser");
@@ -3434,6 +3511,7 @@ mod tests {
         let share = handle_share(ShareArgs {
             session_id: Some(original_session_id.clone()),
             access: ShareAccess::ReadOnly,
+            lease_seconds: None,
         })
         .await
         .expect("share Obscura browser");

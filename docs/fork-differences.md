@@ -378,7 +378,9 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   `agent_browser.share` writes a local share token that another agent can pass
   to `agent_browser.open` to attach to the same live page instead of relaunching
   and rebrowsing. Shares default to `read_only`; `read_write` is available for
-  deliberate handoffs.
+  deliberate handoffs. Share tokens are leased by default for one hour, can be
+  shortened or extended up to twelve hours, and expired tokens are cleaned up
+  when browser shares are read or created.
 - Benchmarks can target the default local page or an explicit URL, and report
   screenshot PNG/base64 sizes alongside latency so transport-size tradeoffs stay
   visible. Obscura currently covers CDP navigation/evaluation/input/snapshot
