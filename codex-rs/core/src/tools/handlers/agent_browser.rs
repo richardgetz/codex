@@ -674,15 +674,13 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
         .await?
     };
 
-    let endpoint = launch.endpoint.clone();
-    let page_ws_url = launch.page_ws_url.clone();
-    let mut notes = launch.notes.clone();
     let session_access = launch.access;
     let stealth = launch.stealth.unwrap_or(args.stealth);
     let viewport_width = launch.viewport_width.unwrap_or(requested_viewport_width);
     let viewport_height = launch.viewport_height.unwrap_or(requested_viewport_height);
-    let session_mode = launch.mode.clone().unwrap_or_else(|| args.mode.clone());
+    let session_mode = launch.mode.take().unwrap_or(args.mode);
     let output_mode = mode_name(&session_mode);
+    let mut notes = std::mem::take(&mut launch.notes);
 
     if args.url.is_some() && session_access == ShareAccess::ReadOnly {
         cleanup_launch(&mut launch).await;
@@ -691,7 +689,7 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
         ));
     }
 
-    let mut cdp = match CdpClient::connect(&page_ws_url).await {
+    let mut cdp = match CdpClient::connect(&launch.page_ws_url).await {
         Ok(cdp) => cdp,
         Err(err) => {
             cleanup_launch(&mut launch).await;
@@ -758,6 +756,8 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
     } else {
         None
     };
+    let endpoint = std::mem::take(&mut launch.endpoint);
+    let page_ws_url = std::mem::take(&mut launch.page_ws_url);
     let session = BrowserSession {
         id: session_id.clone(),
         mode: session_mode,
