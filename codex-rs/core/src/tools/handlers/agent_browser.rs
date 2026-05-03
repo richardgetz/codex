@@ -1800,6 +1800,7 @@ fn overlay_script() -> &'static str {
             if (!rect) {
                 box.style.display = "none";
                 label.style.display = "none";
+                window.__codexAgentBrowserLastSelection = null;
                 return;
             }
             box.style.display = "block";
