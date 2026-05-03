@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-collaborative-highlights#cd547dc2a"
+  change_type: "feat"
+  scope: "agent-browser"
+  summary: "Add collaborative page highlights to the built-in agent browser overlay."
+  decision: "Expose agent_browser.highlight and extend the lazy overlay so agents can mark element refs or viewport rectangles, clear marks, and read highlight state from the overview payload."
+  constraints:
+    - "Keep overlay injection lazy so ordinary snapshot and screenshot paths do not pay page-mutation cost."
+    - "Support both snapshot element refs and explicit viewport rects."
+    - "Sanitize model-provided highlight colors before inserting them into page CSS."
+    - "Preserve owned CDP target cleanup for attached benchmark sessions."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tools/src/agent_browser_tool.rs::highlight_schema"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_highlight"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::overlay_script"
+    - "docs/fork-differences.md::Agent browser"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
