@@ -1,5 +1,5 @@
 intent:
-  id: "intent/2026-05-03/browser-kill-on-drop#auto"
+  id: "intent/2026-05-03/browser-kill-on-drop#f75c22318"
   change_type: "fix"
   scope: "agent-browser"
   summary: "Ensure launched browser processes are cleaned up if their child handle is dropped."
