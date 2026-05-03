@@ -1,0 +1,26 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-cdp-transport-module#74fe8a984"
+  change_type: "refactor"
+  scope: "agent-browser"
+  summary: "Keep CDP websocket transport separate from browser tool/session behavior."
+  decision: "Move the compact CDP client and timeout handling into agent_browser_cdp.rs, exposing only connect, call, call_browser, and Obscura session helpers to the main handler."
+  constraints:
+    - "Must not change agent_browser tool names, arguments, or outputs."
+    - "Must preserve Chromium, external-CDP, and Obscura backend behavior."
+    - "Must keep Obscura flattened Target session support working."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser_cdp.rs"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::ensure_obscura_page_session"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::BrowserSession"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo test -p codex-core agent_browser -- --nocapture"
+    - "cargo test -p codex-tools agent_browser"
+    - "cargo check -p codex-core -p codex-tools -p codex-features"
+    - "cargo clippy -p codex-core -p codex-tools -p codex-features --lib --tests -- -A clippy::large_enum_variant -D warnings"
+    - "CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 CODEX_AGENT_BROWSER_OBSCURA_BINARY=/private/tmp/codex-obscura-target/debug/obscura cargo test -p codex-core tools::handlers::agent_browser::tests::obscura_backend_renders_dom_screenshot -- --ignored --exact --nocapture"
+    - "CODEX_AGENT_BROWSER_RUN_CHROME_TESTS=1 CODEX_AGENT_BROWSER_REMOTE_DEBUGGING_URL=http://127.0.0.1:9349 CODEX_AGENT_BROWSER_BENCHMARK_ITERATIONS=5 CODEX_AGENT_BROWSER_BENCHMARK_OUTPUT=/private/tmp/codex-agent-browser-benchmark.json cargo test -p codex-core tools::handlers::agent_browser::tests::headless_benchmark_launches_browser -- --ignored --exact --nocapture"
