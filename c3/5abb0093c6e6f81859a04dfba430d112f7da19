@@ -1,5 +1,5 @@
 intent:
-  id: "intent/2026-05-03/browser-stderr-tail-test#auto"
+  id: "intent/2026-05-03/browser-stderr-tail-test#c35abb009"
   change_type: "test"
   scope: "agent-browser"
   summary: "Cover browser stderr tail trimming on character boundaries."
