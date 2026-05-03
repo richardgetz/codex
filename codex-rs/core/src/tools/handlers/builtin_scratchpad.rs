@@ -912,7 +912,7 @@ fn open_scratchpad_with_default_continuous(
         .and_then(Value::as_bool)
         .is_some();
     if default_continuous && !continuous_enabled_explicit {
-        set_continuous_policy_fields(&mut scratchpad, true);
+        set_continuous_policy_fields(&mut scratchpad, /*enabled*/ true);
     }
     store.write(&scratchpad)?;
     Ok(serde_json::json!({ "scratchpad": scratchpad }))
