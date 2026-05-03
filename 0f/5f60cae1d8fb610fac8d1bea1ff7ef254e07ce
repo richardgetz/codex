@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-snapshot-compact#0f5f60cae"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Remove repeated browser endpoint data from snapshot output and session state."
+  decision: "Keep endpoint reporting on agent_browser.open only, since snapshots do not need to repeat it and the session stored endpoint solely for that output field."
+  constraints:
+    - "Preserve session_id, mode, stealth, elapsed timing, page text, and element refs in snapshots."
+    - "Avoid changing browser behavior or CDP command flow."
+    - "Keep the change small and local to the agent browser handler."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::BrowserSession"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_snapshot"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
