@@ -375,9 +375,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   available, and falls back to Chromium for broader visual-review support.
 - Tools include open/attach, navigate, snapshot, screenshot, click, type, press,
   scroll, selection-overview, highlight, and benchmark. Obscura currently covers
-  headless CDP navigation/evaluation/input/snapshot flows; screenshot and the
-  headful shell remain Chromium-backed until the Rust-native renderer path is
-  added.
+  CDP navigation/evaluation/input/snapshot flows; screenshots use a lightweight
+  DOM snapshot renderer until native compositor screenshots are added. Obscura
+  `mode = "headful"` opens a small local mirror shell driven by the same CDP
+  snapshot path so the Rust-native backend is not limited to invisible sessions.
 - Set `CODEX_AGENT_BROWSER_OBSCURA_BINARY` to point at a custom Obscura binary,
   or use `backend = "chromium"` to force the Chromium launch path.
 - When attaching to an existing CDP endpoint, Codex creates an `about:blank`

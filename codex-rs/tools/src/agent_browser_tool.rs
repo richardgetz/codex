@@ -60,7 +60,7 @@ pub fn create_agent_browser_tool() -> ToolSpec {
         ),
         tool(
             TOOL_SCREENSHOT,
-            "Capture the current viewport as a PNG.",
+            "Capture the current viewport image.",
             screenshot_schema(),
         ),
         tool(
@@ -226,7 +226,9 @@ fn screenshot_schema() -> JsonSchema {
             ),
             (
                 "full_page".to_string(),
-                JsonSchema::boolean(Some("Capture full page instead of viewport.".to_string())),
+                JsonSchema::boolean(Some(
+                    "Capture beyond the viewport when supported.".to_string(),
+                )),
             ),
         ]),
         None,
