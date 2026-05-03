@@ -1,0 +1,32 @@
+intent:
+  id: "intent/2026-05-03/browser-share-leases#a02858172ba4"
+  change_type: "feat"
+  scope: "agent-browser"
+  summary: "Add lightweight leases to live browser share tokens."
+  decision: "Give agent_browser.share tokens a default one-hour lifetime, expose an optional bounded lease_seconds argument, include expiry details in share output, and delete expired share metadata on read or new share creation."
+  constraints:
+    - "Must preserve read_only as the default access mode for receiving agents."
+    - "Must keep Obscura, Chromium, and external-CDP live-session sharing behavior unchanged while a lease is valid."
+    - "Must avoid long-lived stale share tokens in the temp share directory."
+    - "Must keep the implementation small and avoid adding a background daemon or persistent service."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_share"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::read_browser_share"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::cleanup_expired_browser_shares"
+    - "codex-rs/tools/src/agent_browser_tool.rs::share_schema"
+    - "docs/fork-differences.md::Agent browser"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo fmt --all"
+    - "cargo test -p codex-core agent_browser -- --nocapture"
+    - "cargo test -p codex-tools agent_browser"
+    - "cargo check -p codex-core -p codex-tools -p codex-features"
+    - "cargo clippy -p codex-core -p codex-tools -p codex-features --lib --tests -- -A clippy::large_enum_variant -D warnings"
+    - "CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 CODEX_AGENT_BROWSER_OBSCURA_BINARY=/private/tmp/codex-obscura-target/debug/obscura cargo test -p codex-core tools::handlers::agent_browser::tests::obscura_shared_browser_attaches_to_live_target -- --ignored --exact --nocapture"
+    - "HOME=/private/tmp/codex-dotslash-home RUSTUP_HOME=/private/tmp/codex-rustup-home CARGO_HOME=/private/tmp/codex-cargo-home PATH=/private/tmp/codex-dotslash-bin:$PATH ./tools/argument-comment-lint/run-prebuilt-linter.py -p codex-core"
+    - "HOME=/private/tmp/codex-dotslash-home RUSTUP_HOME=/private/tmp/codex-rustup-home CARGO_HOME=/private/tmp/codex-cargo-home PATH=/private/tmp/codex-dotslash-bin:$PATH ./tools/argument-comment-lint/run-prebuilt-linter.py -p codex-tools"
+    - "git diff --check"
