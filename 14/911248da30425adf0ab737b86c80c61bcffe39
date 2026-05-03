@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-init-cdp-trim#14911248d"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Reduce page initialization CDP round trips."
+  decision: "Remove the unused DOM.enable call and defer Network.enable until a user-agent override is actually applied."
+  constraints:
+    - "Keep Page and Runtime enabled for navigation, evaluation, and startup scripts."
+    - "Preserve stealth and explicit user_agent override behavior."
+    - "Do not change any model-visible browser tool schema or output shape."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::initialize_page"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
