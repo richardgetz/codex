@@ -1096,6 +1096,43 @@ fn test_agent_browser_experimental_tool_registers_namespace_handlers() {
 }
 
 #[test]
+fn test_agent_browser_feature_registers_namespace_handlers() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::AgentBrowser);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, handlers) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    let tool_names = namespace_function_names(&tools, AGENT_BROWSER_NAMESPACE);
+    assert_eq!(
+        tool_names,
+        AGENT_BROWSER_TOOL_NAMES
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>()
+    );
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::namespaced(AGENT_BROWSER_NAMESPACE, "open"),
+        kind: ToolHandlerKind::AgentBrowser,
+    }));
+}
+
+#[test]
 fn test_build_specs_mcp_tools_converted() {
     let model_info = model_info();
     let mut features = Features::with_defaults();

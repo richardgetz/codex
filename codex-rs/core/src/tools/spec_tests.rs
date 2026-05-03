@@ -1195,6 +1195,41 @@ async fn agent_browser_experimental_tool_registers_runtime_handler() {
 }
 
 #[tokio::test]
+async fn agent_browser_feature_registers_runtime_handler() {
+    let config = test_config().await;
+    let model_info = construct_model_info_offline("gpt-5.4", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::AgentBrowser);
+    features.enable(Feature::UnifiedExec);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (specs, registry) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    )
+    .build();
+
+    assert!(
+        specs
+            .iter()
+            .any(|spec| spec.name() == AGENT_BROWSER_NAMESPACE)
+    );
+    assert!(registry.has_handler(&ToolName::namespaced(AGENT_BROWSER_NAMESPACE, "open")));
+}
+
+#[tokio::test]
 async fn builtin_scratchpad_replaces_mcp_scratchpad_namespace() {
     let config = test_config().await;
     let model_info = construct_model_info_offline("gpt-5.4", &config);

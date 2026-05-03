@@ -377,12 +377,12 @@ pub fn build_tool_registry_plan(
         plan.register_handler("test_sync_tool", ToolHandlerKind::TestSync);
     }
 
-    if config.has_environment
-        && config
+    let include_agent_browser_tool = config.agent_browser_tool
+        || config
             .experimental_supported_tools
             .iter()
-            .any(|tool| tool == "agent_browser")
-    {
+            .any(|tool| tool == "agent_browser");
+    if config.has_environment && include_agent_browser_tool {
         plan.push_spec(
             create_agent_browser_tool(),
             /*supports_parallel_tool_calls*/ false,
