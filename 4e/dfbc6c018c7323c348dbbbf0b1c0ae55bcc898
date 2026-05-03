@@ -1,0 +1,3 @@
+Intent: reduce small per-character allocations in the Obscura headful mirror HTML path. The visual shell escaping now appends directly into a preallocated String instead of allocating temporary Vec values for escaped characters, preserving output while keeping the built-in browser helper leaner.
+
+Validation: cargo fmt --all; cargo test -p codex-core obscura_dom_renderer_outputs_png -- --nocapture; cargo check -p codex-core; git diff --check.
