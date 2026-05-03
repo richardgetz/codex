@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-03/benchmark-attached-browser#auto"
+  change_type: "feat"
+  scope: "agent-browser"
+  summary: "Allow browser latency benchmarks to attach to an existing CDP endpoint."
+  decision: "Add optional remote_debugging_url to agent_browser.benchmark and pass it through the existing open/attach path before measuring navigation, snapshot, and screenshot latency."
+  constraints:
+    - "Must preserve default benchmark behavior when no remote debugging URL is provided."
+    - "Must make benchmark measurement possible when local browser process launch is blocked by the execution sandbox."
+    - "Must reuse the same attach behavior as agent_browser.open."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tools/src/agent_browser_tool.rs::benchmark_schema"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_benchmark"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
