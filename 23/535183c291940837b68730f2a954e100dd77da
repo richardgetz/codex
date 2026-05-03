@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-05-03/browser-type-clear-events#auto"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Dispatch input/change events when clearing fields before typing."
+  decision: "When agent_browser.type clears an element, emit bubbling input and change events before inserting text so framework-controlled fields observe the cleared state."
+  constraints:
+    - "Must preserve existing typing behavior when clear is false."
+    - "Must support both referenced elements and the active element path."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_type"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
