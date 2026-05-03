@@ -921,7 +921,6 @@ async fn initialize_page(
         )
         .await?;
     }
-    inject_overlay(cdp).await?;
     Ok(())
 }
 
