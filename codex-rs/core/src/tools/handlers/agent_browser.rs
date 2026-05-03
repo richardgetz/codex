@@ -56,6 +56,9 @@ const DEFAULT_LOCALE: &str = "en-US";
 const DEFAULT_TIMEZONE: &str = "America/New_York";
 const CDP_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 const BROWSER_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_VIEWPORT_COORDINATE: f64 = 100_000.0;
+const MAX_SCROLL_DELTA: f64 = 10_000.0;
+const MAX_HIGHLIGHT_SIZE: f64 = 100_000.0;
 
 static BROWSER_MANAGER: OnceLock<Mutex<BrowserManager>> = OnceLock::new();
 static BROWSER_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -237,6 +240,36 @@ fn elapsed_ms(started: Instant) -> f64 {
 
 fn round_ms(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
+}
+
+fn bounded_number(name: &str, value: f64, min: f64, max: f64) -> Result<f64, FunctionCallError> {
+    if !value.is_finite() || value < min || value > max {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "`{name}` must be a finite number from {min} to {max}"
+        )));
+    }
+    Ok(value)
+}
+
+fn required_bounded_number(
+    value: Option<f64>,
+    name: &str,
+    min: f64,
+    max: f64,
+    missing_message: &'static str,
+) -> Result<f64, FunctionCallError> {
+    let value =
+        value.ok_or_else(|| FunctionCallError::RespondToModel(missing_message.to_string()))?;
+    bounded_number(name, value, min, max)
+}
+
+fn positive_bounded_number(name: &str, value: f64, max: f64) -> Result<f64, FunctionCallError> {
+    if !value.is_finite() || value <= 0.0 || value > max {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "`{name}` must be a positive finite number up to {max}"
+        )));
+    }
+    Ok(value)
 }
 
 #[derive(Debug, Serialize)]
@@ -667,20 +700,21 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
             Err(err) => Err(err),
         }
     } else {
-        let x = args.x.ok_or_else(|| {
-            FunctionCallError::RespondToModel(
-                "click requires either `ref` or both `x` and `y`".to_string(),
-            )
-        });
-        let y = args.y.ok_or_else(|| {
-            FunctionCallError::RespondToModel(
-                "click requires either `ref` or both `x` and `y`".to_string(),
-            )
-        });
-        match (x, y) {
-            (Ok(x), Ok(y)) => dispatch_click(&mut session.cdp, x, y).await,
-            (Err(err), _) | (_, Err(err)) => Err(err),
-        }
+        let x = required_bounded_number(
+            args.x,
+            "x",
+            0.0,
+            MAX_VIEWPORT_COORDINATE,
+            "click requires either `ref` or both `x` and `y`",
+        )?;
+        let y = required_bounded_number(
+            args.y,
+            "y",
+            0.0,
+            MAX_VIEWPORT_COORDINATE,
+            "click requires either `ref` or both `x` and `y`",
+        )?;
+        dispatch_click(&mut session.cdp, x, y).await
     };
     let result = result.map(|_| SimpleResult {
         ok: true,
@@ -911,10 +945,20 @@ async fn handle_scroll(args: ScrollArgs) -> Result<SimpleResult, FunctionCallErr
     let started = Instant::now();
     let mut session = take_session(args.session_id).await?;
     let session_id = session.id.clone();
-    let expression = format!(
-        "(() => {{ window.scrollBy({}, {}); return {{ ok: true, x: window.scrollX, y: window.scrollY }}; }})()",
+    let delta_x = bounded_number(
+        "delta_x",
         args.delta_x.unwrap_or(0.0),
-        args.delta_y.unwrap_or(600.0)
+        -MAX_SCROLL_DELTA,
+        MAX_SCROLL_DELTA,
+    )?;
+    let delta_y = bounded_number(
+        "delta_y",
+        args.delta_y.unwrap_or(600.0),
+        -MAX_SCROLL_DELTA,
+        MAX_SCROLL_DELTA,
+    )?;
+    let expression = format!(
+        "(() => {{ window.scrollBy({delta_x}, {delta_y}); return {{ ok: true, x: window.scrollX, y: window.scrollY }}; }})()"
     );
     let result = evaluate_json(&mut session.cdp, &expression)
         .await
@@ -978,6 +1022,20 @@ async fn handle_highlight(args: HighlightArgs) -> Result<Value, FunctionCallErro
                         .to_string(),
                 ));
             };
+            let x = bounded_number(
+                "x",
+                x,
+                -MAX_VIEWPORT_COORDINATE,
+                MAX_VIEWPORT_COORDINATE,
+            )?;
+            let y = bounded_number(
+                "y",
+                y,
+                -MAX_VIEWPORT_COORDINATE,
+                MAX_VIEWPORT_COORDINATE,
+            )?;
+            let width = positive_bounded_number("width", width, MAX_HIGHLIGHT_SIZE)?;
+            let height = positive_bounded_number("height", height, MAX_HIGHLIGHT_SIZE)?;
             payload["rect"] = json!({
                 "x": x,
                 "y": y,
@@ -2032,6 +2090,19 @@ mod tests {
         assert_eq!(arrow_down.windows_virtual_key_code, 40);
 
         assert!(key_descriptor("ctrl+a").is_none());
+    }
+
+    #[test]
+    fn browser_numeric_inputs_are_bounded() {
+        assert_eq!(
+            bounded_number("delta_y", 600.0, -MAX_SCROLL_DELTA, MAX_SCROLL_DELTA)
+                .expect("default scroll delta"),
+            600.0
+        );
+        assert!(bounded_number("delta_y", 20_000.0, -MAX_SCROLL_DELTA, MAX_SCROLL_DELTA).is_err());
+        assert!(bounded_number("x", f64::NAN, 0.0, MAX_VIEWPORT_COORDINATE).is_err());
+        assert!(positive_bounded_number("width", 0.0, MAX_HIGHLIGHT_SIZE).is_err());
+        assert!(positive_bounded_number("width", 120.0, MAX_HIGHLIGHT_SIZE).is_ok());
     }
 
     #[tokio::test]
