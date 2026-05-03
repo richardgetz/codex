@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-attach-create-page#60c664f3f"
+  change_type: "feat"
+  scope: "agent-browser"
+  summary: "Create an about:blank page when attaching to a CDP endpoint with no page targets."
+  decision: "Teach first_page_ws_url to call Chrome's /json/new endpoint after /json/list returns no page websocket so attached browser sessions do not require manual target creation."
+  constraints:
+    - "Preserve the existing fast path when /json/list already returns a page websocket."
+    - "Use PUT /json/new?about:blank because current Chrome rejects the old GET style."
+    - "Keep launch and attach behavior within the small first-party CDP implementation."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::first_page_ws_url"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::create_page_ws_url"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
