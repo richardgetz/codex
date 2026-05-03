@@ -141,8 +141,9 @@ impl BrowserAccessPolicy {
     }
 
     fn validate_open(&self, args: &OpenArgs) -> Result<(), FunctionCallError> {
-        if args.share_id.is_none() {
-            self.validate_browser_process("open")?;
+        self.validate_browser_process("open")?;
+        if let Some(share_id) = args.share_id.as_deref() {
+            self.validate_shared_attach(share_id)?;
         }
         if let Some(remote_debugging_url) = args.remote_debugging_url.as_deref() {
             self.validate_network_endpoint(
@@ -153,6 +154,13 @@ impl BrowserAccessPolicy {
         if let Some(url) = args.url.as_deref() {
             self.validate_page_url(url, "open")?;
         }
+        Ok(())
+    }
+
+    fn validate_shared_attach(&self, share_id: &str) -> Result<(), FunctionCallError> {
+        let share = read_browser_share(share_id)?;
+        self.validate_network_endpoint(&share.endpoint, /*field*/ "share endpoint")?;
+        self.validate_network_endpoint(&share.page_ws_url, /*field*/ "share page_ws_url")?;
         Ok(())
     }
 
@@ -182,7 +190,8 @@ impl BrowserAccessPolicy {
     fn validate_page_url(&self, raw_url: &str, action: &str) -> Result<(), FunctionCallError> {
         let url = parse_browser_url(raw_url, action)?;
         match url.scheme() {
-            "about" | "data" => Ok(()),
+            "about" => Ok(()),
+            "data" => self.validate_network(action),
             "file" => {
                 let path = url.to_file_path().map_err(|_| {
                     FunctionCallError::RespondToModel(format!(
@@ -2975,7 +2984,7 @@ mod tests {
                     "data:text/html;charset=utf-8,ok",
                     /*action*/ "navigate",
                 )
-                .is_ok()
+                .is_err()
         );
         assert!(
             policy
@@ -2987,6 +2996,21 @@ mod tests {
                 )
                 .is_ok()
         );
+
+        let open_shared = OpenArgs {
+            url: None,
+            share_id: Some("bs-policy-test".to_string()),
+            mode: BrowserMode::Headless,
+            stealth: true,
+            backend: BrowserBackend::Auto,
+            viewport_width: None,
+            viewport_height: None,
+            locale: None,
+            timezone: None,
+            user_agent: None,
+            remote_debugging_url: None,
+        };
+        assert!(policy.validate_open(&open_shared).is_err());
     }
 
     #[test]
