@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-attached-benchmark-test#3f713b1d9"
+  change_type: "test"
+  scope: "agent-browser"
+  summary: "Let the ignored browser benchmark attach to an existing CDP endpoint and write JSON results."
+  decision: "Add environment variables for remote_debugging_url, iteration count, and benchmark JSON output so latency runs can use a brokered browser outside the shell launch sandbox."
+  constraints:
+    - "Keep the benchmark ignored by default and gated by CODEX_AGENT_BROWSER_RUN_CHROME_TESTS=1."
+    - "Do not change runtime benchmark tool behavior."
+    - "Keep direct launch coverage available when no remote endpoint is provided."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::headless_benchmark_launches_browser"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
