@@ -1,12 +1,14 @@
 use std::fs;
-use std::io::Cursor;
 use std::path::Path;
 use std::process::Stdio;
 
-use image::DynamicImage;
+use image::ExtendedColorType;
 use image::ImageBuffer;
-use image::ImageFormat;
+use image::ImageEncoder;
 use image::Rgba;
+use image::codecs::png::CompressionType;
+use image::codecs::png::FilterType;
+use image::codecs::png::PngEncoder;
 use serde_json::Value;
 
 use crate::function_tool::FunctionCallError;
@@ -240,15 +242,17 @@ pub(crate) fn render_snapshot_png(
         }
     }
 
-    let mut encoded = Cursor::new(Vec::new());
-    DynamicImage::ImageRgba8(image)
-        .write_to(&mut encoded, ImageFormat::Png)
+    let mut encoded = Vec::new();
+    let encoder =
+        PngEncoder::new_with_quality(&mut encoded, CompressionType::Fast, FilterType::NoFilter);
+    encoder
+        .write_image(image.as_raw(), width, height, ExtendedColorType::Rgba8)
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!(
                 "failed to encode Obscura DOM screenshot: {err}"
             ))
         })?;
-    Ok(encoded.into_inner())
+    Ok(encoded)
 }
 
 fn html_escape(value: &str) -> String {
