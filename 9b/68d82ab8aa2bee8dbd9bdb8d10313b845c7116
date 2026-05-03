@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-cache-http-client#9b68d82ab"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Reuse the browser debugging HTTP client across calls."
+  decision: "Cache the timeout-bound reqwest client in OnceLock so /json/list polling and target create/close calls do not rebuild client state each time."
+  constraints:
+    - "Preserve the 5-second timeout for browser debugging HTTP calls."
+    - "Keep the CDP websocket client separate from HTTP target discovery."
+    - "Avoid changing attach, launch, or cleanup behavior."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::BROWSER_HTTP_CLIENT"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::browser_http_client"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
