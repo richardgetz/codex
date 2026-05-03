@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-optional-string-schema#5b69763d1"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Compact optional string schemas in the agent browser namespace."
+  decision: "Represent optional string inputs as plain optional string properties instead of nullable anyOf unions."
+  constraints:
+    - "Keep all existing argument names and required fields unchanged."
+    - "Do not change runtime serde handling of omitted or null optional strings."
+    - "Preserve the model-visible meaning of session_id, ref, URL, locale, timezone, user_agent, and remote_debugging_url fields."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tools/src/agent_browser_tool.rs::open_schema"
+    - "codex-rs/tools/src/agent_browser_tool.rs::session_schema"
+    - "codex-rs/tools/src/agent_browser_tool.rs::string_param"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
