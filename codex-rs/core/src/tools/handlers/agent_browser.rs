@@ -58,6 +58,7 @@ const DEFAULT_LOCALE: &str = "en-US";
 const DEFAULT_TIMEZONE: &str = "America/New_York";
 const BROWSER_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_SCROLL_DELTA: f64 = 10_000.0;
+const PNG_DATA_URL_PREFIX: &str = "data:image/png;base64,";
 
 static BROWSER_MANAGER: OnceLock<Mutex<BrowserManager>> = OnceLock::new();
 static BROWSER_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -926,7 +927,7 @@ async fn handle_screenshot(args: ScreenshotArgs) -> Result<FunctionToolOutput, F
                             .unwrap_or_else(|_| summary.to_string()),
                     },
                     FunctionCallOutputContentItem::InputImage {
-                        image_url: format!("data:image/png;base64,{data}"),
+                        image_url: png_base64_data_url(data),
                         detail: Some(DEFAULT_IMAGE_DETAIL),
                     },
                 ],
@@ -982,7 +983,7 @@ async fn obscura_snapshot_screenshot(
                 text: serde_json::to_string(&summary).unwrap_or_else(|_| summary.to_string()),
             },
             FunctionCallOutputContentItem::InputImage {
-                image_url: format!("data:image/png;base64,{}", BASE64_STANDARD.encode(png)),
+                image_url: png_data_url(&png),
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ],
@@ -1604,10 +1605,25 @@ fn screenshot_image_sizes(output: &FunctionToolOutput) -> (usize, usize) {
             let FunctionCallOutputContentItem::InputImage { image_url, .. } = item else {
                 return None;
             };
-            let payload = image_url.split_once(";base64,")?.1;
+            let payload = image_url.strip_prefix(PNG_DATA_URL_PREFIX)?;
             Some((base64_decoded_len(payload), payload.len()))
         })
         .unwrap_or_default()
+}
+
+fn png_base64_data_url(encoded_png: &str) -> String {
+    let mut image_url = String::with_capacity(PNG_DATA_URL_PREFIX.len() + encoded_png.len());
+    image_url.push_str(PNG_DATA_URL_PREFIX);
+    image_url.push_str(encoded_png);
+    image_url
+}
+
+fn png_data_url(png: &[u8]) -> String {
+    let encoded_len = png.len().div_ceil(3) * 4;
+    let mut image_url = String::with_capacity(PNG_DATA_URL_PREFIX.len() + encoded_len);
+    image_url.push_str(PNG_DATA_URL_PREFIX);
+    BASE64_STANDARD.encode_string(png, &mut image_url);
+    image_url
 }
 
 fn base64_decoded_len(payload: &str) -> usize {
@@ -3166,6 +3182,16 @@ mod tests {
             assert_eq!(base64_decoded_len(payload), expected_len);
             assert_eq!(base64_decoded_len(payload), decoded_len);
         }
+    }
+
+    #[test]
+    fn png_data_url_helpers_preserve_output() {
+        let png = b"\x89PNG\r\n\x1a\n";
+        let encoded = BASE64_STANDARD.encode(png);
+        let expected = format!("{PNG_DATA_URL_PREFIX}{encoded}");
+
+        assert_eq!(png_base64_data_url(&encoded), expected);
+        assert_eq!(png_data_url(png), expected);
     }
 
     #[test]
