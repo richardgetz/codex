@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-05-03/browser-kill-on-drop#auto"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Ensure launched browser processes are cleaned up if their child handle is dropped."
+  decision: "Enable tokio process kill_on_drop for browser processes launched by agent_browser."
+  constraints:
+    - "Must not affect attached remote debugging sessions, which do not own a child process."
+    - "Must preserve explicit close behavior while improving cancellation cleanup."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::launch_connection"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
