@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-05-02/fork-npm-macos-codesign#064817135a3c"
+  change_type: "ci"
+  scope: "fork-release"
+  summary: "Sign the fork npm macOS Codex binary with a stable code identity."
+  decision: "Reuse the existing macos-code-sign action in the fork release build, add an optional codesign identifier input, and sign/notarize the Apple Silicon codex binary with com.rickgetz.codex before npm artifact staging."
+  constraints:
+    - "Must keep the fork release lane Apple Silicon focused."
+    - "Must preserve existing upstream release action behavior unless a caller passes an explicit codesign identifier."
+    - "Must keep Apple signing secrets limited to stable release jobs and out of npm tarballs."
+    - "Must clean up temporary signing keychains even on setup failures."
+  intent_priority: "must"
+  code_locations:
+    - ".github/actions/macos-code-sign/action.yml"
+    - ".github/workflows/fork-release.yml"
+    - "docs/fork-release.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
