@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-lazy-overlay#71680fe91"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Defer collaborative overlay injection until selection_overview is requested."
+  decision: "Remove default overlay injection from page initialization so ordinary open/navigate/snapshot sessions avoid two CDP calls and do not mutate pages with overlay DOM unless the collaboration tool is used."
+  constraints:
+    - "Keep selection_overview able to install and read the overlay on demand."
+    - "Preserve snapshot selection text without requiring the overlay."
+    - "Avoid broad refactors in the browser handler."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::initialize_page"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_selection"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
