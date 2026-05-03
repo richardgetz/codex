@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 use std::net::TcpListener;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::OnceLock;
@@ -1067,6 +1068,7 @@ async fn launch_connection(
     let browser_home = profile_dir.path().join("home");
     let browser_config = profile_dir.path().join("config");
     let browser_cache = profile_dir.path().join("cache");
+    let browser_stderr_path = profile_dir.path().join("browser-stderr.log");
     fs::create_dir_all(&browser_home).map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to create browser home dir: {err}"))
     })?;
@@ -1075,6 +1077,9 @@ async fn launch_connection(
     })?;
     fs::create_dir_all(&browser_cache).map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to create browser cache dir: {err}"))
+    })?;
+    let browser_stderr = fs::File::create(&browser_stderr_path).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to create browser stderr log: {err}"))
     })?;
 
     let mut command = Command::new(&binary);
@@ -1104,7 +1109,7 @@ async fn launch_connection(
         .arg("about:blank")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::from(browser_stderr));
 
     if matches!(mode, BrowserMode::Headless) {
         command.arg("--headless=new");
@@ -1128,13 +1133,15 @@ async fn launch_connection(
         ))
     })?;
 
-    let page_ws_url = match wait_for_first_page_ws_url(&endpoint, &mut process).await {
-        Ok(page_ws_url) => page_ws_url,
-        Err(err) => {
-            let _ = process.kill().await;
-            return Err(err);
-        }
-    };
+    let page_ws_url =
+        match wait_for_first_page_ws_url(&endpoint, &mut process, Some(&browser_stderr_path)).await
+        {
+            Ok(page_ws_url) => page_ws_url,
+            Err(err) => {
+                let _ = process.kill().await;
+                return Err(err);
+            }
+        };
     Ok(LaunchConnection {
         endpoint,
         page_ws_url,
@@ -1153,6 +1160,7 @@ async fn kill_launched_browser(process: &mut Option<Child>) {
 async fn wait_for_first_page_ws_url(
     endpoint: &str,
     process: &mut Child,
+    stderr_path: Option<&Path>,
 ) -> Result<String, FunctionCallError> {
     let mut last_error = None;
     for _ in 0..80 {
@@ -1165,17 +1173,39 @@ async fn wait_for_first_page_ws_url(
                 "failed to inspect browser process while waiting for `{endpoint}`: {err}"
             ))
         })? {
+            let stderr = stderr_path
+                .map(browser_stderr_tail)
+                .filter(|stderr| !stderr.is_empty())
+                .map(|stderr| format!("; stderr: {stderr}"))
+                .unwrap_or_default();
             return Err(FunctionCallError::RespondToModel(format!(
-                "browser process exited before exposing `{endpoint}` with status {status}"
+                "browser process exited before exposing `{endpoint}` with status {status}{stderr}"
             )));
         }
         sleep(Duration::from_millis(100)).await;
     }
+    let stderr = stderr_path
+        .map(browser_stderr_tail)
+        .filter(|stderr| !stderr.is_empty())
+        .map(|stderr| format!("; stderr: {stderr}"))
+        .unwrap_or_default();
     Err(last_error.unwrap_or_else(|| {
         FunctionCallError::RespondToModel(format!(
-            "browser did not expose a debuggable page at `{endpoint}`"
+            "browser did not expose a debuggable page at `{endpoint}`{stderr}"
         ))
     }))
+}
+
+fn browser_stderr_tail(path: &Path) -> String {
+    let Ok(stderr) = fs::read_to_string(path) else {
+        return String::new();
+    };
+    let stderr = stderr.trim();
+    if stderr.len() <= 4_000 {
+        return stderr.to_string();
+    }
+    let start = stderr.len().saturating_sub(4_000);
+    format!("...{}", &stderr[start..])
 }
 
 async fn first_page_ws_url(endpoint: &str) -> Result<String, FunctionCallError> {
