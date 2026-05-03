@@ -431,7 +431,7 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
     let mut cdp = match CdpClient::connect(&page_ws_url).await {
         Ok(cdp) => cdp,
         Err(err) => {
-            kill_launched_browser(&mut launch.process).await;
+            cleanup_launch(&mut launch).await;
             return Err(err);
         }
     };
@@ -446,14 +446,14 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
     )
     .await
     {
-        kill_launched_browser(&mut launch.process).await;
+        cleanup_launch(&mut launch).await;
         return Err(err);
     }
 
     if let Some(url) = args.url.as_deref()
         && let Err(err) = navigate_to(&mut cdp, url).await
     {
-        kill_launched_browser(&mut launch.process).await;
+        cleanup_launch(&mut launch).await;
         return Err(err);
     }
 
@@ -1370,6 +1370,14 @@ async fn launch_connection(
 async fn kill_launched_browser(process: &mut Option<Child>) {
     if let Some(mut child) = process.take() {
         let _ = child.kill().await;
+    }
+}
+
+async fn cleanup_launch(launch: &mut LaunchConnection) {
+    let had_process = launch.process.is_some();
+    kill_launched_browser(&mut launch.process).await;
+    if !had_process && let Some(close_url) = launch.owned_page_close_url.take() {
+        let _ = browser_http_client().get(close_url).send().await;
     }
 }
 
