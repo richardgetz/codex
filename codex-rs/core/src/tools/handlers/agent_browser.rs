@@ -2535,7 +2535,7 @@ fn find_obscura_binary() -> Result<PathBuf, FunctionCallError> {
 
     which::which("obscura").map_err(|_| {
         FunctionCallError::RespondToModel(
-            "no Obscura browser binary found; bundle `obscura` next to the Codex executable, set CODEX_AGENT_BROWSER_OBSCURA_BINARY, or open with backend=chromium".to_string(),
+            "no Obscura browser binary found; bundle `obscura` next to the Codex executable or in codex-resources, set CODEX_AGENT_BROWSER_OBSCURA_BINARY, or open with backend=chromium".to_string(),
         )
     })
 }
@@ -2556,18 +2556,39 @@ fn candidate_obscura_binaries() -> Vec<PathBuf> {
 fn obscura_binary_candidates_for_exe(exe: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(dir) = exe.parent() {
-        push_unique_path(&mut candidates, dir.join("obscura"));
+        let binary_name = obscura_executable_name();
+        push_unique_path(&mut candidates, dir.join(binary_name));
+        push_unique_path(
+            &mut candidates,
+            dir.join("codex-resources").join(binary_name),
+        );
+        if dir.file_name().and_then(|value| value.to_str()) == Some("codex")
+            && let Some(parent_dir) = dir.parent()
+        {
+            push_unique_path(
+                &mut candidates,
+                parent_dir.join("browser").join(binary_name),
+            );
+        }
         #[cfg(target_os = "macos")]
         if dir.file_name().and_then(|value| value.to_str()) == Some("MacOS")
             && let Some(contents_dir) = dir.parent()
         {
             push_unique_path(
                 &mut candidates,
-                contents_dir.join("Resources").join("obscura"),
+                contents_dir.join("Resources").join(binary_name),
             );
         }
     }
     candidates
+}
+
+fn obscura_executable_name() -> &'static str {
+    if cfg!(windows) {
+        "obscura.exe"
+    } else {
+        "obscura"
+    }
 }
 
 fn push_unique_path(candidates: &mut Vec<PathBuf>, path: PathBuf) {
@@ -3131,11 +3152,24 @@ mod tests {
                 .iter()
                 .any(|path| path.ends_with("Contents/MacOS/obscura"))
         );
+        assert!(
+            candidates
+                .iter()
+                .any(|path| path.ends_with("Contents/MacOS/codex-resources/obscura"))
+        );
         #[cfg(target_os = "macos")]
         assert!(
             candidates
                 .iter()
                 .any(|path| path.ends_with("Contents/Resources/obscura"))
+        );
+
+        let npm_candidates =
+            obscura_binary_candidates_for_exe(Path::new("/npm/vendor/target/codex/codex"));
+        assert!(
+            npm_candidates
+                .iter()
+                .any(|path| path.ends_with("vendor/target/browser/obscura"))
         );
     }
 

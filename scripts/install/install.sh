@@ -594,6 +594,10 @@ install_release() {
   mkdir -p "$stage_release/codex-resources"
   cp "$vendor_root/codex/codex" "$stage_release/codex"
   cp "$vendor_root/path/rg" "$stage_release/codex-resources/rg"
+  if [ -x "$vendor_root/browser/obscura" ]; then
+    cp "$vendor_root/browser/obscura" "$stage_release/codex-resources/obscura"
+    chmod 0755 "$stage_release/codex-resources/obscura"
+  fi
   chmod 0755 "$stage_release/codex"
   chmod 0755 "$stage_release/codex-resources/rg"
 

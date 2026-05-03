@@ -91,6 +91,8 @@ COMPONENT_DEST_DIR: dict[str, str] = {
     "rg": "path",
 }
 
+OPTIONAL_NATIVE_RESOURCE_DIRS: tuple[str, ...] = ("browser",)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build or stage the Codex CLI npm package.")
@@ -430,6 +432,15 @@ def copy_native_binaries(
             if dest_component_dir.exists():
                 shutil.rmtree(dest_component_dir)
             shutil.copytree(src_component_dir, dest_component_dir)
+
+        for resource_dir_name in OPTIONAL_NATIVE_RESOURCE_DIRS:
+            src_resource_dir = target_dir / resource_dir_name
+            if not src_resource_dir.exists():
+                continue
+            dest_resource_dir = dest_target_dir / resource_dir_name
+            if dest_resource_dir.exists():
+                shutil.rmtree(dest_resource_dir)
+            shutil.copytree(src_resource_dir, dest_resource_dir)
 
     if target_filter is not None:
         missing_targets = sorted(target_filter - copied_targets)

@@ -389,8 +389,11 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   local mirror shell driven by the same CDP snapshot path so the Rust-native
   backend is not limited to invisible sessions.
 - Set `CODEX_AGENT_BROWSER_OBSCURA_BINARY` to point at a custom Obscura binary,
-  bundle `obscura` next to the Codex executable, or on macOS bundle it in
-  `Codex.app/Contents/Resources/obscura`. This keeps the Codex Rust crates lean
+  bundle `obscura` next to the Codex executable, bundle it under
+  `codex-resources/obscura` in standalone installs, or on macOS bundle it in
+  `Codex.app/Contents/Resources/obscura`. The npm staging and standalone
+  installers preserve an optional `vendor/<target>/browser/obscura` resource as
+  `codex-resources/obscura` when present. This keeps the Codex Rust crates lean
   while still letting app distributions ship Obscura as a first-party resource.
   Use `backend = "chromium"` to force the Chromium launch path.
 - When attaching to an existing CDP endpoint, Codex creates an `about:blank`
