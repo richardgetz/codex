@@ -7,6 +7,8 @@ use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -44,6 +46,7 @@ const TOOL_PRESS: &str = "press";
 const TOOL_SCROLL: &str = "scroll";
 const TOOL_SELECTION: &str = "selection_overview";
 const TOOL_HIGHLIGHT: &str = "highlight";
+const TOOL_SHARE: &str = "share";
 const TOOL_BENCHMARK: &str = "benchmark";
 
 const DEFAULT_VIEWPORT_WIDTH: u32 = 1365;
@@ -94,6 +97,7 @@ impl ToolHandler for AgentBrowserHandler {
             TOOL_SCROLL => text_output(handle_scroll(parse_arguments(&arguments)?).await?),
             TOOL_SELECTION => text_output(handle_selection(parse_arguments(&arguments)?).await?),
             TOOL_HIGHLIGHT => text_output(handle_highlight(parse_arguments(&arguments)?).await?),
+            TOOL_SHARE => text_output(handle_share(parse_arguments(&arguments)?).await?),
             TOOL_BENCHMARK => text_output(handle_benchmark(parse_arguments(&arguments)?).await?),
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unknown agent_browser tool `{other}`"
@@ -128,7 +132,7 @@ enum BrowserBackend {
     Chromium,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum BrowserEngine {
     Chromium,
@@ -139,6 +143,7 @@ enum BrowserEngine {
 #[derive(Debug, Deserialize)]
 struct OpenArgs {
     url: Option<String>,
+    share_id: Option<String>,
     #[serde(default)]
     mode: BrowserMode,
     #[serde(default = "default_true")]
@@ -226,6 +231,21 @@ struct HighlightArgs {
     label: Option<String>,
     color: Option<String>,
     clear: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ShareAccess {
+    #[default]
+    ReadOnly,
+    ReadWrite,
+}
+
+#[derive(Debug, Deserialize)]
+struct ShareArgs {
+    session_id: Option<String>,
+    #[serde(default)]
+    access: ShareAccess,
 }
 
 #[derive(Debug, Deserialize)]
@@ -322,15 +342,34 @@ struct SimpleResult {
 }
 
 #[derive(Debug, Serialize)]
+struct ShareResult {
+    ok: bool,
+    session_id: String,
+    share_id: String,
+    access: ShareAccess,
+    backend: BrowserEngine,
+    mode: &'static str,
+    endpoint: String,
+    remote_debugging_url: String,
+    share_file: String,
+    url: String,
+    notes: Vec<String>,
+    elapsed_ms: f64,
+}
+
+#[derive(Debug, Serialize)]
 struct BenchmarkResult {
     mode: &'static str,
     backend: BrowserEngine,
     stealth: bool,
+    target_url: String,
     iterations: usize,
     launch_ms: f64,
     navigate_ms: f64,
     snapshot_ms: Vec<f64>,
     screenshot_ms: Vec<f64>,
+    screenshot_png_bytes: Vec<usize>,
+    screenshot_base64_chars: Vec<usize>,
     totals: BenchmarkTotals,
 }
 
@@ -338,6 +377,8 @@ struct BenchmarkResult {
 struct BenchmarkTotals {
     snapshot_avg_ms: f64,
     screenshot_avg_ms: f64,
+    screenshot_png_avg_bytes: f64,
+    screenshot_base64_avg_chars: f64,
 }
 
 struct BrowserManager {
@@ -378,12 +419,31 @@ struct BrowserSession {
     stealth: bool,
     viewport_width: u32,
     viewport_height: u32,
+    endpoint: String,
+    page_ws_url: String,
+    target_id: Option<String>,
+    access: ShareAccess,
     cdp: CdpClient,
     process: Option<Child>,
     owned_page_close_url: Option<String>,
     _profile_dir: Option<TempDir>,
     visual_shell_path: Option<PathBuf>,
     overlay_script_registered: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct BrowserShare {
+    share_id: String,
+    access: ShareAccess,
+    engine: BrowserEngine,
+    mode: String,
+    endpoint: String,
+    page_ws_url: String,
+    target_id: Option<String>,
+    viewport_width: u32,
+    viewport_height: u32,
+    stealth: bool,
+    created_at_unix_ms: u128,
 }
 
 struct PageInitOptions<'a> {
@@ -435,11 +495,11 @@ async fn put_session(session: BrowserSession) {
 async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
     let started = Instant::now();
     let session_id = format!("br-{}", Uuid::new_v4().simple());
-    let viewport_width = args
+    let requested_viewport_width = args
         .viewport_width
         .unwrap_or(DEFAULT_VIEWPORT_WIDTH)
         .clamp(320, 7680);
-    let viewport_height = args
+    let requested_viewport_height = args
         .viewport_height
         .unwrap_or(DEFAULT_VIEWPORT_HEIGHT)
         .clamp(240, 4320);
@@ -448,15 +508,24 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
         .timezone
         .unwrap_or_else(|| DEFAULT_TIMEZONE.to_string());
 
-    let mut launch = if let Some(remote) = args.remote_debugging_url.as_deref() {
+    if args.share_id.is_some() && args.remote_debugging_url.is_some() {
+        return Err(FunctionCallError::RespondToModel(
+            "`share_id` and `remote_debugging_url` cannot both be set".to_string(),
+        ));
+    }
+
+    let shared_attach = args.share_id.is_some();
+    let mut launch = if let Some(share_id) = args.share_id.as_deref() {
+        attach_shared_connection(share_id).await?
+    } else if let Some(remote) = args.remote_debugging_url.as_deref() {
         attach_connection(remote).await?
     } else {
         launch_connection(
             &args.backend,
             &args.mode,
             args.stealth,
-            viewport_width,
-            viewport_height,
+            requested_viewport_width,
+            requested_viewport_height,
             &locale,
         )
         .await?
@@ -465,6 +534,19 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
     let endpoint = launch.endpoint.clone();
     let page_ws_url = launch.page_ws_url.clone();
     let mut notes = launch.notes.clone();
+    let session_access = launch.access;
+    let stealth = launch.stealth.unwrap_or(args.stealth);
+    let viewport_width = launch.viewport_width.unwrap_or(requested_viewport_width);
+    let viewport_height = launch.viewport_height.unwrap_or(requested_viewport_height);
+    let session_mode = launch.mode.clone().unwrap_or_else(|| args.mode.clone());
+    let output_mode = mode_name(&session_mode);
+
+    if args.url.is_some() && session_access == ShareAccess::ReadOnly {
+        cleanup_launch(&mut launch).await;
+        return Err(FunctionCallError::RespondToModel(
+            "`url` cannot be used when opening a read_only shared browser session".to_string(),
+        ));
+    }
 
     let mut cdp = match CdpClient::connect(&page_ws_url).await {
         Ok(cdp) => cdp,
@@ -473,19 +555,26 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
             return Err(err);
         }
     };
-    if let Err(err) = initialize_page(
-        &mut cdp,
-        PageInitOptions {
-            engine: launch.engine,
-            stealth: args.stealth,
-            viewport_width,
-            viewport_height,
-            locale: &locale,
-            timezone: &timezone,
-            user_agent: args.user_agent.as_deref(),
-        },
-    )
-    .await
+    if let Some(target_id) = launch.target_id.as_deref()
+        && let Err(err) = attach_obscura_target(&mut cdp, target_id).await
+    {
+        cleanup_launch(&mut launch).await;
+        return Err(err);
+    }
+    if !(shared_attach && session_access == ShareAccess::ReadOnly)
+        && let Err(err) = initialize_page(
+            &mut cdp,
+            PageInitOptions {
+                engine: launch.engine,
+                stealth,
+                viewport_width,
+                viewport_height,
+                locale: &locale,
+                timezone: &timezone,
+                user_agent: args.user_agent.as_deref(),
+            },
+        )
+        .await
     {
         cleanup_launch(&mut launch).await;
         return Err(err);
@@ -500,7 +589,7 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
 
     let url = page_url(&mut cdp).await.unwrap_or_default();
     let visual_shell_path = if launch.engine == BrowserEngine::Obscura
-        && matches!(args.mode, BrowserMode::Headful)
+        && matches!(session_mode, BrowserMode::Headful)
     {
         match launch.profile_dir.as_ref() {
             Some(profile_dir) => {
@@ -528,11 +617,15 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
     };
     let session = BrowserSession {
         id: session_id.clone(),
-        mode: args.mode.clone(),
+        mode: session_mode,
         engine: launch.engine,
-        stealth: args.stealth,
+        stealth,
         viewport_width,
         viewport_height,
+        endpoint: endpoint.clone(),
+        page_ws_url,
+        target_id: cdp.target_id().map(str::to_string),
+        access: session_access,
         cdp,
         process: launch.process.take(),
         owned_page_close_url: launch.owned_page_close_url.take(),
@@ -547,9 +640,9 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
 
     Ok(OpenResult {
         session_id,
-        mode: mode_name(&args.mode),
+        mode: output_mode,
         backend: launch.engine,
-        stealth: args.stealth,
+        stealth,
         endpoint: endpoint.clone(),
         url,
         launch_ms: elapsed_ms(started),
@@ -590,6 +683,10 @@ async fn handle_navigate(args: NavigateArgs) -> Result<SimpleResult, FunctionCal
     let started = Instant::now();
     let mut session = take_session(args.session_id).await?;
     let session_id = session.id.clone();
+    if let Err(err) = ensure_write_access(&session, TOOL_NAVIGATE) {
+        put_session(session).await;
+        return Err(err);
+    }
     let result = match navigate_to(&mut session.cdp, &args.url).await {
         Ok(()) => {
             if let Some(path) = session.visual_shell_path.clone() {
@@ -739,6 +836,10 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
     let started = Instant::now();
     let mut session = take_session(args.session_id).await?;
     let session_id = session.id.clone();
+    if let Err(err) = ensure_write_access(&session, TOOL_CLICK) {
+        put_session(session).await;
+        return Err(err);
+    }
 
     let result = if let Some(element_ref) = args.element_ref.as_deref() {
         let expression = format!(
@@ -830,6 +931,10 @@ async fn handle_type(args: TypeArgs) -> Result<SimpleResult, FunctionCallError> 
     let started = Instant::now();
     let mut session = take_session(args.session_id).await?;
     let session_id = session.id.clone();
+    if let Err(err) = ensure_write_access(&session, TOOL_TYPE) {
+        put_session(session).await;
+        return Err(err);
+    }
     let mut result = Ok(());
     if let Some(element_ref) = args.element_ref.as_deref()
         && result.is_ok()
@@ -911,6 +1016,10 @@ async fn handle_press(args: PressArgs) -> Result<SimpleResult, FunctionCallError
     let started = Instant::now();
     let mut session = take_session(args.session_id).await?;
     let session_id = session.id.clone();
+    if let Err(err) = ensure_write_access(&session, TOOL_PRESS) {
+        put_session(session).await;
+        return Err(err);
+    }
     let result = dispatch_key(&mut session.cdp, &args.key)
         .await
         .map(|_| SimpleResult {
@@ -1031,6 +1140,10 @@ async fn handle_scroll(args: ScrollArgs) -> Result<SimpleResult, FunctionCallErr
     let started = Instant::now();
     let mut session = take_session(args.session_id).await?;
     let session_id = session.id.clone();
+    if let Err(err) = ensure_write_access(&session, TOOL_SCROLL) {
+        put_session(session).await;
+        return Err(err);
+    }
     let delta_x = bounded_number(
         "delta_x",
         args.delta_x.unwrap_or(0.0),
@@ -1063,6 +1176,10 @@ async fn handle_selection(args: SelectionArgs) -> Result<Value, FunctionCallErro
     let mut session = take_session(args.session_id).await?;
     let session_id = session.id.clone();
     let overlay_result = if args.enable_overlay.unwrap_or(true) {
+        if let Err(err) = ensure_write_access(&session, TOOL_SELECTION) {
+            put_session(session).await;
+            return Err(err);
+        }
         ensure_overlay(&mut session).await
     } else {
         Ok(())
@@ -1088,6 +1205,10 @@ async fn handle_highlight(args: HighlightArgs) -> Result<Value, FunctionCallErro
     let started = Instant::now();
     let mut session = take_session(args.session_id).await?;
     let session_id = session.id.clone();
+    if let Err(err) = ensure_write_access(&session, TOOL_HIGHLIGHT) {
+        put_session(session).await;
+        return Err(err);
+    }
     let result = async {
         ensure_overlay(&mut session).await?;
         let clear = args.clear.unwrap_or(false);
@@ -1160,11 +1281,59 @@ async fn handle_highlight(args: HighlightArgs) -> Result<Value, FunctionCallErro
     result
 }
 
+async fn handle_share(args: ShareArgs) -> Result<ShareResult, FunctionCallError> {
+    let started = Instant::now();
+    let mut session = take_session(args.session_id).await?;
+    let session_id = session.id.clone();
+    let share_id = format!("bs-{}", Uuid::new_v4().simple());
+    let url = page_url(&mut session.cdp).await.unwrap_or_default();
+    let share = BrowserShare {
+        share_id: share_id.clone(),
+        access: args.access,
+        engine: session.engine,
+        mode: mode_name(&session.mode).to_string(),
+        endpoint: session.endpoint.clone(),
+        page_ws_url: session.page_ws_url.clone(),
+        target_id: session.target_id.clone(),
+        viewport_width: session.viewport_width,
+        viewport_height: session.viewport_height,
+        stealth: session.stealth,
+        created_at_unix_ms: unix_ms_now(),
+    };
+    let share_file = write_browser_share(&share)?;
+    let result = ShareResult {
+        ok: true,
+        session_id,
+        share_id,
+        access: args.access,
+        backend: session.engine,
+        mode: mode_name(&session.mode),
+        endpoint: session.endpoint.clone(),
+        remote_debugging_url: session.page_ws_url.clone(),
+        share_file: share_file.display().to_string(),
+        url,
+        notes: vec![
+            "pass share_id to agent_browser.open from another agent to attach to this live page"
+                .to_string(),
+            if args.access == ShareAccess::ReadOnly {
+                "read_only shares allow snapshot and screenshot, but block navigation and input"
+                    .to_string()
+            } else {
+                "read_write shares allow the receiving agent to navigate and interact".to_string()
+            },
+        ],
+        elapsed_ms: elapsed_ms(started),
+    };
+    put_session(session).await;
+    Ok(result)
+}
+
 async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, FunctionCallError> {
     let iterations = args.iterations.unwrap_or(3).clamp(1, 20);
     let open_started = Instant::now();
     let open = OpenArgs {
         url: None,
+        share_id: None,
         mode: args.mode.clone(),
         backend: args.backend.clone(),
         stealth: args.stealth,
@@ -1179,15 +1348,18 @@ async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, Functi
     let launch_ms = elapsed_ms(open_started);
     let session_id = opened.session_id.clone();
     let result = async {
+        let target_url = args.url.clone().unwrap_or_else(benchmark_url);
         let navigate_started = Instant::now();
         handle_navigate(NavigateArgs {
             session_id: Some(session_id.clone()),
-            url: args.url.clone().unwrap_or_else(benchmark_url),
+            url: target_url.clone(),
         })
         .await?;
         let navigate_ms = elapsed_ms(navigate_started);
         let mut snapshot_ms = Vec::with_capacity(iterations);
         let mut screenshot_ms = Vec::with_capacity(iterations);
+        let mut screenshot_png_bytes = Vec::with_capacity(iterations);
+        let mut screenshot_base64_chars = Vec::with_capacity(iterations);
 
         for _ in 0..iterations {
             let started = Instant::now();
@@ -1200,27 +1372,35 @@ async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, Functi
             snapshot_ms.push(elapsed_ms(started));
 
             let started = Instant::now();
-            let _ = handle_screenshot(ScreenshotArgs {
+            let screenshot = handle_screenshot(ScreenshotArgs {
                 session_id: Some(session_id.clone()),
                 full_page: Some(false),
             })
             .await?;
             screenshot_ms.push(elapsed_ms(started));
+            let (png_bytes, base64_chars) = screenshot_image_sizes(&screenshot);
+            screenshot_png_bytes.push(png_bytes);
+            screenshot_base64_chars.push(base64_chars);
         }
 
         Ok(BenchmarkResult {
             mode: mode_name(&args.mode),
             backend: opened.backend,
             stealth: args.stealth,
+            target_url,
             iterations,
             launch_ms,
             navigate_ms,
             totals: BenchmarkTotals {
                 snapshot_avg_ms: average_ms(&snapshot_ms),
                 screenshot_avg_ms: average_ms(&screenshot_ms),
+                screenshot_png_avg_bytes: average_usize(&screenshot_png_bytes),
+                screenshot_base64_avg_chars: average_usize(&screenshot_base64_chars),
             },
             snapshot_ms,
             screenshot_ms,
+            screenshot_png_bytes,
+            screenshot_base64_chars,
         })
     }
     .await;
@@ -1237,6 +1417,102 @@ fn average_ms(values: &[f64]) -> f64 {
         return 0.0;
     }
     round_ms(values.iter().sum::<f64>() / values.len() as f64)
+}
+
+fn average_usize(values: &[usize]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    round_ms(values.iter().sum::<usize>() as f64 / values.len() as f64)
+}
+
+fn screenshot_image_sizes(output: &FunctionToolOutput) -> (usize, usize) {
+    output
+        .body
+        .iter()
+        .find_map(|item| {
+            let FunctionCallOutputContentItem::InputImage { image_url, .. } = item else {
+                return None;
+            };
+            let payload = image_url.split_once(";base64,")?.1;
+            let png_bytes = BASE64_STANDARD
+                .decode(payload.as_bytes())
+                .map(|bytes| bytes.len())
+                .unwrap_or_default();
+            Some((png_bytes, payload.len()))
+        })
+        .unwrap_or_default()
+}
+
+fn ensure_write_access(session: &BrowserSession, action: &str) -> Result<(), FunctionCallError> {
+    if session.access == ShareAccess::ReadOnly {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "agent_browser session `{}` is a read_only shared session; `{action}` requires a read_write share",
+            session.id
+        )));
+    }
+    Ok(())
+}
+
+fn unix_ms_now() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
+fn browser_share_dir() -> PathBuf {
+    std::env::temp_dir().join("codex-agent-browser-shares")
+}
+
+fn browser_share_path(share_id: &str) -> Result<PathBuf, FunctionCallError> {
+    if share_id.is_empty()
+        || !share_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err(FunctionCallError::RespondToModel(
+            "`share_id` must contain only letters, numbers, '-' or '_'".to_string(),
+        ));
+    }
+    Ok(browser_share_dir().join(format!("{share_id}.json")))
+}
+
+fn write_browser_share(share: &BrowserShare) -> Result<PathBuf, FunctionCallError> {
+    let dir = browser_share_dir();
+    fs::create_dir_all(&dir).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to create browser share directory `{}`: {err}",
+            dir.display()
+        ))
+    })?;
+    let path = browser_share_path(&share.share_id)?;
+    let json = serde_json::to_vec(share).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to serialize browser share: {err}"))
+    })?;
+    fs::write(&path, json).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to write browser share `{}`: {err}",
+            path.display()
+        ))
+    })?;
+    Ok(path)
+}
+
+fn read_browser_share(share_id: &str) -> Result<BrowserShare, FunctionCallError> {
+    let path = browser_share_path(share_id)?;
+    let json = fs::read(&path).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to read browser share `{}`: {err}",
+            path.display()
+        ))
+    })?;
+    serde_json::from_slice(&json).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "browser share `{}` was invalid: {err}",
+            path.display()
+        ))
+    })
 }
 
 async fn ensure_obscura_page_session(cdp: &mut CdpClient) -> Result<(), FunctionCallError> {
@@ -1270,6 +1546,33 @@ async fn ensure_obscura_page_session(cdp: &mut CdpClient) -> Result<(), Function
             )
         })?;
     cdp.set_session_id(session_id.to_string());
+    cdp.set_target_id(target_id.to_string());
+    Ok(())
+}
+
+async fn attach_obscura_target(
+    cdp: &mut CdpClient,
+    target_id: &str,
+) -> Result<(), FunctionCallError> {
+    if cdp.has_session() {
+        return Ok(());
+    }
+    let attached = cdp
+        .call_browser(
+            "Target.attachToTarget",
+            json!({ "targetId": target_id, "flatten": true }),
+        )
+        .await?;
+    let session_id = attached
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "shared Obscura Target.attachToTarget did not return sessionId".to_string(),
+            )
+        })?;
+    cdp.set_session_id(session_id.to_string());
+    cdp.set_target_id(target_id.to_string());
     Ok(())
 }
 
@@ -1495,6 +1798,12 @@ async fn evaluate_json(cdp: &mut CdpClient, expression: &str) -> Result<Value, F
 
 struct LaunchConnection {
     engine: BrowserEngine,
+    mode: Option<BrowserMode>,
+    access: ShareAccess,
+    stealth: Option<bool>,
+    viewport_width: Option<u32>,
+    viewport_height: Option<u32>,
+    target_id: Option<String>,
     endpoint: String,
     page_ws_url: String,
     process: Option<Child>,
@@ -1507,6 +1816,12 @@ async fn attach_connection(remote: &str) -> Result<LaunchConnection, FunctionCal
     if remote.starts_with("ws://") || remote.starts_with("wss://") {
         return Ok(LaunchConnection {
             engine: BrowserEngine::ExternalCdp,
+            mode: None,
+            access: ShareAccess::ReadWrite,
+            stealth: None,
+            viewport_width: None,
+            viewport_height: None,
+            target_id: None,
             endpoint: remote.to_string(),
             page_ws_url: remote.to_string(),
             process: None,
@@ -1520,12 +1835,37 @@ async fn attach_connection(remote: &str) -> Result<LaunchConnection, FunctionCal
     let page = first_page(&endpoint).await?;
     Ok(LaunchConnection {
         engine: BrowserEngine::ExternalCdp,
+        mode: None,
+        access: ShareAccess::ReadWrite,
+        stealth: None,
+        viewport_width: None,
+        viewport_height: None,
+        target_id: None,
         endpoint,
         page_ws_url: page.ws_url,
         process: None,
         profile_dir: None,
         owned_page_close_url: page.owned_close_url,
         notes: vec!["attached to existing remote debugging endpoint".to_string()],
+    })
+}
+
+async fn attach_shared_connection(share_id: &str) -> Result<LaunchConnection, FunctionCallError> {
+    let share = read_browser_share(share_id)?;
+    Ok(LaunchConnection {
+        engine: share.engine,
+        mode: Some(browser_mode_from_name(&share.mode)?),
+        access: share.access,
+        stealth: Some(share.stealth),
+        viewport_width: Some(share.viewport_width),
+        viewport_height: Some(share.viewport_height),
+        target_id: share.target_id,
+        endpoint: share.endpoint,
+        page_ws_url: share.page_ws_url,
+        process: None,
+        profile_dir: None,
+        owned_page_close_url: None,
+        notes: vec![format!("attached to shared browser session `{share_id}`")],
     })
 }
 
@@ -1608,6 +1948,12 @@ async fn launch_obscura_connection(
     }
     Ok(LaunchConnection {
         engine: BrowserEngine::Obscura,
+        mode: None,
+        access: ShareAccess::ReadWrite,
+        stealth: None,
+        viewport_width: None,
+        viewport_height: None,
+        target_id: None,
         endpoint,
         page_ws_url: page.ws_url,
         process: Some(process),
@@ -1714,6 +2060,12 @@ async fn launch_chromium_connection(
     };
     Ok(LaunchConnection {
         engine: BrowserEngine::Chromium,
+        mode: None,
+        access: ShareAccess::ReadWrite,
+        stealth: None,
+        viewport_width: None,
+        viewport_height: None,
+        target_id: None,
         endpoint,
         page_ws_url: page.ws_url,
         process: Some(process),
@@ -1999,6 +2351,16 @@ fn mode_name(mode: &BrowserMode) -> &'static str {
     match mode {
         BrowserMode::Headful => "headful",
         BrowserMode::Headless => "headless",
+    }
+}
+
+fn browser_mode_from_name(mode: &str) -> Result<BrowserMode, FunctionCallError> {
+    match mode {
+        "headful" => Ok(BrowserMode::Headful),
+        "headless" => Ok(BrowserMode::Headless),
+        other => Err(FunctionCallError::RespondToModel(format!(
+            "shared browser session had unsupported mode `{other}`"
+        ))),
     }
 }
 
@@ -2389,6 +2751,31 @@ mod tests {
     }
 
     #[test]
+    fn browser_share_roundtrips_local_metadata() {
+        let share = BrowserShare {
+            share_id: format!("bs-test-{}", Uuid::new_v4().simple()),
+            access: ShareAccess::ReadOnly,
+            engine: BrowserEngine::ExternalCdp,
+            mode: "headless".to_string(),
+            endpoint: "http://127.0.0.1:9222".to_string(),
+            page_ws_url: "ws://127.0.0.1:9222/devtools/page/1".to_string(),
+            target_id: Some("target-1".to_string()),
+            viewport_width: 1280,
+            viewport_height: 800,
+            stealth: true,
+            created_at_unix_ms: 1,
+        };
+
+        let path = write_browser_share(&share).expect("write browser share");
+        let loaded = read_browser_share(&share.share_id).expect("read browser share");
+
+        assert!(path.ends_with(format!("{}.json", share.share_id)));
+        assert_eq!(loaded.share_id, share.share_id);
+        assert_eq!(loaded.access, ShareAccess::ReadOnly);
+        assert_eq!(loaded.target_id.as_deref(), Some("target-1"));
+    }
+
+    #[test]
     fn obscura_binary_candidates_include_bundled_locations() {
         let candidates = obscura_binary_candidates_for_exe(Path::new(
             "/Applications/Codex.app/Contents/MacOS/codex",
@@ -2456,8 +2843,12 @@ mod tests {
         write_benchmark_output("CODEX_AGENT_BROWSER_BENCHMARK_OUTPUT", &result);
         assert_eq!(result.mode, "headless");
         assert!(result.launch_ms > 0.0);
+        assert_eq!(result.target_url, benchmark_url());
         assert_eq!(result.snapshot_ms.len(), iterations);
         assert_eq!(result.screenshot_ms.len(), iterations);
+        assert_eq!(result.screenshot_png_bytes.len(), iterations);
+        assert_eq!(result.screenshot_base64_chars.len(), iterations);
+        assert!(result.totals.screenshot_png_avg_bytes > 0.0);
     }
 
     #[tokio::test]
@@ -2472,6 +2863,7 @@ mod tests {
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(1);
         let (_page_dir, page_url) = benchmark_file_url("codex-obscura-benchmark-");
+        let expected_url = page_url.clone();
         let result = handle_benchmark(BenchmarkArgs {
             mode: BrowserMode::Headless,
             backend: BrowserBackend::Obscura,
@@ -2486,9 +2878,13 @@ mod tests {
         write_benchmark_output("CODEX_AGENT_BROWSER_OBSCURA_BENCHMARK_OUTPUT", &result);
         assert_eq!(result.mode, "headless");
         assert_eq!(result.backend, BrowserEngine::Obscura);
+        assert_eq!(result.target_url, expected_url);
         assert!(result.launch_ms > 0.0);
         assert_eq!(result.snapshot_ms.len(), iterations);
         assert_eq!(result.screenshot_ms.len(), iterations);
+        assert_eq!(result.screenshot_png_bytes.len(), iterations);
+        assert_eq!(result.screenshot_base64_chars.len(), iterations);
+        assert!(result.totals.screenshot_base64_avg_chars > 0.0);
     }
 
     #[tokio::test]
@@ -2500,6 +2896,7 @@ mod tests {
 
         let open = handle_open(OpenArgs {
             url: Some(benchmark_url()),
+            share_id: None,
             mode: BrowserMode::Headless,
             stealth: true,
             backend: BrowserBackend::Chromium,
@@ -2628,6 +3025,170 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires CODEX_AGENT_BROWSER_RUN_CHROME_TESTS=1 and a local Chrome/Chromium binary"]
+    async fn shared_browser_attaches_read_only_to_live_page() {
+        if std::env::var("CODEX_AGENT_BROWSER_RUN_CHROME_TESTS").as_deref() != Ok("1") {
+            return;
+        }
+
+        let open = handle_open(OpenArgs {
+            url: Some(benchmark_url()),
+            share_id: None,
+            mode: BrowserMode::Headless,
+            stealth: true,
+            backend: BrowserBackend::Chromium,
+            viewport_width: Some(1280),
+            viewport_height: Some(800),
+            locale: Some(DEFAULT_LOCALE.to_string()),
+            timezone: Some(DEFAULT_TIMEZONE.to_string()),
+            user_agent: None,
+            remote_debugging_url: std::env::var("CODEX_AGENT_BROWSER_REMOTE_DEBUGGING_URL").ok(),
+        })
+        .await
+        .expect("open browser");
+        let original_session_id = open.session_id;
+        let share = handle_share(ShareArgs {
+            session_id: Some(original_session_id.clone()),
+            access: ShareAccess::ReadOnly,
+        })
+        .await
+        .expect("share browser");
+
+        let attached = handle_open(OpenArgs {
+            url: None,
+            share_id: Some(share.share_id),
+            mode: BrowserMode::Headless,
+            stealth: true,
+            backend: BrowserBackend::Auto,
+            viewport_width: None,
+            viewport_height: None,
+            locale: None,
+            timezone: None,
+            user_agent: None,
+            remote_debugging_url: None,
+        })
+        .await
+        .expect("attach shared browser");
+        let shared_session_id = attached.session_id;
+        let snapshot = handle_snapshot(SnapshotArgs {
+            session_id: Some(shared_session_id.clone()),
+            max_text_chars: Some(2_000),
+            max_elements: Some(20),
+        })
+        .await
+        .expect("snapshot shared browser");
+        assert!(
+            snapshot
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("Codex Agent Browser Benchmark"))
+        );
+
+        let blocked = handle_navigate(NavigateArgs {
+            session_id: Some(shared_session_id.clone()),
+            url: "about:blank".to_string(),
+        })
+        .await
+        .expect_err("read-only share should reject navigate");
+        assert!(blocked.to_string().contains("read_only shared session"));
+
+        handle_close(SessionArgs {
+            session_id: Some(shared_session_id),
+        })
+        .await
+        .expect("close shared browser");
+        handle_close(SessionArgs {
+            session_id: Some(original_session_id),
+        })
+        .await
+        .expect("close original browser");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 and an Obscura binary"]
+    async fn obscura_shared_browser_attaches_to_live_target() {
+        if std::env::var("CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS").as_deref() != Ok("1") {
+            return;
+        }
+
+        let (_page_dir, page_url) = benchmark_file_url("codex-obscura-share-");
+        let open = handle_open(OpenArgs {
+            url: Some(page_url),
+            share_id: None,
+            mode: BrowserMode::Headless,
+            stealth: true,
+            backend: BrowserBackend::Obscura,
+            viewport_width: Some(800),
+            viewport_height: Some(600),
+            locale: Some(DEFAULT_LOCALE.to_string()),
+            timezone: Some(DEFAULT_TIMEZONE.to_string()),
+            user_agent: None,
+            remote_debugging_url: None,
+        })
+        .await
+        .expect("open Obscura browser");
+        let original_session_id = open.session_id;
+        assert_eq!(open.backend, BrowserEngine::Obscura);
+
+        let share = handle_share(ShareArgs {
+            session_id: Some(original_session_id.clone()),
+            access: ShareAccess::ReadOnly,
+        })
+        .await
+        .expect("share Obscura browser");
+        let attached = handle_open(OpenArgs {
+            url: None,
+            share_id: Some(share.share_id),
+            mode: BrowserMode::Headless,
+            stealth: true,
+            backend: BrowserBackend::Auto,
+            viewport_width: None,
+            viewport_height: None,
+            locale: None,
+            timezone: None,
+            user_agent: None,
+            remote_debugging_url: None,
+        })
+        .await
+        .expect("attach shared Obscura browser");
+        let shared_session_id = attached.session_id;
+        assert_eq!(attached.backend, BrowserEngine::Obscura);
+
+        let snapshot = handle_snapshot(SnapshotArgs {
+            session_id: Some(shared_session_id.clone()),
+            max_text_chars: Some(2_000),
+            max_elements: Some(20),
+        })
+        .await
+        .expect("snapshot shared Obscura browser");
+        assert!(
+            snapshot
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("Codex Agent Browser Benchmark"))
+        );
+
+        let blocked = handle_navigate(NavigateArgs {
+            session_id: Some(shared_session_id.clone()),
+            url: "about:blank".to_string(),
+        })
+        .await
+        .expect_err("read-only Obscura share should reject navigate");
+        assert!(blocked.to_string().contains("read_only shared session"));
+
+        handle_close(SessionArgs {
+            session_id: Some(shared_session_id),
+        })
+        .await
+        .expect("close shared Obscura browser");
+        handle_close(SessionArgs {
+            session_id: Some(original_session_id),
+        })
+        .await
+        .expect("close original Obscura browser");
+    }
+
+    #[tokio::test]
     #[ignore = "requires CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 and an Obscura binary"]
     async fn obscura_backend_renders_dom_screenshot() {
         if std::env::var("CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS").as_deref() != Ok("1") {
@@ -2638,6 +3199,7 @@ mod tests {
 
         let open = handle_open(OpenArgs {
             url: Some(page_url),
+            share_id: None,
             mode: BrowserMode::Headless,
             stealth: true,
             backend: BrowserBackend::Obscura,

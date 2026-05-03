@@ -244,7 +244,7 @@ pub(crate) fn render_snapshot_png(
 
     let mut encoded = Vec::new();
     let encoder =
-        PngEncoder::new_with_quality(&mut encoded, CompressionType::Fast, FilterType::NoFilter);
+        PngEncoder::new_with_quality(&mut encoded, CompressionType::Fast, FilterType::Sub);
     encoder
         .write_image(image.as_raw(), width, height, ExtendedColorType::Rgba8)
         .map_err(|err| {

@@ -19,6 +19,7 @@ pub const TOOL_PRESS: &str = "press";
 pub const TOOL_SCROLL: &str = "scroll";
 pub const TOOL_SELECTION: &str = "selection_overview";
 pub const TOOL_HIGHLIGHT: &str = "highlight";
+pub const TOOL_SHARE: &str = "share";
 pub const TOOL_BENCHMARK: &str = "benchmark";
 
 pub const AGENT_BROWSER_TOOL_NAMES: &[&str] = &[
@@ -33,6 +34,7 @@ pub const AGENT_BROWSER_TOOL_NAMES: &[&str] = &[
     TOOL_SCROLL,
     TOOL_SELECTION,
     TOOL_HIGHLIGHT,
+    TOOL_SHARE,
     TOOL_BENCHMARK,
 ];
 
@@ -90,6 +92,11 @@ pub fn create_agent_browser_tool() -> ToolSpec {
             highlight_schema(),
         ),
         tool(
+            TOOL_SHARE,
+            "Share a live browser session for another agent to attach.",
+            share_schema(),
+        ),
+        tool(
             TOOL_BENCHMARK,
             "Benchmark launch, navigation, snapshot, and screenshot latency.",
             benchmark_schema(),
@@ -98,7 +105,7 @@ pub fn create_agent_browser_tool() -> ToolSpec {
 
     ToolSpec::Namespace(ResponsesApiNamespace {
         name: AGENT_BROWSER_NAMESPACE.to_string(),
-        description: "Built-in browser automation with headful/headless modes, snapshots, screenshots, input, selection capture, and highlights.".to_string(),
+        description: "Built-in browser automation with headful/headless modes, snapshots, screenshots, input, selection capture, highlights, and live-session sharing.".to_string(),
         tools,
     })
 }
@@ -118,6 +125,10 @@ fn open_schema() -> JsonSchema {
     JsonSchema::object(
         BTreeMap::from([
             ("url".to_string(), string_param("URL to open immediately.")),
+            (
+                "share_id".to_string(),
+                string_param("Live browser share id from agent_browser.share."),
+            ),
             (
                 "mode".to_string(),
                 JsonSchema::string_enum(
@@ -381,6 +392,26 @@ fn highlight_schema() -> JsonSchema {
             (
                 "clear".to_string(),
                 JsonSchema::boolean(Some("Clear existing highlights.".to_string())),
+            ),
+        ]),
+        None,
+        Some(AdditionalProperties::Boolean(false)),
+    )
+}
+
+fn share_schema() -> JsonSchema {
+    JsonSchema::object(
+        BTreeMap::from([
+            (
+                "session_id".to_string(),
+                string_param("Browser session id. Defaults to the active session."),
+            ),
+            (
+                "access".to_string(),
+                JsonSchema::string_enum(
+                    vec![json!("read_only"), json!("read_write")],
+                    Some("Access for the receiving agent. Defaults to read_only.".to_string()),
+                ),
             ),
         ]),
         None,

@@ -19,6 +19,7 @@ pub(crate) struct CdpClient {
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     next_id: u64,
     session_id: Option<String>,
+    target_id: Option<String>,
 }
 
 impl CdpClient {
@@ -32,6 +33,7 @@ impl CdpClient {
             socket,
             next_id: 1,
             session_id: None,
+            target_id: None,
         })
     }
 
@@ -41,6 +43,14 @@ impl CdpClient {
 
     pub(crate) fn set_session_id(&mut self, session_id: String) {
         self.session_id = Some(session_id);
+    }
+
+    pub(crate) fn set_target_id(&mut self, target_id: String) {
+        self.target_id = Some(target_id);
+    }
+
+    pub(crate) fn target_id(&self) -> Option<&str> {
+        self.target_id.as_deref()
     }
 
     pub(crate) async fn call(

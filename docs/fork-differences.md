@@ -374,12 +374,18 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   Obscura backend for headless agent sessions when an `obscura` binary is
   available, and falls back to Chromium for broader visual-review support.
 - Tools include open/attach, navigate, snapshot, screenshot, click, type, press,
-  scroll, selection-overview, highlight, and benchmark. Benchmarks can target
-  the default local page or an explicit URL. Obscura currently covers CDP
-  navigation/evaluation/input/snapshot flows; screenshots use a lightweight DOM
-  snapshot renderer until native compositor screenshots are added. Obscura
-  `mode = "headful"` opens a small local mirror shell driven by the same CDP
-  snapshot path so the Rust-native backend is not limited to invisible sessions.
+  scroll, selection-overview, highlight, live-session sharing, and benchmark.
+  `agent_browser.share` writes a local share token that another agent can pass
+  to `agent_browser.open` to attach to the same live page instead of relaunching
+  and rebrowsing. Shares default to `read_only`; `read_write` is available for
+  deliberate handoffs.
+- Benchmarks can target the default local page or an explicit URL, and report
+  screenshot PNG/base64 sizes alongside latency so transport-size tradeoffs stay
+  visible. Obscura currently covers CDP navigation/evaluation/input/snapshot
+  flows; screenshots use a lightweight DOM snapshot renderer until native
+  compositor screenshots are added. Obscura `mode = "headful"` opens a small
+  local mirror shell driven by the same CDP snapshot path so the Rust-native
+  backend is not limited to invisible sessions.
 - Set `CODEX_AGENT_BROWSER_OBSCURA_BINARY` to point at a custom Obscura binary,
   bundle `obscura` next to the Codex executable, or on macOS bundle it in
   `Codex.app/Contents/Resources/obscura`. This keeps the Codex Rust crates lean
