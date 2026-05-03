@@ -421,8 +421,14 @@ async fn put_session(session: BrowserSession) {
 async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
     let started = Instant::now();
     let session_id = format!("br-{}", Uuid::new_v4().simple());
-    let viewport_width = args.viewport_width.unwrap_or(DEFAULT_VIEWPORT_WIDTH);
-    let viewport_height = args.viewport_height.unwrap_or(DEFAULT_VIEWPORT_HEIGHT);
+    let viewport_width = args
+        .viewport_width
+        .unwrap_or(DEFAULT_VIEWPORT_WIDTH)
+        .clamp(320, 7680);
+    let viewport_height = args
+        .viewport_height
+        .unwrap_or(DEFAULT_VIEWPORT_HEIGHT)
+        .clamp(240, 4320);
     let locale = args.locale.unwrap_or_else(|| DEFAULT_LOCALE.to_string());
     let timezone = args
         .timezone
