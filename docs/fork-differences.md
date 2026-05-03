@@ -380,7 +380,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   `mode = "headful"` opens a small local mirror shell driven by the same CDP
   snapshot path so the Rust-native backend is not limited to invisible sessions.
 - Set `CODEX_AGENT_BROWSER_OBSCURA_BINARY` to point at a custom Obscura binary,
-  or use `backend = "chromium"` to force the Chromium launch path.
+  bundle `obscura` next to the Codex executable, or on macOS bundle it in
+  `Codex.app/Contents/Resources/obscura`. This keeps the Codex Rust crates lean
+  while still letting app distributions ship Obscura as a first-party resource.
+  Use `backend = "chromium"` to force the Chromium launch path.
 - When attaching to an existing CDP endpoint, Codex creates an `about:blank`
   page target if `/json/list` has no debuggable page yet, then closes only that
   owned target when the session closes.

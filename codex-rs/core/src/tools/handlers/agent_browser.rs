@@ -1935,8 +1935,7 @@ fn find_browser_binary() -> Result<PathBuf, FunctionCallError> {
 }
 
 fn find_obscura_binary() -> Result<PathBuf, FunctionCallError> {
-    if let Ok(path) = std::env::var("CODEX_AGENT_BROWSER_OBSCURA_BINARY") {
-        let path = PathBuf::from(path);
+    for path in candidate_obscura_binaries() {
         if path.exists() {
             return Ok(path);
         }
@@ -1944,9 +1943,45 @@ fn find_obscura_binary() -> Result<PathBuf, FunctionCallError> {
 
     which::which("obscura").map_err(|_| {
         FunctionCallError::RespondToModel(
-            "no Obscura browser binary found; set CODEX_AGENT_BROWSER_OBSCURA_BINARY or open with backend=chromium".to_string(),
+            "no Obscura browser binary found; bundle `obscura` next to the Codex executable, set CODEX_AGENT_BROWSER_OBSCURA_BINARY, or open with backend=chromium".to_string(),
         )
     })
+}
+
+fn candidate_obscura_binaries() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(path) = std::env::var("CODEX_AGENT_BROWSER_OBSCURA_BINARY") {
+        push_unique_path(&mut candidates, PathBuf::from(path));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        for candidate in obscura_binary_candidates_for_exe(&exe) {
+            push_unique_path(&mut candidates, candidate);
+        }
+    }
+    candidates
+}
+
+fn obscura_binary_candidates_for_exe(exe: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(dir) = exe.parent() {
+        push_unique_path(&mut candidates, dir.join("obscura"));
+        #[cfg(target_os = "macos")]
+        if dir.file_name().and_then(|value| value.to_str()) == Some("MacOS")
+            && let Some(contents_dir) = dir.parent()
+        {
+            push_unique_path(
+                &mut candidates,
+                contents_dir.join("Resources").join("obscura"),
+            );
+        }
+    }
+    candidates
+}
+
+fn push_unique_path(candidates: &mut Vec<PathBuf>, path: PathBuf) {
+    if !candidates.iter().any(|candidate| candidate == &path) {
+        candidates.push(path);
+    }
 }
 
 fn free_local_port() -> Result<u16, FunctionCallError> {
@@ -2350,6 +2385,24 @@ mod tests {
         assert_eq!(json!(BrowserEngine::Obscura), json!("obscura"));
         assert_eq!(json!(BrowserEngine::Chromium), json!("chromium"));
         assert_eq!(json!(BrowserEngine::ExternalCdp), json!("external_cdp"));
+    }
+
+    #[test]
+    fn obscura_binary_candidates_include_bundled_locations() {
+        let candidates = obscura_binary_candidates_for_exe(Path::new(
+            "/Applications/Codex.app/Contents/MacOS/codex",
+        ));
+        assert!(
+            candidates
+                .iter()
+                .any(|path| path.ends_with("Contents/MacOS/obscura"))
+        );
+        #[cfg(target_os = "macos")]
+        assert!(
+            candidates
+                .iter()
+                .any(|path| path.ends_with("Contents/Resources/obscura"))
+        );
     }
 
     #[test]
