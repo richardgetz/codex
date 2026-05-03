@@ -1449,15 +1449,50 @@ async fn first_page_ws_url(endpoint: &str) -> Result<String, FunctionCallError> 
             ))
         })?;
 
-    targets
+    if let Some(ws_url) = targets
         .into_iter()
         .find(|target| target.target_type.as_deref() == Some("page"))
         .and_then(|target| target.web_socket_debugger_url)
-        .ok_or_else(|| {
+    {
+        return Ok(ws_url);
+    }
+
+    create_page_ws_url(endpoint, &url).await
+}
+
+async fn create_page_ws_url(
+    endpoint: &str,
+    target_list_url: &str,
+) -> Result<String, FunctionCallError> {
+    #[derive(Deserialize)]
+    struct Target {
+        #[serde(rename = "webSocketDebuggerUrl")]
+        web_socket_debugger_url: Option<String>,
+    }
+
+    let url = format!("{}/json/new?about:blank", endpoint.trim_end_matches('/'));
+    let target: Target = reqwest::Client::new()
+        .put(&url)
+        .send()
+        .await
+        .map_err(|err| {
             FunctionCallError::RespondToModel(format!(
-                "browser target list `{url}` did not include a page websocket"
+                "browser target list `{target_list_url}` did not include a page websocket and `{url}` failed: {err}"
             ))
-        })
+        })?
+        .json()
+        .await
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "browser target list `{target_list_url}` did not include a page websocket and `{url}` returned invalid JSON: {err}"
+            ))
+        })?;
+
+    target.web_socket_debugger_url.ok_or_else(|| {
+        FunctionCallError::RespondToModel(format!(
+            "browser target list `{target_list_url}` did not include a page websocket and `{url}` did not create one"
+        ))
+    })
 }
 
 fn find_browser_binary() -> Result<PathBuf, FunctionCallError> {
