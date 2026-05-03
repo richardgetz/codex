@@ -289,20 +289,25 @@ fn wrap_visual_text(text: &str, max_chars: usize, max_lines: usize) -> Vec<Strin
     let mut lines = Vec::new();
     for raw_line in text.lines() {
         let mut line = String::new();
+        let mut line_len = 0;
         for word in raw_line.split_whitespace() {
-            let next_len =
-                line.chars().count() + word.chars().count() + usize::from(!line.is_empty());
+            let word_len = word.chars().count();
+            let separator_len = usize::from(!line.is_empty());
+            let next_len = line_len + word_len + separator_len;
             if next_len > max_chars && !line.is_empty() {
                 lines.push(compact_visual_text(&line));
                 line.clear();
+                line_len = 0;
                 if lines.len() >= max_lines {
                     return lines;
                 }
             }
             if !line.is_empty() {
                 line.push(' ');
+                line_len += 1;
             }
             line.push_str(word);
+            line_len += word_len;
         }
         if !line.is_empty() {
             lines.push(compact_visual_text(&line));
@@ -338,6 +343,28 @@ fn compact_visual_text(text: &str) -> String {
         compacted.push(ch);
     }
     compacted
+}
+
+fn compact_visual_text_len(text: &str) -> usize {
+    let mut len = 0;
+    let mut pending_space = false;
+    for ch in text.chars() {
+        let ch = if ch.is_ascii() && !ch.is_control() {
+            ch
+        } else {
+            ' '
+        };
+        if ch.is_whitespace() {
+            pending_space = len > 0;
+            continue;
+        }
+        if pending_space {
+            len += 1;
+            pending_space = false;
+        }
+        len += 1;
+    }
+    len
 }
 
 fn draw_rect(
@@ -386,7 +413,7 @@ fn draw_outline(
 }
 
 fn visual_bar_width(text: &str, max_width: u32) -> u32 {
-    let width = u32::try_from(compact_visual_text(text).chars().count())
+    let width = u32::try_from(compact_visual_text_len(text))
         .unwrap_or(max_width)
         .saturating_mul(6)
         .clamp(/*min*/ 18, /*max*/ max_width.max(18));
@@ -401,4 +428,25 @@ fn draw_text_bar(
     color: Rgba<u8>,
 ) {
     draw_rect(image, x, y, width.max(8), /*height*/ 4, color);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_visual_text_len_matches_compacted_text() {
+        for value in [
+            "",
+            "plain text",
+            "  leading   and trailing  ",
+            "unicode \u{00e9} and\ncontrols\u{0007}",
+            "tabs\tcollapse\ttoo",
+        ] {
+            assert_eq!(
+                compact_visual_text_len(value),
+                compact_visual_text(value).chars().count()
+            );
+        }
+    }
 }
