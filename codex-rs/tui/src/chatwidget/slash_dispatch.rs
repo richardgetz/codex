@@ -48,6 +48,12 @@ fn scratchpad_update_event_from_value(value: &serde_json::Value) -> Option<Scrat
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_string(),
+        continuous_enabled: value
+            .get("run_policy")
+            .and_then(|policy| policy.get("continuous"))
+            .and_then(|continuous| continuous.get("enabled"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
         completed: string_array_value(value.get("completed")),
         next_steps: string_array_value(value.get("next_steps")),
         pending_waits: value
@@ -501,24 +507,35 @@ impl ChatWidget {
                     None
                 }
             },
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(serde_json::json!({
-                "scratchpad_id": thread_id.to_string(),
-                "origin_thread_id": thread_id.to_string(),
-                "objective": "Session continuous run policy",
-                "status": "active",
-                "completed": [],
-                "next_steps": [],
-                "pending_waits": [],
-                "run_policy": {},
-                "communication_policy": {
-                    "fallback": {
-                        "final_response_on_channel_failure": false
-                    }
-                },
-                "created_at": chrono::Utc::now().to_rfc3339(),
-                "updated_at": chrono::Utc::now().to_rfc3339(),
-                "archived_at": null
-            })),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                let default_continuous = self
+                    .config
+                    .scratchpad
+                    .for_mode(self.active_mode_kind())
+                    .default_continuous;
+                Some(serde_json::json!({
+                    "scratchpad_id": thread_id.to_string(),
+                    "origin_thread_id": thread_id.to_string(),
+                    "objective": "Session continuous run policy",
+                    "status": "active",
+                    "completed": [],
+                    "next_steps": [],
+                    "pending_waits": [],
+                    "run_policy": {
+                        "continuous": {
+                            "enabled": default_continuous
+                        }
+                    },
+                    "communication_policy": {
+                        "fallback": {
+                            "final_response_on_channel_failure": false
+                        }
+                    },
+                    "created_at": chrono::Utc::now().to_rfc3339(),
+                    "updated_at": chrono::Utc::now().to_rfc3339(),
+                    "archived_at": null
+                }))
+            }
             Err(err) => {
                 self.add_error_message(format!(
                     "Could not read built-in scratchpad `{thread_id}`: {err}"

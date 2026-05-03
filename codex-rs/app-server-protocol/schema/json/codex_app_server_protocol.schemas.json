@@ -17879,6 +17879,9 @@
             },
             "type": "array"
           },
+          "continuousEnabled": {
+            "type": "boolean"
+          },
           "nextSteps": {
             "items": {
               "type": "string"
@@ -17912,6 +17915,7 @@
         },
         "required": [
           "completed",
+          "continuousEnabled",
           "nextSteps",
           "objective",
           "pendingWaits",

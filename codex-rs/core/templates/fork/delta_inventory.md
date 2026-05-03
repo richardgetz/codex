@@ -104,7 +104,7 @@ stable/mainline is pulled in.
     roots automatically.
   - Config: `[scratchpad]` with mode overrides under
     `[scratchpad.modes.<mode>]`
-  - Keys: `enabled`, `recover_after_compaction`,
+  - Keys: `enabled`, `default_continuous`, `recover_after_compaction`,
     `auto_archive_after_days`, `delete_archived_after_days`
   - Built-in scratchpad tools are bound to the current thread/session id:
     `open_scratchpad` defaults `scratchpad_id` to that id, and model-visible
@@ -133,9 +133,12 @@ stable/mainline is pulled in.
     the id, show only the newest completed item, and show five next steps and
     waits.
   - Slash command: `/continuous [on|off|status]` toggles
-    `run_policy.continuous.enabled` on the current thread scratchpad. When it is
-    enabled and the scratchpad still has `next_steps` or `pending_waits`, Codex
-    loops back to continue instead of finalizing.
+    `run_policy.continuous.enabled` on the current thread scratchpad. New
+    thread scratchpads default to continuous mode unless
+    `[scratchpad].default_continuous = false` or a mode override disables it.
+    When it is enabled and the scratchpad still has actionable `next_steps`,
+    Codex loops back to continue instead of finalizing. Blocked work belongs in
+    `pending_waits`; pending waits alone do not keep continuous mode running.
   - Scratchpads support standalone `communication_policy` fields for durable
     communication preferences; channel failure alone must not force a final
     response while the main work can continue.

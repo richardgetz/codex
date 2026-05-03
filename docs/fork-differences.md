@@ -187,9 +187,12 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - Default and Orchestrator modes treat scratchpad as a first-class
   recovery ledger. Plan mode does not use built-in scratchpad by default.
 - `/continuous` toggles a scratchpad-backed continuous run policy for the
-  current thread. When `run_policy.continuous.enabled` is true and the
-  scratchpad still has `next_steps` or `pending_waits`, Codex loops back to the
-  scratchpad instead of finalizing.
+  current thread. New thread scratchpads default to continuous mode unless
+  `[scratchpad].default_continuous = false` or a mode override disables it.
+  When `run_policy.continuous.enabled` is true and the scratchpad still has
+  actionable `next_steps`, Codex loops back to the scratchpad instead of
+  finalizing. Blocked work should be moved to `pending_waits`; pending waits
+  alone do not keep continuous mode running.
 - Scratchpads include `communication_policy` for durable communication
   preferences; channel failure alone is not treated as permission to stop or
   fall back to a final response.
@@ -260,6 +263,7 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   ```toml
   [scratchpad]
   enabled = true
+  default_continuous = true
   recover_after_compaction = true
   auto_archive_after_days = 30
   delete_archived_after_days = 90
@@ -273,10 +277,12 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
   [scratchpad.modes.plan]
   enabled = false
+  default_continuous = false
   recover_after_compaction = false
 
   [scratchpad.modes.orchestrator]
   enabled = true
+  default_continuous = true
   recover_after_compaction = true
   ```
 

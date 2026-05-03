@@ -52,7 +52,7 @@ use crate::session::PreviousTurnSettings;
 use crate::session::SessionSettingsUpdate;
 use crate::session::active_thread_scratchpad;
 use crate::session::continuous_run_policy_enabled;
-use crate::session::scratchpad_has_uncompleted_items;
+use crate::session::scratchpad_has_continuous_work;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -554,7 +554,7 @@ pub(crate) async fn run_turn(
                     )
                     .filter(|scratchpad| {
                         continuous_run_policy_enabled(scratchpad)
-                            && scratchpad_has_uncompleted_items(scratchpad)
+                            && scratchpad_has_continuous_work(scratchpad)
                     }) {
                         let message = ResponseItem::Message {
                             id: None,
@@ -741,7 +741,7 @@ fn build_continuous_run_block_message(scratchpad: &serde_json::Value) -> String 
         "You are not allowed to stop, finalize, or hand off a completed answer yet.".to_string(),
     ];
     lines.push(
-        "Continue working from the scratchpad until its next_steps and pending_waits are complete, or until the user disables /continuous."
+        "Continue working from the scratchpad until every actionable next_steps item is complete, or until only blocked pending_waits remain. Move blocked work from next_steps to pending_waits before ending the continuous session."
             .to_string(),
     );
     lines.join("\n")
@@ -842,7 +842,7 @@ mod thread_control_tests {
             "Scratchpad continuous run policy is enabled for this thread.\n\
 Scratchpad: thread-123\n\
 You are not allowed to stop, finalize, or hand off a completed answer yet.\n\
-Continue working from the scratchpad until its next_steps and pending_waits are complete, or until the user disables /continuous."
+Continue working from the scratchpad until every actionable next_steps item is complete, or until only blocked pending_waits remain. Move blocked work from next_steps to pending_waits before ending the continuous session."
         );
     }
 

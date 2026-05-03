@@ -6383,21 +6383,27 @@ fn continuous_run_policy_requires_enabled_policy_and_uncompleted_items() {
     });
     assert!(super::continuous_run_policy_enabled(&enabled_with_work));
     assert!(super::scratchpad_has_uncompleted_items(&enabled_with_work));
+    assert!(super::scratchpad_has_continuous_work(&enabled_with_work));
 
-    let enabled_without_work = serde_json::json!({
+    let enabled_with_only_blocked_waits = serde_json::json!({
         "scratchpad_id": "thread-123",
         "status": "active",
         "next_steps": [],
-        "pending_waits": [],
+        "pending_waits": [{"summary": "blocked on CI"}],
         "run_policy": {
             "continuous": {
                 "enabled": true
             }
         }
     });
-    assert!(super::continuous_run_policy_enabled(&enabled_without_work));
-    assert!(!super::scratchpad_has_uncompleted_items(
-        &enabled_without_work
+    assert!(super::continuous_run_policy_enabled(
+        &enabled_with_only_blocked_waits
+    ));
+    assert!(super::scratchpad_has_uncompleted_items(
+        &enabled_with_only_blocked_waits
+    ));
+    assert!(!super::scratchpad_has_continuous_work(
+        &enabled_with_only_blocked_waits
     ));
 
     let disabled_with_work = serde_json::json!({
@@ -6413,6 +6419,7 @@ fn continuous_run_policy_requires_enabled_policy_and_uncompleted_items() {
     });
     assert!(!super::continuous_run_policy_enabled(&disabled_with_work));
     assert!(super::scratchpad_has_uncompleted_items(&disabled_with_work));
+    assert!(super::scratchpad_has_continuous_work(&disabled_with_work));
 }
 
 #[tokio::test]
@@ -6578,6 +6585,7 @@ async fn build_initial_context_respects_mode_scoped_scratchpad_disable() {
                 ModeKind::Default,
                 ScratchpadModeConfig {
                     enabled: false,
+                    default_continuous: true,
                     recover_after_compaction: true,
                 },
             );

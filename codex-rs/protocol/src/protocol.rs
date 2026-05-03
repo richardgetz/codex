@@ -1930,6 +1930,8 @@ pub struct ScratchpadUpdateEvent {
     pub scratchpad_id: String,
     pub objective: String,
     pub status: String,
+    #[serde(default)]
+    pub continuous_enabled: bool,
     pub completed: Vec<String>,
     pub next_steps: Vec<String>,
     pub pending_waits: Vec<String>,

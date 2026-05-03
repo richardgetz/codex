@@ -265,10 +265,19 @@ impl ToolHandler for BuiltinScratchpadHandler {
             config.codex_home.as_path(),
         )?;
         let default_scratchpad_id = session.conversation_id.to_string();
+        let default_continuous = config
+            .scratchpad
+            .for_mode(turn.collaboration_mode.mode)
+            .default_continuous;
 
         let tool_name = tool_name.name.as_str();
         let result = match tool_name {
-            TOOL_OPEN => open_scratchpad(&store, &args, &default_scratchpad_id),
+            TOOL_OPEN => open_scratchpad_with_default_continuous(
+                &store,
+                &args,
+                &default_scratchpad_id,
+                default_continuous,
+            ),
             TOOL_RESUME => resume_scratchpad(&store, &args, &default_scratchpad_id),
             TOOL_GET => get_scratchpad(&store, &args, &default_scratchpad_id),
             TOOL_SUMMARY => get_scratchpad_summary(&store, &args, &default_scratchpad_id),
@@ -345,6 +354,7 @@ pub(crate) fn scratchpad_update_event_from_result(result: &Value) -> Option<Scra
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
+        continuous_enabled: scratchpad_continuous_enabled(scratchpad),
         completed: string_array_value(scratchpad.get("completed")),
         next_steps: string_array_value(scratchpad.get("next_steps")),
         pending_waits: scratchpad
@@ -389,6 +399,15 @@ fn format_pending_wait(wait: &Value) -> String {
         .find_map(|key| object.get(*key).and_then(Value::as_str))
         .unwrap_or("pending wait")
         .to_string()
+}
+
+fn scratchpad_continuous_enabled(scratchpad: &Value) -> bool {
+    scratchpad
+        .get("run_policy")
+        .and_then(|policy| policy.get("continuous"))
+        .and_then(|continuous| continuous.get("enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -822,10 +841,25 @@ fn unarchive_current_thread_scratchpad(
     store.write(&scratchpad)
 }
 
+#[cfg(test)]
 fn open_scratchpad(
     store: &ScratchpadStore,
     args: &Value,
     default_scratchpad_id: &str,
+) -> Result<Value, FunctionCallError> {
+    open_scratchpad_with_default_continuous(
+        store,
+        args,
+        default_scratchpad_id,
+        /*default_continuous*/ false,
+    )
+}
+
+fn open_scratchpad_with_default_continuous(
+    store: &ScratchpadStore,
+    args: &Value,
+    default_scratchpad_id: &str,
+    default_continuous: bool,
 ) -> Result<Value, FunctionCallError> {
     let _guard = scratchpad_write_guard()?;
     let objective = string_arg(args, "objective")?;
@@ -871,6 +905,15 @@ fn open_scratchpad(
         archived_at: None,
     };
     merge_update(&mut scratchpad, args);
+    let continuous_enabled_explicit = args
+        .get("run_policy")
+        .and_then(|policy| policy.get("continuous"))
+        .and_then(|continuous| continuous.get("enabled"))
+        .and_then(Value::as_bool)
+        .is_some();
+    if default_continuous && !continuous_enabled_explicit {
+        set_continuous_policy_fields(&mut scratchpad, true);
+    }
     store.write(&scratchpad)?;
     Ok(serde_json::json!({ "scratchpad": scratchpad }))
 }
@@ -2066,6 +2109,69 @@ mod tests {
         assert_eq!(
             second["scratchpad"]["scratchpad_id"],
             first["scratchpad"]["scratchpad_id"]
+        );
+    }
+
+    #[test]
+    fn open_can_default_new_thread_scratchpads_to_continuous() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let args = serde_json::json!({
+            "objective": "continuous objective",
+            "next_steps": ["ship it"]
+        });
+
+        let opened = open_scratchpad_with_default_continuous(
+            &store,
+            &args,
+            "thread-123",
+            /*default_continuous*/ true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            opened["scratchpad"]["run_policy"]["continuous"]["enabled"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            opened["scratchpad"]["communication_policy"]["fallback"]["final_response_on_channel_failure"],
+            serde_json::json!(false)
+        );
+    }
+
+    #[test]
+    fn explicit_continuous_policy_overrides_default_new_thread_policy() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let args = serde_json::json!({
+            "objective": "manual continuous objective",
+            "run_policy": {
+                "continuous": {
+                    "enabled": false
+                }
+            },
+            "next_steps": ["ship it"]
+        });
+
+        let opened = open_scratchpad_with_default_continuous(
+            &store,
+            &args,
+            "thread-123",
+            /*default_continuous*/ true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            opened["scratchpad"]["run_policy"]["continuous"]["enabled"],
+            serde_json::json!(false)
         );
     }
 

@@ -667,6 +667,7 @@ fn parses_mode_scoped_scratchpad_config() {
         r#"
 [scratchpad]
 enabled = true
+default_continuous = true
 recover_after_compaction = true
 auto_archive_after_days = 14
 delete_archived_after_days = 120
@@ -681,9 +682,11 @@ pending_waits = 4
 
 [scratchpad.modes.plan]
 enabled = false
+default_continuous = false
 recover_after_compaction = false
 
 [scratchpad.modes.orchestrator]
+default_continuous = false
 recover_after_compaction = false
 "#,
     )
@@ -693,6 +696,7 @@ recover_after_compaction = false
         cfg.scratchpad,
         Some(ScratchpadToml {
             enabled: Some(true),
+            default_continuous: Some(true),
             recover_after_compaction: Some(true),
             auto_archive_after_days: Some(14),
             delete_archived_after_days: Some(120),
@@ -709,6 +713,7 @@ recover_after_compaction = false
                     ModeKind::Plan,
                     ScratchpadModeToml {
                         enabled: Some(false),
+                        default_continuous: Some(false),
                         recover_after_compaction: Some(false),
                     },
                 ),
@@ -716,6 +721,7 @@ recover_after_compaction = false
                     ModeKind::Orchestrator,
                     ScratchpadModeToml {
                         enabled: None,
+                        default_continuous: Some(false),
                         recover_after_compaction: Some(false),
                     },
                 ),
@@ -777,6 +783,7 @@ enabled = false
 
 [scratchpad.modes.plan]
 enabled = true
+default_continuous = true
 recover_after_compaction = true
 
 [scratchpad.view]
@@ -795,7 +802,19 @@ pending_waits = 3
 
     assert!(!config.scratchpad.for_mode(ModeKind::Default).enabled);
     assert!(config.scratchpad.for_mode(ModeKind::Orchestrator).enabled);
+    assert!(
+        config
+            .scratchpad
+            .for_mode(ModeKind::Orchestrator)
+            .default_continuous
+    );
     assert!(config.scratchpad.for_mode(ModeKind::Plan).enabled);
+    assert!(
+        config
+            .scratchpad
+            .for_mode(ModeKind::Plan)
+            .default_continuous
+    );
     assert_eq!(config.scratchpad.auto_archive_after_days, 30);
     assert_eq!(config.scratchpad.delete_archived_after_days, 90);
     assert_eq!(
