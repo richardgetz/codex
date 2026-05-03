@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-non-dom-refs#141e37287"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Store browser element refs without writing visible data attributes into the page DOM."
+  decision: "Replace data-codex-agent-ref attributes with a page-local Map and non-enumerable element properties, then resolve click/type refs from that map."
+  constraints:
+    - "Keep stable refs available after snapshot."
+    - "Tell the model to call snapshot first when a ref is missing."
+    - "Avoid changing the model-visible ref shape."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::snapshot_page"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_click"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_type"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
