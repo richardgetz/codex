@@ -56,9 +56,7 @@ const DEFAULT_LOCALE: &str = "en-US";
 const DEFAULT_TIMEZONE: &str = "America/New_York";
 const CDP_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 const BROWSER_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_VIEWPORT_COORDINATE: f64 = 100_000.0;
 const MAX_SCROLL_DELTA: f64 = 10_000.0;
-const MAX_HIGHLIGHT_SIZE: f64 = 100_000.0;
 
 static BROWSER_MANAGER: OnceLock<Mutex<BrowserManager>> = OnceLock::new();
 static BROWSER_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -344,6 +342,8 @@ struct BrowserSession {
     id: String,
     mode: BrowserMode,
     stealth: bool,
+    viewport_width: u32,
+    viewport_height: u32,
     cdp: CdpClient,
     process: Option<Child>,
     owned_page_close_url: Option<String>,
@@ -518,6 +518,8 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
         id: session_id.clone(),
         mode: args.mode.clone(),
         stealth: args.stealth,
+        viewport_width,
+        viewport_height,
         cdp,
         process: launch.process.take(),
         owned_page_close_url: launch.owned_page_close_url.take(),
@@ -688,8 +690,8 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
                         "click failed: element ref did not return y coordinate".to_string(),
                     )
                 })?;
-                let x = bounded_number("x", x, 0.0, MAX_VIEWPORT_COORDINATE)?;
-                let y = bounded_number("y", y, 0.0, MAX_VIEWPORT_COORDINATE)?;
+                let x = bounded_number("x", x, 0.0, f64::from(session.viewport_width))?;
+                let y = bounded_number("y", y, 0.0, f64::from(session.viewport_height))?;
                 dispatch_click(&mut session.cdp, x, y).await
             }
             Ok(result) => Err(FunctionCallError::RespondToModel(format!(
@@ -706,14 +708,14 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
             args.x,
             "x",
             0.0,
-            MAX_VIEWPORT_COORDINATE,
+            f64::from(session.viewport_width),
             "click requires either `ref` or both `x` and `y`",
         )?;
         let y = required_bounded_number(
             args.y,
             "y",
             0.0,
-            MAX_VIEWPORT_COORDINATE,
+            f64::from(session.viewport_height),
             "click requires either `ref` or both `x` and `y`",
         )?;
         dispatch_click(&mut session.cdp, x, y).await
@@ -1024,20 +1026,11 @@ async fn handle_highlight(args: HighlightArgs) -> Result<Value, FunctionCallErro
                         .to_string(),
                 ));
             };
-            let x = bounded_number(
-                "x",
-                x,
-                -MAX_VIEWPORT_COORDINATE,
-                MAX_VIEWPORT_COORDINATE,
-            )?;
-            let y = bounded_number(
-                "y",
-                y,
-                -MAX_VIEWPORT_COORDINATE,
-                MAX_VIEWPORT_COORDINATE,
-            )?;
-            let width = positive_bounded_number("width", width, MAX_HIGHLIGHT_SIZE)?;
-            let height = positive_bounded_number("height", height, MAX_HIGHLIGHT_SIZE)?;
+            let x = bounded_number("x", x, 0.0, f64::from(session.viewport_width))?;
+            let y = bounded_number("y", y, 0.0, f64::from(session.viewport_height))?;
+            let width = positive_bounded_number("width", width, f64::from(session.viewport_width))?;
+            let height =
+                positive_bounded_number("height", height, f64::from(session.viewport_height))?;
             payload["rect"] = json!({
                 "x": x,
                 "y": y,
@@ -2102,9 +2095,9 @@ mod tests {
             600.0
         );
         assert!(bounded_number("delta_y", 20_000.0, -MAX_SCROLL_DELTA, MAX_SCROLL_DELTA).is_err());
-        assert!(bounded_number("x", f64::NAN, 0.0, MAX_VIEWPORT_COORDINATE).is_err());
-        assert!(positive_bounded_number("width", 0.0, MAX_HIGHLIGHT_SIZE).is_err());
-        assert!(positive_bounded_number("width", 120.0, MAX_HIGHLIGHT_SIZE).is_ok());
+        assert!(bounded_number("x", f64::NAN, 0.0, 1280.0).is_err());
+        assert!(positive_bounded_number("width", 0.0, 1280.0).is_err());
+        assert!(positive_bounded_number("width", 120.0, 1280.0).is_ok());
     }
 
     #[tokio::test]
