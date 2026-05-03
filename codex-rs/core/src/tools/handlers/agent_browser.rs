@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 use std::net::TcpListener;
@@ -11,8 +10,6 @@ use std::time::Instant;
 
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_tools::AdditionalProperties;
-use codex_tools::JsonSchema;
 use futures::SinkExt;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -1462,15 +1459,6 @@ fn overlay_script() -> &'static str {
         paint();
     })();
     "#
-}
-
-#[allow(dead_code)]
-pub(crate) fn agent_browser_namespace_schema() -> JsonSchema {
-    JsonSchema::object(
-        BTreeMap::new(),
-        None,
-        Some(AdditionalProperties::Boolean(true)),
-    )
 }
 
 #[cfg(test)]
