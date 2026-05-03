@@ -662,6 +662,8 @@ async fn handle_type(args: TypeArgs) -> Result<SimpleResult, FunctionCallError> 
                 if ({}) {{
                     if ("value" in el) el.value = "";
                     else el.textContent = "";
+                    el.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                    el.dispatchEvent(new Event("change", {{ bubbles: true }}));
                 }}
                 return {{ ok: true }};
             }})()"#,
@@ -688,8 +690,15 @@ async fn handle_type(args: TypeArgs) -> Result<SimpleResult, FunctionCallError> 
             &mut session.cdp,
             r#"(() => {
                 const el = document.activeElement;
-                if (el && "value" in el) el.value = "";
-                else if (el) el.textContent = "";
+                if (el && "value" in el) {
+                    el.value = "";
+                    el.dispatchEvent(new Event("input", { bubbles: true }));
+                    el.dispatchEvent(new Event("change", { bubbles: true }));
+                } else if (el) {
+                    el.textContent = "";
+                    el.dispatchEvent(new Event("input", { bubbles: true }));
+                    el.dispatchEvent(new Event("change", { bubbles: true }));
+                }
                 return { ok: true };
             })()"#,
         )
