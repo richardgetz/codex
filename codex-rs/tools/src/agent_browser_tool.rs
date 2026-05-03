@@ -107,10 +107,7 @@ fn tool(name: &str, description: &str, parameters: JsonSchema) -> ResponsesApiNa
 fn open_schema() -> JsonSchema {
     JsonSchema::object(
         BTreeMap::from([
-            (
-                "url".to_string(),
-                nullable_string("URL to open immediately."),
-            ),
+            ("url".to_string(), string_param("URL to open immediately.")),
             (
                 "mode".to_string(),
                 JsonSchema::string_enum(
@@ -134,19 +131,19 @@ fn open_schema() -> JsonSchema {
             ),
             (
                 "locale".to_string(),
-                nullable_string("Locale hint such as en-US."),
+                string_param("Locale hint such as en-US."),
             ),
             (
                 "timezone".to_string(),
-                nullable_string("Timezone id such as America/New_York."),
+                string_param("Timezone id such as America/New_York."),
             ),
             (
                 "user_agent".to_string(),
-                nullable_string("User agent override."),
+                string_param("User agent override."),
             ),
             (
                 "remote_debugging_url".to_string(),
-                nullable_string("Existing Chrome/Chromium debugging endpoint."),
+                string_param("Existing Chrome/Chromium debugging endpoint."),
             ),
         ]),
         None,
@@ -158,7 +155,7 @@ fn session_schema() -> JsonSchema {
     JsonSchema::object(
         BTreeMap::from([(
             "session_id".to_string(),
-            nullable_string("Session id. Defaults to the active session."),
+            string_param("Session id. Defaults to the active session."),
         )]),
         None,
         Some(AdditionalProperties::Boolean(false)),
@@ -170,7 +167,7 @@ fn navigate_schema() -> JsonSchema {
         BTreeMap::from([
             (
                 "session_id".to_string(),
-                nullable_string("Browser session id."),
+                string_param("Browser session id."),
             ),
             (
                 "url".to_string(),
@@ -187,7 +184,7 @@ fn snapshot_schema() -> JsonSchema {
         BTreeMap::from([
             (
                 "session_id".to_string(),
-                nullable_string("Browser session id."),
+                string_param("Browser session id."),
             ),
             (
                 "max_text_chars".to_string(),
@@ -208,7 +205,7 @@ fn screenshot_schema() -> JsonSchema {
         BTreeMap::from([
             (
                 "session_id".to_string(),
-                nullable_string("Browser session id."),
+                string_param("Browser session id."),
             ),
             (
                 "full_page".to_string(),
@@ -225,11 +222,11 @@ fn click_schema() -> JsonSchema {
         BTreeMap::from([
             (
                 "session_id".to_string(),
-                nullable_string("Browser session id."),
+                string_param("Browser session id."),
             ),
             (
                 "ref".to_string(),
-                nullable_string("Stable element ref, such as e3."),
+                string_param("Stable element ref, such as e3."),
             ),
             (
                 "x".to_string(),
@@ -250,11 +247,11 @@ fn type_schema() -> JsonSchema {
         BTreeMap::from([
             (
                 "session_id".to_string(),
-                nullable_string("Browser session id."),
+                string_param("Browser session id."),
             ),
             (
                 "ref".to_string(),
-                nullable_string("Stable element ref, such as e3."),
+                string_param("Stable element ref, such as e3."),
             ),
             (
                 "text".to_string(),
@@ -277,7 +274,7 @@ fn scroll_schema() -> JsonSchema {
         BTreeMap::from([
             (
                 "session_id".to_string(),
-                nullable_string("Browser session id."),
+                string_param("Browser session id."),
             ),
             (
                 "delta_x".to_string(),
@@ -298,7 +295,7 @@ fn selection_schema() -> JsonSchema {
         BTreeMap::from([
             (
                 "session_id".to_string(),
-                nullable_string("Browser session id."),
+                string_param("Browser session id."),
             ),
             (
                 "enable_overlay".to_string(),
@@ -332,7 +329,7 @@ fn benchmark_schema() -> JsonSchema {
             ),
             (
                 "remote_debugging_url".to_string(),
-                nullable_string("Existing Chrome/Chromium debugging endpoint."),
+                string_param("Existing Chrome/Chromium debugging endpoint."),
             ),
         ]),
         None,
@@ -340,12 +337,6 @@ fn benchmark_schema() -> JsonSchema {
     )
 }
 
-fn nullable_string(description: &str) -> JsonSchema {
-    JsonSchema::any_of(
-        vec![
-            JsonSchema::string(Some(description.to_string())),
-            JsonSchema::null(None),
-        ],
-        Some(description.to_string()),
-    )
+fn string_param(description: &str) -> JsonSchema {
+    JsonSchema::string(Some(description.to_string()))
 }
