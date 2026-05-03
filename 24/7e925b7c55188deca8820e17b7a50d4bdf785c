@@ -1,0 +1,26 @@
+intent:
+  id: "intent/2026-05-03/obscura-visual-renderer-module#247e925b7"
+  change_type: "refactor"
+  scope: "agent-browser"
+  summary: "Keep the Obscura visual renderer isolated from the browser control handler."
+  decision: "Move the DOM snapshot PNG renderer and headful mirror shell helpers into agent_browser_visual.rs while leaving CDP/session control in agent_browser.rs."
+  constraints:
+    - "Must not change agent_browser tool behavior or output shapes."
+    - "Must preserve Obscura headful mirror and DOM screenshot behavior."
+    - "Must keep Chromium and external CDP paths working."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser_visual.rs"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::obscura_snapshot_screenshot"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::refresh_obscura_visual_shell"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo test -p codex-core agent_browser -- --nocapture"
+    - "cargo test -p codex-tools agent_browser"
+    - "cargo check -p codex-core -p codex-tools -p codex-features"
+    - "cargo clippy -p codex-core -p codex-tools -p codex-features --lib --tests -- -A clippy::large_enum_variant -D warnings"
+    - "CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 CODEX_AGENT_BROWSER_OBSCURA_BINARY=/private/tmp/codex-obscura-target/debug/obscura cargo test -p codex-core tools::handlers::agent_browser::tests::obscura_backend_renders_dom_screenshot -- --ignored --exact --nocapture"
+    - "CODEX_AGENT_BROWSER_RUN_CHROME_TESTS=1 CODEX_AGENT_BROWSER_REMOTE_DEBUGGING_URL=http://127.0.0.1:9349 CODEX_AGENT_BROWSER_BENCHMARK_ITERATIONS=5 CODEX_AGENT_BROWSER_BENCHMARK_OUTPUT=/private/tmp/codex-agent-browser-benchmark.json cargo test -p codex-core tools::handlers::agent_browser::tests::headless_benchmark_launches_browser -- --ignored --exact --nocapture"
