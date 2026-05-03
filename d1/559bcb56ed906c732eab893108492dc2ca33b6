@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-owned-page-cleanup-doc#d1559bcb5"
+  change_type: "docs"
+  scope: "agent-browser"
+  summary: "Document owned CDP page cleanup on attached sessions."
+  decision: "Expand the attach fallback documentation to mention that Codex closes only page targets it created, matching the new cleanup behavior."
+  constraints:
+    - "Keep the note concise in the existing agent browser fork-differences section."
+    - "Do not imply Codex closes preexisting attached browser pages."
+  intent_priority: "should"
+  code_locations:
+    - "docs/fork-differences.md::Agent browser"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
