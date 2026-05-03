@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 use std::process::Stdio;
@@ -62,13 +63,9 @@ pub(crate) fn visual_shell_html(
     viewport_width: u32,
     viewport_height: u32,
 ) -> String {
-    let title = html_escape(snapshot.get("title").and_then(Value::as_str).unwrap_or(""));
-    let url = html_escape(snapshot.get("url").and_then(Value::as_str).unwrap_or(""));
-    let text = html_escape(snapshot.get("text").and_then(Value::as_str).unwrap_or(""));
-    let width = viewport_width.clamp(/*min*/ 320, /*max*/ 1600);
-    let height = viewport_height.clamp(/*min*/ 240, /*max*/ 1200);
     let mut element_markup = String::new();
     if let Some(elements) = snapshot.get("elements").and_then(Value::as_array) {
+        element_markup.reserve(elements.len().min(160) * 128);
         for element in elements.iter().take(160) {
             let label = html_escape(element.get("label").and_then(Value::as_str).unwrap_or(""));
             let tag = html_escape(element.get("tag").and_then(Value::as_str).unwrap_or("el"));
@@ -88,12 +85,17 @@ pub(crate) fn visual_shell_html(
                 .and_then(Value::as_i64)
                 .unwrap_or(1)
                 .max(1);
-            element_markup.push_str(&format!(
+            let _ = write!(
+                element_markup,
                 r#"<div class="target" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px"><span>{tag} {ref_id} {label}</span></div>"#
-            ));
+            );
         }
     }
-
+    let title = html_escape(snapshot.get("title").and_then(Value::as_str).unwrap_or(""));
+    let url = html_escape(snapshot.get("url").and_then(Value::as_str).unwrap_or(""));
+    let text = html_escape(snapshot.get("text").and_then(Value::as_str).unwrap_or(""));
+    let width = viewport_width.clamp(/*min*/ 320, /*max*/ 1600);
+    let height = viewport_height.clamp(/*min*/ 240, /*max*/ 1200);
     format!(
         r#"<!doctype html>
 <meta charset="utf-8">
