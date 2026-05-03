@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-03/browser-launch-diagnostics#86e990fb2"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Surface browser launch stderr when CDP startup fails."
+  decision: "Capture launched browser stderr in the isolated profile and append a short tail to CDP startup failure messages."
+  constraints:
+    - "Must keep stdout suppressed and stderr scoped to the temporary browser profile."
+    - "Must avoid leaking unrelated user files into model-visible diagnostics."
+    - "Must preserve process cleanup on startup failure."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::launch_connection"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::wait_for_first_page_ws_url"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
