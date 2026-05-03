@@ -330,6 +330,10 @@ fn benchmark_schema() -> JsonSchema {
                 "stealth".to_string(),
                 JsonSchema::boolean(Some("Use stealth profile. Defaults to true.".to_string())),
             ),
+            (
+                "remote_debugging_url".to_string(),
+                nullable_string("Existing Chrome/Chromium debugging endpoint."),
+            ),
         ]),
         None,
         Some(AdditionalProperties::Boolean(false)),

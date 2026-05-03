@@ -192,6 +192,7 @@ struct BenchmarkArgs {
     iterations: Option<usize>,
     #[serde(default = "default_true")]
     stealth: bool,
+    remote_debugging_url: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -765,7 +766,7 @@ async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, Functi
         locale: Some(DEFAULT_LOCALE.to_string()),
         timezone: Some(DEFAULT_TIMEZONE.to_string()),
         user_agent: None,
-        remote_debugging_url: None,
+        remote_debugging_url: args.remote_debugging_url,
     };
     let opened = handle_open(open).await?;
     let launch_ms = open_started.elapsed().as_millis();
@@ -1476,6 +1477,7 @@ mod tests {
             mode: BrowserMode::Headless,
             iterations: Some(1),
             stealth: true,
+            remote_debugging_url: None,
         })
         .await
         .expect("headless benchmark should complete");
