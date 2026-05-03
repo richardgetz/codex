@@ -371,8 +371,8 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   namespace when the session has a local execution environment.
 - The namespace provides CDP-backed browser control over multiple launch
   backends: `auto`, `obscura`, and `chromium`. `auto` prefers the Rust-native
-  Obscura backend for headless agent sessions when an `obscura` binary is
-  available, and falls back to Chromium for broader visual-review support.
+  Obscura backend when an `obscura` binary is available, and falls back to
+  Chromium for broader visual-review support.
 - Tools include open/attach, navigate, snapshot, screenshot, click, type, press,
   scroll, selection-overview, highlight, live-session sharing, and benchmark.
   `agent_browser.share` writes a local share token that another agent can pass

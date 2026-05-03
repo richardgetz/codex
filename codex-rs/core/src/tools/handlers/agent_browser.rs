@@ -2122,9 +2122,7 @@ async fn launch_connection(
             launch_chromium_connection(mode, stealth, viewport_width, viewport_height, locale).await
         }
         BrowserBackend::Auto => {
-            if matches!(mode, BrowserMode::Headless)
-                && let Ok(connection) = launch_obscura_connection(mode, stealth).await
-            {
+            if let Ok(connection) = launch_obscura_connection(mode, stealth).await {
                 return Ok(connection);
             }
             launch_chromium_connection(mode, stealth, viewport_width, viewport_height, locale).await
@@ -3662,6 +3660,44 @@ mod tests {
         })
         .await
         .expect("close Obscura browser");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 and an Obscura binary"]
+    async fn auto_headful_prefers_obscura_when_available() {
+        if std::env::var("CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS").as_deref() != Ok("1") {
+            return;
+        }
+
+        let (_page_dir, page_url) = benchmark_file_url("codex-obscura-auto-headful-");
+        let open = handle_open(OpenArgs {
+            url: Some(page_url),
+            share_id: None,
+            mode: BrowserMode::Headful,
+            stealth: true,
+            backend: BrowserBackend::Auto,
+            viewport_width: Some(800),
+            viewport_height: Some(600),
+            locale: Some(DEFAULT_LOCALE.to_string()),
+            timezone: Some(DEFAULT_TIMEZONE.to_string()),
+            user_agent: None,
+            remote_debugging_url: None,
+        })
+        .await
+        .expect("open Obscura browser through auto");
+
+        assert_eq!(open.backend, BrowserEngine::Obscura);
+        assert!(
+            open.notes
+                .iter()
+                .any(|note| note.contains("Obscura headful mirror"))
+        );
+
+        handle_close(SessionArgs {
+            session_id: Some(open.session_id),
+        })
+        .await
+        .expect("close auto Obscura browser");
     }
 
     fn benchmark_file_url(prefix: &str) -> (TempDir, String) {
