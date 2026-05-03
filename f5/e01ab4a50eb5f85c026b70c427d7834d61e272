@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-compatibility-wording#f5e01ab4a"
+  change_type: "docs"
+  scope: "agent-browser"
+  summary: "Reword browser stealth-facing text as a compatibility profile for legitimate UI testing."
+  decision: "Keep the existing `stealth` API field for compatibility while describing the behavior as a browser compatibility profile in model-visible schemas and fork documentation, with explicit boundaries around authentication, payment, rate, and usage-policy requirements."
+  constraints:
+    - "Do not rename the existing `stealth` field or change runtime behavior."
+    - "Keep model-visible schema descriptions concise."
+    - "Document the legitimate UI testing and review automation purpose clearly."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tools/src/agent_browser_tool.rs::open_schema"
+    - "codex-rs/tools/src/agent_browser_tool.rs::benchmark_schema"
+    - "docs/fork-differences.md::Agent browser"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
