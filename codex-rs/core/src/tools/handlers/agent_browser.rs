@@ -270,6 +270,20 @@ fn positive_bounded_number(name: &str, value: f64, max: f64) -> Result<f64, Func
     Ok(value)
 }
 
+fn remaining_viewport_extent(
+    name: &str,
+    viewport: u32,
+    origin: f64,
+) -> Result<f64, FunctionCallError> {
+    let remaining = f64::from(viewport) - origin;
+    if remaining <= 0.0 {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "`{name}` origin is outside the viewport"
+        )));
+    }
+    Ok(remaining)
+}
+
 #[derive(Debug, Serialize)]
 struct OpenResult {
     session_id: String,
@@ -1028,9 +1042,16 @@ async fn handle_highlight(args: HighlightArgs) -> Result<Value, FunctionCallErro
             };
             let x = bounded_number("x", x, 0.0, f64::from(session.viewport_width))?;
             let y = bounded_number("y", y, 0.0, f64::from(session.viewport_height))?;
-            let width = positive_bounded_number("width", width, f64::from(session.viewport_width))?;
-            let height =
-                positive_bounded_number("height", height, f64::from(session.viewport_height))?;
+            let width = positive_bounded_number(
+                "width",
+                width,
+                remaining_viewport_extent("x", session.viewport_width, x)?,
+            )?;
+            let height = positive_bounded_number(
+                "height",
+                height,
+                remaining_viewport_extent("y", session.viewport_height, y)?,
+            )?;
             payload["rect"] = json!({
                 "x": x,
                 "y": y,
@@ -1210,11 +1231,7 @@ async fn initialize_page(
             json!({ "source": script }),
         )
         .await?;
-        evaluate_json(
-            cdp,
-            &format!("(() => {{ {script} return {{ ok: true }}; }})()"),
-        )
-        .await?;
+        evaluate_json(cdp, &script).await?;
     }
     Ok(())
 }
@@ -1329,14 +1346,8 @@ async fn inject_overlay(cdp: &mut CdpClient) -> Result<(), FunctionCallError> {
         json!({ "source": overlay_script() }),
     )
     .await?;
-    evaluate_json(
-        cdp,
-        &format!(
-            "(() => {{ {} return window.__codexAgentBrowserOverview(); }})()",
-            overlay_script()
-        ),
-    )
-    .await?;
+    evaluate_json(cdp, overlay_script()).await?;
+    evaluate_json(cdp, "(() => window.__codexAgentBrowserOverview())()").await?;
     Ok(())
 }
 
@@ -2098,6 +2109,8 @@ mod tests {
         assert!(bounded_number("x", f64::NAN, 0.0, 1280.0).is_err());
         assert!(positive_bounded_number("width", 0.0, 1280.0).is_err());
         assert!(positive_bounded_number("width", 120.0, 1280.0).is_ok());
+        assert_eq!(remaining_viewport_extent("x", 1280, 1200.0).unwrap(), 80.0);
+        assert!(remaining_viewport_extent("x", 1280, 1280.0).is_err());
     }
 
     #[tokio::test]
