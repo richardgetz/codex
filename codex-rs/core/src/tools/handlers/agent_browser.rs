@@ -585,8 +585,10 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
     let result = if let Some(element_ref) = args.element_ref.as_deref() {
         let expression = format!(
             r#"(() => {{
-                const el = document.querySelector(`[data-codex-agent-ref="${{CSS.escape({})}}"]`);
-                if (!el) return {{ ok: false, message: "element ref not found" }};
+                const agentRef = {};
+                const refs = window.__codexAgentBrowserRefElements;
+                const el = refs && refs.get(agentRef);
+                if (!el || !el.isConnected) return {{ ok: false, message: "element ref not found; call snapshot first" }};
                 el.scrollIntoView({{ block: "center", inline: "center" }});
                 const rect = el.getBoundingClientRect();
                 if (rect.width <= 0 || rect.height <= 0) {{
@@ -674,8 +676,9 @@ async fn handle_type(args: TypeArgs) -> Result<SimpleResult, FunctionCallError> 
         let expression = format!(
             r#"(() => {{
                 const agentRef = {};
-                const el = document.querySelector(`[data-codex-agent-ref="${{CSS.escape(agentRef)}}"]`);
-                if (!el) return {{ ok: false, message: "element ref not found" }};
+                const refs = window.__codexAgentBrowserRefElements;
+                const el = refs && refs.get(agentRef);
+                if (!el || !el.isConnected) return {{ ok: false, message: "element ref not found; call snapshot first" }};
                 el.scrollIntoView({{ block: "center", inline: "center" }});
                 el.focus();
                 if ({}) {{
@@ -991,6 +994,17 @@ async fn snapshot_page(
             const maxText = {max_text_chars};
             const maxElements = {max_elements};
             window.__codexAgentBrowserNextRef = window.__codexAgentBrowserNextRef || 1;
+            window.__codexAgentBrowserRefElements = window.__codexAgentBrowserRefElements || new Map();
+            const refFor = (el) => {{
+                if (!el.__codexAgentRef) {{
+                    Object.defineProperty(el, "__codexAgentRef", {{
+                        value: "e" + window.__codexAgentBrowserNextRef++,
+                        configurable: true
+                    }});
+                }}
+                window.__codexAgentBrowserRefElements.set(el.__codexAgentRef, el);
+                return el.__codexAgentRef;
+            }};
             const selectors = [
                 "a[href]", "button", "input", "textarea", "select", "[role=button]",
                 "[role=link]", "[contenteditable=true]", "summary", "[tabindex]:not([tabindex='-1'])"
@@ -1002,12 +1016,9 @@ async fn snapshot_page(
                 seen.add(el);
                 const rect = el.getBoundingClientRect();
                 if (rect.width <= 0 || rect.height <= 0) continue;
-                if (!el.dataset.codexAgentRef) {{
-                    el.dataset.codexAgentRef = "e" + window.__codexAgentBrowserNextRef++;
-                }}
                 const label = (el.getAttribute("aria-label") || el.getAttribute("title") || el.innerText || el.value || el.placeholder || "").trim().replace(/\s+/g, " ").slice(0, 220);
                 elements.push({{
-                    ref: el.dataset.codexAgentRef,
+                    ref: refFor(el),
                     tag: el.tagName.toLowerCase(),
                     role: el.getAttribute("role"),
                     label,
