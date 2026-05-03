@@ -213,6 +213,14 @@ fn default_headless() -> BrowserMode {
     BrowserMode::Headless
 }
 
+fn elapsed_ms(started: Instant) -> f64 {
+    round_ms(started.elapsed().as_secs_f64() * 1_000.0)
+}
+
+fn round_ms(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
 #[derive(Debug, Serialize)]
 struct OpenResult {
     session_id: String,
@@ -220,7 +228,7 @@ struct OpenResult {
     stealth: bool,
     endpoint: String,
     url: String,
-    launch_ms: u128,
+    launch_ms: f64,
     notes: Vec<String>,
 }
 
@@ -229,7 +237,7 @@ struct SimpleResult {
     ok: bool,
     session_id: String,
     message: String,
-    elapsed_ms: Option<u128>,
+    elapsed_ms: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -237,17 +245,17 @@ struct BenchmarkResult {
     mode: &'static str,
     stealth: bool,
     iterations: usize,
-    launch_ms: u128,
-    navigate_ms: u128,
-    snapshot_ms: Vec<u128>,
-    screenshot_ms: Vec<u128>,
+    launch_ms: f64,
+    navigate_ms: f64,
+    snapshot_ms: Vec<f64>,
+    screenshot_ms: Vec<f64>,
     totals: BenchmarkTotals,
 }
 
 #[derive(Debug, Serialize)]
 struct BenchmarkTotals {
-    snapshot_avg_ms: u128,
-    screenshot_avg_ms: u128,
+    snapshot_avg_ms: f64,
+    screenshot_avg_ms: f64,
 }
 
 struct BrowserManager {
@@ -470,7 +478,7 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
         stealth: args.stealth,
         endpoint: endpoint.clone(),
         url,
-        launch_ms: started.elapsed().as_millis(),
+        launch_ms: elapsed_ms(started),
         notes,
     })
 }
@@ -512,7 +520,7 @@ async fn handle_navigate(args: NavigateArgs) -> Result<SimpleResult, FunctionCal
             ok: true,
             session_id,
             message: "navigated".to_string(),
-            elapsed_ms: Some(started.elapsed().as_millis()),
+            elapsed_ms: Some(elapsed_ms(started)),
         });
     put_session(session).await;
     result
@@ -532,7 +540,7 @@ async fn handle_snapshot(args: SnapshotArgs) -> Result<Value, FunctionCallError>
         snapshot["mode"] = Value::String(mode_name(&session.mode).to_string());
         snapshot["stealth"] = Value::Bool(session.stealth);
         snapshot["endpoint"] = Value::String(session.endpoint.clone());
-        snapshot["elapsed_ms"] = json!(started.elapsed().as_millis());
+        snapshot["elapsed_ms"] = json!(elapsed_ms(started));
         snapshot
     });
     put_session(session).await;
@@ -564,7 +572,7 @@ async fn handle_screenshot(args: ScreenshotArgs) -> Result<FunctionToolOutput, F
                 "session_id": session_id,
                 "mode": mode_name(&session.mode),
                 "stealth": session.stealth,
-                "elapsed_ms": started.elapsed().as_millis(),
+                "elapsed_ms": elapsed_ms(started),
                 "mime_type": "image/png",
             });
             Ok(FunctionToolOutput::from_content(
@@ -653,7 +661,7 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
         ok: true,
         session_id,
         message: "clicked".to_string(),
-        elapsed_ms: Some(started.elapsed().as_millis()),
+        elapsed_ms: Some(elapsed_ms(started)),
     });
     put_session(session).await;
     result
@@ -748,7 +756,7 @@ async fn handle_type(args: TypeArgs) -> Result<SimpleResult, FunctionCallError> 
         ok: true,
         session_id,
         message: "typed".to_string(),
-        elapsed_ms: Some(started.elapsed().as_millis()),
+        elapsed_ms: Some(elapsed_ms(started)),
     });
     put_session(session).await;
     result
@@ -764,7 +772,7 @@ async fn handle_press(args: PressArgs) -> Result<SimpleResult, FunctionCallError
             ok: true,
             session_id,
             message: "pressed".to_string(),
-            elapsed_ms: Some(started.elapsed().as_millis()),
+            elapsed_ms: Some(elapsed_ms(started)),
         });
     put_session(session).await;
     result
@@ -889,7 +897,7 @@ async fn handle_scroll(args: ScrollArgs) -> Result<SimpleResult, FunctionCallErr
             ok: true,
             session_id,
             message: "scrolled".to_string(),
-            elapsed_ms: Some(started.elapsed().as_millis()),
+            elapsed_ms: Some(elapsed_ms(started)),
         });
     put_session(session).await;
     result
@@ -918,7 +926,7 @@ async fn handle_selection(args: SelectionArgs) -> Result<Value, FunctionCallErro
             .await
             .map(|mut overview| {
                 overview["session_id"] = Value::String(session_id);
-                overview["elapsed_ms"] = json!(started.elapsed().as_millis());
+                overview["elapsed_ms"] = json!(elapsed_ms(started));
                 overview
             }),
         Err(err) => Err(err),
@@ -942,7 +950,7 @@ async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, Functi
         remote_debugging_url: args.remote_debugging_url,
     };
     let opened = handle_open(open).await?;
-    let launch_ms = open_started.elapsed().as_millis();
+    let launch_ms = elapsed_ms(open_started);
     let session_id = opened.session_id.clone();
     let result = async {
         let navigate_started = Instant::now();
@@ -951,7 +959,7 @@ async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, Functi
             url: benchmark_url(),
         })
         .await?;
-        let navigate_ms = navigate_started.elapsed().as_millis();
+        let navigate_ms = elapsed_ms(navigate_started);
         let mut snapshot_ms = Vec::with_capacity(iterations);
         let mut screenshot_ms = Vec::with_capacity(iterations);
 
@@ -963,7 +971,7 @@ async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, Functi
                 max_elements: Some(80),
             })
             .await?;
-            snapshot_ms.push(started.elapsed().as_millis());
+            snapshot_ms.push(elapsed_ms(started));
 
             let started = Instant::now();
             let _ = handle_screenshot(ScreenshotArgs {
@@ -971,7 +979,7 @@ async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, Functi
                 full_page: Some(false),
             })
             .await?;
-            screenshot_ms.push(started.elapsed().as_millis());
+            screenshot_ms.push(elapsed_ms(started));
         }
 
         Ok(BenchmarkResult {
@@ -997,11 +1005,11 @@ async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, Functi
     result
 }
 
-fn average_ms(values: &[u128]) -> u128 {
+fn average_ms(values: &[f64]) -> f64 {
     if values.is_empty() {
-        return 0;
+        return 0.0;
     }
-    values.iter().sum::<u128>() / values.len() as u128
+    round_ms(values.iter().sum::<f64>() / values.len() as f64)
 }
 
 async fn initialize_page(
@@ -1750,7 +1758,7 @@ mod tests {
             .expect("write benchmark output");
         }
         assert_eq!(result.mode, "headless");
-        assert!(result.launch_ms > 0);
+        assert!(result.launch_ms > 0.0);
         assert_eq!(result.snapshot_ms.len(), iterations);
         assert_eq!(result.screenshot_ms.len(), iterations);
     }
