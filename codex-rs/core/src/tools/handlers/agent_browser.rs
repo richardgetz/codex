@@ -805,53 +805,57 @@ async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, Functi
     let opened = handle_open(open).await?;
     let launch_ms = open_started.elapsed().as_millis();
     let session_id = opened.session_id.clone();
-    let navigate_started = Instant::now();
-    handle_navigate(NavigateArgs {
-        session_id: Some(session_id.clone()),
-        url: benchmark_url(),
-    })
-    .await?;
-    let navigate_ms = navigate_started.elapsed().as_millis();
-    let mut snapshot_ms = Vec::with_capacity(iterations);
-    let mut screenshot_ms = Vec::with_capacity(iterations);
-
-    for _ in 0..iterations {
-        let started = Instant::now();
-        let _ = handle_snapshot(SnapshotArgs {
+    let result = async {
+        let navigate_started = Instant::now();
+        handle_navigate(NavigateArgs {
             session_id: Some(session_id.clone()),
-            max_text_chars: Some(8_000),
-            max_elements: Some(80),
+            url: benchmark_url(),
         })
         .await?;
-        snapshot_ms.push(started.elapsed().as_millis());
+        let navigate_ms = navigate_started.elapsed().as_millis();
+        let mut snapshot_ms = Vec::with_capacity(iterations);
+        let mut screenshot_ms = Vec::with_capacity(iterations);
 
-        let started = Instant::now();
-        let _ = handle_screenshot(ScreenshotArgs {
-            session_id: Some(session_id.clone()),
-            full_page: Some(false),
+        for _ in 0..iterations {
+            let started = Instant::now();
+            let _ = handle_snapshot(SnapshotArgs {
+                session_id: Some(session_id.clone()),
+                max_text_chars: Some(8_000),
+                max_elements: Some(80),
+            })
+            .await?;
+            snapshot_ms.push(started.elapsed().as_millis());
+
+            let started = Instant::now();
+            let _ = handle_screenshot(ScreenshotArgs {
+                session_id: Some(session_id.clone()),
+                full_page: Some(false),
+            })
+            .await?;
+            screenshot_ms.push(started.elapsed().as_millis());
+        }
+
+        Ok(BenchmarkResult {
+            mode: mode_name(&args.mode),
+            stealth: args.stealth,
+            iterations,
+            launch_ms,
+            navigate_ms,
+            totals: BenchmarkTotals {
+                snapshot_avg_ms: average_ms(&snapshot_ms),
+                screenshot_avg_ms: average_ms(&screenshot_ms),
+            },
+            snapshot_ms,
+            screenshot_ms,
         })
-        .await?;
-        screenshot_ms.push(started.elapsed().as_millis());
     }
+    .await;
 
     let _ = handle_close(SessionArgs {
         session_id: Some(session_id),
     })
     .await;
-
-    Ok(BenchmarkResult {
-        mode: mode_name(&args.mode),
-        stealth: args.stealth,
-        iterations,
-        launch_ms,
-        navigate_ms,
-        totals: BenchmarkTotals {
-            snapshot_avg_ms: average_ms(&snapshot_ms),
-            screenshot_avg_ms: average_ms(&screenshot_ms),
-        },
-        snapshot_ms,
-        screenshot_ms,
-    })
+    result
 }
 
 fn average_ms(values: &[u128]) -> u128 {
