@@ -575,7 +575,11 @@ def _verify_download(
         algorithm, _, expected_hex = expected_digest.partition(":")
         if algorithm != "sha256" or not expected_hex:
             raise RuntimeError(f"Unsupported digest '{expected_digest}' for {path}.")
-        actual_hex = hashlib.sha256(path.read_bytes()).hexdigest()
+        hasher = hashlib.sha256()
+        with open(path, "rb") as file:
+            for chunk in iter(lambda: file.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        actual_hex = hasher.hexdigest()
         if actual_hex != expected_hex:
             raise RuntimeError(
                 f"Downloaded file has sha256 {actual_hex}, expected {expected_hex}: {path}"
