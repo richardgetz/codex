@@ -994,7 +994,7 @@ async fn snapshot_page(
             const maxText = {max_text_chars};
             const maxElements = {max_elements};
             window.__codexAgentBrowserNextRef = window.__codexAgentBrowserNextRef || 1;
-            window.__codexAgentBrowserRefElements = window.__codexAgentBrowserRefElements || new Map();
+            window.__codexAgentBrowserRefElements = new Map();
             const refFor = (el) => {{
                 if (!el.__codexAgentRef) {{
                     Object.defineProperty(el, "__codexAgentRef", {{
