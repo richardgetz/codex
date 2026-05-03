@@ -1754,6 +1754,7 @@ fn overlay_script() -> &'static str {
         window.__codexAgentBrowserOverlayInstalled = true;
         window.__codexAgentBrowserLastSelection = null;
         window.__codexAgentBrowserHighlights = window.__codexAgentBrowserHighlights || [];
+        const maxHighlights = 40;
 
         const box = document.createElement("div");
         box.id = "codex-agent-browser-selection-overlay";
@@ -1949,6 +1950,12 @@ fn overlay_script() -> &'static str {
                 color: cleanColor(request.color || "#d93025"),
                 capturedAt: new Date().toISOString()
             });
+            if (window.__codexAgentBrowserHighlights.length > maxHighlights) {
+                window.__codexAgentBrowserHighlights.splice(
+                    0,
+                    window.__codexAgentBrowserHighlights.length - maxHighlights
+                );
+            }
             return overviewPayload();
         };
 
