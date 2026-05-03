@@ -1212,16 +1212,16 @@ async fn snapshot_page(
             const maxText = {max_text_chars};
             const maxElements = {max_elements};
             window.__codexAgentBrowserNextRef = window.__codexAgentBrowserNextRef || 1;
+            window.__codexAgentBrowserElementRefs = window.__codexAgentBrowserElementRefs || new WeakMap();
             window.__codexAgentBrowserRefElements = new Map();
             const refFor = (el) => {{
-                if (!el.__codexAgentRef) {{
-                    Object.defineProperty(el, "__codexAgentRef", {{
-                        value: "e" + window.__codexAgentBrowserNextRef++,
-                        configurable: true
-                    }});
+                let ref = window.__codexAgentBrowserElementRefs.get(el);
+                if (!ref) {{
+                    ref = "e" + window.__codexAgentBrowserNextRef++;
+                    window.__codexAgentBrowserElementRefs.set(el, ref);
                 }}
-                window.__codexAgentBrowserRefElements.set(el.__codexAgentRef, el);
-                return el.__codexAgentRef;
+                window.__codexAgentBrowserRefElements.set(ref, el);
+                return ref;
             }};
             const selectors = [
                 "a[href]", "button", "input", "textarea", "select", "[role=button]",
@@ -2115,6 +2115,20 @@ mod tests {
                 })
             })
             .expect("run button ref");
+        let mut session = take_session(Some(session_id.clone()))
+            .await
+            .expect("take session for ref pollution check");
+        let ref_property = evaluate_json(
+            &mut session.cdp,
+            r#"(() => ({
+                hasRefProperty: Array.from(document.querySelectorAll("button")).some((el) => (
+                    Object.prototype.hasOwnProperty.call(el, "__codexAgentRef")
+                ))
+            }))()"#,
+        )
+        .await
+        .expect("check ref property");
+        put_session(session).await;
 
         let marked = handle_highlight(HighlightArgs {
             session_id: Some(session_id.clone()),
@@ -2182,5 +2196,9 @@ mod tests {
         assert_eq!(marked_ref_count, 1);
         assert_eq!(marked_count, 2);
         assert_eq!(cleared_count, 0);
+        assert_eq!(
+            ref_property.get("hasRefProperty").and_then(Value::as_bool),
+            Some(false)
+        );
     }
 }
