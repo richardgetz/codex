@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-ref-click-bounds#85c799c7b"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Apply browser coordinate bounds to element-ref click centers."
+  decision: "Run the same finite viewport-coordinate guard on element-ref click centers returned from page JavaScript before sending CDP mouse events, keeping direct-coordinate and ref-click paths consistent."
+  constraints:
+    - "Preserve element-ref click behavior for visible elements."
+    - "Do not change the browser tool API or output shape."
+    - "Reuse the existing numeric bounds helpers."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_click"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
