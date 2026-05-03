@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-visual-targets#aec2468dae67"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Avoid per-target format allocation in the Obscura visual shell."
+  decision: "Write target overlay HTML directly into the reserved element markup buffer instead of allocating a temporary formatted string for each target."
+  constraints:
+    - "Must preserve the generated visual shell HTML structure and target overlay behavior."
+    - "Must keep escaping and viewport clamping semantics unchanged."
+    - "Must remain isolated to the Obscura visual renderer helper."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser_visual.rs::visual_shell_html"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
