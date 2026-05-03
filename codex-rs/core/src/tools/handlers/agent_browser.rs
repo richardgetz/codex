@@ -54,6 +54,7 @@ const DEFAULT_VIEWPORT_HEIGHT: u32 = 900;
 const DEFAULT_LOCALE: &str = "en-US";
 const DEFAULT_TIMEZONE: &str = "America/New_York";
 const CDP_CALL_TIMEOUT: Duration = Duration::from_secs(30);
+const BROWSER_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
 static BROWSER_MANAGER: OnceLock<Mutex<BrowserManager>> = OnceLock::new();
 
@@ -501,7 +502,7 @@ async fn handle_close(args: SessionArgs) -> Result<SimpleResult, FunctionCallErr
     if let Some(mut child) = session.process.take() {
         let _ = child.kill().await;
     } else if let Some(close_url) = session.owned_page_close_url.take() {
-        let _ = reqwest::get(close_url).await;
+        let _ = browser_http_client().get(close_url).send().await;
     }
 
     Ok(SimpleResult {
@@ -1446,7 +1447,9 @@ async fn first_page(endpoint: &str) -> Result<PageTarget, FunctionCallError> {
     }
 
     let url = format!("{}/json/list", endpoint.trim_end_matches('/'));
-    let targets: Vec<Target> = reqwest::get(&url)
+    let targets: Vec<Target> = browser_http_client()
+        .get(&url)
+        .send()
         .await
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!(
@@ -1487,7 +1490,7 @@ async fn create_page(
     }
 
     let url = format!("{}/json/new?about:blank", endpoint.trim_end_matches('/'));
-    let target: Target = reqwest::Client::new()
+    let target: Target = browser_http_client()
         .put(&url)
         .send()
         .await
@@ -1516,6 +1519,13 @@ async fn create_page(
         ws_url,
         owned_close_url,
     })
+}
+
+fn browser_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(BROWSER_HTTP_TIMEOUT)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
 fn find_browser_binary() -> Result<PathBuf, FunctionCallError> {
