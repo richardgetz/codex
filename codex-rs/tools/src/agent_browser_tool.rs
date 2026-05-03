@@ -132,6 +132,13 @@ fn open_schema() -> JsonSchema {
                 )),
             ),
             (
+                "backend".to_string(),
+                JsonSchema::string_enum(
+                    vec![json!("auto"), json!("obscura"), json!("chromium")],
+                    Some("Browser backend. Defaults to auto.".to_string()),
+                ),
+            ),
+            (
                 "viewport_width".to_string(),
                 JsonSchema::integer(Some("Viewport width in CSS pixels.".to_string())),
             ),
@@ -153,7 +160,7 @@ fn open_schema() -> JsonSchema {
             ),
             (
                 "remote_debugging_url".to_string(),
-                string_param("Existing Chrome/Chromium debugging endpoint."),
+                string_param("Existing CDP debugging endpoint."),
             ),
         ]),
         None,
@@ -390,6 +397,13 @@ fn benchmark_schema() -> JsonSchema {
                 ),
             ),
             (
+                "backend".to_string(),
+                JsonSchema::string_enum(
+                    vec![json!("auto"), json!("obscura"), json!("chromium")],
+                    Some("Browser backend. Defaults to auto.".to_string()),
+                ),
+            ),
+            (
                 "iterations".to_string(),
                 JsonSchema::integer(Some(
                     "Snapshot/screenshot iterations. Defaults to 3.".to_string(),
@@ -403,7 +417,7 @@ fn benchmark_schema() -> JsonSchema {
             ),
             (
                 "remote_debugging_url".to_string(),
-                string_param("Existing Chrome/Chromium debugging endpoint."),
+                string_param("Existing CDP debugging endpoint."),
             ),
         ]),
         None,

@@ -369,9 +369,17 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
 - `[features].agent_browser = true` exposes the built-in `agent_browser`
   namespace when the session has a local execution environment.
-- The namespace provides headful/headless Chrome or Chromium control over CDP:
-  open/attach, navigate, snapshot, screenshot, click, type, press, scroll,
-  selection-overview, highlight, and benchmark tools.
+- The namespace provides CDP-backed browser control over multiple launch
+  backends: `auto`, `obscura`, and `chromium`. `auto` prefers the Rust-native
+  Obscura backend for headless agent sessions when an `obscura` binary is
+  available, and falls back to Chromium for broader visual-review support.
+- Tools include open/attach, navigate, snapshot, screenshot, click, type, press,
+  scroll, selection-overview, highlight, and benchmark. Obscura currently covers
+  headless CDP navigation/evaluation/input/snapshot flows; screenshot and the
+  headful shell remain Chromium-backed until the Rust-native renderer path is
+  added.
+- Set `CODEX_AGENT_BROWSER_OBSCURA_BINARY` to point at a custom Obscura binary,
+  or use `backend = "chromium"` to force the Chromium launch path.
 - When attaching to an existing CDP endpoint, Codex creates an `about:blank`
   page target if `/json/list` has no debuggable page yet, then closes only that
   owned target when the session closes.

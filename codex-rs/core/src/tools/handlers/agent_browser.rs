@@ -124,6 +124,23 @@ enum BrowserMode {
     Headless,
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum BrowserBackend {
+    #[default]
+    Auto,
+    Obscura,
+    Chromium,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum BrowserEngine {
+    Chromium,
+    Obscura,
+    ExternalCdp,
+}
+
 #[derive(Debug, Deserialize)]
 struct OpenArgs {
     url: Option<String>,
@@ -131,6 +148,8 @@ struct OpenArgs {
     mode: BrowserMode,
     #[serde(default = "default_true")]
     stealth: bool,
+    #[serde(default)]
+    backend: BrowserBackend,
     viewport_width: Option<u32>,
     viewport_height: Option<u32>,
     locale: Option<String>,
@@ -218,6 +237,8 @@ struct HighlightArgs {
 struct BenchmarkArgs {
     #[serde(default = "default_headless")]
     mode: BrowserMode,
+    #[serde(default)]
+    backend: BrowserBackend,
     iterations: Option<usize>,
     #[serde(default = "default_true")]
     stealth: bool,
@@ -288,6 +309,7 @@ fn remaining_viewport_extent(
 struct OpenResult {
     session_id: String,
     mode: &'static str,
+    backend: BrowserEngine,
     stealth: bool,
     endpoint: String,
     url: String,
@@ -306,6 +328,7 @@ struct SimpleResult {
 #[derive(Debug, Serialize)]
 struct BenchmarkResult {
     mode: &'static str,
+    backend: BrowserEngine,
     stealth: bool,
     iterations: usize,
     launch_ms: f64,
@@ -355,6 +378,7 @@ impl BrowserManager {
 struct BrowserSession {
     id: String,
     mode: BrowserMode,
+    engine: BrowserEngine,
     stealth: bool,
     viewport_width: u32,
     viewport_height: u32,
@@ -363,6 +387,16 @@ struct BrowserSession {
     owned_page_close_url: Option<String>,
     _profile_dir: Option<TempDir>,
     overlay_script_registered: bool,
+}
+
+struct PageInitOptions<'a> {
+    engine: BrowserEngine,
+    stealth: bool,
+    viewport_width: u32,
+    viewport_height: u32,
+    locale: &'a str,
+    timezone: &'a str,
+    user_agent: Option<&'a str>,
 }
 
 struct CdpClient {
@@ -485,6 +519,7 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
         attach_connection(remote).await?
     } else {
         launch_connection(
+            &args.backend,
             &args.mode,
             args.stealth,
             viewport_width,
@@ -507,12 +542,15 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
     };
     if let Err(err) = initialize_page(
         &mut cdp,
-        args.stealth,
-        viewport_width,
-        viewport_height,
-        &locale,
-        &timezone,
-        args.user_agent.as_deref(),
+        PageInitOptions {
+            engine: launch.engine,
+            stealth: args.stealth,
+            viewport_width,
+            viewport_height,
+            locale: &locale,
+            timezone: &timezone,
+            user_agent: args.user_agent.as_deref(),
+        },
     )
     .await
     {
@@ -531,6 +569,7 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
     let session = BrowserSession {
         id: session_id.clone(),
         mode: args.mode.clone(),
+        engine: launch.engine,
         stealth: args.stealth,
         viewport_width,
         viewport_height,
@@ -548,6 +587,7 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
     Ok(OpenResult {
         session_id,
         mode: mode_name(&args.mode),
+        backend: launch.engine,
         stealth: args.stealth,
         endpoint: endpoint.clone(),
         url,
@@ -625,6 +665,12 @@ async fn handle_screenshot(args: ScreenshotArgs) -> Result<FunctionToolOutput, F
     let started = Instant::now();
     let mut session = take_session(args.session_id).await?;
     let session_id = session.id.clone();
+    if session.engine == BrowserEngine::Obscura {
+        put_session(session).await;
+        return Err(FunctionCallError::RespondToModel(
+            "agent_browser.screenshot is not implemented for the Obscura backend yet; use snapshot or open with backend=chromium for screenshots".to_string(),
+        ));
+    }
     let result = session
         .cdp
         .call(
@@ -645,6 +691,7 @@ async fn handle_screenshot(args: ScreenshotArgs) -> Result<FunctionToolOutput, F
             let summary = json!({
                 "session_id": session_id,
                 "mode": mode_name(&session.mode),
+                "backend": session.engine,
                 "stealth": session.stealth,
                 "elapsed_ms": elapsed_ms(started),
                 "mime_type": "image/png",
@@ -1098,6 +1145,7 @@ async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, Functi
     let open = OpenArgs {
         url: None,
         mode: args.mode.clone(),
+        backend: args.backend.clone(),
         stealth: args.stealth,
         viewport_width: Some(1280),
         viewport_height: Some(800),
@@ -1141,6 +1189,7 @@ async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, Functi
 
         Ok(BenchmarkResult {
             mode: mode_name(&args.mode),
+            backend: opened.backend,
             stealth: args.stealth,
             iterations,
             launch_ms,
@@ -1171,42 +1220,41 @@ fn average_ms(values: &[f64]) -> f64 {
 
 async fn initialize_page(
     cdp: &mut CdpClient,
-    stealth: bool,
-    viewport_width: u32,
-    viewport_height: u32,
-    locale: &str,
-    timezone: &str,
-    user_agent: Option<&str>,
+    options: PageInitOptions<'_>,
 ) -> Result<(), FunctionCallError> {
     cdp.call("Page.enable", json!({})).await?;
     cdp.call("Runtime.enable", json!({})).await?;
     cdp.call(
         "Emulation.setDeviceMetricsOverride",
         json!({
-            "width": viewport_width,
-            "height": viewport_height,
+            "width": options.viewport_width,
+            "height": options.viewport_height,
             "deviceScaleFactor": 1,
             "mobile": false,
         }),
     )
     .await?;
-    cdp.call(
-        "Emulation.setLocaleOverride",
-        json!({
-            "locale": locale,
-        }),
-    )
-    .await?;
-    cdp.call(
-        "Emulation.setTimezoneOverride",
-        json!({
-            "timezoneId": timezone,
-        }),
-    )
-    .await?;
-    let user_agent_override = if let Some(user_agent) = user_agent {
+    if options.engine != BrowserEngine::Obscura {
+        cdp.call(
+            "Emulation.setLocaleOverride",
+            json!({
+                "locale": options.locale,
+            }),
+        )
+        .await?;
+        cdp.call(
+            "Emulation.setTimezoneOverride",
+            json!({
+                "timezoneId": options.timezone,
+            }),
+        )
+        .await?;
+    } else {
+        let _ = options.timezone;
+    }
+    let user_agent_override = if let Some(user_agent) = options.user_agent {
         Some(user_agent.to_string())
-    } else if stealth {
+    } else if options.stealth && options.engine != BrowserEngine::Obscura {
         browser_user_agent(cdp)
             .await?
             .map(|user_agent| stealth_user_agent(&user_agent))
@@ -1219,13 +1267,13 @@ async fn initialize_page(
             "Network.setUserAgentOverride",
             json!({
                 "userAgent": user_agent,
-                "acceptLanguage": locale,
+                "acceptLanguage": options.locale,
             }),
         )
         .await?;
     }
-    if stealth {
-        let script = stealth_script(locale);
+    if options.stealth && options.engine != BrowserEngine::Obscura {
+        let script = stealth_script(options.locale);
         cdp.call(
             "Page.addScriptToEvaluateOnNewDocument",
             json!({ "source": script }),
@@ -1384,6 +1432,7 @@ async fn evaluate_json(cdp: &mut CdpClient, expression: &str) -> Result<Value, F
 }
 
 struct LaunchConnection {
+    engine: BrowserEngine,
     endpoint: String,
     page_ws_url: String,
     process: Option<Child>,
@@ -1395,6 +1444,7 @@ struct LaunchConnection {
 async fn attach_connection(remote: &str) -> Result<LaunchConnection, FunctionCallError> {
     if remote.starts_with("ws://") || remote.starts_with("wss://") {
         return Ok(LaunchConnection {
+            engine: BrowserEngine::ExternalCdp,
             endpoint: remote.to_string(),
             page_ws_url: remote.to_string(),
             process: None,
@@ -1407,6 +1457,7 @@ async fn attach_connection(remote: &str) -> Result<LaunchConnection, FunctionCal
     let endpoint = remote.trim_end_matches('/').to_string();
     let page = first_page(&endpoint).await?;
     Ok(LaunchConnection {
+        engine: BrowserEngine::ExternalCdp,
         endpoint,
         page_ws_url: page.ws_url,
         process: None,
@@ -1417,6 +1468,94 @@ async fn attach_connection(remote: &str) -> Result<LaunchConnection, FunctionCal
 }
 
 async fn launch_connection(
+    backend: &BrowserBackend,
+    mode: &BrowserMode,
+    stealth: bool,
+    viewport_width: u32,
+    viewport_height: u32,
+    locale: &str,
+) -> Result<LaunchConnection, FunctionCallError> {
+    match backend {
+        BrowserBackend::Obscura => launch_obscura_connection(mode, stealth).await,
+        BrowserBackend::Chromium => {
+            launch_chromium_connection(mode, stealth, viewport_width, viewport_height, locale).await
+        }
+        BrowserBackend::Auto => {
+            if matches!(mode, BrowserMode::Headless)
+                && let Ok(connection) = launch_obscura_connection(mode, stealth).await
+            {
+                return Ok(connection);
+            }
+            launch_chromium_connection(mode, stealth, viewport_width, viewport_height, locale).await
+        }
+    }
+}
+
+async fn launch_obscura_connection(
+    mode: &BrowserMode,
+    stealth: bool,
+) -> Result<LaunchConnection, FunctionCallError> {
+    let binary = find_obscura_binary()?;
+    let port = free_local_port()?;
+    let profile_dir = tempfile::Builder::new()
+        .prefix("codex-agent-obscura-")
+        .tempdir()
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to create Obscura temp dir: {err}"))
+        })?;
+    let browser_stderr_path = profile_dir.path().join("obscura-stderr.log");
+    let browser_stderr = fs::File::create(&browser_stderr_path).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to create Obscura stderr log: {err}"))
+    })?;
+    let endpoint = format!("http://127.0.0.1:{port}");
+
+    let mut command = Command::new(&binary);
+    command.kill_on_drop(true);
+    command
+        .arg("serve")
+        .arg("--port")
+        .arg(port.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(browser_stderr));
+    if stealth {
+        command.arg("--stealth");
+    }
+
+    let mut process = command.spawn().map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to launch Obscura browser `{}`: {err}",
+            binary.display()
+        ))
+    })?;
+
+    let page = match wait_for_first_page(&endpoint, &mut process, Some(&browser_stderr_path)).await
+    {
+        Ok(page) => page,
+        Err(err) => {
+            let _ = process.kill().await;
+            return Err(err);
+        }
+    };
+    let mut notes = vec![format!("launched Obscura {}", binary.display())];
+    if matches!(mode, BrowserMode::Headful) {
+        notes.push(
+            "Obscura currently runs headless; Codex will add the headful shell separately"
+                .to_string(),
+        );
+    }
+    Ok(LaunchConnection {
+        engine: BrowserEngine::Obscura,
+        endpoint,
+        page_ws_url: page.ws_url,
+        process: Some(process),
+        profile_dir: Some(profile_dir),
+        owned_page_close_url: page.owned_close_url,
+        notes,
+    })
+}
+
+async fn launch_chromium_connection(
     mode: &BrowserMode,
     stealth: bool,
     viewport_width: u32,
@@ -1512,6 +1651,7 @@ async fn launch_connection(
         }
     };
     Ok(LaunchConnection {
+        engine: BrowserEngine::Chromium,
         endpoint,
         page_ws_url: page.ws_url,
         process: Some(process),
@@ -1731,6 +1871,21 @@ fn find_browser_binary() -> Result<PathBuf, FunctionCallError> {
     Err(FunctionCallError::RespondToModel(
         "no Chrome/Chromium browser binary found; set CODEX_AGENT_BROWSER_BINARY".to_string(),
     ))
+}
+
+fn find_obscura_binary() -> Result<PathBuf, FunctionCallError> {
+    if let Ok(path) = std::env::var("CODEX_AGENT_BROWSER_OBSCURA_BINARY") {
+        let path = PathBuf::from(path);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    which::which("obscura").map_err(|_| {
+        FunctionCallError::RespondToModel(
+            "no Obscura browser binary found; set CODEX_AGENT_BROWSER_OBSCURA_BINARY or open with backend=chromium".to_string(),
+        )
+    })
 }
 
 fn free_local_port() -> Result<u16, FunctionCallError> {
@@ -2113,6 +2268,13 @@ mod tests {
         assert!(remaining_viewport_extent("x", 1280, 1280.0).is_err());
     }
 
+    #[test]
+    fn browser_engine_serializes_as_tool_output_backend() {
+        assert_eq!(json!(BrowserEngine::Obscura), json!("obscura"));
+        assert_eq!(json!(BrowserEngine::Chromium), json!("chromium"));
+        assert_eq!(json!(BrowserEngine::ExternalCdp), json!("external_cdp"));
+    }
+
     #[tokio::test]
     #[ignore = "requires CODEX_AGENT_BROWSER_RUN_CHROME_TESTS=1 and a local Chrome/Chromium binary"]
     async fn headless_benchmark_launches_browser() {
@@ -2126,6 +2288,7 @@ mod tests {
             .unwrap_or(1);
         let result = handle_benchmark(BenchmarkArgs {
             mode: BrowserMode::Headless,
+            backend: BrowserBackend::Chromium,
             iterations: Some(iterations),
             stealth: true,
             remote_debugging_url: std::env::var("CODEX_AGENT_BROWSER_REMOTE_DEBUGGING_URL").ok(),
@@ -2157,6 +2320,7 @@ mod tests {
             url: Some(benchmark_url()),
             mode: BrowserMode::Headless,
             stealth: true,
+            backend: BrowserBackend::Chromium,
             viewport_width: Some(1280),
             viewport_height: Some(800),
             locale: Some(DEFAULT_LOCALE.to_string()),
