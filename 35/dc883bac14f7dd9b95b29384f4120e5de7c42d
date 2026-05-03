@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-benchmark-cleanup#35dc883ba"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Ensure benchmark sessions are closed even when benchmark steps fail."
+  decision: "Wrap the benchmark navigation/snapshot/screenshot body in a result block, then call handle_close before returning that result so opened browser sessions do not leak on early errors."
+  constraints:
+    - "Preserve the existing benchmark result shape."
+    - "Keep cleanup best-effort so close failures do not hide the original benchmark failure."
+    - "Do not require launching Chrome for coverage in this sandbox."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_benchmark"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
