@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-clear-stale-selection#4b122ef13"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Clear stale collaborative selection state when the page no longer has a selection."
+  decision: "Set __codexAgentBrowserLastSelection to null whenever the overlay paint pass finds no active selection rect, so selection_overview reports no selection instead of an older captured selection."
+  constraints:
+    - "Keep the selection overlay hidden behavior unchanged."
+    - "Do not change highlight rendering or highlight state."
+    - "Preserve lazy overlay injection."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::overlay_script"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
