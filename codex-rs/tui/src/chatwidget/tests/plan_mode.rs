@@ -1849,6 +1849,7 @@ async fn scratchpad_update_renders_history_cell() {
             scratchpad_id: "thread-1".to_string(),
             objective: "Ship visible scratchpad UX".to_string(),
             status: "in_progress".to_string(),
+            continuous_enabled: true,
             completed: vec![
                 "Open scratchpad".to_string(),
                 "Trace plan rendering".to_string(),
@@ -1870,12 +1871,14 @@ async fn scratchpad_update_renders_history_cell() {
     let cells = drain_insert_history(&mut rx);
     assert!(!cells.is_empty(), "expected scratchpad update cell");
     let blob = lines_to_single_string(cells.last().unwrap());
+    insta::assert_snapshot!("scratchpad_update_continuous_history_cell", blob);
     assert!(
         blob.contains("Scratchpad"),
         "missing scratchpad header: {blob:?}"
     );
     assert!(blob.contains("id: thread-1"));
     assert!(blob.contains("Ship visible scratchpad UX"));
+    assert!(blob.contains("runs until Next up is done"));
     assert!(!blob.contains("Open scratchpad"));
     assert!(blob.contains("Trace plan rendering"));
     assert!(blob.contains("Add scratchpad history cell 1"));
@@ -1902,6 +1905,7 @@ async fn scratchpad_update_respects_tui_view_config() {
             scratchpad_id: "thread-1".to_string(),
             objective: "Tune scratchpad UX".to_string(),
             status: "in_progress".to_string(),
+            continuous_enabled: false,
             completed: vec![
                 "First completed".to_string(),
                 "Second completed".to_string(),

@@ -7047,6 +7047,7 @@ impl ChatWidget {
                     scratchpad_id: notification.scratchpad_id,
                     objective: notification.objective,
                     status: notification.status,
+                    continuous_enabled: notification.continuous_enabled,
                     completed: notification.completed,
                     next_steps: notification.next_steps,
                     pending_waits: notification.pending_waits,

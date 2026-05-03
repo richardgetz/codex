@@ -2843,6 +2843,15 @@ impl HistoryCell for ScratchpadUpdateCell {
             ));
         }
 
+        if self.update.continuous_enabled {
+            body.extend(wrap_scratchpad_line(
+                width,
+                "Continuous: ",
+                "on - runs until Next up is done or only Waiting remains",
+                Style::default().cyan(),
+            ));
+        }
+
         append_scratchpad_section(
             &mut body,
             width,

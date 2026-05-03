@@ -4042,6 +4042,26 @@ pub(crate) fn scratchpad_has_uncompleted_items(value: &Value) -> bool {
     })
 }
 
+pub(crate) fn scratchpad_has_continuous_work(value: &Value) -> bool {
+    if value.get("archived_at").is_some_and(|item| !item.is_null()) {
+        return false;
+    }
+    if matches!(
+        value
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("archived" | "completed" | "complete" | "done")
+    ) {
+        return false;
+    }
+    value
+        .get("next_steps")
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
+}
+
 pub(crate) fn continuous_run_policy_enabled(value: &Value) -> bool {
     value
         .get("run_policy")

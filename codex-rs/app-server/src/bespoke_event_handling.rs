@@ -1981,6 +1981,7 @@ async fn handle_turn_scratchpad_update(
         scratchpad_id: scratchpad_update_event.scratchpad_id,
         objective: scratchpad_update_event.objective,
         status: scratchpad_update_event.status,
+        continuous_enabled: scratchpad_update_event.continuous_enabled,
         completed: scratchpad_update_event.completed,
         next_steps: scratchpad_update_event.next_steps,
         pending_waits: scratchpad_update_event.pending_waits,
@@ -4712,6 +4713,7 @@ mod tests {
             scratchpad_id: "scratch-123".to_string(),
             objective: "Ship scratchpad UX".to_string(),
             status: "in_progress".to_string(),
+            continuous_enabled: true,
             completed: vec!["wire core event".to_string()],
             next_steps: vec!["render history card".to_string()],
             pending_waits: vec!["manual TUI test".to_string()],
@@ -4733,6 +4735,7 @@ mod tests {
                 assert_eq!(n.scratchpad_id, "scratch-123");
                 assert_eq!(n.objective, "Ship scratchpad UX");
                 assert_eq!(n.status, "in_progress");
+                assert!(n.continuous_enabled);
                 assert_eq!(n.completed, vec!["wire core event".to_string()]);
                 assert_eq!(n.next_steps, vec!["render history card".to_string()]);
                 assert_eq!(n.pending_waits, vec!["manual TUI test".to_string()]);

@@ -2612,6 +2612,10 @@
       "additionalProperties": false,
       "description": "Built-in scratchpad behavior for one collaboration mode.",
       "properties": {
+        "default_continuous": {
+          "description": "When true, newly created thread scratchpads start with continuous run policy enabled.",
+          "type": "boolean"
+        },
         "enabled": {
           "description": "When false, the built-in scratchpad tool namespace and scratchpad developer guidance are not exposed in this mode.",
           "type": "boolean"
@@ -2632,6 +2636,10 @@
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "default_continuous": {
+          "description": "Global default for enabling continuous run policy on newly created thread scratchpads.",
+          "type": "boolean"
         },
         "delete_archived_after_days": {
           "description": "Delete archived scratchpads after this many days in the archive. Set to 0 to disable automatic deletion.",
