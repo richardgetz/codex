@@ -2074,6 +2074,52 @@ mod tests {
         .await
         .expect("open browser");
         let session_id = open.session_id;
+        let snapshot = handle_snapshot(SnapshotArgs {
+            session_id: Some(session_id.clone()),
+            max_text_chars: None,
+            max_elements: None,
+        })
+        .await
+        .expect("snapshot page");
+        let button_ref = snapshot
+            .get("elements")
+            .and_then(Value::as_array)
+            .and_then(|elements| {
+                elements.iter().find_map(|element| {
+                    let is_run = element
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .is_some_and(|label| label == "Run");
+                    if is_run {
+                        element
+                            .get("ref")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .expect("run button ref");
+
+        let marked = handle_highlight(HighlightArgs {
+            session_id: Some(session_id.clone()),
+            element_ref: Some(button_ref),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            label: Some("Button issue".to_string()),
+            color: None,
+            clear: None,
+        })
+        .await
+        .expect("mark ref highlight");
+        let marked_ref_count = marked
+            .get("highlights")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or_default();
 
         let marked = handle_highlight(HighlightArgs {
             session_id: Some(session_id.clone()),
@@ -2082,12 +2128,12 @@ mod tests {
             y: Some(24.0),
             width: Some(120.0),
             height: Some(40.0),
-            label: Some("Issue".to_string()),
+            label: Some("Rect issue".to_string()),
             color: None,
             clear: None,
         })
         .await
-        .expect("mark highlight");
+        .expect("mark rect highlight");
         let marked_count = marked
             .get("highlights")
             .and_then(Value::as_array)
@@ -2119,7 +2165,8 @@ mod tests {
         .await
         .expect("close browser");
 
-        assert_eq!(marked_count, 1);
+        assert_eq!(marked_ref_count, 1);
+        assert_eq!(marked_count, 2);
         assert_eq!(cleared_count, 0);
     }
 }
