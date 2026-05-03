@@ -372,6 +372,8 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - The namespace provides headful/headless Chrome or Chromium control over CDP:
   open/attach, navigate, snapshot, screenshot, click, type, press, scroll,
   selection-overview, and benchmark tools.
+- When attaching to an existing CDP endpoint, Codex creates an `about:blank`
+  page target if `/json/list` has no debuggable page yet.
 - Stealth mode is enabled by default for browser sessions. It isolates launch
   state in a temporary profile, applies automation-focused Chromium flags, hides
   common webdriver signals, and normalizes the default headless user agent.
