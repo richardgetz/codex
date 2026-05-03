@@ -57,6 +57,7 @@ const CDP_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 const BROWSER_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
 static BROWSER_MANAGER: OnceLock<Mutex<BrowserManager>> = OnceLock::new();
+static BROWSER_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 pub struct AgentBrowserHandler;
 
@@ -1529,11 +1530,13 @@ async fn create_page(
     })
 }
 
-fn browser_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(BROWSER_HTTP_TIMEOUT)
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+fn browser_http_client() -> &'static reqwest::Client {
+    BROWSER_HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(BROWSER_HTTP_TIMEOUT)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
 }
 
 fn find_browser_binary() -> Result<PathBuf, FunctionCallError> {
