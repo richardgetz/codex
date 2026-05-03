@@ -1081,6 +1081,7 @@ async fn launch_connection(
     })?;
 
     let mut command = Command::new(&binary);
+    command.kill_on_drop(true);
     command
         .env("HOME", &browser_home)
         .env("XDG_CONFIG_HOME", &browser_config)
