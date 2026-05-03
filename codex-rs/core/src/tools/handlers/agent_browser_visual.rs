@@ -65,8 +65,8 @@ pub(crate) fn visual_shell_html(
     let title = html_escape(snapshot.get("title").and_then(Value::as_str).unwrap_or(""));
     let url = html_escape(snapshot.get("url").and_then(Value::as_str).unwrap_or(""));
     let text = html_escape(snapshot.get("text").and_then(Value::as_str).unwrap_or(""));
-    let width = viewport_width.clamp(320, 1600);
-    let height = viewport_height.clamp(240, 1200);
+    let width = viewport_width.clamp(/*min*/ 320, /*max*/ 1600);
+    let height = viewport_height.clamp(/*min*/ 240, /*max*/ 1200);
     let mut element_markup = String::new();
     if let Some(elements) = snapshot.get("elements").and_then(Value::as_array) {
         for element in elements.iter().take(160) {
@@ -122,22 +122,35 @@ pub(crate) fn render_snapshot_png(
     viewport_height: u32,
     full_page: bool,
 ) -> Result<Vec<u8>, FunctionCallError> {
-    let width = viewport_width.clamp(320, 1600);
+    let width = viewport_width.clamp(/*min*/ 320, /*max*/ 1600);
     let height = if full_page {
-        viewport_height.clamp(480, 2400)
+        viewport_height.clamp(/*min*/ 480, /*max*/ 2400)
     } else {
-        viewport_height.clamp(240, 1200)
+        viewport_height.clamp(/*min*/ 240, /*max*/ 1200)
     };
     let mut image = ImageBuffer::from_pixel(width, height, Rgba([248, 249, 250, 255]));
-    draw_rect(&mut image, 0, 0, width, 44, Rgba([32, 33, 36, 255]));
-    draw_text_bar(&mut image, 10, 10, width / 3, Rgba([255, 255, 255, 255]));
+    draw_rect(
+        &mut image,
+        /*x*/ 0,
+        /*y*/ 0,
+        width,
+        /*height*/ 44,
+        Rgba([32, 33, 36, 255]),
+    );
+    draw_text_bar(
+        &mut image,
+        /*x*/ 10,
+        /*y*/ 10,
+        width / 3,
+        Rgba([255, 255, 255, 255]),
+    );
 
     let title = snapshot.get("title").and_then(Value::as_str).unwrap_or("");
     let url = snapshot.get("url").and_then(Value::as_str).unwrap_or("");
     draw_text_bar(
         &mut image,
-        10,
-        30,
+        /*x*/ 10,
+        /*y*/ 30,
         visual_bar_width(
             if title.is_empty() { url } else { title },
             width.saturating_sub(20),
@@ -147,14 +160,16 @@ pub(crate) fn render_snapshot_png(
 
     draw_rect(
         &mut image,
-        0,
-        44,
+        /*x*/ 0,
+        /*y*/ 44,
         width,
         height.saturating_sub(44),
         Rgba([255, 255, 255, 255]),
     );
     let text = snapshot.get("text").and_then(Value::as_str).unwrap_or("");
-    let max_chars = usize::try_from(width / 7).unwrap_or(80).clamp(24, 180);
+    let max_chars = usize::try_from(width / 7)
+        .unwrap_or(80)
+        .clamp(/*min*/ 24, /*max*/ 180);
     for (line_index, line) in wrap_visual_text(text, max_chars, if full_page { 90 } else { 42 })
         .iter()
         .enumerate()
@@ -165,7 +180,7 @@ pub(crate) fn render_snapshot_png(
         }
         draw_text_bar(
             &mut image,
-            12,
+            /*x*/ 12,
             y,
             visual_bar_width(line, width.saturating_sub(24)),
             Rgba([95, 99, 104, 255]),
@@ -217,10 +232,10 @@ pub(crate) fn render_snapshot_png(
                 * scale_y;
             draw_outline(
                 &mut image,
-                x.round() as u32,
-                y.round() as u32,
+                /*x*/ x.round() as u32,
+                /*y*/ y.round() as u32,
                 w.round().max(1.0) as u32,
-                h.round().max(1.0) as u32,
+                /*height*/ h.round().max(1.0) as u32,
                 Rgba([11, 87, 208, 255]),
             );
             let label = element
@@ -235,7 +250,7 @@ pub(crate) fn render_snapshot_png(
                     &mut image,
                     x.round() as u32,
                     (y - 10.0).round() as u32,
-                    visual_bar_width(&label, 220),
+                    visual_bar_width(&label, /*max_width*/ 220),
                     Rgba([11, 87, 208, 255]),
                 );
             }
@@ -342,21 +357,21 @@ fn draw_outline(
     height: u32,
     color: Rgba<u8>,
 ) {
-    draw_rect(image, x, y, width, 2, color);
+    draw_rect(image, x, y, width, /*height*/ 2, color);
     draw_rect(
         image,
         x,
         y.saturating_add(height.saturating_sub(2)),
         width,
-        2,
+        /*height*/ 2,
         color,
     );
-    draw_rect(image, x, y, 2, height, color);
+    draw_rect(image, x, y, /*width*/ 2, height, color);
     draw_rect(
         image,
         x.saturating_add(width.saturating_sub(2)),
         y,
-        2,
+        /*width*/ 2,
         height,
         color,
     );
@@ -366,7 +381,7 @@ fn visual_bar_width(text: &str, max_width: u32) -> u32 {
     let width = u32::try_from(compact_visual_text(text).chars().count())
         .unwrap_or(max_width)
         .saturating_mul(6)
-        .clamp(18, max_width.max(18));
+        .clamp(/*min*/ 18, /*max*/ max_width.max(18));
     width.min(max_width)
 }
 
@@ -377,5 +392,5 @@ fn draw_text_bar(
     width: u32,
     color: Rgba<u8>,
 ) {
-    draw_rect(image, x, y, width.max(8), 4, color);
+    draw_rect(image, x, y, width.max(8), /*height*/ 4, color);
 }

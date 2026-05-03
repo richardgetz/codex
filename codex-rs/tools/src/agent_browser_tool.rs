@@ -174,7 +174,7 @@ fn open_schema() -> JsonSchema {
                 string_param("Existing CDP debugging endpoint."),
             ),
         ]),
-        None,
+        /*required*/ None,
         Some(AdditionalProperties::Boolean(false)),
     )
 }
@@ -185,7 +185,7 @@ fn session_schema() -> JsonSchema {
             "session_id".to_string(),
             string_param("Session id. Defaults to the active session."),
         )]),
-        None,
+        /*required*/ None,
         Some(AdditionalProperties::Boolean(false)),
     )
 }
@@ -223,7 +223,7 @@ fn snapshot_schema() -> JsonSchema {
                 JsonSchema::integer(Some("Max element refs. Defaults to 80.".to_string())),
             ),
         ]),
-        None,
+        /*required*/ None,
         Some(AdditionalProperties::Boolean(false)),
     )
 }
@@ -242,7 +242,7 @@ fn screenshot_schema() -> JsonSchema {
                 )),
             ),
         ]),
-        None,
+        /*required*/ None,
         Some(AdditionalProperties::Boolean(false)),
     )
 }
@@ -267,7 +267,7 @@ fn click_schema() -> JsonSchema {
                 JsonSchema::number(Some("Viewport y coordinate.".to_string())),
             ),
         ]),
-        None,
+        /*required*/ None,
         Some(AdditionalProperties::Boolean(false)),
     )
 }
@@ -335,7 +335,7 @@ fn scroll_schema() -> JsonSchema {
                 JsonSchema::number(Some("Vertical scroll delta in pixels.".to_string())),
             ),
         ]),
-        None,
+        /*required*/ None,
         Some(AdditionalProperties::Boolean(false)),
     )
 }
@@ -352,7 +352,7 @@ fn selection_schema() -> JsonSchema {
                 JsonSchema::boolean(Some("Enable overlay before reading state.".to_string())),
             ),
         ]),
-        None,
+        /*required*/ None,
         Some(AdditionalProperties::Boolean(false)),
     )
 }
@@ -394,7 +394,7 @@ fn highlight_schema() -> JsonSchema {
                 JsonSchema::boolean(Some("Clear existing highlights.".to_string())),
             ),
         ]),
-        None,
+        /*required*/ None,
         Some(AdditionalProperties::Boolean(false)),
     )
 }
@@ -414,7 +414,7 @@ fn share_schema() -> JsonSchema {
                 ),
             ),
         ]),
-        None,
+        /*required*/ None,
         Some(AdditionalProperties::Boolean(false)),
     )
 }
@@ -454,7 +454,7 @@ fn benchmark_schema() -> JsonSchema {
                 string_param("Existing CDP debugging endpoint."),
             ),
         ]),
-        None,
+        /*required*/ None,
         Some(AdditionalProperties::Boolean(false)),
     )
 }

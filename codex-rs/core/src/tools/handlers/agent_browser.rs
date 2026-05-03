@@ -14,6 +14,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -34,6 +36,7 @@ use crate::tools::handlers::agent_browser_visual;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use url::Url;
 
 const TOOL_OPEN: &str = "open";
 const TOOL_CLOSE: &str = "close";
@@ -68,11 +71,8 @@ impl ToolHandler for AgentBrowserHandler {
         ToolKind::Function
     }
 
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        !matches!(
-            invocation.tool_name.name.as_str(),
-            TOOL_SNAPSHOT | TOOL_SCREENSHOT
-        )
+    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
+        true
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -85,10 +85,19 @@ impl ToolHandler for AgentBrowserHandler {
             }
         };
 
+        let access_policy = BrowserAccessPolicy::from_invocation(&invocation);
         match invocation.tool_name.name.as_str() {
-            TOOL_OPEN => text_output(handle_open(parse_arguments(&arguments)?).await?),
+            TOOL_OPEN => {
+                let args = parse_arguments(&arguments)?;
+                access_policy.validate_open(&args)?;
+                text_output(handle_open(args).await?)
+            }
             TOOL_CLOSE => text_output(handle_close(parse_arguments(&arguments)?).await?),
-            TOOL_NAVIGATE => text_output(handle_navigate(parse_arguments(&arguments)?).await?),
+            TOOL_NAVIGATE => {
+                let args: NavigateArgs = parse_arguments(&arguments)?;
+                access_policy.validate_page_url(&args.url, "navigate")?;
+                text_output(handle_navigate(args).await?)
+            }
             TOOL_SNAPSHOT => text_output(handle_snapshot(parse_arguments(&arguments)?).await?),
             TOOL_SCREENSHOT => handle_screenshot(parse_arguments(&arguments)?).await,
             TOOL_CLICK => text_output(handle_click(parse_arguments(&arguments)?).await?),
@@ -98,12 +107,123 @@ impl ToolHandler for AgentBrowserHandler {
             TOOL_SELECTION => text_output(handle_selection(parse_arguments(&arguments)?).await?),
             TOOL_HIGHLIGHT => text_output(handle_highlight(parse_arguments(&arguments)?).await?),
             TOOL_SHARE => text_output(handle_share(parse_arguments(&arguments)?).await?),
-            TOOL_BENCHMARK => text_output(handle_benchmark(parse_arguments(&arguments)?).await?),
+            TOOL_BENCHMARK => {
+                let args: BenchmarkArgs = parse_arguments(&arguments)?;
+                access_policy.validate_browser_process("benchmark")?;
+                access_policy.validate_page_url(
+                    args.url.as_deref().unwrap_or(BENCHMARK_DATA_URL_SENTINEL),
+                    /*action*/ "benchmark",
+                )?;
+                text_output(handle_benchmark(args).await?)
+            }
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unknown agent_browser tool `{other}`"
             ))),
         }
     }
+}
+
+const BENCHMARK_DATA_URL_SENTINEL: &str = "data:text/html;charset=utf-8,";
+
+struct BrowserAccessPolicy {
+    network: NetworkSandboxPolicy,
+    file_system: FileSystemSandboxPolicy,
+    cwd: PathBuf,
+}
+
+impl BrowserAccessPolicy {
+    fn from_invocation(invocation: &ToolInvocation) -> Self {
+        Self {
+            network: invocation.turn.network_sandbox_policy(),
+            file_system: invocation.turn.file_system_sandbox_policy(),
+            cwd: invocation.turn.cwd.to_path_buf(),
+        }
+    }
+
+    fn validate_open(&self, args: &OpenArgs) -> Result<(), FunctionCallError> {
+        if args.share_id.is_none() {
+            self.validate_browser_process("open")?;
+        }
+        if let Some(remote_debugging_url) = args.remote_debugging_url.as_deref() {
+            self.validate_network_endpoint(
+                remote_debugging_url,
+                /*field*/ "remote_debugging_url",
+            )?;
+        }
+        if let Some(url) = args.url.as_deref() {
+            self.validate_page_url(url, "open")?;
+        }
+        Ok(())
+    }
+
+    fn validate_browser_process(&self, action: &str) -> Result<(), FunctionCallError> {
+        if !self.network.is_enabled() {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "agent_browser.{action} requires network-enabled permissions because browser processes are outside the command sandbox"
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_network_endpoint(
+        &self,
+        raw_url: &str,
+        field: &str,
+    ) -> Result<(), FunctionCallError> {
+        let url = parse_browser_url(raw_url, field)?;
+        match url.scheme() {
+            "http" | "https" | "ws" | "wss" => self.validate_network(/*action*/ field),
+            other => Err(FunctionCallError::RespondToModel(format!(
+                "agent_browser `{field}` does not support `{other}:` URLs"
+            ))),
+        }
+    }
+
+    fn validate_page_url(&self, raw_url: &str, action: &str) -> Result<(), FunctionCallError> {
+        let url = parse_browser_url(raw_url, action)?;
+        match url.scheme() {
+            "about" | "data" => Ok(()),
+            "file" => {
+                let path = url.to_file_path().map_err(|_| {
+                    FunctionCallError::RespondToModel(format!(
+                        "agent_browser.{action} could not resolve file URL `{raw_url}`"
+                    ))
+                })?;
+                if self
+                    .file_system
+                    .can_read_path_with_cwd(&path, /*cwd*/ &self.cwd)
+                {
+                    Ok(())
+                } else {
+                    Err(FunctionCallError::RespondToModel(format!(
+                        "agent_browser.{action} cannot read `{}` under the current filesystem permissions",
+                        path.display()
+                    )))
+                }
+            }
+            "http" | "https" | "ws" | "wss" => self.validate_network(action),
+            other => Err(FunctionCallError::RespondToModel(format!(
+                "agent_browser.{action} does not support `{other}:` URLs"
+            ))),
+        }
+    }
+
+    fn validate_network(&self, action: &str) -> Result<(), FunctionCallError> {
+        if self.network.is_enabled() {
+            return Ok(());
+        }
+        Err(FunctionCallError::RespondToModel(format!(
+            "agent_browser.{action} cannot use network URLs while network access is restricted"
+        )))
+    }
+}
+
+fn parse_browser_url(raw_url: &str, field: &str) -> Result<Url, FunctionCallError> {
+    Url::parse(raw_url).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "agent_browser `{field}` requires an absolute URL: {err}"
+        ))
+    })
 }
 
 fn text_output<T: Serialize>(value: T) -> Result<FunctionToolOutput, FunctionCallError> {
@@ -456,6 +576,12 @@ struct PageInitOptions<'a> {
     user_agent: Option<&'a str>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SnapshotRefMode {
+    ActionRefs,
+    ReadOnly,
+}
+
 async fn cdp_call_allowing(
     cdp: &mut CdpClient,
     method: &str,
@@ -714,10 +840,16 @@ async fn handle_navigate(args: NavigateArgs) -> Result<SimpleResult, FunctionCal
 async fn handle_snapshot(args: SnapshotArgs) -> Result<Value, FunctionCallError> {
     let started = Instant::now();
     let mut session = take_session(args.session_id).await?;
+    let ref_mode = snapshot_ref_mode(&session);
     let result = snapshot_page(
         &mut session.cdp,
-        args.max_text_chars.unwrap_or(12_000).clamp(1_000, 80_000),
-        args.max_elements.unwrap_or(80).clamp(1, 250),
+        args.max_text_chars
+            .unwrap_or(12_000)
+            .clamp(/*min*/ 1_000, /*max*/ 80_000),
+        args.max_elements
+            .unwrap_or(80)
+            .clamp(/*min*/ 1, /*max*/ 250),
+        ref_mode,
     )
     .await
     .map(|mut snapshot| {
@@ -737,9 +869,12 @@ async fn handle_screenshot(args: ScreenshotArgs) -> Result<FunctionToolOutput, F
     let mut session = take_session(args.session_id).await?;
     let session_id = session.id.clone();
     if session.engine == BrowserEngine::Obscura {
-        let result =
-            obscura_snapshot_screenshot(&mut session, args.full_page.unwrap_or(false), started)
-                .await;
+        let result = obscura_snapshot_screenshot(
+            &mut session,
+            args.full_page.unwrap_or(/*default*/ false),
+            started,
+        )
+        .await;
         put_session(session).await;
         return result;
     }
@@ -750,7 +885,7 @@ async fn handle_screenshot(args: ScreenshotArgs) -> Result<FunctionToolOutput, F
             json!({
                 "format": "png",
                 "fromSurface": true,
-                "captureBeyondViewport": args.full_page.unwrap_or(false),
+                "captureBeyondViewport": args.full_page.unwrap_or(/*default*/ false),
             }),
         )
         .await
@@ -779,7 +914,7 @@ async fn handle_screenshot(args: ScreenshotArgs) -> Result<FunctionToolOutput, F
                         detail: Some(DEFAULT_IMAGE_DETAIL),
                     },
                 ],
-                Some(true),
+                /*success*/ Some(true),
             ))
         });
     put_session(session).await;
@@ -792,7 +927,14 @@ async fn obscura_snapshot_screenshot(
     started: Instant,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let max_text_chars = if full_page { 24_000 } else { 12_000 };
-    let snapshot = snapshot_page(&mut session.cdp, max_text_chars, 120).await?;
+    let ref_mode = snapshot_ref_mode(session);
+    let snapshot = snapshot_page(
+        &mut session.cdp,
+        max_text_chars,
+        /*max_elements*/ 120,
+        ref_mode,
+    )
+    .await?;
     if let Some(path) = session.visual_shell_path.clone() {
         let _ = agent_browser_visual::write_visual_shell(
             &path,
@@ -828,7 +970,7 @@ async fn obscura_snapshot_screenshot(
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ],
-        Some(true),
+        /*success*/ Some(true),
     ))
 }
 
@@ -873,8 +1015,10 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
                         "click failed: element ref did not return y coordinate".to_string(),
                     )
                 })?;
-                let x = bounded_number("x", x, 0.0, f64::from(session.viewport_width))?;
-                let y = bounded_number("y", y, 0.0, f64::from(session.viewport_height))?;
+                let x =
+                    bounded_number("x", x, /*min*/ 0.0, f64::from(session.viewport_width))?;
+                let y =
+                    bounded_number("y", y, /*min*/ 0.0, f64::from(session.viewport_height))?;
                 dispatch_click(&mut session.cdp, x, y).await
             }
             Ok(result) => Err(FunctionCallError::RespondToModel(format!(
@@ -890,14 +1034,14 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
         let x = required_bounded_number(
             args.x,
             "x",
-            0.0,
+            /*min*/ 0.0,
             f64::from(session.viewport_width),
             "click requires either `ref` or both `x` and `y`",
         )?;
         let y = required_bounded_number(
             args.y,
             "y",
-            0.0,
+            /*min*/ 0.0,
             f64::from(session.viewport_height),
             "click requires either `ref` or both `x` and `y`",
         )?;
@@ -1147,13 +1291,13 @@ async fn handle_scroll(args: ScrollArgs) -> Result<SimpleResult, FunctionCallErr
     let delta_x = bounded_number(
         "delta_x",
         args.delta_x.unwrap_or(0.0),
-        -MAX_SCROLL_DELTA,
+        /*min*/ -MAX_SCROLL_DELTA,
         MAX_SCROLL_DELTA,
     )?;
     let delta_y = bounded_number(
         "delta_y",
         args.delta_y.unwrap_or(600.0),
-        -MAX_SCROLL_DELTA,
+        /*min*/ -MAX_SCROLL_DELTA,
         MAX_SCROLL_DELTA,
     )?;
     let expression = format!(
@@ -1229,17 +1373,17 @@ async fn handle_highlight(args: HighlightArgs) -> Result<Value, FunctionCallErro
                         .to_string(),
                 ));
             };
-            let x = bounded_number("x", x, 0.0, f64::from(session.viewport_width))?;
-            let y = bounded_number("y", y, 0.0, f64::from(session.viewport_height))?;
+            let x = bounded_number("x", x, /*min*/ 0.0, f64::from(session.viewport_width))?;
+            let y = bounded_number("y", y, /*min*/ 0.0, f64::from(session.viewport_height))?;
             let width = positive_bounded_number(
                 "width",
                 width,
-                remaining_viewport_extent("x", session.viewport_width, x)?,
+                remaining_viewport_extent(/*name*/ "x", session.viewport_width, x)?,
             )?;
             let height = positive_bounded_number(
                 "height",
                 height,
-                remaining_viewport_extent("y", session.viewport_height, y)?,
+                remaining_viewport_extent(/*name*/ "y", session.viewport_height, y)?,
             )?;
             payload["rect"] = json!({
                 "x": x,
@@ -1689,23 +1833,51 @@ async fn snapshot_page(
     cdp: &mut CdpClient,
     max_text_chars: usize,
     max_elements: usize,
+    ref_mode: SnapshotRefMode,
 ) -> Result<Value, FunctionCallError> {
+    let ref_setup = match ref_mode {
+        SnapshotRefMode::ActionRefs => {
+            r#"
+            window.__codexAgentBrowserNextRef = window.__codexAgentBrowserNextRef || 1;
+            window.__codexAgentBrowserElementRefs = window.__codexAgentBrowserElementRefs || new WeakMap();
+            window.__codexAgentBrowserRefElements = new Map();
+            "#
+        }
+        SnapshotRefMode::ReadOnly => "const readOnlyRefs = new Map();",
+    };
+    let ref_for = match ref_mode {
+        SnapshotRefMode::ActionRefs => {
+            r#"
+            const refFor = (el) => {
+                let ref = window.__codexAgentBrowserElementRefs.get(el);
+                if (!ref) {
+                    ref = "e" + window.__codexAgentBrowserNextRef++;
+                    window.__codexAgentBrowserElementRefs.set(el, ref);
+                }
+                window.__codexAgentBrowserRefElements.set(ref, el);
+                return ref;
+            };
+            "#
+        }
+        SnapshotRefMode::ReadOnly => {
+            r#"
+            const refFor = (el) => {
+                let ref = readOnlyRefs.get(el);
+                if (!ref) {
+                    ref = "e" + (readOnlyRefs.size + 1);
+                    readOnlyRefs.set(el, ref);
+                }
+                return ref;
+            };
+            "#
+        }
+    };
     let expression = format!(
         r#"(() => {{
             const maxText = {max_text_chars};
             const maxElements = {max_elements};
-            window.__codexAgentBrowserNextRef = window.__codexAgentBrowserNextRef || 1;
-            window.__codexAgentBrowserElementRefs = window.__codexAgentBrowserElementRefs || new WeakMap();
-            window.__codexAgentBrowserRefElements = new Map();
-            const refFor = (el) => {{
-                let ref = window.__codexAgentBrowserElementRefs.get(el);
-                if (!ref) {{
-                    ref = "e" + window.__codexAgentBrowserNextRef++;
-                    window.__codexAgentBrowserElementRefs.set(el, ref);
-                }}
-                window.__codexAgentBrowserRefElements.set(ref, el);
-                return ref;
-            }};
+            {ref_setup}
+            {ref_for}
             const selectors = [
                 "a[href]", "button", "input", "textarea", "select", "[role=button]",
                 "[role=link]", "[contenteditable=true]", "summary", "[tabindex]:not([tabindex='-1'])"
@@ -1751,6 +1923,14 @@ async fn snapshot_page(
         }})()"#
     );
     evaluate_json(cdp, &expression).await
+}
+
+fn snapshot_ref_mode(session: &BrowserSession) -> SnapshotRefMode {
+    if session.access == ShareAccess::ReadOnly {
+        SnapshotRefMode::ReadOnly
+    } else {
+        SnapshotRefMode::ActionRefs
+    }
 }
 
 async fn inject_overlay(cdp: &mut CdpClient) -> Result<(), FunctionCallError> {
@@ -2370,7 +2550,13 @@ async fn refresh_obscura_visual_shell(
     viewport_width: u32,
     viewport_height: u32,
 ) -> Result<(), FunctionCallError> {
-    let snapshot = snapshot_page(cdp, 16_000, 160).await?;
+    let snapshot = snapshot_page(
+        cdp,
+        /*max_text_chars*/ 16_000,
+        /*max_elements*/ 160,
+        SnapshotRefMode::ActionRefs,
+    )
+    .await?;
     agent_browser_visual::write_visual_shell(path, &snapshot, viewport_width, viewport_height)
 }
 
@@ -2731,16 +2917,76 @@ mod tests {
     #[test]
     fn browser_numeric_inputs_are_bounded() {
         assert_eq!(
-            bounded_number("delta_y", 600.0, -MAX_SCROLL_DELTA, MAX_SCROLL_DELTA)
-                .expect("default scroll delta"),
+            bounded_number(
+                "delta_y",
+                /*value*/ 600.0,
+                /*min*/ -MAX_SCROLL_DELTA,
+                /*max*/ MAX_SCROLL_DELTA,
+            )
+            .expect("default scroll delta"),
             600.0
         );
-        assert!(bounded_number("delta_y", 20_000.0, -MAX_SCROLL_DELTA, MAX_SCROLL_DELTA).is_err());
-        assert!(bounded_number("x", f64::NAN, 0.0, 1280.0).is_err());
-        assert!(positive_bounded_number("width", 0.0, 1280.0).is_err());
-        assert!(positive_bounded_number("width", 120.0, 1280.0).is_ok());
-        assert_eq!(remaining_viewport_extent("x", 1280, 1200.0).unwrap(), 80.0);
-        assert!(remaining_viewport_extent("x", 1280, 1280.0).is_err());
+        assert!(
+            bounded_number(
+                "delta_y",
+                /*value*/ 20_000.0,
+                /*min*/ -MAX_SCROLL_DELTA,
+                /*max*/ MAX_SCROLL_DELTA,
+            )
+            .is_err()
+        );
+        assert!(
+            bounded_number(
+                "x",
+                /*value*/ f64::NAN,
+                /*min*/ 0.0,
+                /*max*/ 1280.0
+            )
+            .is_err()
+        );
+        assert!(positive_bounded_number("width", /*value*/ 0.0, /*max*/ 1280.0).is_err());
+        assert!(positive_bounded_number("width", /*value*/ 120.0, /*max*/ 1280.0).is_ok());
+        assert_eq!(
+            remaining_viewport_extent("x", /*viewport*/ 1280, /*origin*/ 1200.0).unwrap(),
+            80.0
+        );
+        assert!(remaining_viewport_extent("x", /*viewport*/ 1280, /*origin*/ 1280.0).is_err());
+    }
+
+    #[test]
+    fn browser_access_policy_blocks_network_when_restricted() {
+        let cwd = tempfile::tempdir().expect("tempdir");
+        let policy = BrowserAccessPolicy {
+            network: NetworkSandboxPolicy::Restricted,
+            file_system: codex_protocol::models::PermissionProfile::read_only()
+                .file_system_sandbox_policy(),
+            cwd: cwd.path().to_path_buf(),
+        };
+
+        assert!(policy.validate_browser_process(/*action*/ "open").is_err());
+        assert!(
+            policy
+                .validate_page_url("https://example.com", /*action*/ "navigate")
+                .is_err()
+        );
+        assert!(
+            policy
+                .validate_page_url(
+                    "data:text/html;charset=utf-8,ok",
+                    /*action*/ "navigate",
+                )
+                .is_ok()
+        );
+        assert!(
+            policy
+                .validate_page_url(
+                    Url::from_file_path(cwd.path().join("fixture.html"))
+                        .expect("file URL")
+                        .as_str(),
+                    /*action*/ "navigate"
+                )
+                .is_ok()
+        );
     }
 
     #[test]
@@ -2809,11 +3055,16 @@ mod tests {
                 }
             ]
         });
-        let png = agent_browser_visual::render_snapshot_png(&snapshot, 800, 600, false)
-            .expect("render png snapshot");
+        let png = agent_browser_visual::render_snapshot_png(
+            &snapshot, /*viewport_width*/ 800, /*viewport_height*/ 600,
+            /*full_page*/ false,
+        )
+        .expect("render png snapshot");
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
         assert!(png.len() > 512);
-        let html = agent_browser_visual::visual_shell_html(&snapshot, 800, 600);
+        let html = agent_browser_visual::visual_shell_html(
+            &snapshot, /*viewport_width*/ 800, /*viewport_height*/ 600,
+        );
         assert!(html.contains("Obscura headful mirror"));
         assert!(html.contains("button e1 Run"));
     }
@@ -3082,6 +3333,32 @@ mod tests {
                 .get("text")
                 .and_then(Value::as_str)
                 .is_some_and(|text| text.contains("Codex Agent Browser Benchmark"))
+        );
+        let mut original_session = take_session(Some(original_session_id.clone()))
+            .await
+            .expect("take original Obscura browser");
+        let globals = evaluate_json(
+            &mut original_session.cdp,
+            r#"(() => ({
+                hasNextRef: Object.prototype.hasOwnProperty.call(window, "__codexAgentBrowserNextRef"),
+                hasElementRefs: Object.prototype.hasOwnProperty.call(window, "__codexAgentBrowserElementRefs"),
+                hasRefElements: Object.prototype.hasOwnProperty.call(window, "__codexAgentBrowserRefElements")
+            }))()"#,
+        )
+        .await
+        .expect("read original page globals");
+        put_session(original_session).await;
+        assert_eq!(
+            globals.get("hasNextRef").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            globals.get("hasElementRefs").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            globals.get("hasRefElements").and_then(Value::as_bool),
+            Some(false)
         );
 
         let blocked = handle_navigate(NavigateArgs {

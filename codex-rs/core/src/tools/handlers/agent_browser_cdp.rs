@@ -76,14 +76,17 @@ impl CdpClient {
         method: &str,
         params: Value,
     ) -> Result<Value, FunctionCallError> {
-        timeout(CDP_CALL_TIMEOUT, self.call_inner(method, params, None))
-            .await
-            .map_err(|_| {
-                FunctionCallError::RespondToModel(format!(
-                    "browser command `{method}` timed out after {}s",
-                    CDP_CALL_TIMEOUT.as_secs()
-                ))
-            })?
+        timeout(
+            CDP_CALL_TIMEOUT,
+            self.call_inner(method, params, /*session_id*/ None),
+        )
+        .await
+        .map_err(|_| {
+            FunctionCallError::RespondToModel(format!(
+                "browser command `{method}` timed out after {}s",
+                CDP_CALL_TIMEOUT.as_secs()
+            ))
+        })?
     }
 
     async fn call_inner(
