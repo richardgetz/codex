@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-compact-output#287cc517f"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Compact agent browser JSON responses and bound CDP command waits."
+  decision: "Use compact serde JSON for text outputs to reduce model-visible tokens, and wrap each CDP command in a 30-second timeout so a wedged browser cannot hang the handler indefinitely."
+  constraints:
+    - "Preserve structured JSON output shape."
+    - "Keep screenshots returning both summary text and image content."
+    - "Do not require launching Chrome for coverage."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::text_output"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::CdpClient::call"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
