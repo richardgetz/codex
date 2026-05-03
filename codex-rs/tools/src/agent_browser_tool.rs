@@ -15,6 +15,7 @@ pub const TOOL_SNAPSHOT: &str = "snapshot";
 pub const TOOL_SCREENSHOT: &str = "screenshot";
 pub const TOOL_CLICK: &str = "click";
 pub const TOOL_TYPE: &str = "type";
+pub const TOOL_PRESS: &str = "press";
 pub const TOOL_SCROLL: &str = "scroll";
 pub const TOOL_SELECTION: &str = "selection_overview";
 pub const TOOL_BENCHMARK: &str = "benchmark";
@@ -27,6 +28,7 @@ pub const AGENT_BROWSER_TOOL_NAMES: &[&str] = &[
     TOOL_SCREENSHOT,
     TOOL_CLICK,
     TOOL_TYPE,
+    TOOL_PRESS,
     TOOL_SCROLL,
     TOOL_SELECTION,
     TOOL_BENCHMARK,
@@ -69,6 +71,7 @@ pub fn create_agent_browser_tool() -> ToolSpec {
             "Type text into the focused field or element ref.",
             type_schema(),
         ),
+        tool(TOOL_PRESS, "Press a common keyboard key.", press_schema()),
         tool(
             TOOL_SCROLL,
             "Scroll the page by a pixel delta.",
@@ -265,6 +268,26 @@ fn type_schema() -> JsonSchema {
             ),
         ]),
         Some(vec!["text".to_string()]),
+        Some(AdditionalProperties::Boolean(false)),
+    )
+}
+
+fn press_schema() -> JsonSchema {
+    JsonSchema::object(
+        BTreeMap::from([
+            (
+                "session_id".to_string(),
+                string_param("Browser session id."),
+            ),
+            (
+                "key".to_string(),
+                JsonSchema::string(Some(
+                    "Key to press, such as Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, or PageDown."
+                        .to_string(),
+                )),
+            ),
+        ]),
+        Some(vec!["key".to_string()]),
         Some(AdditionalProperties::Boolean(false)),
     )
 }

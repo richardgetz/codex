@@ -44,6 +44,7 @@ const TOOL_SNAPSHOT: &str = "snapshot";
 const TOOL_SCREENSHOT: &str = "screenshot";
 const TOOL_CLICK: &str = "click";
 const TOOL_TYPE: &str = "type";
+const TOOL_PRESS: &str = "press";
 const TOOL_SCROLL: &str = "scroll";
 const TOOL_SELECTION: &str = "selection_overview";
 const TOOL_BENCHMARK: &str = "benchmark";
@@ -90,6 +91,7 @@ impl ToolHandler for AgentBrowserHandler {
             TOOL_SCREENSHOT => handle_screenshot(parse_arguments(&arguments)?).await,
             TOOL_CLICK => text_output(handle_click(parse_arguments(&arguments)?).await?),
             TOOL_TYPE => text_output(handle_type(parse_arguments(&arguments)?).await?),
+            TOOL_PRESS => text_output(handle_press(parse_arguments(&arguments)?).await?),
             TOOL_SCROLL => text_output(handle_scroll(parse_arguments(&arguments)?).await?),
             TOOL_SELECTION => text_output(handle_selection(parse_arguments(&arguments)?).await?),
             TOOL_BENCHMARK => text_output(handle_benchmark(parse_arguments(&arguments)?).await?),
@@ -172,6 +174,12 @@ struct TypeArgs {
     element_ref: Option<String>,
     text: String,
     clear: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PressArgs {
+    session_id: Option<String>,
+    key: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -744,6 +752,126 @@ async fn handle_type(args: TypeArgs) -> Result<SimpleResult, FunctionCallError> 
     });
     put_session(session).await;
     result
+}
+
+async fn handle_press(args: PressArgs) -> Result<SimpleResult, FunctionCallError> {
+    let started = Instant::now();
+    let mut session = take_session(args.session_id).await?;
+    let session_id = session.id.clone();
+    let result = dispatch_key(&mut session.cdp, &args.key)
+        .await
+        .map(|_| SimpleResult {
+            ok: true,
+            session_id,
+            message: "pressed".to_string(),
+            elapsed_ms: Some(started.elapsed().as_millis()),
+        });
+    put_session(session).await;
+    result
+}
+
+struct KeyDescriptor {
+    key: &'static str,
+    code: &'static str,
+    windows_virtual_key_code: u32,
+}
+
+fn key_descriptor(key: &str) -> Option<KeyDescriptor> {
+    let normalized = key.trim().to_ascii_lowercase();
+    let descriptor = match normalized.as_str() {
+        "enter" | "return" => KeyDescriptor {
+            key: "Enter",
+            code: "Enter",
+            windows_virtual_key_code: 13,
+        },
+        "tab" => KeyDescriptor {
+            key: "Tab",
+            code: "Tab",
+            windows_virtual_key_code: 9,
+        },
+        "escape" | "esc" => KeyDescriptor {
+            key: "Escape",
+            code: "Escape",
+            windows_virtual_key_code: 27,
+        },
+        "backspace" => KeyDescriptor {
+            key: "Backspace",
+            code: "Backspace",
+            windows_virtual_key_code: 8,
+        },
+        "delete" | "del" => KeyDescriptor {
+            key: "Delete",
+            code: "Delete",
+            windows_virtual_key_code: 46,
+        },
+        "space" | " " => KeyDescriptor {
+            key: " ",
+            code: "Space",
+            windows_virtual_key_code: 32,
+        },
+        "arrowup" | "up" => KeyDescriptor {
+            key: "ArrowUp",
+            code: "ArrowUp",
+            windows_virtual_key_code: 38,
+        },
+        "arrowdown" | "down" => KeyDescriptor {
+            key: "ArrowDown",
+            code: "ArrowDown",
+            windows_virtual_key_code: 40,
+        },
+        "arrowleft" | "left" => KeyDescriptor {
+            key: "ArrowLeft",
+            code: "ArrowLeft",
+            windows_virtual_key_code: 37,
+        },
+        "arrowright" | "right" => KeyDescriptor {
+            key: "ArrowRight",
+            code: "ArrowRight",
+            windows_virtual_key_code: 39,
+        },
+        "home" => KeyDescriptor {
+            key: "Home",
+            code: "Home",
+            windows_virtual_key_code: 36,
+        },
+        "end" => KeyDescriptor {
+            key: "End",
+            code: "End",
+            windows_virtual_key_code: 35,
+        },
+        "pageup" => KeyDescriptor {
+            key: "PageUp",
+            code: "PageUp",
+            windows_virtual_key_code: 33,
+        },
+        "pagedown" => KeyDescriptor {
+            key: "PageDown",
+            code: "PageDown",
+            windows_virtual_key_code: 34,
+        },
+        _ => return None,
+    };
+    Some(descriptor)
+}
+
+async fn dispatch_key(cdp: &mut CdpClient, key: &str) -> Result<(), FunctionCallError> {
+    let descriptor = key_descriptor(key).ok_or_else(|| {
+        FunctionCallError::RespondToModel(format!(
+            "unsupported key `{key}`; use Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, or PageDown"
+        ))
+    })?;
+    let base = json!({
+        "key": descriptor.key,
+        "code": descriptor.code,
+        "windowsVirtualKeyCode": descriptor.windows_virtual_key_code,
+        "nativeVirtualKeyCode": descriptor.windows_virtual_key_code,
+    });
+    let mut key_down = base.clone();
+    key_down["type"] = Value::String("rawKeyDown".to_string());
+    cdp.call("Input.dispatchKeyEvent", key_down).await?;
+    let mut key_up = base;
+    key_up["type"] = Value::String("keyUp".to_string());
+    cdp.call("Input.dispatchKeyEvent", key_up).await.map(|_| ())
 }
 
 async fn handle_scroll(args: ScrollArgs) -> Result<SimpleResult, FunctionCallError> {
@@ -1578,6 +1706,20 @@ mod tests {
             stealth_user_agent(user_agent),
             "Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36"
         );
+    }
+
+    #[test]
+    fn key_descriptor_maps_common_keys() {
+        let enter = key_descriptor("Enter").expect("enter descriptor");
+        assert_eq!(enter.key, "Enter");
+        assert_eq!(enter.code, "Enter");
+        assert_eq!(enter.windows_virtual_key_code, 13);
+
+        let arrow_down = key_descriptor("down").expect("down descriptor");
+        assert_eq!(arrow_down.key, "ArrowDown");
+        assert_eq!(arrow_down.windows_virtual_key_code, 40);
+
+        assert!(key_descriptor("ctrl+a").is_none());
     }
 
     #[tokio::test]

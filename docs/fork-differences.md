@@ -370,7 +370,7 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - `[features].agent_browser = true` exposes the built-in `agent_browser`
   namespace when the session has a local execution environment.
 - The namespace provides headful/headless Chrome or Chromium control over CDP:
-  open/attach, navigate, snapshot, screenshot, click, type, scroll,
+  open/attach, navigate, snapshot, screenshot, click, type, press, scroll,
   selection-overview, and benchmark tools.
 - Stealth mode is enabled by default for browser sessions. It isolates launch
   state in a temporary profile, applies automation-focused Chromium flags, hides
