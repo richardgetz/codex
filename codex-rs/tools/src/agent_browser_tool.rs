@@ -98,7 +98,7 @@ pub fn create_agent_browser_tool() -> ToolSpec {
 
     ToolSpec::Namespace(ResponsesApiNamespace {
         name: AGENT_BROWSER_NAMESPACE.to_string(),
-        description: "Built-in browser automation with headful/headless modes, snapshots, screenshots, input, and selection capture.".to_string(),
+        description: "Built-in browser automation with headful/headless modes, snapshots, screenshots, input, selection capture, and highlights.".to_string(),
         tools,
     })
 }
