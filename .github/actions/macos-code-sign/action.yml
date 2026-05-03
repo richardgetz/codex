@@ -7,6 +7,10 @@ inputs:
   binaries:
     description: Space-delimited binary basenames to sign and notarize.
     default: "codex codex-responses-api-proxy"
+  codesign-identifier:
+    description: Optional explicit code signing identifier to embed in signed binaries.
+    required: false
+    default: ""
   sign-binaries:
     description: Whether to sign and notarize the macOS binaries.
     required: false
@@ -56,6 +60,7 @@ runs:
         echo "$APPLE_CERTIFICATE" | base64 -d > "$cert_path"
 
         keychain_path="${RUNNER_TEMP}/codex-signing.keychain-db"
+        echo "APPLE_CODESIGN_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
         security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
         security set-keychain-settings -lut 21600 "$keychain_path"
         security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
@@ -114,7 +119,6 @@ runs:
         rm -f "$cert_path"
 
         echo "APPLE_CODESIGN_IDENTITY=$APPLE_CODESIGN_IDENTITY" >> "$GITHUB_ENV"
-        echo "APPLE_CODESIGN_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
         echo "::add-mask::$APPLE_CODESIGN_IDENTITY"
 
     - name: Sign macOS binaries
@@ -123,6 +127,7 @@ runs:
       env:
         TARGET: ${{ inputs.target }}
         BINARIES: ${{ inputs.binaries }}
+        CODESIGN_IDENTIFIER: ${{ inputs.codesign-identifier }}
       run: |
         set -euo pipefail
 
@@ -137,10 +142,14 @@ runs:
         fi
 
         entitlements_path="$GITHUB_ACTION_PATH/codex.entitlements.plist"
+        identifier_args=()
+        if [[ -n "${CODESIGN_IDENTIFIER:-}" ]]; then
+          identifier_args+=(--identifier "$CODESIGN_IDENTIFIER")
+        fi
 
         for binary in ${BINARIES}; do
           path="codex-rs/target/${TARGET}/release/${binary}"
-          codesign --force --options runtime --timestamp --entitlements "$entitlements_path" --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
+          codesign --force --options runtime --timestamp --entitlements "$entitlements_path" --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "${identifier_args[@]}" "$path"
         done
 
     - name: Notarize macOS binaries
@@ -238,8 +247,6 @@ runs:
     - name: Remove signing keychain
       if: ${{ always() }}
       shell: bash
-      env:
-        APPLE_CODESIGN_KEYCHAIN: ${{ env.APPLE_CODESIGN_KEYCHAIN }}
       run: |
         set -euo pipefail
         if [[ -n "${APPLE_CODESIGN_KEYCHAIN:-}" ]]; then

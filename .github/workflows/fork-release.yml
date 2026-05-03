@@ -11,6 +11,7 @@ concurrency:
 
 jobs:
   compute-release:
+    if: ${{ github.ref_name == 'stable' }}
     runs-on: ubuntu-latest
     outputs:
       base_version: ${{ steps.compute.outputs.base_version }}
@@ -33,6 +34,7 @@ jobs:
           python3 scripts/compute_fork_release.py --write-github-output
 
   build:
+    if: ${{ github.ref_name == 'stable' }}
     needs: compute-release
     name: Build - ${{ matrix.target }}
     runs-on: macos-15
@@ -194,6 +196,20 @@ jobs:
           log_progress "[60%] Cargo build completed in ${duration_min}m (${duration_sec}s)"
           append_summary "- [60%] Cargo build completed in ${duration_min}m (${duration_sec}s)"
 
+      - name: "[62%] Sign and notarize release binary"
+        uses: ./.github/actions/macos-code-sign
+        with:
+          target: ${{ matrix.target }}
+          binaries: codex
+          codesign-identifier: com.rickgetz.codex
+          sign-binaries: "true"
+          sign-dmg: "false"
+          apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
+          apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+
       - name: "[65%] Stage artifacts"
         shell: bash
         run: |
@@ -211,6 +227,7 @@ jobs:
           path: dist/${{ matrix.target }}/*
 
   release:
+    if: ${{ github.ref_name == 'stable' }}
     needs:
       - compute-release
       - build
@@ -303,6 +320,7 @@ jobs:
             dist/**/*.zst
 
   publish-npm:
+    if: ${{ github.ref_name == 'stable' }}
     needs: release
     runs-on: ubuntu-latest
     permissions:

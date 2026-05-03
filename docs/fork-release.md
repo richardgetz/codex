@@ -45,6 +45,28 @@ fails if they contain secret-like paths such as `.npmrc`, `.env*`, `.ssh/`,
 `.aws/`, or key/certificate files. The publish step also redacts auth-shaped
 output before writing logs.
 
+## One-time Apple signing setup
+
+The fork release workflow signs and notarizes the Apple Silicon `codex` binary
+before it is packaged for npm. The signed binary uses the code signing identifier
+`com.rickgetz.codex`, which gives macOS Keychain a stable code identity across
+npm upgrades.
+
+Configure these GitHub Actions secrets before relying on the release workflow:
+
+- `APPLE_CERTIFICATE_P12`: base64-encoded Developer ID Application certificate
+  exported as a `.p12`.
+- `APPLE_CERTIFICATE_PASSWORD`: password for the exported `.p12`.
+- `APPLE_NOTARIZATION_KEY_P8`: base64-encoded App Store Connect API key.
+- `APPLE_NOTARIZATION_KEY_ID`: key ID for the notarization API key.
+- `APPLE_NOTARIZATION_ISSUER_ID`: issuer ID for the notarization API key.
+
+The workflow imports the certificate into a temporary keychain, signs with the
+hardened runtime enabled, notarizes the binary, and deletes the temporary
+keychain before the build job exits. The certificate and notarization key are
+not added to any npm tarball; the publish job still audits tarball contents
+before publishing.
+
 ## Automatic counter behavior
 
 The workflow derives the upstream base version from `codex-rs/Cargo.toml` and
@@ -62,11 +84,17 @@ Merge or push to `stable` and the workflow will:
 1. Read the base version from `codex-rs/Cargo.toml`.
 2. Compute the next fork counter for that base release line.
 3. Build the macOS release binaries with the derived display version.
-4. Create the matching `rick-v<base>-rick.<n>` tag on the merge commit.
-5. Generate GitHub release notes that separate fork changes from mainline
+4. Sign and notarize the Apple Silicon `codex` binary with
+   `com.rickgetz.codex`.
+5. Create the matching `rick-v<base>-rick.<n>` tag on the merge commit.
+6. Generate GitHub release notes that separate fork changes from mainline
    Codex refreshes.
-6. Create a GitHub release.
-7. Publish the npm package.
+7. Create a GitHub release.
+8. Publish the npm package.
+
+Manual `workflow_dispatch` runs are guarded to `stable` as well. Dispatching the
+workflow from another branch skips the release jobs so Apple signing secrets are
+only exposed to the maintained release branch.
 
 ## Release notes
 
