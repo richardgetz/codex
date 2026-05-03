@@ -1,0 +1,30 @@
+intent:
+  id: "intent/2026-05-03/obscura-package-resource#1d2c56d2"
+  change_type: "feat"
+  scope: "agent-browser"
+  summary: "Make packaged Obscura resources discoverable by npm and standalone Codex installs."
+  decision: "Search bundled Obscura in standalone codex-resources and npm vendor browser directories, preserve optional vendor browser resources during npm staging, and copy optional Obscura into standalone codex-resources when present."
+  constraints:
+    - "Must keep Obscura external to codex-core and avoid adding its Rust/V8/Deno dependency graph to the main workspace."
+    - "Must preserve CODEX_AGENT_BROWSER_OBSCURA_BINARY as the highest-priority override and keep PATH fallback."
+    - "Must not require Obscura for existing release packages that do not contain a browser resource."
+    - "Must keep backend=chromium as an explicit fallback path."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::obscura_binary_candidates_for_exe"
+    - "codex-cli/scripts/build_npm_package.py::copy_native_binaries"
+    - "scripts/install/install.sh::install_release"
+    - "scripts/install/install.ps1"
+    - "docs/fork-differences.md::Agent browser"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo fmt --all"
+    - "cargo test -p codex-core obscura_binary_candidates_include_bundled_locations -- --nocapture"
+    - "cargo check -p codex-core"
+    - "PYTHONPYCACHEPREFIX=/private/tmp/codex-pycache /opt/homebrew/bin/python3.13 -m py_compile codex-cli/scripts/build_npm_package.py"
+    - "bash -n scripts/install/install.sh"
+    - "PYTHONPYCACHEPREFIX=/private/tmp/codex-pycache /opt/homebrew/bin/python3.13 copy_native_binaries optional browser resource smoke"
+    - "git diff --check"
