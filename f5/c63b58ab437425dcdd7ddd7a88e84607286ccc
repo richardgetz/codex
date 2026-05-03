@@ -1,5 +1,5 @@
 intent:
-  id: "intent/2026-05-03/remove-browser-schema-stub#auto"
+  id: "intent/2026-05-03/remove-browser-schema-stub#f5c63b58a"
   change_type: "refactor"
   scope: "agent-browser"
   summary: "Remove unused schema scaffolding from the browser runtime handler."
