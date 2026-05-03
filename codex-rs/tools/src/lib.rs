@@ -1,6 +1,7 @@
 //! Shared tool definitions and Responses API tool primitives that can live
 //! outside `codex-core`.
 
+mod agent_browser_tool;
 mod agent_job_tool;
 mod agent_tool;
 mod apply_patch_tool;
@@ -25,6 +26,9 @@ mod tool_suggest;
 mod utility_tool;
 mod view_image;
 
+pub use agent_browser_tool::AGENT_BROWSER_NAMESPACE;
+pub use agent_browser_tool::AGENT_BROWSER_TOOL_NAMES;
+pub use agent_browser_tool::create_agent_browser_tool;
 pub use agent_job_tool::create_report_agent_job_result_tool;
 pub use agent_job_tool::create_spawn_agents_on_csv_tool;
 pub use agent_tool::SpawnAgentToolOptions;

@@ -1,0 +1,1445 @@
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::net::TcpListener;
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::sync::OnceLock;
+use std::time::Duration;
+use std::time::Instant;
+
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
+use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_tools::AdditionalProperties;
+use codex_tools::JsonSchema;
+use futures::SinkExt;
+use futures::StreamExt;
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Value;
+use serde_json::json;
+use tempfile::TempDir;
+use tokio::net::TcpStream;
+use tokio::process::Child;
+use tokio::process::Command;
+use tokio::sync::Mutex;
+use tokio::time::sleep;
+use tokio_tungstenite::MaybeTlsStream;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message;
+use uuid::Uuid;
+
+use crate::function_tool::FunctionCallError;
+use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolPayload;
+use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::ToolHandler;
+use crate::tools::registry::ToolKind;
+
+const TOOL_OPEN: &str = "open";
+const TOOL_CLOSE: &str = "close";
+const TOOL_NAVIGATE: &str = "navigate";
+const TOOL_SNAPSHOT: &str = "snapshot";
+const TOOL_SCREENSHOT: &str = "screenshot";
+const TOOL_CLICK: &str = "click";
+const TOOL_TYPE: &str = "type";
+const TOOL_SCROLL: &str = "scroll";
+const TOOL_SELECTION: &str = "selection_overview";
+const TOOL_BENCHMARK: &str = "benchmark";
+
+const DEFAULT_VIEWPORT_WIDTH: u32 = 1365;
+const DEFAULT_VIEWPORT_HEIGHT: u32 = 900;
+const DEFAULT_LOCALE: &str = "en-US";
+const DEFAULT_TIMEZONE: &str = "America/New_York";
+
+static BROWSER_MANAGER: OnceLock<Mutex<BrowserManager>> = OnceLock::new();
+
+pub struct AgentBrowserHandler;
+
+impl ToolHandler for AgentBrowserHandler {
+    type Output = FunctionToolOutput;
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+        !matches!(
+            invocation.tool_name.name.as_str(),
+            TOOL_SNAPSHOT | TOOL_SCREENSHOT
+        )
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        let arguments = match &invocation.payload {
+            ToolPayload::Function { arguments } => arguments.clone(),
+            _ => {
+                return Err(FunctionCallError::RespondToModel(
+                    "agent_browser handler received unsupported payload".to_string(),
+                ));
+            }
+        };
+
+        match invocation.tool_name.name.as_str() {
+            TOOL_OPEN => text_output(handle_open(parse_arguments(&arguments)?).await?),
+            TOOL_CLOSE => text_output(handle_close(parse_arguments(&arguments)?).await?),
+            TOOL_NAVIGATE => text_output(handle_navigate(parse_arguments(&arguments)?).await?),
+            TOOL_SNAPSHOT => text_output(handle_snapshot(parse_arguments(&arguments)?).await?),
+            TOOL_SCREENSHOT => handle_screenshot(parse_arguments(&arguments)?).await,
+            TOOL_CLICK => text_output(handle_click(parse_arguments(&arguments)?).await?),
+            TOOL_TYPE => text_output(handle_type(parse_arguments(&arguments)?).await?),
+            TOOL_SCROLL => text_output(handle_scroll(parse_arguments(&arguments)?).await?),
+            TOOL_SELECTION => text_output(handle_selection(parse_arguments(&arguments)?).await?),
+            TOOL_BENCHMARK => text_output(handle_benchmark(parse_arguments(&arguments)?).await?),
+            other => Err(FunctionCallError::RespondToModel(format!(
+                "unknown agent_browser tool `{other}`"
+            ))),
+        }
+    }
+}
+
+fn text_output<T: Serialize>(value: T) -> Result<FunctionToolOutput, FunctionCallError> {
+    let text = serde_json::to_string_pretty(&value).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to serialize agent_browser result: {err}"
+        ))
+    })?;
+    Ok(FunctionToolOutput::from_text(text, Some(true)))
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum BrowserMode {
+    #[default]
+    Headful,
+    Headless,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenArgs {
+    url: Option<String>,
+    #[serde(default)]
+    mode: BrowserMode,
+    #[serde(default = "default_true")]
+    stealth: bool,
+    viewport_width: Option<u32>,
+    viewport_height: Option<u32>,
+    locale: Option<String>,
+    timezone: Option<String>,
+    user_agent: Option<String>,
+    remote_debugging_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionArgs {
+    session_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NavigateArgs {
+    session_id: Option<String>,
+    url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SnapshotArgs {
+    session_id: Option<String>,
+    max_text_chars: Option<usize>,
+    max_elements: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScreenshotArgs {
+    session_id: Option<String>,
+    full_page: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClickArgs {
+    session_id: Option<String>,
+    #[serde(rename = "ref")]
+    element_ref: Option<String>,
+    x: Option<f64>,
+    y: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TypeArgs {
+    session_id: Option<String>,
+    #[serde(rename = "ref")]
+    element_ref: Option<String>,
+    text: String,
+    clear: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScrollArgs {
+    session_id: Option<String>,
+    delta_x: Option<f64>,
+    delta_y: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SelectionArgs {
+    session_id: Option<String>,
+    enable_overlay: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BenchmarkArgs {
+    #[serde(default = "default_headless")]
+    mode: BrowserMode,
+    iterations: Option<usize>,
+    #[serde(default = "default_true")]
+    stealth: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_headless() -> BrowserMode {
+    BrowserMode::Headless
+}
+
+#[derive(Debug, Serialize)]
+struct OpenResult {
+    session_id: String,
+    mode: &'static str,
+    stealth: bool,
+    endpoint: String,
+    url: String,
+    launch_ms: u128,
+    notes: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SimpleResult {
+    ok: bool,
+    session_id: String,
+    message: String,
+    elapsed_ms: Option<u128>,
+}
+
+#[derive(Debug, Serialize)]
+struct BenchmarkResult {
+    mode: &'static str,
+    stealth: bool,
+    iterations: usize,
+    launch_ms: u128,
+    navigate_ms: u128,
+    snapshot_ms: Vec<u128>,
+    screenshot_ms: Vec<u128>,
+    totals: BenchmarkTotals,
+}
+
+#[derive(Debug, Serialize)]
+struct BenchmarkTotals {
+    snapshot_avg_ms: u128,
+    screenshot_avg_ms: u128,
+}
+
+struct BrowserManager {
+    sessions: HashMap<String, BrowserSession>,
+    active_session_id: Option<String>,
+}
+
+impl BrowserManager {
+    fn new() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            active_session_id: None,
+        }
+    }
+
+    fn resolve_session_id(&self, requested: Option<String>) -> Result<String, FunctionCallError> {
+        if let Some(session_id) = requested {
+            if self.sessions.contains_key(&session_id) {
+                return Ok(session_id);
+            }
+            return Err(FunctionCallError::RespondToModel(format!(
+                "agent_browser session `{session_id}` was not found"
+            )));
+        }
+
+        self.active_session_id.clone().ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "no active agent_browser session; call agent_browser.open first".to_string(),
+            )
+        })
+    }
+}
+
+struct BrowserSession {
+    id: String,
+    mode: BrowserMode,
+    stealth: bool,
+    endpoint: String,
+    cdp: CdpClient,
+    process: Option<Child>,
+    _profile_dir: Option<TempDir>,
+}
+
+struct CdpClient {
+    socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    next_id: u64,
+}
+
+impl CdpClient {
+    async fn connect(ws_url: &str) -> Result<Self, FunctionCallError> {
+        let (socket, _) = connect_async(ws_url).await.map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to connect to browser websocket `{ws_url}`: {err}"
+            ))
+        })?;
+        Ok(Self { socket, next_id: 1 })
+    }
+
+    async fn call(&mut self, method: &str, params: Value) -> Result<Value, FunctionCallError> {
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        let request = json!({
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+
+        self.socket
+            .send(Message::Text(request.to_string().into()))
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to send browser command `{method}`: {err}"
+                ))
+            })?;
+
+        while let Some(message) = self.socket.next().await {
+            let message = message.map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "browser websocket failed while waiting for `{method}`: {err}"
+                ))
+            })?;
+            let Message::Text(text) = message else {
+                continue;
+            };
+            let value: Value = serde_json::from_str(&text).map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "browser returned invalid JSON for `{method}`: {err}"
+                ))
+            })?;
+            if value.get("id").and_then(Value::as_u64) != Some(id) {
+                continue;
+            }
+            if let Some(error) = value.get("error") {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "browser command `{method}` failed: {error}"
+                )));
+            }
+            return Ok(value.get("result").cloned().unwrap_or(Value::Null));
+        }
+
+        Err(FunctionCallError::RespondToModel(format!(
+            "browser websocket closed while waiting for `{method}`"
+        )))
+    }
+}
+
+fn manager() -> &'static Mutex<BrowserManager> {
+    BROWSER_MANAGER.get_or_init(|| Mutex::new(BrowserManager::new()))
+}
+
+async fn take_session(
+    requested_session_id: Option<String>,
+) -> Result<BrowserSession, FunctionCallError> {
+    let mut manager = manager().lock().await;
+    let session_id = manager.resolve_session_id(requested_session_id)?;
+    manager.sessions.remove(&session_id).ok_or_else(|| {
+        FunctionCallError::RespondToModel(format!(
+            "agent_browser session `{session_id}` disappeared before use"
+        ))
+    })
+}
+
+async fn put_session(session: BrowserSession) {
+    let mut manager = manager().lock().await;
+    manager.sessions.insert(session.id.clone(), session);
+}
+
+async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
+    let started = Instant::now();
+    let session_id = format!("br-{}", Uuid::new_v4().simple());
+    let viewport_width = args.viewport_width.unwrap_or(DEFAULT_VIEWPORT_WIDTH);
+    let viewport_height = args.viewport_height.unwrap_or(DEFAULT_VIEWPORT_HEIGHT);
+    let locale = args.locale.unwrap_or_else(|| DEFAULT_LOCALE.to_string());
+    let timezone = args
+        .timezone
+        .unwrap_or_else(|| DEFAULT_TIMEZONE.to_string());
+
+    let mut launch = if let Some(remote) = args.remote_debugging_url.as_deref() {
+        attach_connection(remote).await?
+    } else {
+        launch_connection(
+            &args.mode,
+            args.stealth,
+            viewport_width,
+            viewport_height,
+            &locale,
+        )
+        .await?
+    };
+
+    let endpoint = launch.endpoint.clone();
+    let page_ws_url = launch.page_ws_url.clone();
+    let notes = launch.notes.clone();
+
+    let mut cdp = match CdpClient::connect(&page_ws_url).await {
+        Ok(cdp) => cdp,
+        Err(err) => {
+            kill_launched_browser(&mut launch.process).await;
+            return Err(err);
+        }
+    };
+    if let Err(err) = initialize_page(
+        &mut cdp,
+        args.stealth,
+        viewport_width,
+        viewport_height,
+        &locale,
+        &timezone,
+        args.user_agent.as_deref(),
+    )
+    .await
+    {
+        kill_launched_browser(&mut launch.process).await;
+        return Err(err);
+    }
+
+    if let Some(url) = args.url.as_deref()
+        && let Err(err) = navigate_to(&mut cdp, url).await
+    {
+        kill_launched_browser(&mut launch.process).await;
+        return Err(err);
+    }
+
+    let url = page_url(&mut cdp).await.unwrap_or_default();
+    let session = BrowserSession {
+        id: session_id.clone(),
+        mode: args.mode.clone(),
+        stealth: args.stealth,
+        endpoint: endpoint.clone(),
+        cdp,
+        process: launch.process.take(),
+        _profile_dir: launch.profile_dir.take(),
+    };
+
+    let mut manager = manager().lock().await;
+    manager.active_session_id = Some(session_id.clone());
+    manager.sessions.insert(session_id.clone(), session);
+
+    Ok(OpenResult {
+        session_id,
+        mode: mode_name(&args.mode),
+        stealth: args.stealth,
+        endpoint: endpoint.clone(),
+        url,
+        launch_ms: started.elapsed().as_millis(),
+        notes,
+    })
+}
+
+async fn handle_close(args: SessionArgs) -> Result<SimpleResult, FunctionCallError> {
+    let (session_id, mut session) = {
+        let mut manager = manager().lock().await;
+        let session_id = manager.resolve_session_id(args.session_id)?;
+        let session = manager.sessions.remove(&session_id).ok_or_else(|| {
+            FunctionCallError::RespondToModel(format!(
+                "agent_browser session `{session_id}` disappeared before close"
+            ))
+        })?;
+        if manager.active_session_id.as_deref() == Some(session_id.as_str()) {
+            manager.active_session_id = manager.sessions.keys().next().cloned();
+        }
+        (session_id, session)
+    };
+
+    if let Some(mut child) = session.process.take() {
+        let _ = child.kill().await;
+    }
+
+    Ok(SimpleResult {
+        ok: true,
+        session_id,
+        message: "closed".to_string(),
+        elapsed_ms: None,
+    })
+}
+
+async fn handle_navigate(args: NavigateArgs) -> Result<SimpleResult, FunctionCallError> {
+    let started = Instant::now();
+    let mut session = take_session(args.session_id).await?;
+    let session_id = session.id.clone();
+    let result = navigate_to(&mut session.cdp, &args.url)
+        .await
+        .map(|_| SimpleResult {
+            ok: true,
+            session_id,
+            message: "navigated".to_string(),
+            elapsed_ms: Some(started.elapsed().as_millis()),
+        });
+    put_session(session).await;
+    result
+}
+
+async fn handle_snapshot(args: SnapshotArgs) -> Result<Value, FunctionCallError> {
+    let started = Instant::now();
+    let mut session = take_session(args.session_id).await?;
+    let result = snapshot_page(
+        &mut session.cdp,
+        args.max_text_chars.unwrap_or(12_000).clamp(1_000, 80_000),
+        args.max_elements.unwrap_or(80).clamp(1, 250),
+    )
+    .await
+    .map(|mut snapshot| {
+        snapshot["session_id"] = Value::String(session.id.clone());
+        snapshot["mode"] = Value::String(mode_name(&session.mode).to_string());
+        snapshot["stealth"] = Value::Bool(session.stealth);
+        snapshot["endpoint"] = Value::String(session.endpoint.clone());
+        snapshot["elapsed_ms"] = json!(started.elapsed().as_millis());
+        snapshot
+    });
+    put_session(session).await;
+    result
+}
+
+async fn handle_screenshot(args: ScreenshotArgs) -> Result<FunctionToolOutput, FunctionCallError> {
+    let started = Instant::now();
+    let mut session = take_session(args.session_id).await?;
+    let session_id = session.id.clone();
+    let result = session
+        .cdp
+        .call(
+            "Page.captureScreenshot",
+            json!({
+                "format": "png",
+                "fromSurface": true,
+                "captureBeyondViewport": args.full_page.unwrap_or(false),
+            }),
+        )
+        .await
+        .and_then(|result| {
+            let data = result.get("data").and_then(Value::as_str).ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "browser screenshot result did not include image data".to_string(),
+                )
+            })?;
+            let summary = json!({
+                "session_id": session_id,
+                "mode": mode_name(&session.mode),
+                "stealth": session.stealth,
+                "elapsed_ms": started.elapsed().as_millis(),
+                "mime_type": "image/png",
+            });
+            Ok(FunctionToolOutput::from_content(
+                vec![
+                    FunctionCallOutputContentItem::InputText {
+                        text: serde_json::to_string_pretty(&summary)
+                            .unwrap_or_else(|_| summary.to_string()),
+                    },
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: format!("data:image/png;base64,{data}"),
+                        detail: Some(DEFAULT_IMAGE_DETAIL),
+                    },
+                ],
+                Some(true),
+            ))
+        });
+    put_session(session).await;
+    result
+}
+
+async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError> {
+    let started = Instant::now();
+    let mut session = take_session(args.session_id).await?;
+    let session_id = session.id.clone();
+
+    let result = if let Some(element_ref) = args.element_ref.as_deref() {
+        let expression = format!(
+            r#"(() => {{
+                const el = document.querySelector(`[data-codex-agent-ref="${{CSS.escape({})}}"]`);
+                if (!el) return {{ ok: false, message: "element ref not found" }};
+                el.scrollIntoView({{ block: "center", inline: "center" }});
+                el.click();
+                return {{ ok: true, message: "clicked ref" }};
+            }})()"#,
+            serde_json::to_string(element_ref).unwrap_or_else(|_| "\"\"".to_string())
+        );
+        evaluate_json(&mut session.cdp, &expression)
+            .await
+            .and_then(|result| {
+                if result.get("ok").and_then(Value::as_bool) == Some(true) {
+                    Ok(())
+                } else {
+                    Err(FunctionCallError::RespondToModel(format!(
+                        "click failed: {}",
+                        result
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown error")
+                    )))
+                }
+            })
+    } else {
+        let x = args.x.ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "click requires either `ref` or both `x` and `y`".to_string(),
+            )
+        });
+        let y = args.y.ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "click requires either `ref` or both `x` and `y`".to_string(),
+            )
+        });
+        match (x, y) {
+            (Ok(x), Ok(y)) => {
+                match session
+                    .cdp
+                    .call(
+                        "Input.dispatchMouseEvent",
+                        json!({"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1}),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        session
+                            .cdp
+                            .call(
+                                "Input.dispatchMouseEvent",
+                                json!({"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1}),
+                            )
+                            .await
+                            .map(|_| ())
+                    }
+                    Err(err) => Err(err),
+                }
+            }
+            (Err(err), _) | (_, Err(err)) => Err(err),
+        }
+    };
+    let result = result.map(|_| SimpleResult {
+        ok: true,
+        session_id,
+        message: "clicked".to_string(),
+        elapsed_ms: Some(started.elapsed().as_millis()),
+    });
+    put_session(session).await;
+    result
+}
+
+async fn handle_type(args: TypeArgs) -> Result<SimpleResult, FunctionCallError> {
+    let started = Instant::now();
+    let mut session = take_session(args.session_id).await?;
+    let session_id = session.id.clone();
+    let mut result = Ok(());
+    if let Some(element_ref) = args.element_ref.as_deref()
+        && result.is_ok()
+    {
+        let expression = format!(
+            r#"(() => {{
+                const agentRef = {};
+                const el = document.querySelector(`[data-codex-agent-ref="${{CSS.escape(agentRef)}}"]`);
+                if (!el) return {{ ok: false, message: "element ref not found" }};
+                el.scrollIntoView({{ block: "center", inline: "center" }});
+                el.focus();
+                if ({}) {{
+                    if ("value" in el) el.value = "";
+                    else el.textContent = "";
+                }}
+                return {{ ok: true }};
+            }})()"#,
+            serde_json::to_string(element_ref).unwrap_or_else(|_| "\"\"".to_string()),
+            args.clear.unwrap_or(false)
+        );
+        result = evaluate_json(&mut session.cdp, &expression)
+            .await
+            .and_then(|value| {
+                if value.get("ok").and_then(Value::as_bool) == Some(true) {
+                    Ok(())
+                } else {
+                    Err(FunctionCallError::RespondToModel(format!(
+                        "type failed: {}",
+                        value
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown error")
+                    )))
+                }
+            });
+    } else if args.clear.unwrap_or(false) && result.is_ok() {
+        result = evaluate_json(
+            &mut session.cdp,
+            r#"(() => {
+                const el = document.activeElement;
+                if (el && "value" in el) el.value = "";
+                else if (el) el.textContent = "";
+                return { ok: true };
+            })()"#,
+        )
+        .await
+        .map(|_| ());
+    }
+
+    if result.is_ok() {
+        result = session
+            .cdp
+            .call("Input.insertText", json!({ "text": args.text }))
+            .await
+            .map(|_| ());
+    }
+
+    let result = result.map(|_| SimpleResult {
+        ok: true,
+        session_id,
+        message: "typed".to_string(),
+        elapsed_ms: Some(started.elapsed().as_millis()),
+    });
+    put_session(session).await;
+    result
+}
+
+async fn handle_scroll(args: ScrollArgs) -> Result<SimpleResult, FunctionCallError> {
+    let started = Instant::now();
+    let mut session = take_session(args.session_id).await?;
+    let session_id = session.id.clone();
+    let expression = format!(
+        "(() => {{ window.scrollBy({}, {}); return {{ ok: true, x: window.scrollX, y: window.scrollY }}; }})()",
+        args.delta_x.unwrap_or(0.0),
+        args.delta_y.unwrap_or(600.0)
+    );
+    let result = evaluate_json(&mut session.cdp, &expression)
+        .await
+        .map(|_| SimpleResult {
+            ok: true,
+            session_id,
+            message: "scrolled".to_string(),
+            elapsed_ms: Some(started.elapsed().as_millis()),
+        });
+    put_session(session).await;
+    result
+}
+
+async fn handle_selection(args: SelectionArgs) -> Result<Value, FunctionCallError> {
+    let started = Instant::now();
+    let mut session = take_session(args.session_id).await?;
+    let session_id = session.id.clone();
+    let overlay_result = if args.enable_overlay.unwrap_or(true) {
+        inject_overlay(&mut session.cdp).await
+    } else {
+        Ok(())
+    };
+    let output = match overlay_result {
+        Ok(()) => evaluate_json(
+                &mut session.cdp,
+                r#"(() => window.__codexAgentBrowserOverview ? window.__codexAgentBrowserOverview() : { overlay: false })()"#,
+            )
+            .await
+            .map(|mut overview| {
+                overview["session_id"] = Value::String(session_id);
+                overview["elapsed_ms"] = json!(started.elapsed().as_millis());
+                overview
+            }),
+        Err(err) => Err(err),
+    };
+    put_session(session).await;
+    output
+}
+
+async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, FunctionCallError> {
+    let iterations = args.iterations.unwrap_or(3).clamp(1, 20);
+    let open_started = Instant::now();
+    let open = OpenArgs {
+        url: None,
+        mode: args.mode.clone(),
+        stealth: args.stealth,
+        viewport_width: Some(1280),
+        viewport_height: Some(800),
+        locale: Some(DEFAULT_LOCALE.to_string()),
+        timezone: Some(DEFAULT_TIMEZONE.to_string()),
+        user_agent: None,
+        remote_debugging_url: None,
+    };
+    let opened = handle_open(open).await?;
+    let launch_ms = open_started.elapsed().as_millis();
+    let session_id = opened.session_id.clone();
+    let navigate_started = Instant::now();
+    handle_navigate(NavigateArgs {
+        session_id: Some(session_id.clone()),
+        url: benchmark_url(),
+    })
+    .await?;
+    let navigate_ms = navigate_started.elapsed().as_millis();
+    let mut snapshot_ms = Vec::with_capacity(iterations);
+    let mut screenshot_ms = Vec::with_capacity(iterations);
+
+    for _ in 0..iterations {
+        let started = Instant::now();
+        let _ = handle_snapshot(SnapshotArgs {
+            session_id: Some(session_id.clone()),
+            max_text_chars: Some(8_000),
+            max_elements: Some(80),
+        })
+        .await?;
+        snapshot_ms.push(started.elapsed().as_millis());
+
+        let started = Instant::now();
+        let _ = handle_screenshot(ScreenshotArgs {
+            session_id: Some(session_id.clone()),
+            full_page: Some(false),
+        })
+        .await?;
+        screenshot_ms.push(started.elapsed().as_millis());
+    }
+
+    let _ = handle_close(SessionArgs {
+        session_id: Some(session_id),
+    })
+    .await;
+
+    Ok(BenchmarkResult {
+        mode: mode_name(&args.mode),
+        stealth: args.stealth,
+        iterations,
+        launch_ms,
+        navigate_ms,
+        totals: BenchmarkTotals {
+            snapshot_avg_ms: average_ms(&snapshot_ms),
+            screenshot_avg_ms: average_ms(&screenshot_ms),
+        },
+        snapshot_ms,
+        screenshot_ms,
+    })
+}
+
+fn average_ms(values: &[u128]) -> u128 {
+    if values.is_empty() {
+        return 0;
+    }
+    values.iter().sum::<u128>() / values.len() as u128
+}
+
+async fn initialize_page(
+    cdp: &mut CdpClient,
+    stealth: bool,
+    viewport_width: u32,
+    viewport_height: u32,
+    locale: &str,
+    timezone: &str,
+    user_agent: Option<&str>,
+) -> Result<(), FunctionCallError> {
+    cdp.call("Page.enable", json!({})).await?;
+    cdp.call("Runtime.enable", json!({})).await?;
+    cdp.call("DOM.enable", json!({})).await?;
+    cdp.call("Network.enable", json!({})).await?;
+    cdp.call(
+        "Emulation.setDeviceMetricsOverride",
+        json!({
+            "width": viewport_width,
+            "height": viewport_height,
+            "deviceScaleFactor": 1,
+            "mobile": false,
+        }),
+    )
+    .await?;
+    cdp.call(
+        "Emulation.setLocaleOverride",
+        json!({
+            "locale": locale,
+        }),
+    )
+    .await?;
+    cdp.call(
+        "Emulation.setTimezoneOverride",
+        json!({
+            "timezoneId": timezone,
+        }),
+    )
+    .await?;
+    if let Some(user_agent) = user_agent {
+        cdp.call(
+            "Network.setUserAgentOverride",
+            json!({
+                "userAgent": user_agent,
+                "acceptLanguage": locale,
+            }),
+        )
+        .await?;
+    }
+    if stealth {
+        let script = stealth_script(locale);
+        cdp.call(
+            "Page.addScriptToEvaluateOnNewDocument",
+            json!({ "source": script }),
+        )
+        .await?;
+        evaluate_json(
+            cdp,
+            &format!("(() => {{ {script} return {{ ok: true }}; }})()"),
+        )
+        .await?;
+    }
+    inject_overlay(cdp).await?;
+    Ok(())
+}
+
+async fn navigate_to(cdp: &mut CdpClient, url: &str) -> Result<(), FunctionCallError> {
+    cdp.call("Page.navigate", json!({ "url": url })).await?;
+    for _ in 0..60 {
+        let ready = evaluate_json(cdp, "(() => ({ readyState: document.readyState }))()").await?;
+        if matches!(
+            ready.get("readyState").and_then(Value::as_str),
+            Some("interactive" | "complete")
+        ) {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    Ok(())
+}
+
+async fn page_url(cdp: &mut CdpClient) -> Result<String, FunctionCallError> {
+    let value = evaluate_json(cdp, "(() => ({ url: location.href }))()").await?;
+    Ok(value
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string())
+}
+
+async fn snapshot_page(
+    cdp: &mut CdpClient,
+    max_text_chars: usize,
+    max_elements: usize,
+) -> Result<Value, FunctionCallError> {
+    let expression = format!(
+        r#"(() => {{
+            const maxText = {max_text_chars};
+            const maxElements = {max_elements};
+            window.__codexAgentBrowserNextRef = window.__codexAgentBrowserNextRef || 1;
+            const selectors = [
+                "a[href]", "button", "input", "textarea", "select", "[role=button]",
+                "[role=link]", "[contenteditable=true]", "summary", "[tabindex]:not([tabindex='-1'])"
+            ];
+            const seen = new Set();
+            const elements = [];
+            for (const el of document.querySelectorAll(selectors.join(","))) {{
+                if (seen.has(el) || elements.length >= maxElements) continue;
+                seen.add(el);
+                const rect = el.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) continue;
+                if (!el.dataset.codexAgentRef) {{
+                    el.dataset.codexAgentRef = "e" + window.__codexAgentBrowserNextRef++;
+                }}
+                const label = (el.getAttribute("aria-label") || el.getAttribute("title") || el.innerText || el.value || el.placeholder || "").trim().replace(/\s+/g, " ").slice(0, 220);
+                elements.push({{
+                    ref: el.dataset.codexAgentRef,
+                    tag: el.tagName.toLowerCase(),
+                    role: el.getAttribute("role"),
+                    label,
+                    href: el.href || null,
+                    type: el.getAttribute("type"),
+                    rect: {{
+                        x: Math.round(rect.x),
+                        y: Math.round(rect.y),
+                        width: Math.round(rect.width),
+                        height: Math.round(rect.height)
+                    }}
+                }});
+            }}
+            const selection = window.getSelection();
+            return {{
+                url: location.href,
+                title: document.title,
+                readyState: document.readyState,
+                text: (document.body && document.body.innerText || "").replace(/\n{{3,}}/g, "\n\n").slice(0, maxText),
+                selection: selection ? selection.toString().slice(0, 4000) : "",
+                elements,
+                viewport: {{
+                    width: window.innerWidth,
+                    height: window.innerHeight,
+                    scrollX: window.scrollX,
+                    scrollY: window.scrollY
+                }}
+            }};
+        }})()"#
+    );
+    evaluate_json(cdp, &expression).await
+}
+
+async fn inject_overlay(cdp: &mut CdpClient) -> Result<(), FunctionCallError> {
+    cdp.call(
+        "Page.addScriptToEvaluateOnNewDocument",
+        json!({ "source": overlay_script() }),
+    )
+    .await?;
+    evaluate_json(
+        cdp,
+        &format!(
+            "(() => {{ {} return window.__codexAgentBrowserOverview(); }})()",
+            overlay_script()
+        ),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn evaluate_json(cdp: &mut CdpClient, expression: &str) -> Result<Value, FunctionCallError> {
+    let result = cdp
+        .call(
+            "Runtime.evaluate",
+            json!({
+                "expression": expression,
+                "returnByValue": true,
+                "awaitPromise": true,
+            }),
+        )
+        .await?;
+    if let Some(exception) = result.get("exceptionDetails") {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "browser evaluation failed: {exception}"
+        )));
+    }
+    Ok(result
+        .get("result")
+        .and_then(|result| result.get("value"))
+        .cloned()
+        .unwrap_or(Value::Null))
+}
+
+struct LaunchConnection {
+    endpoint: String,
+    page_ws_url: String,
+    process: Option<Child>,
+    profile_dir: Option<TempDir>,
+    notes: Vec<String>,
+}
+
+async fn attach_connection(remote: &str) -> Result<LaunchConnection, FunctionCallError> {
+    if remote.starts_with("ws://") || remote.starts_with("wss://") {
+        return Ok(LaunchConnection {
+            endpoint: remote.to_string(),
+            page_ws_url: remote.to_string(),
+            process: None,
+            profile_dir: None,
+            notes: vec!["attached to explicit websocket endpoint".to_string()],
+        });
+    }
+
+    let endpoint = remote.trim_end_matches('/').to_string();
+    let page_ws_url = first_page_ws_url(&endpoint).await?;
+    Ok(LaunchConnection {
+        endpoint,
+        page_ws_url,
+        process: None,
+        profile_dir: None,
+        notes: vec!["attached to existing remote debugging endpoint".to_string()],
+    })
+}
+
+async fn launch_connection(
+    mode: &BrowserMode,
+    stealth: bool,
+    viewport_width: u32,
+    viewport_height: u32,
+    locale: &str,
+) -> Result<LaunchConnection, FunctionCallError> {
+    let binary = find_browser_binary()?;
+    let port = free_local_port()?;
+    let profile_dir = tempfile::Builder::new()
+        .prefix("codex-agent-browser-")
+        .tempdir()
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to create browser profile dir: {err}"
+            ))
+        })?;
+    let endpoint = format!("http://127.0.0.1:{port}");
+    let mut command = Command::new(&binary);
+    command
+        .arg(format!("--remote-debugging-port={port}"))
+        .arg(format!("--user-data-dir={}", profile_dir.path().display()))
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .arg("--remote-debugging-address=127.0.0.1")
+        .arg("--disable-popup-blocking")
+        .arg("--disable-background-networking")
+        .arg("--disable-component-update")
+        .arg("--disable-breakpad")
+        .arg("--disable-crash-reporter")
+        .arg("--disable-crashpad")
+        .arg("--disable-sync")
+        .arg("--disable-gpu")
+        .arg("--disable-dev-shm-usage")
+        .arg("--metrics-recording-only")
+        .arg("--password-store=basic")
+        .arg("--use-mock-keychain")
+        .arg(format!("--lang={locale}"))
+        .arg(format!("--window-size={viewport_width},{viewport_height}"))
+        .arg("about:blank")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    if matches!(mode, BrowserMode::Headless) {
+        command.arg("--headless=new");
+    }
+
+    if stealth {
+        command
+            .arg("--disable-blink-features=AutomationControlled")
+            .arg("--disable-infobars")
+            .arg("--force-webrtc-ip-handling-policy=default_public_interface_only");
+    }
+
+    if std::env::var("CODEX_AGENT_BROWSER_NO_SANDBOX").as_deref() == Ok("1") {
+        command.arg("--no-sandbox");
+    }
+
+    let mut process = command.spawn().map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to launch browser `{}`: {err}",
+            binary.display()
+        ))
+    })?;
+
+    let page_ws_url = match wait_for_first_page_ws_url(&endpoint, &mut process).await {
+        Ok(page_ws_url) => page_ws_url,
+        Err(err) => {
+            let _ = process.kill().await;
+            return Err(err);
+        }
+    };
+    Ok(LaunchConnection {
+        endpoint,
+        page_ws_url,
+        process: Some(process),
+        profile_dir: Some(profile_dir),
+        notes: vec![format!("launched {}", binary.display())],
+    })
+}
+
+async fn kill_launched_browser(process: &mut Option<Child>) {
+    if let Some(mut child) = process.take() {
+        let _ = child.kill().await;
+    }
+}
+
+async fn wait_for_first_page_ws_url(
+    endpoint: &str,
+    process: &mut Child,
+) -> Result<String, FunctionCallError> {
+    let mut last_error = None;
+    for _ in 0..80 {
+        match first_page_ws_url(endpoint).await {
+            Ok(ws_url) => return Ok(ws_url),
+            Err(err) => last_error = Some(err),
+        }
+        if let Some(status) = process.try_wait().map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to inspect browser process while waiting for `{endpoint}`: {err}"
+            ))
+        })? {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "browser process exited before exposing `{endpoint}` with status {status}"
+            )));
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    Err(last_error.unwrap_or_else(|| {
+        FunctionCallError::RespondToModel(format!(
+            "browser did not expose a debuggable page at `{endpoint}`"
+        ))
+    }))
+}
+
+async fn first_page_ws_url(endpoint: &str) -> Result<String, FunctionCallError> {
+    #[derive(Deserialize)]
+    struct Target {
+        #[serde(rename = "type")]
+        target_type: Option<String>,
+        #[serde(rename = "webSocketDebuggerUrl")]
+        web_socket_debugger_url: Option<String>,
+    }
+
+    let url = format!("{}/json/list", endpoint.trim_end_matches('/'));
+    let targets: Vec<Target> = reqwest::get(&url)
+        .await
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to query browser target list `{url}`: {err}"
+            ))
+        })?
+        .json()
+        .await
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to parse browser target list `{url}`: {err}"
+            ))
+        })?;
+
+    targets
+        .into_iter()
+        .find(|target| target.target_type.as_deref() == Some("page"))
+        .and_then(|target| target.web_socket_debugger_url)
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(format!(
+                "browser target list `{url}` did not include a page websocket"
+            ))
+        })
+}
+
+fn find_browser_binary() -> Result<PathBuf, FunctionCallError> {
+    if let Ok(path) = std::env::var("CODEX_AGENT_BROWSER_BINARY") {
+        let path = PathBuf::from(path);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    let candidates = [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/snap/bin/chromium",
+    ];
+    for candidate in candidates {
+        let path = PathBuf::from(candidate);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    for name in [
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium",
+        "chromium-browser",
+    ] {
+        if let Ok(path) = which::which(name) {
+            return Ok(path);
+        }
+    }
+
+    Err(FunctionCallError::RespondToModel(
+        "no Chrome/Chromium browser binary found; set CODEX_AGENT_BROWSER_BINARY".to_string(),
+    ))
+}
+
+fn free_local_port() -> Result<u16, FunctionCallError> {
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to reserve browser debug port: {err}"))
+    })?;
+    let port = listener.local_addr().map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to read browser debug port: {err}"))
+    })?;
+    Ok(port.port())
+}
+
+fn mode_name(mode: &BrowserMode) -> &'static str {
+    match mode {
+        BrowserMode::Headful => "headful",
+        BrowserMode::Headless => "headless",
+    }
+}
+
+fn benchmark_url() -> String {
+    let html = r##"<!doctype html>
+<meta charset="utf-8">
+<title>Codex Agent Browser Benchmark</title>
+<main>
+  <h1>Codex Agent Browser Benchmark</h1>
+  <input aria-label="Search" placeholder="Search">
+  <button>Run</button>
+  <a href="#details">Details</a>
+  <section id="details">This local page measures launch, navigation, snapshot, and screenshot latency.</section>
+</main>"##;
+    format!("data:text/html;charset=utf-8,{}", urlencoding_like(html))
+}
+
+fn urlencoding_like(input: &str) -> String {
+    input
+        .bytes()
+        .flat_map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                vec![byte as char]
+            }
+            b' ' => vec!['%', '2', '0'],
+            _ => format!("%{byte:02X}").chars().collect(),
+        })
+        .collect()
+}
+
+fn stealth_script(locale: &str) -> String {
+    let languages = locale
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    let languages_json = serde_json::to_string(&if languages.is_empty() {
+        vec![DEFAULT_LOCALE]
+    } else {
+        languages
+    })
+    .unwrap_or_else(|_| "[\"en-US\"]".to_string());
+
+    format!(
+        r#"
+        (() => {{
+            const define = (target, key, getter) => {{
+                try {{ Object.defineProperty(target, key, {{ get: getter, configurable: true }}); }} catch (_) {{}}
+            }};
+            define(Navigator.prototype, "webdriver", () => undefined);
+            define(Navigator.prototype, "languages", () => {languages_json});
+            if (!window.chrome) {{
+                Object.defineProperty(window, "chrome", {{
+                    value: {{ runtime: {{}} }},
+                    configurable: true
+                }});
+            }}
+            const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
+            if (originalQuery) {{
+                window.navigator.permissions.query = (parameters) => (
+                    parameters && parameters.name === "notifications"
+                        ? Promise.resolve({{ state: Notification.permission }})
+                        : originalQuery.call(window.navigator.permissions, parameters)
+                );
+            }}
+        }})();
+        "#
+    )
+}
+
+fn overlay_script() -> &'static str {
+    r#"
+    (() => {
+        if (window.__codexAgentBrowserOverlayInstalled) return;
+        window.__codexAgentBrowserOverlayInstalled = true;
+        window.__codexAgentBrowserLastSelection = null;
+
+        const box = document.createElement("div");
+        box.id = "codex-agent-browser-selection-overlay";
+        box.style.cssText = [
+            "position:fixed", "pointer-events:none", "z-index:2147483647",
+            "border:2px solid #1a73e8", "background:rgba(26,115,232,.14)",
+            "box-shadow:0 0 0 1px rgba(255,255,255,.75)", "display:none"
+        ].join(";");
+
+        const label = document.createElement("div");
+        label.style.cssText = [
+            "position:fixed", "pointer-events:none", "z-index:2147483647",
+            "font:12px/1.35 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+            "color:#fff", "background:#1a73e8", "padding:3px 6px",
+            "border-radius:4px", "display:none"
+        ].join(";");
+        label.textContent = "Codex selection";
+
+        const ensure = () => {
+            if (!box.isConnected) document.documentElement.appendChild(box);
+            if (!label.isConnected) document.documentElement.appendChild(label);
+        };
+
+        const rectFromSelection = () => {
+            const selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0 || !selection.toString()) return null;
+            const rect = selection.getRangeAt(0).getBoundingClientRect();
+            if (!rect || (rect.width <= 0 && rect.height <= 0)) return null;
+            return rect;
+        };
+
+        const paint = () => {
+            ensure();
+            const rect = rectFromSelection();
+            if (!rect) {
+                box.style.display = "none";
+                label.style.display = "none";
+                return;
+            }
+            box.style.display = "block";
+            label.style.display = "block";
+            box.style.left = `${Math.max(0, rect.left)}px`;
+            box.style.top = `${Math.max(0, rect.top)}px`;
+            box.style.width = `${Math.max(1, rect.width)}px`;
+            box.style.height = `${Math.max(1, rect.height)}px`;
+            label.style.left = `${Math.max(0, rect.left)}px`;
+            label.style.top = `${Math.max(0, rect.top - 24)}px`;
+            window.__codexAgentBrowserLastSelection = {
+                text: window.getSelection().toString().slice(0, 4000),
+                rect: {
+                    x: Math.round(rect.x),
+                    y: Math.round(rect.y),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height)
+                },
+                url: location.href,
+                title: document.title,
+                capturedAt: new Date().toISOString()
+            };
+        };
+
+        document.addEventListener("selectionchange", () => requestAnimationFrame(paint), true);
+        window.addEventListener("scroll", () => requestAnimationFrame(paint), true);
+        window.addEventListener("resize", () => requestAnimationFrame(paint), true);
+
+        window.__codexAgentBrowserOverview = () => {
+            paint();
+            const selection = window.__codexAgentBrowserLastSelection;
+            return {
+                overlay: true,
+                hasSelection: !!(selection && selection.text),
+                selection,
+                url: location.href,
+                title: document.title
+            };
+        };
+        paint();
+    })();
+    "#
+}
+
+#[allow(dead_code)]
+pub(crate) fn agent_browser_namespace_schema() -> JsonSchema {
+    JsonSchema::object(
+        BTreeMap::new(),
+        None,
+        Some(AdditionalProperties::Boolean(true)),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires CODEX_AGENT_BROWSER_RUN_CHROME_TESTS=1 and a local Chrome/Chromium binary"]
+    async fn headless_benchmark_launches_browser() {
+        if std::env::var("CODEX_AGENT_BROWSER_RUN_CHROME_TESTS").as_deref() != Ok("1") {
+            return;
+        }
+
+        let result = handle_benchmark(BenchmarkArgs {
+            mode: BrowserMode::Headless,
+            iterations: Some(1),
+            stealth: true,
+        })
+        .await
+        .expect("headless benchmark should complete");
+
+        assert_eq!(result.mode, "headless");
+        assert!(result.launch_ms > 0);
+        assert_eq!(result.snapshot_ms.len(), 1);
+        assert_eq!(result.screenshot_ms.len(), 1);
+    }
+}
