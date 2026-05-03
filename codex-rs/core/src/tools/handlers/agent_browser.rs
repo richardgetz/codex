@@ -47,6 +47,7 @@ const TOOL_TYPE: &str = "type";
 const TOOL_PRESS: &str = "press";
 const TOOL_SCROLL: &str = "scroll";
 const TOOL_SELECTION: &str = "selection_overview";
+const TOOL_HIGHLIGHT: &str = "highlight";
 const TOOL_BENCHMARK: &str = "benchmark";
 
 const DEFAULT_VIEWPORT_WIDTH: u32 = 1365;
@@ -96,6 +97,7 @@ impl ToolHandler for AgentBrowserHandler {
             TOOL_PRESS => text_output(handle_press(parse_arguments(&arguments)?).await?),
             TOOL_SCROLL => text_output(handle_scroll(parse_arguments(&arguments)?).await?),
             TOOL_SELECTION => text_output(handle_selection(parse_arguments(&arguments)?).await?),
+            TOOL_HIGHLIGHT => text_output(handle_highlight(parse_arguments(&arguments)?).await?),
             TOOL_BENCHMARK => text_output(handle_benchmark(parse_arguments(&arguments)?).await?),
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unknown agent_browser tool `{other}`"
@@ -195,6 +197,20 @@ struct ScrollArgs {
 struct SelectionArgs {
     session_id: Option<String>,
     enable_overlay: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HighlightArgs {
+    session_id: Option<String>,
+    #[serde(rename = "ref")]
+    element_ref: Option<String>,
+    x: Option<f64>,
+    y: Option<f64>,
+    width: Option<f64>,
+    height: Option<f64>,
+    label: Option<String>,
+    color: Option<String>,
+    clear: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -911,13 +927,7 @@ async fn handle_selection(args: SelectionArgs) -> Result<Value, FunctionCallErro
     let mut session = take_session(args.session_id).await?;
     let session_id = session.id.clone();
     let overlay_result = if args.enable_overlay.unwrap_or(true) {
-        if session.overlay_script_registered {
-            Ok(())
-        } else {
-            inject_overlay(&mut session.cdp).await.map(|_| {
-                session.overlay_script_registered = true;
-            })
-        }
+        ensure_overlay(&mut session).await
     } else {
         Ok(())
     };
@@ -936,6 +946,70 @@ async fn handle_selection(args: SelectionArgs) -> Result<Value, FunctionCallErro
     };
     put_session(session).await;
     output
+}
+
+async fn handle_highlight(args: HighlightArgs) -> Result<Value, FunctionCallError> {
+    let started = Instant::now();
+    let mut session = take_session(args.session_id).await?;
+    let session_id = session.id.clone();
+    let result = async {
+        ensure_overlay(&mut session).await?;
+        let clear = args.clear.unwrap_or(false);
+        let mut payload = json!({
+            "clear": clear,
+            "label": args.label.unwrap_or_else(|| "Codex highlight".to_string()),
+            "color": args.color.unwrap_or_else(|| "#d93025".to_string()),
+        });
+
+        if let Some(element_ref) = args.element_ref {
+            payload["ref"] = Value::String(element_ref);
+        } else if !clear {
+            let (Some(x), Some(y), Some(width), Some(height)) =
+                (args.x, args.y, args.width, args.height)
+            else {
+                return Err(FunctionCallError::RespondToModel(
+                    "highlight requires `clear`, an element `ref`, or x/y/width/height"
+                        .to_string(),
+                ));
+            };
+            payload["rect"] = json!({
+                "x": x,
+                "y": y,
+                "width": width,
+                "height": height,
+            });
+        }
+
+        let payload = serde_json::to_string(&payload).map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to serialize highlight request: {err}"
+            ))
+        })?;
+        evaluate_json(
+            &mut session.cdp,
+            &format!(
+                "(() => window.__codexAgentBrowserHighlight ? window.__codexAgentBrowserHighlight({payload}) : {{ ok: false, message: 'overlay unavailable' }})()"
+            ),
+        )
+        .await
+        .and_then(|mut overview| {
+            if overview.get("ok").and_then(Value::as_bool) == Some(false) {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "highlight failed: {}",
+                    overview
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown error")
+                )));
+            }
+            overview["session_id"] = Value::String(session_id);
+            overview["elapsed_ms"] = json!(elapsed_ms(started));
+            Ok(overview)
+        })
+    }
+    .await;
+    put_session(session).await;
+    result
 }
 
 async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, FunctionCallError> {
@@ -1204,6 +1278,15 @@ async fn inject_overlay(cdp: &mut CdpClient) -> Result<(), FunctionCallError> {
         ),
     )
     .await?;
+    Ok(())
+}
+
+async fn ensure_overlay(session: &mut BrowserSession) -> Result<(), FunctionCallError> {
+    if session.overlay_script_registered {
+        return Ok(());
+    }
+    inject_overlay(&mut session.cdp).await?;
+    session.overlay_script_registered = true;
     Ok(())
 }
 
@@ -1665,11 +1748,12 @@ fn stealth_script(locale: &str) -> String {
 }
 
 fn overlay_script() -> &'static str {
-    r#"
+    r##"
     (() => {
         if (window.__codexAgentBrowserOverlayInstalled) return;
         window.__codexAgentBrowserOverlayInstalled = true;
         window.__codexAgentBrowserLastSelection = null;
+        window.__codexAgentBrowserHighlights = window.__codexAgentBrowserHighlights || [];
 
         const box = document.createElement("div");
         box.id = "codex-agent-browser-selection-overlay";
@@ -1688,9 +1772,17 @@ fn overlay_script() -> &'static str {
         ].join(";");
         label.textContent = "Codex selection";
 
+        const highlightLayer = document.createElement("div");
+        highlightLayer.id = "codex-agent-browser-highlight-layer";
+        highlightLayer.style.cssText = [
+            "position:fixed", "inset:0", "pointer-events:none",
+            "z-index:2147483646"
+        ].join(";");
+
         const ensure = () => {
             if (!box.isConnected) document.documentElement.appendChild(box);
             if (!label.isConnected) document.documentElement.appendChild(label);
+            if (!highlightLayer.isConnected) document.documentElement.appendChild(highlightLayer);
         };
 
         const rectFromSelection = () => {
@@ -1731,24 +1823,146 @@ fn overlay_script() -> &'static str {
             };
         };
 
-        document.addEventListener("selectionchange", () => requestAnimationFrame(paint), true);
-        window.addEventListener("scroll", () => requestAnimationFrame(paint), true);
-        window.addEventListener("resize", () => requestAnimationFrame(paint), true);
+        const cleanColor = (color) => {
+            if (typeof color !== "string" || color.length > 64
+                || !/^[#a-zA-Z0-9(),.%\s-]+$/.test(color)) {
+                return "#d93025";
+            }
+            return !window.CSS || !CSS.supports || CSS.supports("color", color)
+                ? color
+                : "#d93025";
+        };
 
-        window.__codexAgentBrowserOverview = () => {
+        const rectJson = (rect) => ({
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height)
+        });
+
+        const rectForHighlight = (highlight) => {
+            if (highlight.ref) {
+                const refs = window.__codexAgentBrowserRefElements;
+                const el = refs && refs.get(highlight.ref);
+                if (!el || !el.isConnected) return null;
+                const rect = el.getBoundingClientRect();
+                if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+                return rectJson(rect);
+            }
+            return highlight.rect || null;
+        };
+
+        const renderHighlights = () => {
+            ensure();
+            highlightLayer.textContent = "";
+            for (const highlight of window.__codexAgentBrowserHighlights) {
+                const rect = rectForHighlight(highlight);
+                if (!rect) continue;
+                const item = document.createElement("div");
+                const color = cleanColor(highlight.color);
+                item.style.cssText = [
+                    "position:fixed",
+                    `left:${Math.max(0, rect.x)}px`,
+                    `top:${Math.max(0, rect.y)}px`,
+                    `width:${Math.max(1, rect.width)}px`,
+                    `height:${Math.max(1, rect.height)}px`,
+                    `border:2px solid ${color}`,
+                    "background:rgba(217,48,37,.12)",
+                    "box-shadow:0 0 0 1px rgba(255,255,255,.85)"
+                ].join(";");
+                const itemLabel = document.createElement("div");
+                itemLabel.textContent = highlight.label || "Codex highlight";
+                itemLabel.style.cssText = [
+                    "position:absolute", "left:-2px", "top:-24px",
+                    "max-width:280px", "white-space:nowrap", "overflow:hidden",
+                    "text-overflow:ellipsis",
+                    "font:12px/1.35 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+                    `background:${color}`, "color:#fff", "padding:3px 6px",
+                    "border-radius:4px"
+                ].join(";");
+                item.appendChild(itemLabel);
+                highlightLayer.appendChild(item);
+            }
+        };
+
+        const overviewPayload = (ok = true) => {
             paint();
+            renderHighlights();
             const selection = window.__codexAgentBrowserLastSelection;
             return {
+                ok,
                 overlay: true,
                 hasSelection: !!(selection && selection.text),
                 selection,
+                highlights: window.__codexAgentBrowserHighlights.map((highlight) => ({
+                    id: highlight.id,
+                    ref: highlight.ref || null,
+                    label: highlight.label,
+                    color: highlight.color,
+                    rect: rectForHighlight(highlight),
+                    capturedAt: highlight.capturedAt
+                })),
                 url: location.href,
                 title: document.title
             };
         };
+
+        window.__codexAgentBrowserHighlight = (request) => {
+            if (request && request.clear) {
+                window.__codexAgentBrowserHighlights = [];
+            }
+            if (!request || request.clear) return overviewPayload();
+
+            let rect = null;
+            let ref = null;
+            if (request.ref) {
+                ref = String(request.ref);
+                const refs = window.__codexAgentBrowserRefElements;
+                const el = refs && refs.get(ref);
+                if (!el || !el.isConnected) {
+                    return { ok: false, message: "element ref not found; call snapshot first" };
+                }
+                const bounds = el.getBoundingClientRect();
+                if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
+                    return { ok: false, message: "element ref is not visible" };
+                }
+                rect = rectJson(bounds);
+            } else if (request.rect) {
+                rect = {
+                    x: Number(request.rect.x),
+                    y: Number(request.rect.y),
+                    width: Number(request.rect.width),
+                    height: Number(request.rect.height)
+                };
+            }
+            if (!rect || !Number.isFinite(rect.x) || !Number.isFinite(rect.y)
+                || !Number.isFinite(rect.width) || !Number.isFinite(rect.height)
+                || rect.width <= 0 || rect.height <= 0) {
+                return { ok: false, message: "highlight requires a visible ref or positive rect" };
+            }
+
+            window.__codexAgentBrowserHighlights.push({
+                id: `h${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
+                ref,
+                rect,
+                label: String(request.label || "Codex highlight").slice(0, 120),
+                color: cleanColor(request.color || "#d93025"),
+                capturedAt: new Date().toISOString()
+            });
+            return overviewPayload();
+        };
+
+        document.addEventListener("selectionchange", () => requestAnimationFrame(paint), true);
+        window.addEventListener("scroll", () => requestAnimationFrame(() => { paint(); renderHighlights(); }), true);
+        window.addEventListener("resize", () => requestAnimationFrame(() => { paint(); renderHighlights(); }), true);
+
+        window.__codexAgentBrowserOverview = () => {
+            return overviewPayload();
+        };
         paint();
+        renderHighlights();
     })();
-    "#
+    "##
 }
 
 #[cfg(test)]
@@ -1837,5 +2051,75 @@ mod tests {
         assert!(result.launch_ms > 0.0);
         assert_eq!(result.snapshot_ms.len(), iterations);
         assert_eq!(result.screenshot_ms.len(), iterations);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires CODEX_AGENT_BROWSER_RUN_CHROME_TESTS=1 and a local Chrome/Chromium binary"]
+    async fn headless_highlight_marks_and_clears_rect() {
+        if std::env::var("CODEX_AGENT_BROWSER_RUN_CHROME_TESTS").as_deref() != Ok("1") {
+            return;
+        }
+
+        let open = handle_open(OpenArgs {
+            url: Some(benchmark_url()),
+            mode: BrowserMode::Headless,
+            stealth: true,
+            viewport_width: Some(1280),
+            viewport_height: Some(800),
+            locale: Some(DEFAULT_LOCALE.to_string()),
+            timezone: Some(DEFAULT_TIMEZONE.to_string()),
+            user_agent: None,
+            remote_debugging_url: std::env::var("CODEX_AGENT_BROWSER_REMOTE_DEBUGGING_URL").ok(),
+        })
+        .await
+        .expect("open browser");
+        let session_id = open.session_id;
+
+        let marked = handle_highlight(HighlightArgs {
+            session_id: Some(session_id.clone()),
+            element_ref: None,
+            x: Some(12.0),
+            y: Some(24.0),
+            width: Some(120.0),
+            height: Some(40.0),
+            label: Some("Issue".to_string()),
+            color: None,
+            clear: None,
+        })
+        .await
+        .expect("mark highlight");
+        let marked_count = marked
+            .get("highlights")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or_default();
+
+        let cleared = handle_highlight(HighlightArgs {
+            session_id: Some(session_id.clone()),
+            element_ref: None,
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            label: None,
+            color: None,
+            clear: Some(true),
+        })
+        .await
+        .expect("clear highlight");
+        let cleared_count = cleared
+            .get("highlights")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or_default();
+
+        handle_close(SessionArgs {
+            session_id: Some(session_id),
+        })
+        .await
+        .expect("close browser");
+
+        assert_eq!(marked_count, 1);
+        assert_eq!(cleared_count, 0);
     }
 }

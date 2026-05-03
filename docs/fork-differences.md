@@ -371,16 +371,18 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   namespace when the session has a local execution environment.
 - The namespace provides headful/headless Chrome or Chromium control over CDP:
   open/attach, navigate, snapshot, screenshot, click, type, press, scroll,
-  selection-overview, and benchmark tools.
+  selection-overview, highlight, and benchmark tools.
 - When attaching to an existing CDP endpoint, Codex creates an `about:blank`
   page target if `/json/list` has no debuggable page yet, then closes only that
   owned target when the session closes.
 - Stealth mode is enabled by default for browser sessions. It isolates launch
   state in a temporary profile, applies automation-focused Chromium flags, hides
   common webdriver signals, and normalizes the default headless user agent.
-- The collaborative selection overlay is injected only when
-  `agent_browser.selection_overview` is requested, keeping ordinary browsing
-  paths lighter and less page-mutating.
+- The collaborative overlay is injected only when
+  `agent_browser.selection_overview` or `agent_browser.highlight` is requested,
+  keeping ordinary browsing paths lighter and less page-mutating. Highlights can
+  mark a snapshot element ref or viewport rect and are returned in the overlay
+  overview payload.
 
 ### Fork-aware help
 

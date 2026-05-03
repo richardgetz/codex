@@ -18,6 +18,7 @@ pub const TOOL_TYPE: &str = "type";
 pub const TOOL_PRESS: &str = "press";
 pub const TOOL_SCROLL: &str = "scroll";
 pub const TOOL_SELECTION: &str = "selection_overview";
+pub const TOOL_HIGHLIGHT: &str = "highlight";
 pub const TOOL_BENCHMARK: &str = "benchmark";
 
 pub const AGENT_BROWSER_TOOL_NAMES: &[&str] = &[
@@ -31,6 +32,7 @@ pub const AGENT_BROWSER_TOOL_NAMES: &[&str] = &[
     TOOL_PRESS,
     TOOL_SCROLL,
     TOOL_SELECTION,
+    TOOL_HIGHLIGHT,
     TOOL_BENCHMARK,
 ];
 
@@ -81,6 +83,11 @@ pub fn create_agent_browser_tool() -> ToolSpec {
             TOOL_SELECTION,
             "Read or enable the collaborative selection overlay.",
             selection_schema(),
+        ),
+        tool(
+            TOOL_HIGHLIGHT,
+            "Mark or clear a collaborative page highlight.",
+            highlight_schema(),
         ),
         tool(
             TOOL_BENCHMARK,
@@ -323,6 +330,48 @@ fn selection_schema() -> JsonSchema {
             (
                 "enable_overlay".to_string(),
                 JsonSchema::boolean(Some("Enable overlay before reading state.".to_string())),
+            ),
+        ]),
+        None,
+        Some(AdditionalProperties::Boolean(false)),
+    )
+}
+
+fn highlight_schema() -> JsonSchema {
+    JsonSchema::object(
+        BTreeMap::from([
+            (
+                "session_id".to_string(),
+                string_param("Browser session id."),
+            ),
+            (
+                "ref".to_string(),
+                string_param("Element ref to highlight, such as e3."),
+            ),
+            (
+                "x".to_string(),
+                JsonSchema::number(Some("Viewport x coordinate.".to_string())),
+            ),
+            (
+                "y".to_string(),
+                JsonSchema::number(Some("Viewport y coordinate.".to_string())),
+            ),
+            (
+                "width".to_string(),
+                JsonSchema::number(Some("Highlight width in pixels.".to_string())),
+            ),
+            (
+                "height".to_string(),
+                JsonSchema::number(Some("Highlight height in pixels.".to_string())),
+            ),
+            ("label".to_string(), string_param("Short visible label.")),
+            (
+                "color".to_string(),
+                string_param("CSS color. Defaults to #d93025."),
+            ),
+            (
+                "clear".to_string(),
+                JsonSchema::boolean(Some("Clear existing highlights.".to_string())),
             ),
         ]),
         None,

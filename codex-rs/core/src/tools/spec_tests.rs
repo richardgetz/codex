@@ -1192,6 +1192,7 @@ async fn agent_browser_experimental_tool_registers_runtime_handler() {
         AGENT_BROWSER_NAMESPACE,
         "selection_overview"
     )));
+    assert!(registry.has_handler(&ToolName::namespaced(AGENT_BROWSER_NAMESPACE, "highlight")));
 }
 
 #[tokio::test]
