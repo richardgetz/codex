@@ -1204,8 +1204,16 @@ fn browser_stderr_tail(path: &Path) -> String {
     if stderr.len() <= 4_000 {
         return stderr.to_string();
     }
-    let start = stderr.len().saturating_sub(4_000);
-    format!("...{}", &stderr[start..])
+    let mut tail = stderr
+        .chars()
+        .rev()
+        .take(4_000)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    tail.insert_str(0, "...");
+    tail
 }
 
 async fn first_page_ws_url(endpoint: &str) -> Result<String, FunctionCallError> {
