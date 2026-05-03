@@ -1,5 +1,5 @@
 intent:
-  id: "intent/2026-05-03/benchmark-attached-browser#auto"
+  id: "intent/2026-05-03/benchmark-attached-browser#4628548e1"
   change_type: "feat"
   scope: "agent-browser"
   summary: "Allow browser latency benchmarks to attach to an existing CDP endpoint."
