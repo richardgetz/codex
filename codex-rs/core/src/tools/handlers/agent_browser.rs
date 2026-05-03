@@ -887,8 +887,6 @@ async fn initialize_page(
 ) -> Result<(), FunctionCallError> {
     cdp.call("Page.enable", json!({})).await?;
     cdp.call("Runtime.enable", json!({})).await?;
-    cdp.call("DOM.enable", json!({})).await?;
-    cdp.call("Network.enable", json!({})).await?;
     cdp.call(
         "Emulation.setDeviceMetricsOverride",
         json!({
@@ -923,6 +921,7 @@ async fn initialize_page(
         None
     };
     if let Some(user_agent) = user_agent_override {
+        cdp.call("Network.enable", json!({})).await?;
         cdp.call(
             "Network.setUserAgentOverride",
             json!({
