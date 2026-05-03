@@ -1605,13 +1605,61 @@ fn screenshot_image_sizes(output: &FunctionToolOutput) -> (usize, usize) {
                 return None;
             };
             let payload = image_url.split_once(";base64,")?.1;
-            let png_bytes = BASE64_STANDARD
-                .decode(payload.as_bytes())
-                .map(|bytes| bytes.len())
-                .unwrap_or_default();
-            Some((png_bytes, payload.len()))
+            Some((base64_decoded_len(payload), payload.len()))
         })
         .unwrap_or_default()
+}
+
+fn base64_decoded_len(payload: &str) -> usize {
+    let bytes = payload.as_bytes();
+    if !bytes.len().is_multiple_of(4) {
+        return 0;
+    }
+    let padding_start = bytes
+        .iter()
+        .position(|byte| *byte == b'=')
+        .unwrap_or(bytes.len());
+    let padding = bytes.len().saturating_sub(padding_start);
+    if padding > 2 || bytes[padding_start..].iter().any(|byte| *byte != b'=') {
+        return 0;
+    }
+
+    for byte in &bytes[..padding_start] {
+        if base64_value(*byte).is_none() {
+            return 0;
+        }
+    }
+
+    let unpadded_remainder = padding_start % 4;
+    if !matches!((unpadded_remainder, padding), (0, 0) | (2, 2) | (3, 1)) {
+        return 0;
+    }
+
+    if padding > 0 {
+        let Some(last_value) = bytes[..padding_start]
+            .last()
+            .copied()
+            .and_then(base64_value)
+        else {
+            return 0;
+        };
+        if (padding == 2 && last_value & 0b1111 != 0) || (padding == 1 && last_value & 0b11 != 0) {
+            return 0;
+        }
+    }
+
+    bytes.len() / 4 * 3 - padding
+}
+
+fn base64_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'A'..=b'Z' => Some(byte - b'A'),
+        b'a'..=b'z' => Some(byte - b'a' + 26),
+        b'0'..=b'9' => Some(byte - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    }
 }
 
 fn ensure_write_access(session: &BrowserSession, action: &str) -> Result<(), FunctionCallError> {
@@ -3093,6 +3141,31 @@ mod tests {
         assert_eq!(json!(BrowserEngine::Obscura), json!("obscura"));
         assert_eq!(json!(BrowserEngine::Chromium), json!("chromium"));
         assert_eq!(json!(BrowserEngine::ExternalCdp), json!("external_cdp"));
+    }
+
+    #[test]
+    fn base64_decoded_len_counts_bytes_without_decoding() {
+        for (payload, expected_len) in [
+            ("", 0),
+            ("TWFu", 3),
+            ("TWE=", 2),
+            ("TQ==", 1),
+            ("////", 3),
+            ("TWE", 0),
+            ("abcde", 0),
+            ("!!!!", 0),
+            ("T=WE", 0),
+            ("TQ===", 0),
+            ("TR==", 0),
+            ("TWF=", 0),
+        ] {
+            let decoded_len = BASE64_STANDARD
+                .decode(payload.as_bytes())
+                .map(|bytes| bytes.len())
+                .unwrap_or_default();
+            assert_eq!(base64_decoded_len(payload), expected_len);
+            assert_eq!(base64_decoded_len(payload), decoded_len);
+        }
     }
 
     #[test]
