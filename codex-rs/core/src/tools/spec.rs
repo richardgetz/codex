@@ -79,6 +79,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
+    use crate::tools::handlers::AgentBrowserHandler;
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::CodeModeExecuteHandler;
     use crate::tools::handlers::CodeModeWaitHandler;
@@ -240,6 +241,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
         match handler.kind {
             ToolHandlerKind::AgentJobs => {
                 builder.register_handler(handler.name, Arc::new(BatchJobHandler));
+            }
+            ToolHandlerKind::AgentBrowser => {
+                builder.register_handler(handler.name, Arc::new(AgentBrowserHandler));
             }
             ToolHandlerKind::ApplyPatch => {
                 builder.register_handler(handler.name, apply_patch_handler.clone());

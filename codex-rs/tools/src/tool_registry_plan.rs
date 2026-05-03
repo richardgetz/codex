@@ -21,6 +21,7 @@ use crate::coalesce_loadable_tool_specs;
 use crate::collect_code_mode_exec_prompt_tool_definitions;
 use crate::collect_tool_search_source_infos;
 use crate::collect_tool_suggest_entries;
+use crate::create_agent_browser_tool;
 use crate::create_apply_patch_freeform_tool;
 use crate::create_apply_patch_json_tool;
 use crate::create_close_agent_tool_v1;
@@ -374,6 +375,25 @@ pub fn build_tool_registry_plan(
             config.code_mode_enabled,
         );
         plan.register_handler("test_sync_tool", ToolHandlerKind::TestSync);
+    }
+
+    let include_agent_browser_tool = config.agent_browser_tool
+        || config
+            .experimental_supported_tools
+            .iter()
+            .any(|tool| tool == "agent_browser");
+    if config.has_environment && include_agent_browser_tool {
+        plan.push_spec(
+            create_agent_browser_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        for tool_name in crate::AGENT_BROWSER_TOOL_NAMES {
+            plan.register_handler(
+                ToolName::namespaced(crate::AGENT_BROWSER_NAMESPACE, *tool_name),
+                ToolHandlerKind::AgentBrowser,
+            );
+        }
     }
 
     if let Some(web_search_tool) = create_web_search_tool(WebSearchToolOptions {

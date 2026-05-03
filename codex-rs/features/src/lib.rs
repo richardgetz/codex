@@ -196,6 +196,8 @@ pub enum Feature {
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
     BrowserUse,
+    /// Allow the built-in agent browser tool namespace.
+    AgentBrowser,
     /// Allow Codex Computer Use.
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
@@ -268,6 +270,7 @@ impl Feature {
 
     pub fn owner(self) -> FeatureOwner {
         match self {
+            Self::AgentBrowser => FeatureOwner::Rick,
             Self::EnableMcpApprovals => FeatureOwner::Rick,
             _ => FeatureOwner::Upstream,
         }
@@ -976,6 +979,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "browser_use",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::AgentBrowser,
+        key: "agent_browser",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ComputerUse,

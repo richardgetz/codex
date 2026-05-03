@@ -365,6 +365,54 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   current session. It does not create arbitrary MCP servers from unknown tool
   names.
 
+### Agent browser
+
+- `[features].agent_browser = true` exposes the built-in `agent_browser`
+  namespace when the session has a local execution environment.
+- The namespace provides CDP-backed browser control over multiple launch
+  backends: `auto`, `obscura`, and `chromium`. `auto` prefers the Rust-native
+  Obscura backend when an `obscura` binary is available, and falls back to
+  Chromium for broader visual-review support.
+- Tools include open/attach, navigate, snapshot, screenshot, click, type, press,
+  scroll, selection-overview, highlight, live-session sharing, and benchmark.
+  `agent_browser.share` writes a local share token that another agent can pass
+  to `agent_browser.open` to attach to the same live page instead of relaunching
+  and rebrowsing. Shares default to `read_only`; `read_write` is available for
+  deliberate handoffs. Share tokens are leased by default for one hour, can be
+  shortened or extended up to twelve hours, and expired tokens are cleaned up
+  when browser shares are read or created.
+- Benchmarks can target the default local page or an explicit URL, and report
+  screenshot PNG/base64 sizes alongside latency so transport-size tradeoffs stay
+  visible. Obscura currently covers CDP navigation/evaluation/input/snapshot
+  flows; screenshots use a lightweight DOM snapshot renderer until native
+  compositor screenshots are added. Obscura `mode = "headful"` opens a small
+  local mirror shell driven by the same CDP snapshot path so the Rust-native
+  backend is not limited to invisible sessions.
+- Set `CODEX_AGENT_BROWSER_OBSCURA_BINARY` to point at a custom Obscura binary,
+  bundle `obscura` next to the Codex executable, bundle it under
+  `codex-resources/obscura` in standalone installs, or on macOS bundle it in
+  `Codex.app/Contents/Resources/obscura`. The npm staging and standalone
+  installers preserve an optional `vendor/<target>/browser/obscura` resource as
+  `codex-resources/obscura` when present. This keeps the Codex Rust crates lean
+  while still letting app distributions ship Obscura as a first-party resource;
+  `codex-cli/scripts/install_native_deps.py --component obscura` hydrates
+  available pinned upstream Obscura release assets into that vendor resource
+  layout. Use `backend = "chromium"` to force the Chromium launch path.
+- When attaching to an existing CDP endpoint, Codex creates an `about:blank`
+  page target if `/json/list` has no debuggable page yet, then closes only that
+  owned target when the session closes.
+- The browser compatibility profile is enabled by default through the
+  `stealth` option name for API compatibility. It is intended for legitimate UI
+  testing and review automation, not for avoiding authentication, payment, rate,
+  or usage policy requirements. It isolates launch state in a temporary profile,
+  applies review-focused Chromium flags, reduces obvious webdriver-only
+  differences, and normalizes the default headless user agent.
+- The collaborative overlay is injected only when
+  `agent_browser.selection_overview` or `agent_browser.highlight` is requested,
+  keeping ordinary browsing paths lighter and less page-mutating. Highlights can
+  mark a snapshot element ref or viewport rect and are returned in the overlay
+  overview payload.
+
 ### Fork-aware help
 
 - The fork exposes repo-local fork help context so agents can answer questions

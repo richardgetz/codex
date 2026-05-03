@@ -1,3 +1,6 @@
+pub(crate) mod agent_browser;
+pub(crate) mod agent_browser_cdp;
+pub(crate) mod agent_browser_visual;
 pub(crate) mod agent_jobs;
 pub(crate) mod apply_patch;
 pub(crate) mod builtin_schedule;
@@ -36,6 +39,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
+pub use agent_browser::AgentBrowserHandler;
 pub use apply_patch::ApplyPatchHandler;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::AskForApproval;

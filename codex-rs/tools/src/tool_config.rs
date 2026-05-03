@@ -98,6 +98,7 @@ pub struct ToolsConfig {
     pub search_tool: bool,
     pub namespace_tools: bool,
     pub tool_suggest: bool,
+    pub agent_browser_tool: bool,
     pub exec_permission_approvals_enabled: bool,
     pub request_permissions_tool_enabled: bool,
     pub code_mode_enabled: bool,
@@ -156,6 +157,7 @@ impl ToolsConfig {
         let include_tool_suggest = features.enabled(Feature::ToolSuggest)
             && features.enabled(Feature::Apps)
             && features.enabled(Feature::Plugins);
+        let include_agent_browser_tool = features.enabled(Feature::AgentBrowser);
         let include_original_image_detail = can_request_original_image_detail(model_info);
         // API-key auth bypasses Codex backend entitlement/tool normalization, so
         // callers must confirm ChatGPT auth before exposing the built-in tool.
@@ -221,6 +223,7 @@ impl ToolsConfig {
             search_tool: include_search_tool,
             namespace_tools: true,
             tool_suggest: include_tool_suggest,
+            agent_browser_tool: include_agent_browser_tool,
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
             code_mode_enabled: include_code_mode,

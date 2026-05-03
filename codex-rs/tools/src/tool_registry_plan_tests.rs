@@ -1,4 +1,6 @@
 use super::*;
+use crate::AGENT_BROWSER_NAMESPACE;
+use crate::AGENT_BROWSER_TOOL_NAMES;
 use crate::AdditionalProperties;
 use crate::ConfiguredToolSpec;
 use crate::DiscoverablePluginInfo;
@@ -1052,6 +1054,82 @@ fn test_test_model_info_includes_sync_tool() {
     );
 
     assert!(tools.iter().any(|tool| tool.name() == "test_sync_tool"));
+}
+
+#[test]
+fn test_agent_browser_experimental_tool_registers_namespace_handlers() {
+    let mut model_info = model_info();
+    model_info.experimental_supported_tools = vec!["agent_browser".to_string()];
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, handlers) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    let tool_names = namespace_function_names(&tools, AGENT_BROWSER_NAMESPACE);
+    assert_eq!(
+        tool_names,
+        AGENT_BROWSER_TOOL_NAMES
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>()
+    );
+    for tool_name in AGENT_BROWSER_TOOL_NAMES {
+        assert!(handlers.contains(&ToolHandlerSpec {
+            name: ToolName::namespaced(AGENT_BROWSER_NAMESPACE, *tool_name),
+            kind: ToolHandlerKind::AgentBrowser,
+        }));
+    }
+}
+
+#[test]
+fn test_agent_browser_feature_registers_namespace_handlers() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::AgentBrowser);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, handlers) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    let tool_names = namespace_function_names(&tools, AGENT_BROWSER_NAMESPACE);
+    assert_eq!(
+        tool_names,
+        AGENT_BROWSER_TOOL_NAMES
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>()
+    );
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::namespaced(AGENT_BROWSER_NAMESPACE, "open"),
+        kind: ToolHandlerKind::AgentBrowser,
+    }));
 }
 
 #[test]

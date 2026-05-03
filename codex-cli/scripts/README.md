@@ -21,3 +21,14 @@ that are later published under platform-specific dist-tags.
 If you need to invoke `build_npm_package.py` directly, run
 `codex-cli/scripts/install_native_deps.py` first and pass `--vendor-src` pointing to the
 directory that contains the populated `vendor/` tree.
+
+The built-in agent browser can also ship an optional Obscura browser resource.
+Fetch the currently pinned upstream Obscura assets with:
+
+```bash
+codex-cli/scripts/install_native_deps.py --component obscura
+```
+
+The helper installs available Obscura release assets under
+`vendor/<target>/browser/`; platform packages and standalone installers then
+preserve that resource as `codex-resources/obscura` when present.

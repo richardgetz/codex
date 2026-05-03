@@ -676,9 +676,18 @@ try {
                 "codex/codex-windows-sandbox-setup.exe" = "codex-resources\codex-windows-sandbox-setup.exe"
                 "path/rg.exe" = "codex-resources\rg.exe"
             }
+            $optionalCopyMap = @{
+                "browser/obscura.exe" = "codex-resources\obscura.exe"
+            }
 
             foreach ($relativeSource in $copyMap.Keys) {
                 Copy-Item -LiteralPath (Join-Path $vendorRoot $relativeSource) -Destination (Join-Path $stagingDir $copyMap[$relativeSource])
+            }
+            foreach ($relativeSource in $optionalCopyMap.Keys) {
+                $sourcePath = Join-Path $vendorRoot $relativeSource
+                if (Test-Path -LiteralPath $sourcePath -PathType Leaf) {
+                    Copy-Item -LiteralPath $sourcePath -Destination (Join-Path $stagingDir $optionalCopyMap[$relativeSource])
+                }
             }
 
             if (Test-Path -LiteralPath $releaseDir) {
