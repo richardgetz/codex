@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-05-03/browser-stderr-tail-test#auto"
+  change_type: "test"
+  scope: "agent-browser"
+  summary: "Cover browser stderr tail trimming on character boundaries."
+  decision: "Add a pure unit test for browser_stderr_tail so diagnostics stay bounded without slicing through non-ASCII output."
+  constraints:
+    - "Must not require launching a real browser."
+    - "Must preserve existing ignored runtime benchmark test behavior."
+  intent_priority: "may"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::tests"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
