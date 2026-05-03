@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-docs#496cb58c3"
+  change_type: "docs"
+  scope: "agent-browser"
+  summary: "Document the fork-only agent_browser feature gate and behavior."
+  decision: "Add a fork-differences section that explains [features].agent_browser, the built-in namespace tools, default stealth behavior, and lazy selection overlay injection."
+  constraints:
+    - "Keep documentation concise and limited to active fork behavior."
+    - "Do not document speculative future browser capabilities."
+  intent_priority: "should"
+  code_locations:
+    - "docs/fork-differences.md::Agent browser"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
