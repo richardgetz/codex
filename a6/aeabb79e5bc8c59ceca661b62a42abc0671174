@@ -1,0 +1,3 @@
+Intent: make the agent browser default backend behavior match the product direction: backend=auto should prefer the Rust-native Obscura backend whenever it is available, including headful sessions where Codex uses the Obscura mirror shell. Chromium remains an explicit or fallback backend for broader compatibility.
+
+Validation: cargo fmt --all from codex-rs; cargo test -p codex-core agent_browser -- --nocapture; CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 CODEX_AGENT_BROWSER_OBSCURA_BINARY=/private/tmp/codex-obscura-target/debug/obscura cargo test -p codex-core auto_headful_prefers_obscura_when_available -- --ignored --nocapture; cargo test -p codex-core obscura_binary_candidates_include_bundled_locations -- --nocapture; cargo check -p codex-core; git diff --check.
