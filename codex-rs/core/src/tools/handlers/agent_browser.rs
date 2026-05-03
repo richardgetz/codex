@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::fs;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -1063,8 +1064,24 @@ async fn launch_connection(
             ))
         })?;
     let endpoint = format!("http://127.0.0.1:{port}");
+    let browser_home = profile_dir.path().join("home");
+    let browser_config = profile_dir.path().join("config");
+    let browser_cache = profile_dir.path().join("cache");
+    fs::create_dir_all(&browser_home).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to create browser home dir: {err}"))
+    })?;
+    fs::create_dir_all(&browser_config).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to create browser config dir: {err}"))
+    })?;
+    fs::create_dir_all(&browser_cache).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to create browser cache dir: {err}"))
+    })?;
+
     let mut command = Command::new(&binary);
     command
+        .env("HOME", &browser_home)
+        .env("XDG_CONFIG_HOME", &browser_config)
+        .env("XDG_CACHE_HOME", &browser_cache)
         .arg(format!("--remote-debugging-port={port}"))
         .arg(format!("--user-data-dir={}", profile_dir.path().display()))
         .arg("--no-first-run")
