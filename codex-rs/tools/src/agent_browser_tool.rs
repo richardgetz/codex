@@ -405,6 +405,7 @@ fn benchmark_schema() -> JsonSchema {
                     Some("Browser backend. Defaults to auto.".to_string()),
                 ),
             ),
+            ("url".to_string(), string_param("Benchmark target URL.")),
             (
                 "iterations".to_string(),
                 JsonSchema::integer(Some(

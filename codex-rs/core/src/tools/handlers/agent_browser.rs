@@ -234,6 +234,7 @@ struct BenchmarkArgs {
     mode: BrowserMode,
     #[serde(default)]
     backend: BrowserBackend,
+    url: Option<String>,
     iterations: Option<usize>,
     #[serde(default = "default_true")]
     stealth: bool,
@@ -1181,7 +1182,7 @@ async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, Functi
         let navigate_started = Instant::now();
         handle_navigate(NavigateArgs {
             session_id: Some(session_id.clone()),
-            url: benchmark_url(),
+            url: args.url.clone().unwrap_or_else(benchmark_url),
         })
         .await?;
         let navigate_ms = elapsed_ms(navigate_started);
@@ -2444,6 +2445,7 @@ mod tests {
         let result = handle_benchmark(BenchmarkArgs {
             mode: BrowserMode::Headless,
             backend: BrowserBackend::Chromium,
+            url: None,
             iterations: Some(iterations),
             stealth: true,
             remote_debugging_url: std::env::var("CODEX_AGENT_BROWSER_REMOTE_DEBUGGING_URL").ok(),
@@ -2451,14 +2453,39 @@ mod tests {
         .await
         .expect("headless benchmark should complete");
 
-        if let Ok(path) = std::env::var("CODEX_AGENT_BROWSER_BENCHMARK_OUTPUT") {
-            fs::write(
-                path,
-                serde_json::to_string(&result).expect("serialize benchmark"),
-            )
-            .expect("write benchmark output");
-        }
+        write_benchmark_output("CODEX_AGENT_BROWSER_BENCHMARK_OUTPUT", &result);
         assert_eq!(result.mode, "headless");
+        assert!(result.launch_ms > 0.0);
+        assert_eq!(result.snapshot_ms.len(), iterations);
+        assert_eq!(result.screenshot_ms.len(), iterations);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 and an Obscura binary"]
+    async fn obscura_benchmark_launches_browser() {
+        if std::env::var("CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS").as_deref() != Ok("1") {
+            return;
+        }
+
+        let iterations = std::env::var("CODEX_AGENT_BROWSER_BENCHMARK_ITERATIONS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(1);
+        let (_page_dir, page_url) = benchmark_file_url("codex-obscura-benchmark-");
+        let result = handle_benchmark(BenchmarkArgs {
+            mode: BrowserMode::Headless,
+            backend: BrowserBackend::Obscura,
+            url: Some(page_url),
+            iterations: Some(iterations),
+            stealth: true,
+            remote_debugging_url: None,
+        })
+        .await
+        .expect("Obscura benchmark should complete");
+
+        write_benchmark_output("CODEX_AGENT_BROWSER_OBSCURA_BENCHMARK_OUTPUT", &result);
+        assert_eq!(result.mode, "headless");
+        assert_eq!(result.backend, BrowserEngine::Obscura);
         assert!(result.launch_ms > 0.0);
         assert_eq!(result.snapshot_ms.len(), iterations);
         assert_eq!(result.screenshot_ms.len(), iterations);
@@ -2607,13 +2634,7 @@ mod tests {
             return;
         }
 
-        let page_dir = tempfile::Builder::new()
-            .prefix("codex-obscura-smoke-")
-            .tempdir()
-            .expect("create Obscura smoke page dir");
-        let page_path = page_dir.path().join("benchmark.html");
-        fs::write(&page_path, benchmark_html()).expect("write Obscura smoke page");
-        let page_url = format!("file://{}", page_path.display());
+        let (_page_dir, page_url) = benchmark_file_url("codex-obscura-smoke-");
 
         let open = handle_open(OpenArgs {
             url: Some(page_url),
@@ -2666,5 +2687,26 @@ mod tests {
         })
         .await
         .expect("close Obscura browser");
+    }
+
+    fn benchmark_file_url(prefix: &str) -> (TempDir, String) {
+        let page_dir = tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir()
+            .expect("create benchmark page dir");
+        let page_path = page_dir.path().join("benchmark.html");
+        fs::write(&page_path, benchmark_html()).expect("write benchmark page");
+        let page_url = format!("file://{}", page_path.display());
+        (page_dir, page_url)
+    }
+
+    fn write_benchmark_output(env_var: &str, result: &BenchmarkResult) {
+        if let Ok(path) = std::env::var(env_var) {
+            fs::write(
+                path,
+                serde_json::to_string(result).expect("serialize benchmark"),
+            )
+            .expect("write benchmark output");
+        }
     }
 }

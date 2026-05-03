@@ -374,9 +374,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   Obscura backend for headless agent sessions when an `obscura` binary is
   available, and falls back to Chromium for broader visual-review support.
 - Tools include open/attach, navigate, snapshot, screenshot, click, type, press,
-  scroll, selection-overview, highlight, and benchmark. Obscura currently covers
-  CDP navigation/evaluation/input/snapshot flows; screenshots use a lightweight
-  DOM snapshot renderer until native compositor screenshots are added. Obscura
+  scroll, selection-overview, highlight, and benchmark. Benchmarks can target
+  the default local page or an explicit URL. Obscura currently covers CDP
+  navigation/evaluation/input/snapshot flows; screenshots use a lightweight DOM
+  snapshot renderer until native compositor screenshots are added. Obscura
   `mode = "headful"` opens a small local mirror shell driven by the same CDP
   snapshot path so the Rust-native backend is not limited to invisible sessions.
 - Set `CODEX_AGENT_BROWSER_OBSCURA_BINARY` to point at a custom Obscura binary,
