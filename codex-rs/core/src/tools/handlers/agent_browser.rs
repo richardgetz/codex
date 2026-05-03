@@ -898,7 +898,16 @@ async fn initialize_page(
         }),
     )
     .await?;
-    if let Some(user_agent) = user_agent {
+    let user_agent_override = if let Some(user_agent) = user_agent {
+        Some(user_agent.to_string())
+    } else if stealth {
+        browser_user_agent(cdp)
+            .await?
+            .map(|user_agent| stealth_user_agent(&user_agent))
+    } else {
+        None
+    };
+    if let Some(user_agent) = user_agent_override {
         cdp.call(
             "Network.setUserAgentOverride",
             json!({
@@ -922,6 +931,18 @@ async fn initialize_page(
         .await?;
     }
     Ok(())
+}
+
+async fn browser_user_agent(cdp: &mut CdpClient) -> Result<Option<String>, FunctionCallError> {
+    let version = cdp.call("Browser.getVersion", json!({})).await?;
+    Ok(version
+        .get("userAgent")
+        .and_then(Value::as_str)
+        .map(str::to_string))
+}
+
+fn stealth_user_agent(user_agent: &str) -> String {
+    user_agent.replace("HeadlessChrome", "Chrome")
 }
 
 async fn navigate_to(cdp: &mut CdpClient, url: &str) -> Result<(), FunctionCallError> {
@@ -1525,6 +1546,16 @@ mod tests {
         assert!(tail.starts_with("..."));
         assert!(tail.ends_with('é'));
         assert!(tail.len() > 4_000);
+    }
+
+    #[test]
+    fn stealth_user_agent_removes_headless_marker() {
+        let user_agent = "Mozilla/5.0 HeadlessChrome/120.0.0.0 Safari/537.36";
+
+        assert_eq!(
+            stealth_user_agent(user_agent),
+            "Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36"
+        );
     }
 
     #[tokio::test]
