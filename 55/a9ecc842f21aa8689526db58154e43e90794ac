@@ -1,0 +1,33 @@
+intent:
+  id: "intent/2026-05-03/shared-browser-policy#55a9ecc842f2"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Close shared-session and data-URL browser policy gaps found in post-change review."
+  decision: "Require network-enabled browser permissions for shared session attach, validate shared CDP endpoints before attaching, and require network permission for data: page navigation because the browser process can execute page loads outside the command sandbox."
+  constraints:
+    - "Must block shared browser observation and CDP attach when the receiving turn has restricted network permissions."
+    - "Must preserve permitted about:, file:, and network-enabled data: navigation behavior."
+    - "Must keep Obscura live-session sharing functional under allowed permissions."
+    - "Must keep argument-comment lint clean."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::BrowserAccessPolicy::validate_open"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::BrowserAccessPolicy::validate_shared_attach"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::BrowserAccessPolicy::validate_page_url"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::browser_access_policy_blocks_network_when_restricted"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo fmt --all"
+    - "cargo test -p codex-core agent_browser -- --nocapture"
+    - "cargo test -p codex-tools agent_browser"
+    - "cargo check -p codex-core -p codex-tools -p codex-features"
+    - "cargo clippy -p codex-core -p codex-tools -p codex-features --lib --tests -- -A clippy::large_enum_variant -D warnings"
+    - "CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 CODEX_AGENT_BROWSER_OBSCURA_BINARY=/private/tmp/codex-obscura-target/debug/obscura cargo test -p codex-core tools::handlers::agent_browser::tests::obscura_shared_browser_attaches_to_live_target -- --ignored --exact --nocapture"
+    - "HOME=/private/tmp/codex-dotslash-home RUSTUP_HOME=/private/tmp/codex-rustup-home CARGO_HOME=/private/tmp/codex-cargo-home PATH=/private/tmp/codex-dotslash-bin:$PATH ./tools/argument-comment-lint/run-prebuilt-linter.py -p codex-core"
+    - "HOME=/private/tmp/codex-dotslash-home RUSTUP_HOME=/private/tmp/codex-rustup-home CARGO_HOME=/private/tmp/codex-cargo-home PATH=/private/tmp/codex-dotslash-bin:$PATH ./tools/argument-comment-lint/run-prebuilt-linter.py -p codex-tools"
+    - "git diff --check"
+  related:
+    - "post-change-review Franklin 019deed6-ca85-7562-9b3b-222f5ee5b2e0"
