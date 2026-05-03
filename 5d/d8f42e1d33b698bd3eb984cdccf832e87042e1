@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-keyboard-press#5dd8f42e1"
+  change_type: "feat"
+  scope: "agent-browser"
+  summary: "Add a small keyboard press tool for browser automation."
+  decision: "Expose agent_browser.press for common UI navigation/control keys and dispatch them through CDP Input.dispatchKeyEvent."
+  constraints:
+    - "Keep the key surface intentionally small: common keys only, no shortcut/modifier grammar yet."
+    - "Preserve existing click/type/scroll behavior and tool names."
+    - "Register the new tool through the existing agent browser namespace and handler kind."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tools/src/agent_browser_tool.rs::press_schema"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_press"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::dispatch_key"
+    - "docs/fork-differences.md::Agent browser"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
