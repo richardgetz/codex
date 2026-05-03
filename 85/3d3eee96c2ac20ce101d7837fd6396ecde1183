@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-overlay-reuse#853d3eee9"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Avoid re-registering the collaborative selection overlay script."
+  decision: "Track overlay script registration on each browser session so selection_overview installs the script once, then reuses it on later calls."
+  constraints:
+    - "Keep lazy overlay behavior from the default open path."
+    - "Keep selection_overview able to install the overlay on first use."
+    - "Do not add new model-visible controls for internal registration state."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::BrowserSession"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_selection"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
