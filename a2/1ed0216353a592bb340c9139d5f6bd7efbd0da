@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-launch-metadata#a21ed0216353"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Move browser launch metadata into sessions without cloning temporary launch fields."
+  decision: "Use ownership transfer for launch mode, notes, endpoint, and page websocket URL once the fallible launch setup is complete, while borrowing the websocket URL for the CDP connection before moving it."
+  constraints:
+    - "Must preserve the same OpenResult and BrowserSession endpoint, backend, mode, notes, and websocket values."
+    - "Must still allow cleanup_launch to run on all pre-session error paths."
+    - "Must keep the change isolated to agent_browser handle_open allocation cleanup."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_open"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
