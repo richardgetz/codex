@@ -1,0 +1,27 @@
+intent:
+  id: "intent/2026-05-03/obscura-visual-sessions#7acfa354c9d9"
+  change_type: "feat"
+  scope: "agent-browser"
+  summary: "Make the Obscura backend usable for visual agent review instead of headless-only control."
+  decision: "Use flattened CDP target sessions for Obscura, render screenshots from DOM snapshots as PNGs, and open a lightweight local mirror shell for Obscura headful mode while native compositor screenshots remain future work."
+  constraints:
+    - "Must keep Chromium and external CDP behavior working."
+    - "Must keep Obscura support isolated behind the backend selector and CODEX_AGENT_BROWSER_OBSCURA_BINARY."
+    - "Must describe browser compatibility work as legitimate UI testing/review support."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::ensure_obscura_page_session"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::obscura_snapshot_screenshot"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::refresh_obscura_visual_shell"
+    - "codex-rs/tools/src/agent_browser_tool.rs::screenshot_schema"
+    - "docs/fork-differences.md::Agent browser"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo test -p codex-core agent_browser -- --nocapture"
+    - "cargo test -p codex-tools agent_browser"
+    - "cargo check -p codex-core -p codex-tools -p codex-features"
+    - "cargo clippy -p codex-core -p codex-tools -p codex-features --lib --tests -- -A clippy::large_enum_variant -D warnings"
+    - "CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 CODEX_AGENT_BROWSER_OBSCURA_BINARY=/private/tmp/codex-obscura-target/debug/obscura cargo test -p codex-core tools::handlers::agent_browser::tests::obscura_backend_renders_dom_screenshot -- --ignored --exact --nocapture"
