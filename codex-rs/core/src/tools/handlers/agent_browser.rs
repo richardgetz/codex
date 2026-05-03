@@ -1729,18 +1729,29 @@ mod tests {
             return;
         }
 
+        let iterations = std::env::var("CODEX_AGENT_BROWSER_BENCHMARK_ITERATIONS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(1);
         let result = handle_benchmark(BenchmarkArgs {
             mode: BrowserMode::Headless,
-            iterations: Some(1),
+            iterations: Some(iterations),
             stealth: true,
-            remote_debugging_url: None,
+            remote_debugging_url: std::env::var("CODEX_AGENT_BROWSER_REMOTE_DEBUGGING_URL").ok(),
         })
         .await
         .expect("headless benchmark should complete");
 
+        if let Ok(path) = std::env::var("CODEX_AGENT_BROWSER_BENCHMARK_OUTPUT") {
+            fs::write(
+                path,
+                serde_json::to_string(&result).expect("serialize benchmark"),
+            )
+            .expect("write benchmark output");
+        }
         assert_eq!(result.mode, "headless");
         assert!(result.launch_ms > 0);
-        assert_eq!(result.snapshot_ms.len(), 1);
-        assert_eq!(result.screenshot_ms.len(), 1);
+        assert_eq!(result.snapshot_ms.len(), iterations);
+        assert_eq!(result.screenshot_ms.len(), iterations);
     }
 }
