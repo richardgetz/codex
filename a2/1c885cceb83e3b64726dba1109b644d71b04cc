@@ -1,5 +1,5 @@
 intent:
-  id: "intent/2026-05-03/browser-ref-pointer-click#auto"
+  id: "intent/2026-05-03/browser-ref-pointer-click#a21c885cc"
   change_type: "fix"
   scope: "agent-browser"
   summary: "Make element-ref clicks use CDP pointer events instead of DOM click shortcuts."
