@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-05-03/browser-stderr-char-tail#auto"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Make browser stderr diagnostic trimming character-safe."
+  decision: "Trim captured browser stderr tails by Unicode scalar values rather than byte offsets before adding them to CDP startup errors."
+  constraints:
+    - "Must preserve the bounded diagnostic tail behavior."
+    - "Must not risk panics on non-ASCII browser stderr output."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::browser_stderr_tail"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
