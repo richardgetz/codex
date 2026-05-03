@@ -375,9 +375,12 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - When attaching to an existing CDP endpoint, Codex creates an `about:blank`
   page target if `/json/list` has no debuggable page yet, then closes only that
   owned target when the session closes.
-- Stealth mode is enabled by default for browser sessions. It isolates launch
-  state in a temporary profile, applies automation-focused Chromium flags, hides
-  common webdriver signals, and normalizes the default headless user agent.
+- The browser compatibility profile is enabled by default through the
+  `stealth` option name for API compatibility. It is intended for legitimate UI
+  testing and review automation, not for avoiding authentication, payment, rate,
+  or usage policy requirements. It isolates launch state in a temporary profile,
+  applies review-focused Chromium flags, reduces obvious webdriver-only
+  differences, and normalizes the default headless user agent.
 - The collaborative overlay is injected only when
   `agent_browser.selection_overview` or `agent_browser.highlight` is requested,
   keeping ordinary browsing paths lighter and less page-mutating. Highlights can

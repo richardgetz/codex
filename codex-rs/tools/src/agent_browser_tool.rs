@@ -128,7 +128,7 @@ fn open_schema() -> JsonSchema {
             (
                 "stealth".to_string(),
                 JsonSchema::boolean(Some(
-                    "Enable stealth profile. Defaults to true.".to_string(),
+                    "Use the browser compatibility profile. Defaults to true.".to_string(),
                 )),
             ),
             (
@@ -397,7 +397,9 @@ fn benchmark_schema() -> JsonSchema {
             ),
             (
                 "stealth".to_string(),
-                JsonSchema::boolean(Some("Use stealth profile. Defaults to true.".to_string())),
+                JsonSchema::boolean(Some(
+                    "Use the browser compatibility profile. Defaults to true.".to_string(),
+                )),
             ),
             (
                 "remote_debugging_url".to_string(),
