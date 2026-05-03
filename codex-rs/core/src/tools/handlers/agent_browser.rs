@@ -293,7 +293,6 @@ struct BrowserSession {
     id: String,
     mode: BrowserMode,
     stealth: bool,
-    endpoint: String,
     cdp: CdpClient,
     process: Option<Child>,
     _profile_dir: Option<TempDir>,
@@ -461,7 +460,6 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
         id: session_id.clone(),
         mode: args.mode.clone(),
         stealth: args.stealth,
-        endpoint: endpoint.clone(),
         cdp,
         process: launch.process.take(),
         _profile_dir: launch.profile_dir.take(),
@@ -539,7 +537,6 @@ async fn handle_snapshot(args: SnapshotArgs) -> Result<Value, FunctionCallError>
         snapshot["session_id"] = Value::String(session.id.clone());
         snapshot["mode"] = Value::String(mode_name(&session.mode).to_string());
         snapshot["stealth"] = Value::Bool(session.stealth);
-        snapshot["endpoint"] = Value::String(session.endpoint.clone());
         snapshot["elapsed_ms"] = json!(elapsed_ms(started));
         snapshot
     });
