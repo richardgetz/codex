@@ -1,5 +1,5 @@
 intent:
-  id: "intent/2026-05-03/short-browser-tool-descriptions#auto"
+  id: "intent/2026-05-03/short-browser-tool-descriptions#e3ab93c0c"
   change_type: "perf"
   scope: "agent-browser"
   summary: "Reduce model-visible browser tool description weight."
