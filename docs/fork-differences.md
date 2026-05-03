@@ -365,6 +365,20 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   current session. It does not create arbitrary MCP servers from unknown tool
   names.
 
+### Agent browser
+
+- `[features].agent_browser = true` exposes the built-in `agent_browser`
+  namespace when the session has a local execution environment.
+- The namespace provides headful/headless Chrome or Chromium control over CDP:
+  open/attach, navigate, snapshot, screenshot, click, type, scroll,
+  selection-overview, and benchmark tools.
+- Stealth mode is enabled by default for browser sessions. It isolates launch
+  state in a temporary profile, applies automation-focused Chromium flags, hides
+  common webdriver signals, and normalizes the default headless user agent.
+- The collaborative selection overlay is injected only when
+  `agent_browser.selection_overview` is requested, keeping ordinary browsing
+  paths lighter and less page-mutating.
+
 ### Fork-aware help
 
 - The fork exposes repo-local fork help context so agents can answer questions
