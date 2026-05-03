@@ -1,4 +1,5 @@
 pub(crate) mod agent_browser;
+pub(crate) mod agent_browser_cdp;
 pub(crate) mod agent_browser_visual;
 pub(crate) mod agent_jobs;
 pub(crate) mod apply_patch;
