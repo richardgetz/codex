@@ -688,6 +688,8 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
                         "click failed: element ref did not return y coordinate".to_string(),
                     )
                 })?;
+                let x = bounded_number("x", x, 0.0, MAX_VIEWPORT_COORDINATE)?;
+                let y = bounded_number("y", y, 0.0, MAX_VIEWPORT_COORDINATE)?;
                 dispatch_click(&mut session.cdp, x, y).await
             }
             Ok(result) => Err(FunctionCallError::RespondToModel(format!(
