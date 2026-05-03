@@ -1,5 +1,5 @@
 intent:
-  id: "intent/2026-05-03/browser-stderr-char-tail#auto"
+  id: "intent/2026-05-03/browser-stderr-char-tail#a373ddc92"
   change_type: "fix"
   scope: "agent-browser"
   summary: "Make browser stderr diagnostic trimming character-safe."
