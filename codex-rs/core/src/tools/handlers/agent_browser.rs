@@ -569,26 +569,41 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
                 const el = document.querySelector(`[data-codex-agent-ref="${{CSS.escape({})}}"]`);
                 if (!el) return {{ ok: false, message: "element ref not found" }};
                 el.scrollIntoView({{ block: "center", inline: "center" }});
-                el.click();
-                return {{ ok: true, message: "clicked ref" }};
+                const rect = el.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) {{
+                    return {{ ok: false, message: "element ref is not visible" }};
+                }}
+                return {{
+                    ok: true,
+                    x: rect.left + rect.width / 2,
+                    y: rect.top + rect.height / 2
+                }};
             }})()"#,
             serde_json::to_string(element_ref).unwrap_or_else(|_| "\"\"".to_string())
         );
-        evaluate_json(&mut session.cdp, &expression)
-            .await
-            .and_then(|result| {
-                if result.get("ok").and_then(Value::as_bool) == Some(true) {
-                    Ok(())
-                } else {
-                    Err(FunctionCallError::RespondToModel(format!(
-                        "click failed: {}",
-                        result
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or("unknown error")
-                    )))
-                }
-            })
+        match evaluate_json(&mut session.cdp, &expression).await {
+            Ok(result) if result.get("ok").and_then(Value::as_bool) == Some(true) => {
+                let x = result.get("x").and_then(Value::as_f64).ok_or_else(|| {
+                    FunctionCallError::RespondToModel(
+                        "click failed: element ref did not return x coordinate".to_string(),
+                    )
+                })?;
+                let y = result.get("y").and_then(Value::as_f64).ok_or_else(|| {
+                    FunctionCallError::RespondToModel(
+                        "click failed: element ref did not return y coordinate".to_string(),
+                    )
+                })?;
+                dispatch_click(&mut session.cdp, x, y).await
+            }
+            Ok(result) => Err(FunctionCallError::RespondToModel(format!(
+                "click failed: {}",
+                result
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown error")
+            ))),
+            Err(err) => Err(err),
+        }
     } else {
         let x = args.x.ok_or_else(|| {
             FunctionCallError::RespondToModel(
@@ -601,28 +616,7 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
             )
         });
         match (x, y) {
-            (Ok(x), Ok(y)) => {
-                match session
-                    .cdp
-                    .call(
-                        "Input.dispatchMouseEvent",
-                        json!({"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1}),
-                    )
-                    .await
-                {
-                    Ok(_) => {
-                        session
-                            .cdp
-                            .call(
-                                "Input.dispatchMouseEvent",
-                                json!({"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1}),
-                            )
-                            .await
-                            .map(|_| ())
-                    }
-                    Err(err) => Err(err),
-                }
-            }
+            (Ok(x), Ok(y)) => dispatch_click(&mut session.cdp, x, y).await,
             (Err(err), _) | (_, Err(err)) => Err(err),
         }
     };
@@ -634,6 +628,20 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
     });
     put_session(session).await;
     result
+}
+
+async fn dispatch_click(cdp: &mut CdpClient, x: f64, y: f64) -> Result<(), FunctionCallError> {
+    cdp.call(
+        "Input.dispatchMouseEvent",
+        json!({"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1}),
+    )
+    .await?;
+    cdp.call(
+        "Input.dispatchMouseEvent",
+        json!({"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1}),
+    )
+    .await
+    .map(|_| ())
 }
 
 async fn handle_type(args: TypeArgs) -> Result<SimpleResult, FunctionCallError> {
