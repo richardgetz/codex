@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-encoder-allocations#d7f0f8cd8f99"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Reduce short-lived allocations in built-in browser encoding and visual text compaction."
+  decision: "Replace iterator pipelines that allocate temporary vectors or joined token lists with direct preallocated string builders while preserving output semantics."
+  constraints:
+    - "Must preserve benchmark data URL encoding semantics."
+    - "Must preserve Obscura visual text whitespace normalization semantics."
+    - "Must keep the optimization isolated to built-in agent browser helpers."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::urlencoding_like"
+    - "codex-rs/core/src/tools/handlers/agent_browser_visual.rs::compact_visual_text"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
