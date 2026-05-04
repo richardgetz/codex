@@ -387,7 +387,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   flows; screenshots use a lightweight DOM snapshot renderer until native
   compositor screenshots are added. Obscura `mode = "headful"` opens a small
   local mirror shell driven by the same CDP snapshot path so the Rust-native
-  backend is not limited to invisible sessions.
+  backend is not limited to invisible sessions. The mirror has a localhost
+  selection bridge: when the human clicks a mirrored target or selects text in
+  the mirror, `agent_browser.selection_overview` includes that
+  `mirrorSelection` payload for the agent.
 - Set `CODEX_AGENT_BROWSER_OBSCURA_BINARY` to point at a custom Obscura binary,
   bundle `obscura` next to the Codex executable, bundle it under
   `codex-resources/obscura` in standalone installs, or on macOS bundle it in

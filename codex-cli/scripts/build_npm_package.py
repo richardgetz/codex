@@ -66,11 +66,17 @@ PACKAGE_EXPANSIONS: dict[str, list[str]] = {
 
 PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
     "codex": [],
-    "codex-linux-x64": ["codex", "rg"],
+    "codex-linux-x64": ["codex", "rg", "obscura"],
     "codex-linux-arm64": ["codex", "rg"],
     "codex-darwin-x64": ["codex", "rg"],
-    "codex-darwin-arm64": ["codex", "rg"],
-    "codex-win32-x64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
+    "codex-darwin-arm64": ["codex", "rg", "obscura"],
+    "codex-win32-x64": [
+        "codex",
+        "rg",
+        "obscura",
+        "codex-windows-sandbox-setup",
+        "codex-command-runner",
+    ],
     "codex-win32-arm64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
     "codex-responses-api-proxy": ["codex-responses-api-proxy"],
     "codex-sdk": [],

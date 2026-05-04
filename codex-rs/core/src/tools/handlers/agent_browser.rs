@@ -563,6 +563,7 @@ struct BrowserSession {
     owned_page_close_url: Option<String>,
     _profile_dir: Option<TempDir>,
     visual_shell_path: Option<PathBuf>,
+    visual_shell_bridge: Option<agent_browser_visual::VisualShellBridge>,
     overlay_script_registered: bool,
 }
 
@@ -729,20 +730,40 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
     }
 
     let url = page_url(&mut cdp).await.unwrap_or_default();
+    let mut visual_shell_bridge = None;
     let visual_shell_path = if launch.engine == BrowserEngine::Obscura
         && matches!(session_mode, BrowserMode::Headful)
     {
         match launch.profile_dir.as_ref() {
             Some(profile_dir) => {
                 let path = profile_dir.path().join("codex-obscura-headful.html");
-                match refresh_obscura_visual_shell(&mut cdp, &path, viewport_width, viewport_height)
-                    .await
+                let bridge = agent_browser_visual::VisualShellBridge::start(
+                    profile_dir.path().join("codex-obscura-selection.json"),
+                )
+                .ok();
+                let callback_url = bridge
+                    .as_ref()
+                    .map(agent_browser_visual::VisualShellBridge::callback_url);
+                match refresh_obscura_visual_shell(
+                    &mut cdp,
+                    &path,
+                    viewport_width,
+                    viewport_height,
+                    callback_url.as_deref(),
+                )
+                .await
                 {
                     Ok(()) => {
                         notes.push(format!("Obscura headful mirror: {}", path.display()));
+                        if bridge.is_some() {
+                            notes.push(
+                                "Obscura headful mirror selection bridge enabled".to_string(),
+                            );
+                        }
                         if agent_browser_visual::open_visual_shell(&path) {
                             notes.push("opened Obscura headful mirror".to_string());
                         }
+                        visual_shell_bridge = bridge;
                         Some(path)
                     }
                     Err(err) => {
@@ -774,6 +795,7 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
         owned_page_close_url: launch.owned_page_close_url.take(),
         _profile_dir: launch.profile_dir.take(),
         visual_shell_path,
+        visual_shell_bridge,
         overlay_script_registered: false,
     };
 
@@ -833,11 +855,16 @@ async fn handle_navigate(args: NavigateArgs) -> Result<SimpleResult, FunctionCal
     let result = match navigate_to(&mut session.cdp, &args.url).await {
         Ok(()) => {
             if let Some(path) = session.visual_shell_path.clone() {
+                let callback_url = session
+                    .visual_shell_bridge
+                    .as_ref()
+                    .map(agent_browser_visual::VisualShellBridge::callback_url);
                 let _ = refresh_obscura_visual_shell(
                     &mut session.cdp,
                     &path,
                     session.viewport_width,
                     session.viewport_height,
+                    callback_url.as_deref(),
                 )
                 .await;
             }
@@ -953,11 +980,16 @@ async fn obscura_snapshot_screenshot(
     )
     .await?;
     if let Some(path) = session.visual_shell_path.clone() {
+        let callback_url = session
+            .visual_shell_bridge
+            .as_ref()
+            .map(agent_browser_visual::VisualShellBridge::callback_url);
         let _ = agent_browser_visual::write_visual_shell(
             &path,
             &snapshot,
             session.viewport_width,
             session.viewport_height,
+            callback_url.as_deref(),
         );
     }
     let png = agent_browser_visual::render_snapshot_png(
@@ -1352,6 +1384,7 @@ async fn handle_selection(args: SelectionArgs) -> Result<Value, FunctionCallErro
             )
             .await
             .map(|mut overview| {
+                add_visual_shell_selection(&mut overview, &session);
                 overview["session_id"] = Value::String(session_id);
                 overview["elapsed_ms"] = json!(elapsed_ms(started));
                 overview
@@ -1360,6 +1393,22 @@ async fn handle_selection(args: SelectionArgs) -> Result<Value, FunctionCallErro
     };
     put_session(session).await;
     output
+}
+
+fn add_visual_shell_selection(overview: &mut Value, session: &BrowserSession) {
+    let Some(bridge) = session.visual_shell_bridge.as_ref() else {
+        return;
+    };
+    let Ok(text) = fs::read_to_string(bridge.state_path()) else {
+        overview["hasMirrorSelection"] = Value::Bool(false);
+        return;
+    };
+    let Ok(selection) = serde_json::from_str::<Value>(&text) else {
+        overview["hasMirrorSelection"] = Value::Bool(false);
+        return;
+    };
+    overview["hasMirrorSelection"] = Value::Bool(true);
+    overview["mirrorSelection"] = selection;
 }
 
 async fn handle_highlight(args: HighlightArgs) -> Result<Value, FunctionCallError> {
@@ -2691,6 +2740,7 @@ async fn refresh_obscura_visual_shell(
     path: &Path,
     viewport_width: u32,
     viewport_height: u32,
+    callback_url: Option<&str>,
 ) -> Result<(), FunctionCallError> {
     let snapshot = snapshot_page(
         cdp,
@@ -2699,7 +2749,13 @@ async fn refresh_obscura_visual_shell(
         SnapshotRefMode::ActionRefs,
     )
     .await?;
-    agent_browser_visual::write_visual_shell(path, &snapshot, viewport_width, viewport_height)
+    agent_browser_visual::write_visual_shell(
+        path,
+        &snapshot,
+        viewport_width,
+        viewport_height,
+        callback_url,
+    )
 }
 
 fn benchmark_url() -> String {
@@ -3300,7 +3356,7 @@ mod tests {
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
         assert!(png.len() > 512);
         let html = agent_browser_visual::visual_shell_html(
-            &snapshot, /*viewport_width*/ 800, /*viewport_height*/ 600,
+            &snapshot, /*viewport_width*/ 800, /*viewport_height*/ 600, None,
         );
         assert!(html.contains("Obscura headful mirror"));
         assert!(html.contains("button e1 Run"));
@@ -3326,7 +3382,10 @@ mod tests {
         });
 
         let html = agent_browser_visual::visual_shell_html(
-            &snapshot, /*viewport_width*/ 10, /*viewport_height*/ 9_000,
+            &snapshot,
+            /*viewport_width*/ 10,
+            /*viewport_height*/ 9_000,
+            Some("http://127.0.0.1:12345/selection"),
         );
 
         assert!(html.contains("width:320px;height:1200px"));
@@ -3334,9 +3393,11 @@ mod tests {
         assert!(html.contains("https://example.test/?q=&lt;value&gt;&amp;ok=1"));
         assert!(html.contains("Text &lt;body&gt; &amp; more"));
         assert!(html.contains("button e&lt;0&gt; Run &lt;script&gt;"));
+        assert!(html.contains(r#"data-ref="e&lt;0&gt;""#));
+        assert!(html.contains("http://127.0.0.1:12345/selection"));
         assert!(html.contains("left:0px;top:0px;width:1px;height:2px"));
         assert_eq!(html.matches(r#"class="target""#).count(), 160);
-        assert!(!html.contains("<script>"));
+        assert!(html.contains("<script>"));
         assert!(!html.contains("e&lt;160&gt;"));
     }
 
@@ -3416,22 +3477,60 @@ mod tests {
             return;
         }
 
+        highlight_marks_selection_and_clears_rect_for_backend(
+            BrowserBackend::Chromium,
+            std::env::var("CODEX_AGENT_BROWSER_REMOTE_DEBUGGING_URL").ok(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 and an Obscura binary"]
+    async fn obscura_highlight_marks_selection_and_clears_rect() {
+        if std::env::var("CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS").as_deref() != Ok("1") {
+            return;
+        }
+
+        highlight_marks_selection_and_clears_rect_for_backend(BrowserBackend::Obscura, None).await;
+    }
+
+    async fn highlight_marks_selection_and_clears_rect_for_backend(
+        backend: BrowserBackend,
+        remote_debugging_url: Option<String>,
+    ) {
+        let use_obscura_mirror = matches!(backend, BrowserBackend::Obscura);
+        let (_page_dir, page_url) = benchmark_file_url("codex-highlight-overlay-");
         let open = handle_open(OpenArgs {
-            url: Some(benchmark_url()),
+            url: Some(page_url),
             share_id: None,
-            mode: BrowserMode::Headless,
+            mode: if use_obscura_mirror {
+                BrowserMode::Headful
+            } else {
+                BrowserMode::Headless
+            },
             stealth: true,
-            backend: BrowserBackend::Chromium,
+            backend,
             viewport_width: Some(1280),
             viewport_height: Some(800),
             locale: Some(DEFAULT_LOCALE.to_string()),
             timezone: Some(DEFAULT_TIMEZONE.to_string()),
             user_agent: None,
-            remote_debugging_url: std::env::var("CODEX_AGENT_BROWSER_REMOTE_DEBUGGING_URL").ok(),
+            remote_debugging_url,
         })
         .await
         .expect("open browser");
         let session_id = open.session_id;
+        let engine = open.backend;
+        let initial_selection = handle_selection(SelectionArgs {
+            session_id: Some(session_id.clone()),
+            enable_overlay: Some(true),
+        })
+        .await
+        .expect("enable overlay");
+        assert_eq!(
+            initial_selection.get("overlay").and_then(Value::as_bool),
+            Some(true)
+        );
         let snapshot = handle_snapshot(SnapshotArgs {
             session_id: Some(session_id.clone()),
             max_text_chars: None,
@@ -3472,7 +3571,73 @@ mod tests {
         )
         .await
         .expect("check ref property");
+        if engine == BrowserEngine::Obscura {
+            let bridge = session
+                .visual_shell_bridge
+                .as_ref()
+                .expect("Obscura headful session should include a mirror bridge");
+            fs::write(
+                bridge.state_path(),
+                serde_json::to_string(&json!({
+                    "kind": "target",
+                    "ref": "e2",
+                    "label": "Run",
+                }))
+                .expect("serialize mirror selection"),
+            )
+            .expect("write mirror selection");
+        } else {
+            let selection_result = evaluate_json(
+                &mut session.cdp,
+                r#"(() => {
+                    const heading = document.querySelector("h1");
+                    const range = document.createRange();
+                    range.selectNodeContents(heading);
+                    const selection = window.getSelection();
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                    document.dispatchEvent(new Event("selectionchange"));
+                    return { ok: true, text: selection.toString() };
+                })()"#,
+            )
+            .await
+            .expect("select heading");
+            assert_eq!(
+                selection_result.get("text").and_then(Value::as_str),
+                Some("Codex Agent Browser Benchmark")
+            );
+        }
         put_session(session).await;
+        let selected = handle_selection(SelectionArgs {
+            session_id: Some(session_id.clone()),
+            enable_overlay: Some(false),
+        })
+        .await
+        .expect("read selection");
+        if engine == BrowserEngine::Obscura {
+            assert_eq!(
+                selected.get("hasMirrorSelection").and_then(Value::as_bool),
+                Some(true)
+            );
+            assert_eq!(
+                selected
+                    .pointer("/mirrorSelection/ref")
+                    .and_then(Value::as_str),
+                Some("e2")
+            );
+        } else {
+            assert_eq!(
+                selected.get("hasSelection").and_then(Value::as_bool),
+                Some(true)
+            );
+            assert_eq!(
+                selected
+                    .pointer("/selection/text")
+                    .and_then(Value::as_str)
+                    .map(str::trim),
+                Some("Codex Agent Browser Benchmark")
+            );
+        }
 
         let marked = handle_highlight(HighlightArgs {
             session_id: Some(session_id.clone()),

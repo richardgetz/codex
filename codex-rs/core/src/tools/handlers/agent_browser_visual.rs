@@ -1,7 +1,18 @@
 use std::fmt::Write as _;
 use std::fs;
+use std::io::Read;
+use std::io::Write;
+use std::net::SocketAddr;
+use std::net::TcpListener;
+use std::net::TcpStream;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::thread;
+use std::time::Duration;
 
 use image::ExtendedColorType;
 use image::ImageBuffer;
@@ -14,15 +25,81 @@ use serde_json::Value;
 
 use crate::function_tool::FunctionCallError;
 
+pub(crate) struct VisualShellBridge {
+    state_path: PathBuf,
+    stop: Arc<AtomicBool>,
+    addr: SocketAddr,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl VisualShellBridge {
+    pub(crate) fn start(state_path: PathBuf) -> Result<Self, FunctionCallError> {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to start Obscura mirror selection bridge: {err}"
+            ))
+        })?;
+        listener.set_nonblocking(true).map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to configure Obscura mirror selection bridge: {err}"
+            ))
+        })?;
+        let addr = listener.local_addr().map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to read Obscura mirror selection bridge address: {err}"
+            ))
+        })?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let thread_state_path = state_path.clone();
+        let handle = thread::spawn(move || {
+            while !thread_stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((stream, _)) => handle_bridge_stream(stream, &thread_state_path),
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(25));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Ok(Self {
+            state_path,
+            stop,
+            addr,
+            handle: Some(handle),
+        })
+    }
+
+    pub(crate) fn callback_url(&self) -> String {
+        format!("http://{}/selection", self.addr)
+    }
+
+    pub(crate) fn state_path(&self) -> &Path {
+        &self.state_path
+    }
+}
+
+impl Drop for VisualShellBridge {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(self.addr);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 pub(crate) fn write_visual_shell(
     path: &Path,
     snapshot: &Value,
     viewport_width: u32,
     viewport_height: u32,
+    callback_url: Option<&str>,
 ) -> Result<(), FunctionCallError> {
     fs::write(
         path,
-        visual_shell_html(snapshot, viewport_width, viewport_height),
+        visual_shell_html(snapshot, viewport_width, viewport_height, callback_url),
     )
     .map_err(|err| {
         FunctionCallError::RespondToModel(format!(
@@ -62,6 +139,7 @@ pub(crate) fn visual_shell_html(
     snapshot: &Value,
     viewport_width: u32,
     viewport_height: u32,
+    callback_url: Option<&str>,
 ) -> String {
     let mut element_markup = String::new();
     if let Some(elements) = snapshot.get("elements").and_then(Value::as_array) {
@@ -87,13 +165,14 @@ pub(crate) fn visual_shell_html(
                 .max(1);
             let _ = write!(
                 element_markup,
-                r#"<div class="target" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px"><span>{tag} {ref_id} {label}</span></div>"#
+                r#"<div class="target" data-ref="{ref_id}" data-tag="{tag}" data-label="{label}" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px"><span>{tag} {ref_id} {label}</span></div>"#
             );
         }
     }
     let title = html_escape(snapshot.get("title").and_then(Value::as_str).unwrap_or(""));
     let url = html_escape(snapshot.get("url").and_then(Value::as_str).unwrap_or(""));
     let text = html_escape(snapshot.get("text").and_then(Value::as_str).unwrap_or(""));
+    let callback_script = mirror_callback_script(callback_url);
     let width = viewport_width.clamp(/*min*/ 320, /*max*/ 1600);
     let height = viewport_height.clamp(/*min*/ 240, /*max*/ 1200);
     format!(
@@ -107,15 +186,106 @@ h1{{font-size:15px;line-height:18px;margin:0 0 3px}}
 .url{{opacity:.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
 .viewport{{position:relative;width:{width}px;height:{height}px;overflow:hidden;background:white;border-bottom:1px solid #d0d7de}}
 .text{{position:absolute;inset:12px;white-space:pre-wrap;line-height:1.35;color:#24292f}}
-.target{{position:absolute;border:2px solid #0b57d0;background:rgba(11,87,208,.08);box-sizing:border-box;pointer-events:none}}
+.target{{position:absolute;border:2px solid #0b57d0;background:rgba(11,87,208,.08);box-sizing:border-box;cursor:crosshair}}
+.target:hover{{background:rgba(11,87,208,.18)}}
 .target span{{position:absolute;left:-2px;top:-22px;max-width:360px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:#0b57d0;color:white;padding:2px 5px;font-size:11px}}
 aside{{padding:12px;max-width:{width}px;box-sizing:border-box}}
 pre{{white-space:pre-wrap;line-height:1.35;margin:0}}
 </style>
 <header><h1>Obscura headful mirror: {title}</h1><div class="url">{url}</div></header>
 <main class="viewport"><pre class="text">{text}</pre>{element_markup}</main>
-<aside><strong>Snapshot text</strong><pre>{text}</pre></aside>"#
+<aside><strong>Snapshot text</strong><pre>{text}</pre></aside>
+{callback_script}"#
     )
+}
+
+fn mirror_callback_script(callback_url: Option<&str>) -> String {
+    let Some(callback_url) = callback_url else {
+        return String::new();
+    };
+    let callback_url = html_escape(callback_url);
+    format!(
+        r#"<script>
+(() => {{
+  const endpoint = "{callback_url}";
+  const send = (payload) => {{
+    try {{
+      fetch(endpoint, {{
+        method: "POST",
+        mode: "cors",
+        headers: {{ "content-type": "application/json" }},
+        body: JSON.stringify({{ ...payload, capturedAt: new Date().toISOString() }})
+      }}).catch(() => {{}});
+    }} catch (_) {{}}
+  }};
+  document.addEventListener("click", (event) => {{
+    const target = event.target.closest && event.target.closest(".target");
+    if (!target) return;
+    const rect = target.getBoundingClientRect();
+    send({{
+      kind: "target",
+      ref: target.dataset.ref || "",
+      tag: target.dataset.tag || "",
+      label: target.dataset.label || "",
+      rect: {{
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      }}
+    }});
+  }}, true);
+  document.addEventListener("selectionchange", () => {{
+    const selection = window.getSelection();
+    const text = selection ? selection.toString().slice(0, 4000) : "";
+    if (!text) return;
+    const range = selection.rangeCount ? selection.getRangeAt(0) : null;
+    const rect = range ? range.getBoundingClientRect() : null;
+    send({{
+      kind: "selection",
+      text,
+      rect: rect ? {{
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      }} : null
+    }});
+  }}, true);
+}})();
+</script>"#
+    )
+}
+
+fn handle_bridge_stream(mut stream: TcpStream, state_path: &Path) {
+    let mut buffer = [0_u8; 65_536];
+    let Ok(bytes_read) = stream.read(&mut buffer) else {
+        return;
+    };
+    if bytes_read == 0 {
+        return;
+    }
+    let request = String::from_utf8_lossy(&buffer[..bytes_read]);
+    let is_options = request.starts_with("OPTIONS ");
+    let is_post = request.starts_with("POST /selection ");
+    if is_post && let Some(body) = request.split("\r\n\r\n").nth(1) {
+        let body = body.trim();
+        if body.len() <= 16_384 && serde_json::from_str::<Value>(body).is_ok() {
+            let tmp_path = state_path.with_extension("json.tmp");
+            if fs::write(&tmp_path, body).is_ok() {
+                let _ = fs::rename(tmp_path, state_path);
+            }
+        }
+    }
+    let status = if is_options || is_post {
+        "204 No Content"
+    } else {
+        "404 Not Found"
+    };
+    let response = format!(
+        "HTTP/1.1 {status}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    let _ = stream.write_all(response.as_bytes());
 }
 
 pub(crate) fn render_snapshot_png(
