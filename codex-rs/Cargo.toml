@@ -3,6 +3,7 @@ members = [
     "aws-auth",
     "analytics",
     "agent-graph-store",
+    "agent-browser-wry",
     "agent-identity",
     "backend-client",
     "build-info",
@@ -123,6 +124,7 @@ license = "Apache-2.0"
 app_test_support = { path = "app-server/tests/common" }
 codex-analytics = { path = "analytics" }
 codex-agent-graph-store = { path = "agent-graph-store" }
+codex-agent-browser-wry = { path = "agent-browser-wry" }
 codex-agent-identity = { path = "agent-identity" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
@@ -392,6 +394,7 @@ tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25"
 ts-rs = "11"
 tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
+tao = "0.35.1"
 uds_windows = "1.1.0"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2"
@@ -406,6 +409,7 @@ which = "8"
 whoami = "1.6.1"
 wildmatch = "2.6.1"
 winapi-util = "0.1.11"
+wry = "0.55.0"
 zip = "2.4.2"
 zstd = "0.13"
 

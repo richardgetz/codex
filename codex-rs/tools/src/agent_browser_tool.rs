@@ -145,7 +145,12 @@ fn open_schema() -> JsonSchema {
             (
                 "backend".to_string(),
                 JsonSchema::string_enum(
-                    vec![json!("auto"), json!("obscura"), json!("chromium")],
+                    vec![
+                        json!("auto"),
+                        json!("wry"),
+                        json!("obscura"),
+                        json!("chromium"),
+                    ],
                     Some("Browser backend. Defaults to auto.".to_string()),
                 ),
             ),
@@ -438,7 +443,12 @@ fn benchmark_schema() -> JsonSchema {
             (
                 "backend".to_string(),
                 JsonSchema::string_enum(
-                    vec![json!("auto"), json!("obscura"), json!("chromium")],
+                    vec![
+                        json!("auto"),
+                        json!("wry"),
+                        json!("obscura"),
+                        json!("chromium"),
+                    ],
                     Some("Browser backend. Defaults to auto.".to_string()),
                 ),
             ),

@@ -162,7 +162,7 @@ jobs:
           append_summary "- [40%] Starting cargo build for ${TARGET_TRIPLE}"
           log_progress "[40%] Starting cargo build for ${TARGET_TRIPLE}"
 
-          cargo build --target "${TARGET_TRIPLE}" --release --bin codex -vv &
+          cargo build --target "${TARGET_TRIPLE}" --release --bin codex --bin codex-agent-browser-wry -vv &
           build_pid=$!
           started_at="$(date +%s)"
 
@@ -201,8 +201,11 @@ jobs:
           dest="../dist/${{ matrix.target }}"
           mkdir -p "${dest}"
           cp "target/${{ matrix.target }}/release/codex" "${dest}/codex-${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/codex-agent-browser-wry" "${dest}/codex-agent-browser-wry-${{ matrix.target }}"
           tar -C "${dest}" -czf "${dest}/codex-${{ matrix.target }}.tar.gz" "codex-${{ matrix.target }}"
+          tar -C "${dest}" -czf "${dest}/codex-agent-browser-wry-${{ matrix.target }}.tar.gz" "codex-agent-browser-wry-${{ matrix.target }}"
           zstd -T0 -19 --rm "${dest}/codex-${{ matrix.target }}"
+          zstd -T0 -19 --rm "${dest}/codex-agent-browser-wry-${{ matrix.target }}"
 
       - name: "[70%] Upload build artifacts"
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7

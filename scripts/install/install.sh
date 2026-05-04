@@ -598,6 +598,10 @@ install_release() {
     cp "$vendor_root/browser/obscura" "$stage_release/codex-resources/obscura"
     chmod 0755 "$stage_release/codex-resources/obscura"
   fi
+  if [ -x "$vendor_root/browser/codex-agent-browser-wry" ]; then
+    cp "$vendor_root/browser/codex-agent-browser-wry" "$stage_release/codex-resources/codex-agent-browser-wry"
+    chmod 0755 "$stage_release/codex-resources/codex-agent-browser-wry"
+  fi
   chmod 0755 "$stage_release/codex"
   chmod 0755 "$stage_release/codex-resources/rg"
 

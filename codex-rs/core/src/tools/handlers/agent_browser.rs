@@ -21,6 +21,8 @@ use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -262,6 +264,7 @@ enum BrowserBackend {
     Auto,
     Obscura,
     Chromium,
+    Wry,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -269,6 +272,7 @@ enum BrowserBackend {
 enum BrowserEngine {
     Chromium,
     Obscura,
+    Wry,
     ExternalCdp,
 }
 
@@ -499,6 +503,7 @@ struct BenchmarkResult {
     stealth: bool,
     target_url: String,
     iterations: usize,
+    screenshot_available: bool,
     launch_ms: f64,
     navigate_ms: f64,
     snapshot_ms: Vec<f64>,
@@ -558,7 +563,8 @@ struct BrowserSession {
     page_ws_url: String,
     target_id: Option<String>,
     access: ShareAccess,
-    cdp: CdpClient,
+    cdp: Option<CdpClient>,
+    wry: Option<WryClient>,
     process: Option<Child>,
     owned_page_close_url: Option<String>,
     _profile_dir: Option<TempDir>,
@@ -592,6 +598,20 @@ struct PageInitOptions<'a> {
     locale: &'a str,
     timezone: &'a str,
     user_agent: Option<&'a str>,
+}
+
+fn session_cdp_mut(session: &mut BrowserSession) -> Result<&mut CdpClient, FunctionCallError> {
+    session.cdp.as_mut().ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "this browser session does not expose a CDP connection".to_string(),
+        )
+    })
+}
+
+fn session_wry(session: &BrowserSession) -> Result<&WryClient, FunctionCallError> {
+    session.wry.as_ref().ok_or_else(|| {
+        FunctionCallError::RespondToModel("this browser session is not backed by WRY".to_string())
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -671,6 +691,7 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
             requested_viewport_width,
             requested_viewport_height,
             &locale,
+            args.user_agent.as_deref(),
         )
         .await?
     };
@@ -688,6 +709,53 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
         return Err(FunctionCallError::RespondToModel(
             "`url` cannot be used when opening a read_only shared browser session".to_string(),
         ));
+    }
+
+    if launch.engine == BrowserEngine::Wry {
+        let endpoint = std::mem::take(&mut launch.endpoint);
+        let wry = WryClient {
+            endpoint: endpoint.clone(),
+        };
+        if let Some(url) = args.url.as_deref()
+            && let Err(err) = wry_navigate(&wry, url).await
+        {
+            cleanup_launch(&mut launch).await;
+            return Err(err);
+        }
+        let url = wry_current_url(&wry).await.unwrap_or_default();
+        let session = BrowserSession {
+            id: session_id.clone(),
+            mode: session_mode,
+            engine: launch.engine,
+            stealth,
+            viewport_width,
+            viewport_height,
+            endpoint: endpoint.clone(),
+            page_ws_url: endpoint.clone(),
+            target_id: None,
+            access: session_access,
+            cdp: None,
+            wry: Some(wry),
+            process: launch.process.take(),
+            owned_page_close_url: None,
+            _profile_dir: launch.profile_dir.take(),
+            visual_shell_path: None,
+            visual_shell_bridge: None,
+            overlay_script_registered: true,
+        };
+        let mut manager = manager().lock().await;
+        manager.active_session_id = Some(session_id.clone());
+        manager.sessions.insert(session_id.clone(), session);
+        return Ok(OpenResult {
+            session_id,
+            mode: output_mode,
+            backend: launch.engine,
+            stealth,
+            endpoint,
+            url,
+            launch_ms: elapsed_ms(started),
+            notes,
+        });
     }
 
     let mut cdp = match CdpClient::connect(&launch.page_ws_url).await {
@@ -790,7 +858,8 @@ async fn handle_open(args: OpenArgs) -> Result<OpenResult, FunctionCallError> {
         page_ws_url,
         target_id: cdp.target_id().map(str::to_string),
         access: session_access,
-        cdp,
+        cdp: Some(cdp),
+        wry: None,
         process: launch.process.take(),
         owned_page_close_url: launch.owned_page_close_url.take(),
         _profile_dir: launch.profile_dir.take(),
@@ -830,6 +899,12 @@ async fn handle_close(args: SessionArgs) -> Result<SimpleResult, FunctionCallErr
         (session_id, session)
     };
 
+    if session.process.is_some()
+        && let Some(wry) = session.wry.as_ref()
+    {
+        let _ = wry_post(wry, "/close", json!({})).await;
+    }
+
     if let Some(mut child) = session.process.take() {
         let _ = child.kill().await;
     } else if let Some(close_url) = session.owned_page_close_url.take() {
@@ -852,18 +927,32 @@ async fn handle_navigate(args: NavigateArgs) -> Result<SimpleResult, FunctionCal
         put_session(session).await;
         return Err(err);
     }
-    let result = match navigate_to(&mut session.cdp, &args.url).await {
+    if session.engine == BrowserEngine::Wry {
+        let result = wry_navigate(session_wry(&session)?, &args.url)
+            .await
+            .map(|_| SimpleResult {
+                ok: true,
+                session_id,
+                message: "navigated".to_string(),
+                elapsed_ms: Some(elapsed_ms(started)),
+            });
+        put_session(session).await;
+        return result;
+    }
+    let result = match navigate_to(session_cdp_mut(&mut session)?, &args.url).await {
         Ok(()) => {
             if let Some(path) = session.visual_shell_path.clone() {
+                let viewport_width = session.viewport_width;
+                let viewport_height = session.viewport_height;
                 let callback_url = session
                     .visual_shell_bridge
                     .as_ref()
                     .map(agent_browser_visual::VisualShellBridge::callback_url);
                 let _ = refresh_obscura_visual_shell(
-                    &mut session.cdp,
+                    session_cdp_mut(&mut session)?,
                     &path,
-                    session.viewport_width,
-                    session.viewport_height,
+                    viewport_width,
+                    viewport_height,
                     callback_url.as_deref(),
                 )
                 .await;
@@ -885,8 +974,28 @@ async fn handle_snapshot(args: SnapshotArgs) -> Result<Value, FunctionCallError>
     let started = Instant::now();
     let mut session = take_session(args.session_id).await?;
     let ref_mode = snapshot_ref_mode(&session);
+    if session.engine == BrowserEngine::Wry {
+        let mut snapshot = wry_snapshot(
+            session_wry(&session)?,
+            args.max_text_chars
+                .unwrap_or(12_000)
+                .clamp(/*min*/ 1_000, /*max*/ 80_000),
+            args.max_elements
+                .unwrap_or(80)
+                .clamp(/*min*/ 1, /*max*/ 250),
+            ref_mode,
+        )
+        .await?;
+        snapshot["session_id"] = Value::String(session.id.clone());
+        snapshot["mode"] = Value::String(mode_name(&session.mode).to_string());
+        snapshot["backend"] = json!(session.engine);
+        snapshot["stealth"] = Value::Bool(session.stealth);
+        snapshot["elapsed_ms"] = json!(elapsed_ms(started));
+        put_session(session).await;
+        return Ok(snapshot);
+    }
     let result = match snapshot_page(
-        &mut session.cdp,
+        session_cdp_mut(&mut session)?,
         args.max_text_chars
             .unwrap_or(12_000)
             .clamp(/*min*/ 1_000, /*max*/ 80_000),
@@ -899,7 +1008,7 @@ async fn handle_snapshot(args: SnapshotArgs) -> Result<Value, FunctionCallError>
     {
         Ok(mut snapshot) => {
             if session.engine == BrowserEngine::Obscura
-                && let Ok(visual) = obscura_visual_summary(&mut session.cdp).await
+                && let Ok(visual) = obscura_visual_summary(session_cdp_mut(&mut session)?).await
             {
                 snapshot["visual"] = visual;
             }
@@ -920,6 +1029,43 @@ async fn handle_screenshot(args: ScreenshotArgs) -> Result<FunctionToolOutput, F
     let started = Instant::now();
     let mut session = take_session(args.session_id).await?;
     let session_id = session.id.clone();
+    if session.engine == BrowserEngine::Wry {
+        let result = wry_post(session_wry(&session)?, "/screenshot", json!({}))
+            .await
+            .and_then(|value| {
+                let image_url = value
+                    .get("imageUrl")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        FunctionCallError::RespondToModel(
+                            "WRY screenshot result did not include image data".to_string(),
+                        )
+                    })?;
+                let summary = json!({
+                    "session_id": session_id,
+                    "mode": mode_name(&session.mode),
+                    "backend": session.engine,
+                    "stealth": session.stealth,
+                    "elapsed_ms": elapsed_ms(started),
+                    "mime_type": "image/png",
+                });
+                Ok(FunctionToolOutput::from_content(
+                    vec![
+                        FunctionCallOutputContentItem::InputText {
+                            text: serde_json::to_string(&summary)
+                                .unwrap_or_else(|_| summary.to_string()),
+                        },
+                        FunctionCallOutputContentItem::InputImage {
+                            image_url: image_url.to_string(),
+                            detail: Some(DEFAULT_IMAGE_DETAIL),
+                        },
+                    ],
+                    /*success*/ Some(true),
+                ))
+            });
+        put_session(session).await;
+        return result;
+    }
     if session.engine == BrowserEngine::Obscura {
         let result = obscura_snapshot_screenshot(
             &mut session,
@@ -932,6 +1078,12 @@ async fn handle_screenshot(args: ScreenshotArgs) -> Result<FunctionToolOutput, F
     }
     let result = session
         .cdp
+        .as_mut()
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "this browser session does not expose a CDP connection".to_string(),
+            )
+        })?
         .call(
             "Page.captureScreenshot",
             json!({
@@ -981,7 +1133,7 @@ async fn obscura_snapshot_screenshot(
     let max_text_chars = if full_page { 24_000 } else { 12_000 };
     let ref_mode = snapshot_ref_mode(session);
     let snapshot = snapshot_page_with_visual(
-        &mut session.cdp,
+        session_cdp_mut(session)?,
         max_text_chars,
         /*max_elements*/ 120,
         ref_mode,
@@ -1044,6 +1196,39 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
         return Err(err);
     }
 
+    if session.engine == BrowserEngine::Wry {
+        let payload = if let Some(element_ref) = args.element_ref.as_deref() {
+            json!({ "ref": element_ref })
+        } else {
+            let x = required_bounded_number(
+                args.x,
+                "x",
+                /*min*/ 0.0,
+                f64::from(session.viewport_width),
+                "click requires either `ref` or both `x` and `y`",
+            )?;
+            let y = required_bounded_number(
+                args.y,
+                "y",
+                /*min*/ 0.0,
+                f64::from(session.viewport_height),
+                "click requires either `ref` or both `x` and `y`",
+            )?;
+            json!({ "x": x, "y": y })
+        };
+        let result = wry_post(session_wry(&session)?, "/click", payload)
+            .await
+            .and_then(wry_ok)
+            .map(|_| SimpleResult {
+                ok: true,
+                session_id,
+                message: "clicked".to_string(),
+                elapsed_ms: Some(elapsed_ms(started)),
+            });
+        put_session(session).await;
+        return result;
+    }
+
     let result = if let Some(element_ref) = args.element_ref.as_deref() {
         let expression = format!(
             r#"(() => {{
@@ -1064,7 +1249,7 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
             }})()"#,
             serde_json::to_string(element_ref).unwrap_or_else(|_| "\"\"".to_string())
         );
-        match evaluate_json(&mut session.cdp, &expression).await {
+        match evaluate_json(session_cdp_mut(&mut session)?, &expression).await {
             Ok(result) if result.get("ok").and_then(Value::as_bool) == Some(true) => {
                 let x = result.get("x").and_then(Value::as_f64).ok_or_else(|| {
                     FunctionCallError::RespondToModel(
@@ -1080,7 +1265,7 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
                     bounded_number("x", x, /*min*/ 0.0, f64::from(session.viewport_width))?;
                 let y =
                     bounded_number("y", y, /*min*/ 0.0, f64::from(session.viewport_height))?;
-                dispatch_click(&mut session.cdp, x, y).await
+                dispatch_click(session_cdp_mut(&mut session)?, x, y).await
             }
             Ok(result) => Err(FunctionCallError::RespondToModel(format!(
                 "click failed: {}",
@@ -1106,7 +1291,7 @@ async fn handle_click(args: ClickArgs) -> Result<SimpleResult, FunctionCallError
             f64::from(session.viewport_height),
             "click requires either `ref` or both `x` and `y`",
         )?;
-        dispatch_click(&mut session.cdp, x, y).await
+        dispatch_click(session_cdp_mut(&mut session)?, x, y).await
     };
     let result = result.map(|_| SimpleResult {
         ok: true,
@@ -1140,6 +1325,26 @@ async fn handle_type(args: TypeArgs) -> Result<SimpleResult, FunctionCallError> 
         put_session(session).await;
         return Err(err);
     }
+    if session.engine == BrowserEngine::Wry {
+        let mut payload = json!({
+            "text": args.text,
+            "clear": args.clear.unwrap_or(false),
+        });
+        if let Some(element_ref) = args.element_ref {
+            payload["ref"] = Value::String(element_ref);
+        }
+        let result = wry_post(session_wry(&session)?, "/type", payload)
+            .await
+            .and_then(wry_ok)
+            .map(|_| SimpleResult {
+                ok: true,
+                session_id,
+                message: "typed".to_string(),
+                elapsed_ms: Some(elapsed_ms(started)),
+            });
+        put_session(session).await;
+        return result;
+    }
     let mut result = Ok(());
     if let Some(element_ref) = args.element_ref.as_deref()
         && result.is_ok()
@@ -1163,7 +1368,7 @@ async fn handle_type(args: TypeArgs) -> Result<SimpleResult, FunctionCallError> 
             serde_json::to_string(element_ref).unwrap_or_else(|_| "\"\"".to_string()),
             args.clear.unwrap_or(false)
         );
-        result = evaluate_json(&mut session.cdp, &expression)
+        result = evaluate_json(session_cdp_mut(&mut session)?, &expression)
             .await
             .and_then(|value| {
                 if value.get("ok").and_then(Value::as_bool) == Some(true) {
@@ -1180,7 +1385,7 @@ async fn handle_type(args: TypeArgs) -> Result<SimpleResult, FunctionCallError> 
             });
     } else if args.clear.unwrap_or(false) && result.is_ok() {
         result = evaluate_json(
-            &mut session.cdp,
+            session_cdp_mut(&mut session)?,
             r#"(() => {
                 const el = document.activeElement;
                 if (el && "value" in el) {
@@ -1202,6 +1407,12 @@ async fn handle_type(args: TypeArgs) -> Result<SimpleResult, FunctionCallError> 
     if result.is_ok() {
         result = session
             .cdp
+            .as_mut()
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "this browser session does not expose a CDP connection".to_string(),
+                )
+            })?
             .call("Input.insertText", json!({ "text": args.text }))
             .await
             .map(|_| ());
@@ -1225,7 +1436,20 @@ async fn handle_press(args: PressArgs) -> Result<SimpleResult, FunctionCallError
         put_session(session).await;
         return Err(err);
     }
-    let result = dispatch_key(&mut session.cdp, &args.key)
+    if session.engine == BrowserEngine::Wry {
+        let result = wry_post(session_wry(&session)?, "/press", json!({ "key": args.key }))
+            .await
+            .and_then(wry_ok)
+            .map(|_| SimpleResult {
+                ok: true,
+                session_id,
+                message: "pressed".to_string(),
+                elapsed_ms: Some(elapsed_ms(started)),
+            });
+        put_session(session).await;
+        return result;
+    }
+    let result = dispatch_key(session_cdp_mut(&mut session)?, &args.key)
         .await
         .map(|_| SimpleResult {
             ok: true,
@@ -1361,10 +1585,27 @@ async fn handle_scroll(args: ScrollArgs) -> Result<SimpleResult, FunctionCallErr
         /*min*/ -MAX_SCROLL_DELTA,
         MAX_SCROLL_DELTA,
     )?;
+    if session.engine == BrowserEngine::Wry {
+        let result = wry_post(
+            session_wry(&session)?,
+            "/scroll",
+            json!({ "deltaX": delta_x, "deltaY": delta_y }),
+        )
+        .await
+        .and_then(wry_ok)
+        .map(|_| SimpleResult {
+            ok: true,
+            session_id,
+            message: "scrolled".to_string(),
+            elapsed_ms: Some(elapsed_ms(started)),
+        });
+        put_session(session).await;
+        return result;
+    }
     let expression = format!(
         "(() => {{ window.scrollBy({delta_x}, {delta_y}); return {{ ok: true, x: window.scrollX, y: window.scrollY }}; }})()"
     );
-    let result = evaluate_json(&mut session.cdp, &expression)
+    let result = evaluate_json(session_cdp_mut(&mut session)?, &expression)
         .await
         .map(|_| SimpleResult {
             ok: true,
@@ -1380,6 +1621,17 @@ async fn handle_selection(args: SelectionArgs) -> Result<Value, FunctionCallErro
     let started = Instant::now();
     let mut session = take_session(args.session_id).await?;
     let session_id = session.id.clone();
+    if session.engine == BrowserEngine::Wry {
+        let output = wry_post(session_wry(&session)?, "/selection", json!({}))
+            .await
+            .map(|mut overview| {
+                overview["session_id"] = Value::String(session_id);
+                overview["elapsed_ms"] = json!(elapsed_ms(started));
+                overview
+            });
+        put_session(session).await;
+        return output;
+    }
     let overlay_result = if args.enable_overlay.unwrap_or(true) {
         if let Err(err) = ensure_write_access(&session, TOOL_SELECTION) {
             put_session(session).await;
@@ -1391,7 +1643,7 @@ async fn handle_selection(args: SelectionArgs) -> Result<Value, FunctionCallErro
     };
     let output = match overlay_result {
         Ok(()) => evaluate_json(
-                &mut session.cdp,
+                session_cdp_mut(&mut session)?,
                 r#"(() => window.__codexAgentBrowserOverview ? window.__codexAgentBrowserOverview() : { overlay: false })()"#,
             )
             .await
@@ -1430,6 +1682,52 @@ async fn handle_highlight(args: HighlightArgs) -> Result<Value, FunctionCallErro
     if let Err(err) = ensure_write_access(&session, TOOL_HIGHLIGHT) {
         put_session(session).await;
         return Err(err);
+    }
+    if session.engine == BrowserEngine::Wry {
+        let clear = args.clear.unwrap_or(false);
+        let mut payload = json!({
+            "clear": clear,
+            "label": args.label.unwrap_or_else(|| "Codex highlight".to_string()),
+            "color": args.color.unwrap_or_else(|| "#d93025".to_string()),
+        });
+        if let Some(element_ref) = args.element_ref {
+            payload["ref"] = Value::String(element_ref);
+        } else if !clear {
+            let (Some(x), Some(y), Some(width), Some(height)) =
+                (args.x, args.y, args.width, args.height)
+            else {
+                put_session(session).await;
+                return Err(FunctionCallError::RespondToModel(
+                    "highlight requires `clear`, an element `ref`, or x/y/width/height".to_string(),
+                ));
+            };
+            let x = bounded_number("x", x, /*min*/ 0.0, f64::from(session.viewport_width))?;
+            let y = bounded_number("y", y, /*min*/ 0.0, f64::from(session.viewport_height))?;
+            let width = positive_bounded_number(
+                "width",
+                width,
+                remaining_viewport_extent(/*name*/ "x", session.viewport_width, x)?,
+            )?;
+            let height = positive_bounded_number(
+                "height",
+                height,
+                remaining_viewport_extent(/*name*/ "y", session.viewport_height, y)?,
+            )?;
+            payload["x"] = json!(x);
+            payload["y"] = json!(y);
+            payload["width"] = json!(width);
+            payload["height"] = json!(height);
+        }
+        let result = wry_post(session_wry(&session)?, "/highlight", payload)
+            .await
+            .and_then(wry_ok)
+            .map(|mut overview| {
+                overview["session_id"] = Value::String(session_id);
+                overview["elapsed_ms"] = json!(elapsed_ms(started));
+                overview
+            });
+        put_session(session).await;
+        return result;
     }
     let result = async {
         ensure_overlay(&mut session).await?;
@@ -1477,7 +1775,7 @@ async fn handle_highlight(args: HighlightArgs) -> Result<Value, FunctionCallErro
             ))
         })?;
         evaluate_json(
-            &mut session.cdp,
+            session_cdp_mut(&mut session)?,
             &format!(
                 "(() => window.__codexAgentBrowserHighlight ? window.__codexAgentBrowserHighlight({payload}) : {{ ok: false, message: 'overlay unavailable' }})()"
             ),
@@ -1508,7 +1806,17 @@ async fn handle_share(args: ShareArgs) -> Result<ShareResult, FunctionCallError>
     let mut session = take_session(args.session_id).await?;
     let session_id = session.id.clone();
     let share_id = format!("bs-{}", Uuid::new_v4().simple());
-    let url = page_url(&mut session.cdp).await.unwrap_or_default();
+    let url = if session.engine == BrowserEngine::Wry {
+        match session_wry(&session) {
+            Ok(wry) => wry_current_url(wry).await.unwrap_or_default(),
+            Err(_) => String::new(),
+        }
+    } else {
+        match session_cdp_mut(&mut session) {
+            Ok(cdp) => page_url(cdp).await.unwrap_or_default(),
+            Err(_) => String::new(),
+        }
+    };
     let lease_seconds = args
         .lease_seconds
         .unwrap_or(DEFAULT_SHARE_LEASE_SECONDS)
@@ -1592,6 +1900,7 @@ async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, Functi
         let mut screenshot_ms = Vec::with_capacity(iterations);
         let mut screenshot_png_bytes = Vec::with_capacity(iterations);
         let mut screenshot_base64_chars = Vec::with_capacity(iterations);
+        let screenshot_available = true;
 
         for _ in 0..iterations {
             let started = Instant::now();
@@ -1603,16 +1912,18 @@ async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, Functi
             .await?;
             snapshot_ms.push(elapsed_ms(started));
 
-            let started = Instant::now();
-            let screenshot = handle_screenshot(ScreenshotArgs {
-                session_id: Some(session_id.clone()),
-                full_page: Some(false),
-            })
-            .await?;
-            screenshot_ms.push(elapsed_ms(started));
-            let (png_bytes, base64_chars) = screenshot_image_sizes(&screenshot);
-            screenshot_png_bytes.push(png_bytes);
-            screenshot_base64_chars.push(base64_chars);
+            if screenshot_available {
+                let started = Instant::now();
+                let screenshot = handle_screenshot(ScreenshotArgs {
+                    session_id: Some(session_id.clone()),
+                    full_page: Some(false),
+                })
+                .await?;
+                screenshot_ms.push(elapsed_ms(started));
+                let (png_bytes, base64_chars) = screenshot_image_sizes(&screenshot);
+                screenshot_png_bytes.push(png_bytes);
+                screenshot_base64_chars.push(base64_chars);
+            }
         }
 
         Ok(BenchmarkResult {
@@ -1621,6 +1932,7 @@ async fn handle_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult, Functi
             stealth: args.stealth,
             target_url,
             iterations,
+            screenshot_available,
             launch_ms,
             navigate_ms,
             totals: BenchmarkTotals {
@@ -2145,11 +2457,13 @@ async fn obscura_visual_summary(cdp: &mut CdpClient) -> Result<Value, FunctionCa
         r#"(() => {
             const linkedCss = String(globalThis.__obscura_css || "");
             const images = Array.from(document.images || []);
+            const dataImages = images.filter((image) => String(image.src || "").startsWith("data:")).length;
             return {
                 styles: document.querySelectorAll("style").length,
                 linkedCssChars: linkedCss.length,
                 images: images.length,
-                dataImages: images.filter((image) => String(image.src || "").startsWith("data:")).length,
+                dataImages,
+                externalImages: Math.max(0, images.length - dataImages),
                 styleSheets: document.styleSheets ? document.styleSheets.length : 0
             };
         })()"#,
@@ -2180,7 +2494,7 @@ async fn ensure_overlay(session: &mut BrowserSession) -> Result<(), FunctionCall
     if session.overlay_script_registered {
         return Ok(());
     }
-    inject_overlay(&mut session.cdp).await?;
+    inject_overlay(session_cdp_mut(session)?).await?;
     session.overlay_script_registered = true;
     Ok(())
 }
@@ -2208,6 +2522,126 @@ async fn evaluate_json(cdp: &mut CdpClient, expression: &str) -> Result<Value, F
         .unwrap_or(Value::Null))
 }
 
+async fn wry_post(
+    client: &WryClient,
+    path: &str,
+    payload: Value,
+) -> Result<Value, FunctionCallError> {
+    let url = format!("{}{}", client.endpoint.trim_end_matches('/'), path);
+    let response = browser_http_client()
+        .post(url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|err| FunctionCallError::RespondToModel(format!("WRY request failed: {err}")))?;
+    let status = response.status();
+    let value = response.json::<Value>().await.map_err(|err| {
+        FunctionCallError::RespondToModel(format!("WRY response was not JSON: {err}"))
+    })?;
+    if !status.is_success() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "WRY command failed: {}",
+            value
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+        )));
+    }
+    Ok(value)
+}
+
+fn wry_ok(value: Value) -> Result<Value, FunctionCallError> {
+    if value.get("ok").and_then(Value::as_bool) == Some(false) {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "WRY command failed: {}",
+            value
+                .get("message")
+                .or_else(|| value.get("error"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+        )));
+    }
+    Ok(value)
+}
+
+async fn wry_navigate(client: &WryClient, url: &str) -> Result<(), FunctionCallError> {
+    let previous_url = wry_current_url(client).await.unwrap_or_default();
+    wry_post(client, "/navigate", json!({ "url": url }))
+        .await
+        .and_then(wry_ok)
+        .map(|_| ())?;
+    wry_wait_for_load(client, &previous_url, url).await
+}
+
+async fn wry_wait_for_load(
+    client: &WryClient,
+    previous_url: &str,
+    requested_url: &str,
+) -> Result<(), FunctionCallError> {
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(10) {
+        let state = wry_post(
+            client,
+            "/eval",
+            json!({ "script": "(() => ({ url: location.href, readyState: document.readyState }))()" }),
+        )
+        .await?;
+        let url = state.get("url").and_then(Value::as_str).unwrap_or_default();
+        let ready_state = state
+            .get("readyState")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let navigated = previous_url.is_empty()
+            || url != previous_url
+            || url == requested_url
+            || requested_url.starts_with("data:");
+        if navigated && matches!(ready_state, "interactive" | "complete") {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Err(FunctionCallError::RespondToModel(
+        "timed out waiting for WRY navigation to finish".to_string(),
+    ))
+}
+
+async fn wry_snapshot(
+    client: &WryClient,
+    max_text_chars: usize,
+    max_elements: usize,
+    ref_mode: SnapshotRefMode,
+) -> Result<Value, FunctionCallError> {
+    let mut snapshot = wry_post(
+        client,
+        "/snapshot",
+        json!({
+            "maxTextChars": max_text_chars,
+            "maxElements": max_elements,
+            "actionRefs": ref_mode == SnapshotRefMode::ActionRefs,
+        }),
+    )
+    .await?;
+    if let Some(text) = snapshot.get("text").and_then(Value::as_str)
+        && text.chars().count() > max_text_chars
+    {
+        snapshot["text"] = Value::String(text.chars().take(max_text_chars).collect());
+    }
+    if let Some(elements) = snapshot.get_mut("elements").and_then(Value::as_array_mut) {
+        elements.truncate(max_elements);
+    }
+    Ok(snapshot)
+}
+
+async fn wry_current_url(client: &WryClient) -> Result<String, FunctionCallError> {
+    let value = wry_post(
+        client,
+        "/eval",
+        json!({ "script": "(() => location.href)()" }),
+    )
+    .await?;
+    Ok(value.as_str().unwrap_or_default().to_string())
+}
+
 struct LaunchConnection {
     engine: BrowserEngine,
     mode: Option<BrowserMode>,
@@ -2222,6 +2656,11 @@ struct LaunchConnection {
     profile_dir: Option<TempDir>,
     owned_page_close_url: Option<String>,
     notes: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct WryClient {
+    endpoint: String,
 }
 
 async fn attach_connection(remote: &str) -> Result<LaunchConnection, FunctionCallError> {
@@ -2288,19 +2727,115 @@ async fn launch_connection(
     viewport_width: u32,
     viewport_height: u32,
     locale: &str,
+    user_agent: Option<&str>,
 ) -> Result<LaunchConnection, FunctionCallError> {
     match backend {
         BrowserBackend::Obscura => launch_obscura_connection(mode, stealth).await,
+        BrowserBackend::Wry => {
+            launch_wry_connection(mode, viewport_width, viewport_height, user_agent).await
+        }
         BrowserBackend::Chromium => {
             launch_chromium_connection(mode, stealth, viewport_width, viewport_height, locale).await
         }
         BrowserBackend::Auto => {
+            if cfg!(target_os = "macos")
+                && matches!(mode, BrowserMode::Headful)
+                && let Ok(connection) =
+                    launch_wry_connection(mode, viewport_width, viewport_height, user_agent).await
+            {
+                return Ok(connection);
+            }
             if let Ok(connection) = launch_obscura_connection(mode, stealth).await {
                 return Ok(connection);
             }
             launch_chromium_connection(mode, stealth, viewport_width, viewport_height, locale).await
         }
     }
+}
+
+async fn launch_wry_connection(
+    mode: &BrowserMode,
+    viewport_width: u32,
+    viewport_height: u32,
+    user_agent: Option<&str>,
+) -> Result<LaunchConnection, FunctionCallError> {
+    if !matches!(mode, BrowserMode::Headful) {
+        return Err(FunctionCallError::RespondToModel(
+            "backend=wry currently supports headful mode only".to_string(),
+        ));
+    }
+    let binary = find_wry_binary()?;
+    let mut command = Command::new(&binary);
+    command
+        .arg("--width")
+        .arg(viewport_width.to_string())
+        .arg("--height")
+        .arg(viewport_height.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if let Some(user_agent) = user_agent {
+        command.arg("--user-agent").arg(user_agent);
+    }
+    let mut process = command.spawn().map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to launch WRY browser `{}`: {err}",
+            binary.display()
+        ))
+    })?;
+    let stdout = process.stdout.take().ok_or_else(|| {
+        FunctionCallError::RespondToModel("WRY browser stdout was not captured".to_string())
+    })?;
+    let mut stdout = BufReader::new(stdout).lines();
+    let line = tokio::time::timeout(Duration::from_secs(10), stdout.next_line())
+        .await
+        .map_err(|_| FunctionCallError::RespondToModel("WRY browser did not start".to_string()))?
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to read WRY startup: {err}"))
+        })?
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel("WRY browser exited before startup".to_string())
+        })?;
+    let startup: Value = serde_json::from_str(&line).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("WRY browser startup was not JSON: {err}"))
+    })?;
+    if startup.get("ok").and_then(Value::as_bool) == Some(false) {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "WRY browser failed to start: {}",
+            startup
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+        )));
+    }
+    let endpoint = startup
+        .get("endpoint")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "WRY browser startup did not include endpoint".to_string(),
+            )
+        })?
+        .to_string();
+    Ok(LaunchConnection {
+        engine: BrowserEngine::Wry,
+        mode: Some(BrowserMode::Headful),
+        access: ShareAccess::ReadWrite,
+        stealth: Some(false),
+        viewport_width: Some(viewport_width),
+        viewport_height: Some(viewport_height),
+        target_id: None,
+        endpoint: endpoint.clone(),
+        page_ws_url: endpoint,
+        process: Some(process),
+        profile_dir: None,
+        owned_page_close_url: None,
+        notes: vec![
+            format!("launched WRY/WebKit helper {}", binary.display()),
+            "WRY uses the system WebKit/WebView renderer for native macOS page pixels".to_string(),
+        ],
+    })
 }
 
 async fn launch_obscura_connection(
@@ -2709,6 +3244,76 @@ fn find_obscura_binary() -> Result<PathBuf, FunctionCallError> {
             "no Obscura browser binary found; bundle `obscura` next to the Codex executable or in codex-resources, set CODEX_AGENT_BROWSER_OBSCURA_BINARY, or open with backend=chromium".to_string(),
         )
     })
+}
+
+fn find_wry_binary() -> Result<PathBuf, FunctionCallError> {
+    for path in candidate_wry_binaries() {
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    which::which(wry_executable_name()).map_err(|_| {
+        FunctionCallError::RespondToModel(
+            "no WRY browser helper found; build `codex-agent-browser-wry`, bundle it next to the Codex executable, or set CODEX_AGENT_BROWSER_WRY_BINARY".to_string(),
+        )
+    })
+}
+
+fn candidate_wry_binaries() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(path) = std::env::var("CODEX_AGENT_BROWSER_WRY_BINARY") {
+        push_unique_path(&mut candidates, PathBuf::from(path));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        for candidate in wry_binary_candidates_for_exe(&exe) {
+            push_unique_path(&mut candidates, candidate);
+        }
+    }
+    candidates
+}
+
+fn wry_binary_candidates_for_exe(exe: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(dir) = exe.parent() {
+        let binary_name = wry_executable_name();
+        push_unique_path(&mut candidates, dir.join(binary_name));
+        push_unique_path(
+            &mut candidates,
+            dir.join("codex-resources").join(binary_name),
+        );
+        if dir.file_name().and_then(|value| value.to_str()) == Some("codex")
+            && let Some(parent_dir) = dir.parent()
+        {
+            push_unique_path(
+                &mut candidates,
+                parent_dir.join("browser").join(binary_name),
+            );
+        }
+        if dir.file_name().and_then(|value| value.to_str()) == Some("debug")
+            && let Some(target_dir) = dir.parent()
+        {
+            push_unique_path(&mut candidates, target_dir.join("debug").join(binary_name));
+        }
+        #[cfg(target_os = "macos")]
+        if dir.file_name().and_then(|value| value.to_str()) == Some("MacOS")
+            && let Some(contents_dir) = dir.parent()
+        {
+            push_unique_path(
+                &mut candidates,
+                contents_dir.join("Resources").join(binary_name),
+            );
+        }
+    }
+    candidates
+}
+
+fn wry_executable_name() -> &'static str {
+    if cfg!(windows) {
+        "codex-agent-browser-wry.exe"
+    } else {
+        "codex-agent-browser-wry"
+    }
 }
 
 fn candidate_obscura_binaries() -> Vec<PathBuf> {
@@ -3272,6 +3877,7 @@ mod tests {
     fn browser_engine_serializes_as_tool_output_backend() {
         assert_eq!(json!(BrowserEngine::Obscura), json!("obscura"));
         assert_eq!(json!(BrowserEngine::Chromium), json!("chromium"));
+        assert_eq!(json!(BrowserEngine::Wry), json!("wry"));
         assert_eq!(json!(BrowserEngine::ExternalCdp), json!("external_cdp"));
     }
 
@@ -3389,6 +3995,38 @@ mod tests {
             npm_candidates
                 .iter()
                 .any(|path| path.ends_with("vendor/target/browser/obscura"))
+        );
+    }
+
+    #[test]
+    fn wry_binary_candidates_include_bundled_locations() {
+        let binary_name = wry_executable_name();
+        let candidates = wry_binary_candidates_for_exe(Path::new(
+            "/Applications/Codex.app/Contents/MacOS/codex",
+        ));
+        assert!(
+            candidates
+                .iter()
+                .any(|path| path.ends_with(format!("Contents/MacOS/{binary_name}")))
+        );
+        assert!(
+            candidates.iter().any(|path| path.ends_with(format!(
+                "Contents/MacOS/codex-resources/{binary_name}"
+            )))
+        );
+        #[cfg(target_os = "macos")]
+        assert!(
+            candidates
+                .iter()
+                .any(|path| path.ends_with(format!("Contents/Resources/{binary_name}")))
+        );
+
+        let npm_candidates =
+            wry_binary_candidates_for_exe(Path::new("/npm/vendor/target/codex/codex"));
+        assert!(
+            npm_candidates
+                .iter()
+                .any(|path| { path.ends_with(format!("vendor/target/browser/{binary_name}")) })
         );
     }
 
@@ -3652,7 +4290,7 @@ mod tests {
             .await
             .expect("take session for ref pollution check");
         let ref_property = evaluate_json(
-            &mut session.cdp,
+            session.cdp.as_mut().expect("CDP session"),
             r#"(() => ({
                 hasRefProperty: Array.from(document.querySelectorAll("button")).some((el) => (
                     Object.prototype.hasOwnProperty.call(el, "__codexAgentRef")
@@ -3678,7 +4316,7 @@ mod tests {
             .expect("write mirror selection");
         } else {
             let selection_result = evaluate_json(
-                &mut session.cdp,
+                session.cdp.as_mut().expect("CDP session"),
                 r#"(() => {
                     const heading = document.querySelector("h1");
                     const range = document.createRange();
@@ -3865,7 +4503,7 @@ mod tests {
             .await
             .expect("take original Obscura browser");
         let globals = evaluate_json(
-            &mut original_session.cdp,
+            original_session.cdp.as_mut().expect("CDP session"),
             r#"(() => ({
                 hasNextRef: Object.prototype.hasOwnProperty.call(window, "__codexAgentBrowserNextRef"),
                 hasElementRefs: Object.prototype.hasOwnProperty.call(window, "__codexAgentBrowserElementRefs"),

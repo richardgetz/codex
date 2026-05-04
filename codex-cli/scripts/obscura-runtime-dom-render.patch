@@ -20,7 +20,7 @@ index bb88efe..0179e94 100644
  serde_json = { workspace = true }
 +base64 = { workspace = true }
 diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
-index 94fb566..cbde187 100644
+index 94fb566..b7adee9 100644
 --- a/crates/obscura-browser/src/page.rs
 +++ b/crates/obscura-browser/src/page.rs
 @@ -1,5 +1,6 @@
@@ -30,19 +30,26 @@ index 94fb566..cbde187 100644
  use obscura_dom::{parse_html, DomTree};
  use obscura_js::runtime::ObscuraJsRuntime;
  use obscura_net::{ObscuraHttpClient, ObscuraNetError, Response};
-@@ -385,6 +386,88 @@ impl Page {
+@@ -385,6 +386,100 @@ impl Page {
          }
      }
 
 +    async fn inline_visual_assets(&mut self) {
++        const MAX_VISUAL_IMAGE_CANDIDATES: usize = 96;
++        const MAX_VISUAL_IMAGE_BYTES: usize = 512 * 1024;
++        const MAX_VISUAL_IMAGE_TOTAL_BYTES: usize = 8 * 1024 * 1024;
++
 +        let Some(image_sources_json) = self.js.as_mut().and_then(|js| {
-+            js.evaluate(
++            let script = format!(
 +                r#"
 +                    JSON.stringify(Array.from(document.querySelectorAll("img[src]") || [])
-+                        .map((img, index) => ({index, src: img.getAttribute("src") || ""}))
++                        .map((img, index) => ({{index, src: img.getAttribute("src") || ""}}))
 +                        .filter((entry) => entry.src && !entry.src.startsWith("data:") && !entry.src.startsWith("blob:"))
-+                        .slice(0, 24))
-+                "#,
++                        .slice(0, {MAX_VISUAL_IMAGE_CANDIDATES}))
++                "#
++            );
++            js.evaluate(
++                &script,
 +            ).ok().and_then(|value| value.as_str().map(ToString::to_string))
 +        }) else {
 +            return;
@@ -55,6 +62,7 @@ index 94fb566..cbde187 100644
 +        };
 +
 +        let mut updates = Vec::new();
++        let mut total_bytes = 0;
 +        for image in image_sources {
 +            let Some(index) = image.get("index").and_then(serde_json::Value::as_u64) else {
 +                continue;
@@ -76,9 +84,13 @@ index 94fb566..cbde187 100644
 +            let Ok(response) = self.do_fetch(&asset_url).await else {
 +                continue;
 +            };
-+            if response.body.is_empty() || response.body.len() > 2 * 1024 * 1024 {
++            if response.body.is_empty() || response.body.len() > MAX_VISUAL_IMAGE_BYTES {
 +                continue;
 +            }
++            if total_bytes + response.body.len() > MAX_VISUAL_IMAGE_TOTAL_BYTES {
++                break;
++            }
++            total_bytes += response.body.len();
 +            self.record_network_event(&asset_url.to_string(), "GET", "Image", response.status, &response.headers, response.body.len());
 +            let mime = response
 +                .headers
@@ -119,7 +131,7 @@ index 94fb566..cbde187 100644
      pub async fn navigate(&mut self, url_str: &str) -> Result<(), PageError> {
          self.navigate_with_wait(url_str, crate::lifecycle::WaitUntil::Load).await
      }
-@@ -563,11 +646,21 @@ impl Page {
+@@ -563,11 +658,21 @@ impl Page {
          if !css_sources.is_empty() {
              if let Some(js) = &mut self.js {
                  let combined_css = css_sources.join("\n");
@@ -146,7 +158,7 @@ index 94fb566..cbde187 100644
                  let _ = js.execute_script("<css>", &code);
              }
          }
-@@ -577,6 +670,7 @@ impl Page {
+@@ -577,6 +682,7 @@ impl Page {
          }
 
          self.execute_scripts().await;
@@ -154,7 +166,7 @@ index 94fb566..cbde187 100644
 
          if let Some(js) = &mut self.js {
              if let Ok(new_title) = js.evaluate("document.title") {
-@@ -862,3 +956,78 @@ impl From<ObscuraNetError> for PageError {
+@@ -862,3 +968,90 @@ impl From<ObscuraNetError> for PageError {
          PageError::NetworkError(e.to_string())
      }
  }
@@ -192,15 +204,25 @@ index 94fb566..cbde187 100644
 +            dir.join("hero.svg"),
 +            r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#,
 +        ).unwrap();
++        for index in 0..32 {
++            std::fs::write(
++                dir.join(format!("thumb-{index}.svg")),
++                format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><title>{index}</title></svg>"#),
++            ).unwrap();
++        }
++        let thumbnails = (0..32)
++            .map(|index| format!(r#"<img class="thumb" src="thumb-{index}.svg" alt="Thumb {index}">"#))
++            .collect::<Vec<_>>()
++            .join("");
 +        std::fs::write(
 +            dir.join("index.html"),
-+            r#"
++            format!(r#"
 +                <!doctype html>
 +                <html>
 +                    <head><link rel="stylesheet" href="app.css"></head>
-+                    <body><img id="hero" src="hero.svg" alt="Hero"><div class="card">Card</div></body>
++                    <body><img id="hero" src="hero.svg" alt="Hero">{thumbnails}<div class="card">Card</div></body>
 +                </html>
-+            "#,
++            "#),
 +        ).unwrap();
 +
 +        let url = Url::from_file_path(dir.join("index.html")).unwrap();
@@ -213,7 +235,8 @@ index 94fb566..cbde187 100644
 +                    linkedCss: String(globalThis.__obscura_css || ""),
 +                    injectedCss: document.querySelector('style[data-obscura-linked-css]')?.textContent || "",
 +                    imageSrc: document.getElementById("hero").getAttribute("src"),
-+                    originalSrc: document.getElementById("hero").getAttribute("data-obscura-original-src")
++                    originalSrc: document.getElementById("hero").getAttribute("data-obscura-original-src"),
++                    dataImages: Array.from(document.images || []).filter((img) => String(img.getAttribute("src") || "").startsWith("data:")).length
 +                })
 +            "#,
 +        ).unwrap();
@@ -227,6 +250,7 @@ index 94fb566..cbde187 100644
 +                "injectedCss": ".card{color:rgb(1,2,3)}",
 +                "imageSrc": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjwvc3ZnPg==",
 +                "originalSrc": "hero.svg",
++                "dataImages": 33,
 +            })
 +        );
 +

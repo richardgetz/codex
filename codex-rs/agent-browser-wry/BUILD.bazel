@@ -1,0 +1,14 @@
+load("//:defs.bzl", "codex_rust_crate", "multiplatform_binaries")
+
+codex_rust_crate(
+    name = "agent-browser-wry",
+    crate_name = "codex_agent_browser_wry",
+)
+
+multiplatform_binaries(
+    name = "codex-agent-browser-wry",
+    platforms = [
+        "macos_amd64",
+        "macos_arm64",
+    ],
+)

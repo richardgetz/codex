@@ -22,8 +22,11 @@ If you need to invoke `build_npm_package.py` directly, run
 `codex-cli/scripts/install_native_deps.py` first and pass `--vendor-src` pointing to the
 directory that contains the populated `vendor/` tree.
 
-The built-in agent browser can also ship an optional Obscura browser resource.
-Fetch the currently pinned upstream Obscura assets with:
+The built-in agent browser can also ship optional browser resources. The
+WRY/WebKit helper is built from this repository's release artifacts and staged
+as a native component for macOS packages; Obscura remains available as a
+lightweight/headless Rust browser resource. Fetch the currently pinned upstream
+Obscura assets with:
 
 ```bash
 codex-cli/scripts/install_native_deps.py --component obscura
@@ -63,6 +66,6 @@ root ES module execution, DOM text/style collection support, linked stylesheet
 injection, bounded image data-url inlining, and heuristic element rects while
 waiting for an upstream or forked Obscura release asset.
 
-The helper installs available Obscura release assets under
+The helper installs macOS WRY and available Obscura browser binaries under
 `vendor/<target>/browser/`; platform packages and standalone installers then
-preserve that resource as `codex-resources/obscura` when present.
+preserve those resources under `codex-resources/` when present.

@@ -369,10 +369,13 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
 - `[features].agent_browser = true` exposes the built-in `agent_browser`
   namespace when the session has a local execution environment.
-- The namespace provides CDP-backed browser control over multiple launch
-  backends: `auto`, `obscura`, and `chromium`. `auto` prefers the Rust-native
-  Obscura backend when an `obscura` binary is available, and falls back to
-  Chromium for broader visual-review support.
+- The namespace provides browser control over multiple launch backends: `auto`,
+  `wry`, `obscura`, and `chromium`. On macOS in headful mode, `auto` first
+  tries the bundled WRY/WebKit helper so reviewed pages render with the platform
+  WebKit engine instead of Codex approximating layout from DOM data. For
+  Chromium-specific fidelity, open with `backend = "chromium"`. For headless
+  mode, non-macOS sessions, or when WRY is not available, `auto` continues
+  through the Rust-native Obscura backend and then Chromium.
 - Tools include open/attach, navigate, snapshot, screenshot, click, type, press,
   scroll, selection-overview, highlight, live-session sharing, and benchmark.
   `agent_browser.share` writes a local share token that another agent can pass
@@ -382,25 +385,33 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   shortened or extended up to twelve hours, and expired tokens are cleaned up
   when browser shares are read or created.
 - Benchmarks can target the default local page or an explicit URL, and report
-  screenshot PNG/base64 sizes alongside latency so transport-size tradeoffs stay
-  visible. Obscura currently covers CDP navigation/evaluation/input/snapshot
-  flows; screenshots use a lightweight DOM snapshot renderer until native
-  compositor screenshots are added. Obscura `mode = "headful"` opens a local
-  mirror shell driven by the same CDP snapshot path so the Rust-native backend
-  is not limited to invisible sessions. The mirror renders captured page
+  screenshot PNG/base64 sizes alongside latency when a backend exposes image
+  capture. On macOS, WRY exposes the real rendered page in a native WebKit
+  window plus DOM snapshot/input/selection/highlight control, and screenshots
+  use macOS window capture for the native WebKit window. Obscura currently
+  covers CDP navigation/evaluation/input/snapshot flows; screenshots use a
+  lightweight DOM
+  snapshot renderer until native compositor screenshots are added. Obscura
+  `mode = "headful"` opens a local mirror shell driven by the same CDP snapshot
+  path so the Rust-native backend is not limited to invisible sessions. The
+  mirror renders captured page
   HTML/CSS in an inert iframe when available, uses the patched Obscura runtime
   to expose style sheets and inline a bounded set of image assets as data URLs,
   overlays agent target boxes, and has a localhost selection bridge: when the
   human clicks the mirrored page or selects text in the mirror,
   `agent_browser.selection_overview` includes that `mirrorSelection` payload
   for the agent.
-- Set `CODEX_AGENT_BROWSER_OBSCURA_BINARY` to point at a custom Obscura binary,
+- Set `CODEX_AGENT_BROWSER_WRY_BINARY` to point at a custom WRY helper binary,
+  bundle `codex-agent-browser-wry` next to the Codex executable, or bundle it
+  under `codex-resources/codex-agent-browser-wry`. On macOS,
+  `Codex.app/Contents/Resources/codex-agent-browser-wry` is also checked. Set
+  `CODEX_AGENT_BROWSER_OBSCURA_BINARY` to point at a custom Obscura binary,
   bundle `obscura` next to the Codex executable, bundle it under
   `codex-resources/obscura` in standalone installs, or on macOS bundle it in
   `Codex.app/Contents/Resources/obscura`. The npm staging and standalone
-  installers preserve an optional `vendor/<target>/browser/obscura` resource as
-  `codex-resources/obscura` when present. This keeps the Codex Rust crates lean
-  while still letting app distributions ship Obscura as a first-party resource;
+  installers preserve browser resources from `vendor/<target>/browser/` under
+  `codex-resources/` when present. This keeps the Codex Rust crates lean while
+  still letting app distributions ship browser helpers as first-party resources;
   `codex-cli/scripts/install_native_deps.py --component obscura` hydrates
   available pinned upstream Obscura release assets into that vendor resource
   layout, and `--obscura-binary <path> --target <triple>` installs a local

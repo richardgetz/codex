@@ -68,8 +68,8 @@ PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
     "codex": [],
     "codex-linux-x64": ["codex", "rg", "obscura"],
     "codex-linux-arm64": ["codex", "rg"],
-    "codex-darwin-x64": ["codex", "rg"],
-    "codex-darwin-arm64": ["codex", "rg", "obscura"],
+    "codex-darwin-x64": ["codex", "rg", "codex-agent-browser-wry"],
+    "codex-darwin-arm64": ["codex", "rg", "obscura", "codex-agent-browser-wry"],
     "codex-win32-x64": [
         "codex",
         "rg",
@@ -77,7 +77,12 @@ PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
         "codex-windows-sandbox-setup",
         "codex-command-runner",
     ],
-    "codex-win32-arm64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
+    "codex-win32-arm64": [
+        "codex",
+        "rg",
+        "codex-windows-sandbox-setup",
+        "codex-command-runner",
+    ],
     "codex-responses-api-proxy": ["codex-responses-api-proxy"],
     "codex-sdk": [],
 }
@@ -94,7 +99,12 @@ COMPONENT_DEST_DIR: dict[str, str] = {
     "codex-responses-api-proxy": "codex-responses-api-proxy",
     "codex-windows-sandbox-setup": "codex",
     "codex-command-runner": "codex",
+    "codex-agent-browser-wry": "browser",
     "rg": "path",
+}
+
+COMPONENT_REQUIRED_FILES: dict[str, tuple[str, ...]] = {
+    "codex-agent-browser-wry": ("codex-agent-browser-wry",),
 }
 
 OPTIONAL_NATIVE_RESOURCE_DIRS: tuple[str, ...] = ("browser",)
@@ -433,6 +443,12 @@ def copy_native_binaries(
                 raise RuntimeError(
                     f"Missing native component '{component}' in vendor source: {src_component_dir}"
                 )
+            for required_file in COMPONENT_REQUIRED_FILES.get(component, ()):
+                required_path = src_component_dir / required_file
+                if not required_path.is_file():
+                    raise RuntimeError(
+                        f"Missing native component file '{component}': {required_path}"
+                    )
 
             dest_component_dir = dest_target_dir / dest_dir_name
             if dest_component_dir.exists():

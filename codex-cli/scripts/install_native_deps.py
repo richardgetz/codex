@@ -55,6 +55,7 @@ class ObscuraAsset:
 
 
 WINDOWS_TARGETS = tuple(target for target in BINARY_TARGETS if "windows" in target)
+WRY_TARGETS = tuple(target for target in BINARY_TARGETS if "apple-darwin" in target)
 
 BINARY_COMPONENTS = {
     "codex": BinaryComponent(
@@ -78,6 +79,12 @@ BINARY_COMPONENTS = {
         dest_dir="codex",
         binary_basename="codex-command-runner",
         targets=WINDOWS_TARGETS,
+    ),
+    "codex-agent-browser-wry": BinaryComponent(
+        artifact_prefix="codex-agent-browser-wry",
+        dest_dir="browser",
+        binary_basename="codex-agent-browser-wry",
+        targets=WRY_TARGETS,
     ),
 }
 

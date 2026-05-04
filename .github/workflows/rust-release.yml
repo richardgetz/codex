@@ -71,7 +71,7 @@ jobs:
             target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-responses-api-proxy codex-agent-browser-wry"
             build_dmg: "true"
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
@@ -83,7 +83,7 @@ jobs:
             target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-responses-api-proxy codex-agent-browser-wry"
             build_dmg: "true"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
