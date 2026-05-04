@@ -519,7 +519,7 @@ def build_and_install_local_obscura_from_source(
         if release:
             cmd.append("--release")
         env = os.environ.copy()
-        env["CARGO_HOME"] = str(tmp_dir / "cargo-home")
+        env["CARGO_HOME"] = source_build_cargo_home(env, tmp_dir)
         env["CARGO_TARGET_DIR"] = str(target_dir)
         subprocess.check_call(cmd, cwd=build_dir, env=env)
         profile = "release" if release else "debug"
@@ -549,6 +549,24 @@ def ensure_obscura_source_build_target_matches_host(target: str) -> None:
             f"{target}. Pass --target {host_target} or install a prebuilt binary with "
             "--obscura-binary."
         )
+
+
+def source_build_cargo_home(env: dict[str, str], tmp_dir: Path) -> str:
+    cargo_home = env.get("CARGO_HOME")
+    if cargo_home:
+        cargo_home_path = Path(cargo_home).expanduser()
+        if directory_is_writable(cargo_home_path):
+            return str(cargo_home_path)
+    return str(tmp_dir / "cargo-home")
+
+
+def directory_is_writable(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(prefix=".codex-write-test-", dir=path, delete=True):
+            return True
+    except OSError:
+        return False
 
 
 def apply_obscura_patch_if_needed(source_dir: Path, patch_path: Path) -> None:

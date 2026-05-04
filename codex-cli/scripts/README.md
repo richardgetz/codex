@@ -53,8 +53,9 @@ codex-cli/scripts/install_native_deps.py --component obscura \
 When `--obscura-source-dir` is provided without any `--component`, the helper
 only builds and installs Obscura. This mode intentionally requires the selected
 target to match the current host; use `--obscura-binary` for cross-target
-staging. Source builds use temporary Cargo home and target directories so the
-package staging step does not depend on the caller's local Cargo cache.
+staging. Source builds reuse the caller's `CARGO_HOME` only when it is writable,
+then fall back to temporary Cargo home and target directories so package staging
+does not depend on local cache permissions.
 
 `obscura-runtime-dom-render.patch` records the current local Obscura runtime
 patch used to render the Mobian React app during development. The patch covers
