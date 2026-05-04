@@ -885,7 +885,7 @@ async fn handle_snapshot(args: SnapshotArgs) -> Result<Value, FunctionCallError>
     let started = Instant::now();
     let mut session = take_session(args.session_id).await?;
     let ref_mode = snapshot_ref_mode(&session);
-    let result = snapshot_page(
+    let result = match snapshot_page(
         &mut session.cdp,
         args.max_text_chars
             .unwrap_or(12_000)
@@ -896,14 +896,22 @@ async fn handle_snapshot(args: SnapshotArgs) -> Result<Value, FunctionCallError>
         ref_mode,
     )
     .await
-    .map(|mut snapshot| {
-        snapshot["session_id"] = Value::String(session.id.clone());
-        snapshot["mode"] = Value::String(mode_name(&session.mode).to_string());
-        snapshot["backend"] = json!(session.engine);
-        snapshot["stealth"] = Value::Bool(session.stealth);
-        snapshot["elapsed_ms"] = json!(elapsed_ms(started));
-        snapshot
-    });
+    {
+        Ok(mut snapshot) => {
+            if session.engine == BrowserEngine::Obscura
+                && let Ok(visual) = obscura_visual_summary(&mut session.cdp).await
+            {
+                snapshot["visual"] = visual;
+            }
+            snapshot["session_id"] = Value::String(session.id.clone());
+            snapshot["mode"] = Value::String(mode_name(&session.mode).to_string());
+            snapshot["backend"] = json!(session.engine);
+            snapshot["stealth"] = Value::Bool(session.stealth);
+            snapshot["elapsed_ms"] = json!(elapsed_ms(started));
+            Ok(snapshot)
+        }
+        Err(err) => Err(err),
+    };
     put_session(session).await;
     result
 }
@@ -2129,6 +2137,24 @@ async fn snapshot_page_with_visual(
         snapshot_obj.insert("visual".to_string(), visual);
     }
     Ok(snapshot)
+}
+
+async fn obscura_visual_summary(cdp: &mut CdpClient) -> Result<Value, FunctionCallError> {
+    evaluate_json(
+        cdp,
+        r#"(() => {
+            const linkedCss = String(globalThis.__obscura_css || "");
+            const images = Array.from(document.images || []);
+            return {
+                styles: document.querySelectorAll("style").length,
+                linkedCssChars: linkedCss.length,
+                images: images.length,
+                dataImages: images.filter((image) => String(image.src || "").startsWith("data:")).length,
+                styleSheets: document.styleSheets ? document.styleSheets.length : 0
+            };
+        })()"#,
+    )
+    .await
 }
 
 fn snapshot_ref_mode(session: &BrowserSession) -> SnapshotRefMode {
