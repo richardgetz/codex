@@ -20,12 +20,14 @@ use codex_core_api::CodexThread;
 use codex_core_api::Config;
 use codex_core_api::ConfigLayerStack;
 use codex_core_api::Constrained;
+use codex_core_api::ConventionalCommitsConfig;
 use codex_core_api::EnablementConfig;
 use codex_core_api::EnvironmentManager;
 use codex_core_api::EnvironmentManagerArgs;
 use codex_core_api::EventMsg;
 use codex_core_api::ExecServerRuntimePaths;
 use codex_core_api::GhostSnapshotConfig;
+use codex_core_api::GitIntentNotesConfig;
 use codex_core_api::History;
 use codex_core_api::MemoriesConfig;
 use codex_core_api::ModelAvailabilityNuxConfig;
@@ -188,6 +190,8 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         user_instructions: None,
         base_instructions: None,
         developer_instructions: None,
+        conventional_commits: ConventionalCommitsConfig::default(),
+        git_intent_notes: GitIntentNotesConfig::default(),
         guardian_policy_config: None,
         include_permissions_instructions: false,
         include_apps_instructions: false,
