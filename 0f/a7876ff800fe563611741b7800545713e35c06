@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-05-04/agent-browser-wry#0fa7876ff"
+  change_type: "feat"
+  scope: "agent-browser"
+  summary: "Add a macOS WRY/WebKit headful backend for native page rendering in the built-in agent browser."
+  decision: "Keep WebKit isolated in a first-party helper binary with localhost control endpoints, make backend=auto prefer WRY for macOS headful sessions, and retain Obscura/Chromium as fallback paths."
+  constraints:
+    - "Headful macOS UI review must use a real browser engine rather than a DOM approximation."
+    - "Do not link WRY/WebKit directly into codex-core; keep the helper packaged as a native browser resource."
+    - "Do not use Playwright fallback for this built-in browser path."
+    - "Be explicit that WRY is WebKit/Safari-class fidelity, not Chromium/Firefox pixel identity."
+  residual_risks:
+    - "WRY screenshots depend on macOS window capture permissions and window visibility."
+    - "WRY same-URL reload completion can still be hard to distinguish from an already-complete page."
+    - "WRY input currently uses JS-dispatched events rather than trusted native OS events."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/agent-browser-wry"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::launch_wry_connection"
+    - "codex-cli/scripts/build_npm_package.py"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
