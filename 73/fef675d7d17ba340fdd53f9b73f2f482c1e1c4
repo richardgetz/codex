@@ -1,0 +1,23 @@
+intent:
+  id: codex-first-class-commit-guidance-73fef675d
+  change_type: feat
+  scope: config
+  summary: Add default-on first-class Conventional Commits and git intent notes guidance toggles.
+  decision: Bake the previously skill-driven commit-message and intent-note workflows into core config so sessions receive deterministic developer guidance by default, with explicit config opt-outs.
+  constraints:
+    - Conventional Commits and git intent notes guidance must default to enabled.
+    - config.toml must allow disabling each guidance block.
+    - git intent note metadata writes must remain narrow and must not make git config, hooks, or escaped/symlinked git metadata writable.
+    - Linked worktrees whose git metadata escapes the workspace should use normal rules or approval paths instead of automatic roots.
+  intent_priority: must
+  code_locations:
+    - codex-rs/config/src/types.rs
+    - codex-rs/config/src/config_toml.rs
+    - codex-rs/core/src/config/mod.rs
+    - codex-rs/core/src/context/conventional_commits_instructions.rs
+    - codex-rs/core/src/context/git_intent_notes_instructions.rs
+    - codex-rs/core/src/session/mod.rs
+  requested_by: rick
+  recorded_by:
+    agent: codex-cli
+    model: gpt-5
