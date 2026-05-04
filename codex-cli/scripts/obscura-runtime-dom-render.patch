@@ -1,11 +1,246 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 7b51079..4375f67 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1594,6 +1594,7 @@ name = "obscura-browser"
+ version = "0.1.0"
+ dependencies = [
+  "anyhow",
++ "base64",
+  "futures",
+  "obscura-dom",
+  "obscura-js",
+diff --git a/crates/obscura-browser/Cargo.toml b/crates/obscura-browser/Cargo.toml
+index bb88efe..0179e94 100644
+--- a/crates/obscura-browser/Cargo.toml
++++ b/crates/obscura-browser/Cargo.toml
+@@ -18,3 +18,4 @@ tracing = { workspace = true }
+ thiserror = { workspace = true }
+ anyhow = { workspace = true }
+ serde_json = { workspace = true }
++base64 = { workspace = true }
+diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
+index 94fb566..cbde187 100644
+--- a/crates/obscura-browser/src/page.rs
++++ b/crates/obscura-browser/src/page.rs
+@@ -1,5 +1,6 @@
+ use std::sync::Arc;
+
++use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+ use obscura_dom::{parse_html, DomTree};
+ use obscura_js::runtime::ObscuraJsRuntime;
+ use obscura_net::{ObscuraHttpClient, ObscuraNetError, Response};
+@@ -385,6 +386,88 @@ impl Page {
+         }
+     }
+
++    async fn inline_visual_assets(&mut self) {
++        let Some(image_sources_json) = self.js.as_mut().and_then(|js| {
++            js.evaluate(
++                r#"
++                    JSON.stringify(Array.from(document.querySelectorAll("img[src]") || [])
++                        .map((img, index) => ({index, src: img.getAttribute("src") || ""}))
++                        .filter((entry) => entry.src && !entry.src.startsWith("data:") && !entry.src.startsWith("blob:"))
++                        .slice(0, 24))
++                "#,
++            ).ok().and_then(|value| value.as_str().map(ToString::to_string))
++        }) else {
++            return;
++        };
++        let Ok(image_sources) = serde_json::from_str::<serde_json::Value>(&image_sources_json) else {
++            return;
++        };
++        let Some(image_sources) = image_sources.as_array() else {
++            return;
++        };
++
++        let mut updates = Vec::new();
++        for image in image_sources {
++            let Some(index) = image.get("index").and_then(serde_json::Value::as_u64) else {
++                continue;
++            };
++            let Some(src) = image.get("src").and_then(serde_json::Value::as_str) else {
++                continue;
++            };
++            let asset_url = if src.starts_with("http://") || src.starts_with("https://") || src.starts_with("file://") {
++                Url::parse(src).ok()
++            } else {
++                self.url.as_ref().and_then(|base| base.join(src).ok())
++            };
++            let Some(asset_url) = asset_url else {
++                continue;
++            };
++            if self.should_block_url(asset_url.as_str()) {
++                continue;
++            }
++            let Ok(response) = self.do_fetch(&asset_url).await else {
++                continue;
++            };
++            if response.body.is_empty() || response.body.len() > 2 * 1024 * 1024 {
++                continue;
++            }
++            self.record_network_event(&asset_url.to_string(), "GET", "Image", response.status, &response.headers, response.body.len());
++            let mime = response
++                .headers
++                .get("content-type")
++                .and_then(|value| value.split(';').next())
++                .map(str::trim)
++                .filter(|value| !value.is_empty())
++                .unwrap_or_else(|| mime_from_image_url(asset_url.as_str()));
++            let data_url = format!("data:{mime};base64,{}", BASE64.encode(&response.body));
++            updates.push(serde_json::json!({
++                "index": index,
++                "original": src,
++                "dataUrl": data_url,
++            }));
++        }
++
++        if updates.is_empty() {
++            return;
++        }
++        if let Some(js) = &mut self.js {
++            let updates_json = serde_json::to_string(&updates).unwrap_or_else(|_| "[]".to_string());
++            let script = format!(
++                r#"(function(updates) {{
++                    var images = Array.from(document.querySelectorAll("img[src]") || []);
++                    for (var i = 0; i < updates.length; i++) {{
++                        var update = updates[i];
++                        var img = images[update.index];
++                        if (!img || img.getAttribute("src") !== update.original) continue;
++                        img.setAttribute("data-obscura-original-src", update.original);
++                        img.setAttribute("src", update.dataUrl);
++                    }}
++                }})({updates_json});"#
++            );
++            let _ = js.execute_script("<visual-assets>", &script);
++        }
++    }
++
+     pub async fn navigate(&mut self, url_str: &str) -> Result<(), PageError> {
+         self.navigate_with_wait(url_str, crate::lifecycle::WaitUntil::Load).await
+     }
+@@ -563,11 +646,21 @@ impl Page {
+         if !css_sources.is_empty() {
+             if let Some(js) = &mut self.js {
+                 let combined_css = css_sources.join("\n");
+-                let escaped = combined_css
+-                    .replace('\\', "\\\\")
+-                    .replace('`', "\\`")
+-                    .replace("${", "\\${");
+-                let code = format!("globalThis.__obscura_css = `{}`;", escaped);
++                let css_json = serde_json::to_string(&combined_css).unwrap_or_else(|_| "\"\"".to_string());
++                let code = format!(
++                    r#"(function(css) {{
++                        globalThis.__obscura_css = css;
++                        var head = document.head || document.querySelector("head") || document.documentElement;
++                        if (!head || !css) return;
++                        var style = document.querySelector('style[data-obscura-linked-css]');
++                        if (!style) {{
++                            style = document.createElement("style");
++                            style.setAttribute("data-obscura-linked-css", "");
++                            head.appendChild(style);
++                        }}
++                        style.textContent = css;
++                    }})({css_json});"#
++                );
+                 let _ = js.execute_script("<css>", &code);
+             }
+         }
+@@ -577,6 +670,7 @@ impl Page {
+         }
+
+         self.execute_scripts().await;
++        self.inline_visual_assets().await;
+
+         if let Some(js) = &mut self.js {
+             if let Ok(new_title) = js.evaluate("document.title") {
+@@ -862,3 +956,78 @@ impl From<ObscuraNetError> for PageError {
+         PageError::NetworkError(e.to_string())
+     }
+ }
++
++fn mime_from_image_url(url: &str) -> &'static str {
++    let clean = url.split(['?', '#']).next().unwrap_or("").to_lowercase();
++    if clean.ends_with(".png") {
++        "image/png"
++    } else if clean.ends_with(".jpg") || clean.ends_with(".jpeg") {
++        "image/jpeg"
++    } else if clean.ends_with(".gif") {
++        "image/gif"
++    } else if clean.ends_with(".svg") {
++        "image/svg+xml"
++    } else if clean.ends_with(".webp") {
++        "image/webp"
++    } else {
++        "application/octet-stream"
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use std::sync::Arc;
++
++    use super::*;
++
++    #[tokio::test]
++    async fn navigate_injects_css_and_inlines_image_assets() {
++        let dir = std::env::temp_dir().join(format!("obscura-page-assets-{}", std::process::id()));
++        let _ = std::fs::remove_dir_all(&dir);
++        std::fs::create_dir_all(&dir).unwrap();
++        std::fs::write(dir.join("app.css"), ".card{color:rgb(1,2,3)}").unwrap();
++        std::fs::write(
++            dir.join("hero.svg"),
++            r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#,
++        ).unwrap();
++        std::fs::write(
++            dir.join("index.html"),
++            r#"
++                <!doctype html>
++                <html>
++                    <head><link rel="stylesheet" href="app.css"></head>
++                    <body><img id="hero" src="hero.svg" alt="Hero"><div class="card">Card</div></body>
++                </html>
++            "#,
++        ).unwrap();
++
++        let url = Url::from_file_path(dir.join("index.html")).unwrap();
++        let context = Arc::new(BrowserContext::new("ctx".to_string()));
++        let mut page = Page::new("page".to_string(), context);
++        page.navigate(url.as_str()).await.unwrap();
++        let summary = page.js.as_mut().unwrap().evaluate(
++            r#"
++                JSON.stringify({
++                    linkedCss: String(globalThis.__obscura_css || ""),
++                    injectedCss: document.querySelector('style[data-obscura-linked-css]')?.textContent || "",
++                    imageSrc: document.getElementById("hero").getAttribute("src"),
++                    originalSrc: document.getElementById("hero").getAttribute("data-obscura-original-src")
++                })
++            "#,
++        ).unwrap();
++        let summary: serde_json::Value =
++            serde_json::from_str(summary.as_str().expect("summary JSON string")).unwrap();
++
++        assert_eq!(
++            summary,
++            serde_json::json!({
++                "linkedCss": ".card{color:rgb(1,2,3)}",
++                "injectedCss": ".card{color:rgb(1,2,3)}",
++                "imageSrc": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjwvc3ZnPg==",
++                "originalSrc": "hero.svg",
++            })
++        );
++
++        let _ = std::fs::remove_dir_all(&dir);
++    }
++}
 diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
-index 9122dc0..cacffad 100644
+index 9122dc0..ad205e5 100644
 --- a/crates/obscura-js/js/bootstrap.js
 +++ b/crates/obscura-js/js/bootstrap.js
 @@ -209,6 +209,84 @@ const _styleProxy = (decl) => new Proxy(decl, {
    }
  });
- 
+
 +const __obscuraInvalidateLayout = () => { globalThis.__obscuraLayoutCache = null; };
 +
 +const __obscuraLayoutCache = () => {
@@ -137,7 +372,22 @@ index 9122dc0..cacffad 100644
      return n;
    }
    contains(o) { return o ? _dom("contains", this._nid, o._nid) === "true" : false; }
-@@ -406,6 +491,7 @@ class Element extends Node {
+@@ -403,9 +488,22 @@ class Element extends Node {
+   }
+   get style() { return this._style; }
+   set style(v) { if (typeof v === "string") this._style.cssText = v; }
++  get sheet() {
++    if (this.localName !== 'style' && this.localName !== 'link') return null;
++    if (!this._sheet) this._sheet = new CSSStyleSheet();
++    if (this.localName === 'style') {
++      const text = this.textContent || '';
++      if (this._sheet._obscuraText !== text) {
++        this._sheet.replaceSync(text);
++        this._sheet._obscuraText = text;
++      }
++    }
++    return this._sheet;
++  }
    getAttribute(n) { return _domParse("get_attribute", this._nid, n); }
    setAttribute(n, v) {
      _dom("set_attribute", this._nid, n + "\0" + String(v));
@@ -145,7 +395,7 @@ index 9122dc0..cacffad 100644
      if (globalThis.__mutationObservers?.length) globalThis.__notifyMutation('attributes', this._nid, [], [], n);
    }
    setAttributeNS(ns, n, v) { this.setAttribute(n, v); } // Simplified NS handling
-@@ -688,7 +774,7 @@ class Element extends Node {
+@@ -688,7 +786,7 @@ class Element extends Node {
    get scrollLeft() { return 0; } set scrollLeft(v) {}
    getBoundingClientRect() {
      globalThis.__obscura_click_target = this;
@@ -154,23 +404,106 @@ index 9122dc0..cacffad 100644
    }
    getClientRects() { return [this.getBoundingClientRect()]; }
    scrollIntoView() { globalThis.__obscura_click_target = this; }
+@@ -884,10 +982,17 @@ class Document extends Node {
+       hasFeature() { return true; },
+     };
+   }
+-  get styleSheets() { return []; }
+-  get forms() { return []; }
+-  get images() { return []; }
+-  get links() { return []; }
++  get styleSheets() {
++    const sheets = Array.from(this.querySelectorAll('style,link[rel="stylesheet"]') || [])
++      .map((node) => node.sheet)
++      .filter(Boolean);
++    sheets.item = (i) => sheets[i] || null;
++    sheets.forEach = Array.prototype.forEach.bind(sheets);
++    return sheets;
++  }
++  get forms() { return this.querySelectorAll("form"); }
++  get images() { return this.querySelectorAll("img"); }
++  get links() { return this.querySelectorAll("a[href]"); }
+   get scripts() { return this.querySelectorAll("script"); }
+   get cookie() {
+     return Deno.core.ops.op_get_cookies();
+diff --git a/crates/obscura-js/src/ops.rs b/crates/obscura-js/src/ops.rs
+index 999399a..34fa3bc 100644
+--- a/crates/obscura-js/src/ops.rs
++++ b/crates/obscura-js/src/ops.rs
+@@ -310,6 +310,9 @@ async fn op_fetch_url(
+                 "error": e,
+             }).to_string());
+         }
++        if parsed_url.scheme() == "file" {
++            return fetch_file_url_for_js(parsed_url).await;
++        }
+     }
+
+     let (cookie_jar, in_flight, intercept_tx) = {
+@@ -537,6 +540,46 @@ async fn op_fetch_url(
+     .to_string())
+ }
+
++async fn fetch_file_url_for_js(url: url::Url) -> Result<String, deno_error::JsErrorBox> {
++    let path = url
++        .to_file_path()
++        .map_err(|_| deno_error::JsErrorBox::generic("Invalid file URL"))?;
++    let resp_bytes = tokio::fs::read(&path)
++        .await
++        .map_err(|e| deno_error::JsErrorBox::generic(e.to_string()))?;
++    let resp_body = String::from_utf8_lossy(&resp_bytes).to_string();
++    let resp_body_base64 = BASE64.encode(&resp_bytes);
++    let content_type = path
++        .extension()
++        .and_then(|extension| extension.to_str())
++        .map(content_type_for_extension)
++        .unwrap_or("application/octet-stream");
++    Ok(serde_json::json!({
++        "status": 200,
++        "body": resp_body,
++        "bodyBase64": resp_body_base64,
++        "url": url.to_string(),
++        "headers": {"content-type": content_type},
++    })
++    .to_string())
++}
++
++fn content_type_for_extension(extension: &str) -> &'static str {
++    match extension.to_ascii_lowercase().as_str() {
++        "html" | "htm" => "text/html",
++        "css" => "text/css",
++        "js" | "mjs" => "application/javascript",
++        "json" => "application/json",
++        "png" => "image/png",
++        "jpg" | "jpeg" => "image/jpeg",
++        "gif" => "image/gif",
++        "svg" => "image/svg+xml",
++        "webp" => "image/webp",
++        "ico" => "image/x-icon",
++        _ => "application/octet-stream",
++    }
++}
++
+ fn glob_match(pattern: &str, url: &str) -> bool {
+     if pattern == "*" {
+         return true;
 diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
-index ba51fa4..0eca92b 100644
+index ba51fa4..79de937 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
 @@ -362,7 +362,7 @@ impl ObscuraJsRuntime {
- 
+
          let module_id = self
              .runtime
 -            .load_side_es_module_from_code(&specifier, deno_core::ModuleCodeString::from_static(""))
 +            .load_side_es_module(&specifier)
              .await
              .map_err(|e| format!("Module load error: {}", e))?;
- 
-@@ -1043,6 +1043,68 @@ mod tests {
+
+@@ -1043,6 +1043,108 @@ mod tests {
          assert_eq!(text, serde_json::json!("A"));
      }
- 
+
 +    #[test]
 +    fn test_insert_before_preserves_parent_order() {
 +        let mut rt = setup_runtime(r#"<div id="root"><span id="b">B</span></div>"#);
@@ -200,6 +533,46 @@ index ba51fa4..0eca92b 100644
 +
 +        let css = rt.evaluate("document.querySelector('style').textContent").unwrap();
 +        assert_eq!(css, serde_json::json!(" .x{color:red}"));
++    }
++
++    #[test]
++    fn test_document_collections_and_style_sheets_reflect_dom() {
++        let mut rt = setup_runtime(r#"
++            <html>
++                <head>
++                    <style>.a{color:red}</style>
++                    <link rel="stylesheet" href="/app.css">
++                </head>
++                <body>
++                    <form id="form"></form>
++                    <a href="/next">Next</a>
++                    <img src="/hero.png" alt="Hero">
++                </body>
++            </html>
++        "#);
++
++        let summary = rt.evaluate(r#"
++            JSON.stringify({
++                images: document.images.length,
++                links: document.links.length,
++                forms: document.forms.length,
++                sheets: document.styleSheets.length,
++                firstRule: document.styleSheets[0].cssRules[0].cssText
++            })
++        "#).unwrap();
++
++        let summary: serde_json::Value =
++            serde_json::from_str(summary.as_str().expect("summary JSON string")).unwrap();
++        assert_eq!(
++            summary,
++            serde_json::json!({
++                "images": 1,
++                "links": 1,
++                "forms": 1,
++                "sheets": 2,
++                "firstRule": ".a{color:red}",
++            })
++        );
 +    }
 +
 +    #[test]

@@ -42,8 +42,10 @@ When `--obscura-binary` is provided without any `--component`, the helper only
 installs the local Obscura binary.
 
 `obscura-runtime-dom-render.patch` records the current local Obscura runtime
-patch used to render the Mobian React app during development while waiting for
-an upstream or forked Obscura release asset.
+patch used to render the Mobian React app during development. The patch covers
+root ES module execution, DOM text/style collection support, linked stylesheet
+injection, bounded image data-url inlining, and heuristic element rects while
+waiting for an upstream or forked Obscura release asset.
 
 The helper installs available Obscura release assets under
 `vendor/<target>/browser/`; platform packages and standalone installers then
