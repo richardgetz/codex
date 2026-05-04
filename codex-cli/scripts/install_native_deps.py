@@ -210,6 +210,20 @@ def parse_args() -> argparse.Namespace:
             f"(default: {DEFAULT_OBSCURA_VERSION})."
         ),
     )
+    parser.add_argument(
+        "--obscura-binary",
+        type=Path,
+        help=(
+            "Install a local Obscura binary instead of downloading a pinned release asset. "
+            "Use with --component obscura and exactly one --target, or pass "
+            "--obscura-binary-target."
+        ),
+    )
+    parser.add_argument(
+        "--obscura-binary-target",
+        choices=BINARY_TARGETS,
+        help="Target triple for --obscura-binary when selected targets are ambiguous.",
+    )
     return parser.parse_args()
 
 
@@ -220,12 +234,17 @@ def main() -> int:
     vendor_dir = codex_cli_root / VENDOR_DIR_NAME
     vendor_dir.mkdir(parents=True, exist_ok=True)
 
-    components = args.components or [
-        "codex",
-        "codex-windows-sandbox-setup",
-        "codex-command-runner",
-        "rg",
-    ]
+    if args.obscura_binary and args.components is None:
+        components = ["obscura"]
+    else:
+        components = args.components or [
+            "codex",
+            "codex-windows-sandbox-setup",
+            "codex-command-runner",
+            "rg",
+        ]
+    if args.obscura_binary and "obscura" not in components:
+        raise RuntimeError("--obscura-binary requires --component obscura")
     selected_targets = args.targets or list(BINARY_TARGETS)
     selected_binary_components = [
         BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS
@@ -259,8 +278,20 @@ def main() -> int:
 
     if "obscura" in components:
         with _gha_group("Fetch Obscura browser binaries"):
-            print(f"Fetching Obscura browser binaries from {args.obscura_version}...")
-            fetch_obscura(vendor_dir, selected_targets, release_version=args.obscura_version)
+            if args.obscura_binary:
+                target = resolve_local_obscura_target(
+                    selected_targets,
+                    binary_target=args.obscura_binary_target,
+                )
+                installed = install_local_obscura_binary(
+                    vendor_dir,
+                    target,
+                    args.obscura_binary,
+                )
+                print(f"Installed local Obscura browser binary: {installed}")
+            else:
+                print(f"Fetching Obscura browser binaries from {args.obscura_version}...")
+                fetch_obscura(vendor_dir, selected_targets, release_version=args.obscura_version)
 
     print(f"Installed native dependencies into {vendor_dir}")
     return 0
@@ -387,6 +418,35 @@ def fetch_obscura(
             print(f"  installed Obscura for {target}")
 
     return [results[asset.target] for asset in selected_assets]
+
+
+def resolve_local_obscura_target(
+    selected_targets: Sequence[str],
+    *,
+    binary_target: str | None,
+) -> str:
+    if binary_target:
+        return binary_target
+    if len(selected_targets) == 1:
+        return selected_targets[0]
+    raise RuntimeError(
+        "--obscura-binary requires exactly one --target or --obscura-binary-target"
+    )
+
+
+def install_local_obscura_binary(vendor_dir: Path, target: str, source: Path) -> Path:
+    source = source.resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"Local Obscura binary not found: {source}")
+    binary_name = "obscura.exe" if "windows" in target else "obscura"
+    dest = vendor_dir / target / "browser" / binary_name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if source != dest.resolve():
+        dest.unlink(missing_ok=True)
+        shutil.copy2(source, dest)
+    if "windows" not in target:
+        dest.chmod(0o755)
+    return dest
 
 
 def _download_artifacts(workflow_id: str, dest_dir: Path, github_repo: str) -> None:

@@ -173,6 +173,7 @@ pub(crate) fn visual_shell_html(
     let url = html_escape(snapshot.get("url").and_then(Value::as_str).unwrap_or(""));
     let text = html_escape(snapshot.get("text").and_then(Value::as_str).unwrap_or(""));
     let callback_script = mirror_callback_script(callback_url);
+    let page_view = visual_page_view(snapshot, &text);
     let width = viewport_width.clamp(/*min*/ 320, /*max*/ 1600);
     let height = viewport_height.clamp(/*min*/ 240, /*max*/ 1200);
     format!(
@@ -186,6 +187,7 @@ h1{{font-size:15px;line-height:18px;margin:0 0 3px}}
 .url{{opacity:.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
 .viewport{{position:relative;width:{width}px;height:{height}px;overflow:hidden;background:white;border-bottom:1px solid #d0d7de}}
 .text{{position:absolute;inset:12px;white-space:pre-wrap;line-height:1.35;color:#24292f}}
+.page-frame{{position:absolute;inset:0;width:100%;height:100%;border:0;background:white}}
 .target{{position:absolute;border:2px solid #0b57d0;background:rgba(11,87,208,.08);box-sizing:border-box;cursor:crosshair}}
 .target:hover{{background:rgba(11,87,208,.18)}}
 .target span{{position:absolute;left:-2px;top:-22px;max-width:360px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:#0b57d0;color:white;padding:2px 5px;font-size:11px}}
@@ -193,10 +195,112 @@ aside{{padding:12px;max-width:{width}px;box-sizing:border-box}}
 pre{{white-space:pre-wrap;line-height:1.35;margin:0}}
 </style>
 <header><h1>Obscura headful mirror: {title}</h1><div class="url">{url}</div></header>
-<main class="viewport"><pre class="text">{text}</pre>{element_markup}</main>
+<main class="viewport">{page_view}{element_markup}</main>
 <aside><strong>Snapshot text</strong><pre>{text}</pre></aside>
 {callback_script}"#
     )
+}
+
+fn visual_page_view(snapshot: &Value, fallback_text: &str) -> String {
+    let Some(visual) = snapshot.get("visual") else {
+        return format!(r#"<pre class="text">{fallback_text}</pre>"#);
+    };
+    let html = visual.get("html").and_then(Value::as_str).unwrap_or("");
+    if html.trim().is_empty() {
+        return format!(r#"<pre class="text">{fallback_text}</pre>"#);
+    }
+    let linked_css = visual
+        .get("linkedCss")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let base_url = visual
+        .get("baseUrl")
+        .and_then(Value::as_str)
+        .or_else(|| snapshot.get("url").and_then(Value::as_str))
+        .unwrap_or("");
+    let html_literal = js_literal(html);
+    let css_literal = js_literal(linked_css);
+    let base_literal = js_literal(base_url);
+    format!(
+        r#"<iframe id="page-frame" class="page-frame" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
+<script>
+(() => {{
+  const rawHtml = {html_literal};
+  const linkedCss = {css_literal};
+  const baseUrl = {base_literal};
+  const frame = document.getElementById("page-frame");
+  const send = (payload) => {{
+    const callback = window.__codexObscuraMirrorSend;
+    if (callback) callback(payload);
+  }};
+  const labelFor = (el) => {{
+    if (!el) return "";
+    return (el.getAttribute("aria-label") || el.getAttribute("title") || el.alt || el.innerText || el.value || el.placeholder || "").trim().replace(/\s+/g, " ").slice(0, 220);
+  }};
+  const rectJson = (rect, frameRect) => ({{
+    x: Math.round(frameRect.left + rect.left),
+    y: Math.round(frameRect.top + rect.top),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height)
+  }});
+  const doc = new DOMParser().parseFromString(rawHtml, "text/html");
+  doc.querySelectorAll("script,noscript").forEach((node) => node.remove());
+  if (baseUrl) {{
+    const base = doc.createElement("base");
+    base.href = baseUrl;
+    doc.head.prepend(base);
+  }}
+  if (linkedCss) {{
+    const style = doc.createElement("style");
+    style.setAttribute("data-codex-obscura-linked-css", "");
+    style.textContent = linkedCss;
+    doc.head.appendChild(style);
+  }}
+  frame.addEventListener("load", () => {{
+    const frameDoc = frame.contentDocument;
+    if (!frameDoc) return;
+    frameDoc.addEventListener("click", (event) => {{
+      const target = event.target && event.target.closest
+        ? event.target.closest("a[href],button,input,textarea,select,[role=button],[role=link],[tabindex],img")
+        : event.target;
+      if (!target || !target.getBoundingClientRect) return;
+      const rect = target.getBoundingClientRect();
+      const frameRect = frame.getBoundingClientRect();
+      send({{
+        kind: "mirrorElement",
+        tag: (target.tagName || "").toLowerCase(),
+        label: labelFor(target),
+        href: target.href || target.getAttribute?.("href") || null,
+        src: target.src || target.getAttribute?.("src") || null,
+        rect: rectJson(rect, frameRect)
+      }});
+    }}, true);
+    frameDoc.addEventListener("selectionchange", () => {{
+      const selection = frameDoc.getSelection && frameDoc.getSelection();
+      const text = selection ? selection.toString().slice(0, 4000) : "";
+      if (!text) return;
+      const range = selection.rangeCount ? selection.getRangeAt(0) : null;
+      const rect = range ? range.getBoundingClientRect() : null;
+      const frameRect = frame.getBoundingClientRect();
+      send({{
+        kind: "mirrorSelection",
+        text,
+        rect: rect ? rectJson(rect, frameRect) : null
+      }});
+    }}, true);
+  }});
+  frame.srcdoc = "<!doctype html>" + doc.documentElement.outerHTML;
+}})();
+</script>"#
+    )
+}
+
+fn js_literal(value: &str) -> String {
+    serde_json::to_string(value)
+        .unwrap_or_else(|_| "\"\"".to_string())
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
 }
 
 fn mirror_callback_script(callback_url: Option<&str>) -> String {
@@ -218,6 +322,7 @@ fn mirror_callback_script(callback_url: Option<&str>) -> String {
       }}).catch(() => {{}});
     }} catch (_) {{}}
   }};
+  window.__codexObscuraMirrorSend = send;
   document.addEventListener("click", (event) => {{
     const target = event.target.closest && event.target.closest(".target");
     if (!target) return;

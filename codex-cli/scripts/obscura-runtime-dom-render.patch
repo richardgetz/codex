@@ -1,0 +1,238 @@
+diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
+index 9122dc0..cacffad 100644
+--- a/crates/obscura-js/js/bootstrap.js
++++ b/crates/obscura-js/js/bootstrap.js
+@@ -209,6 +209,84 @@ const _styleProxy = (decl) => new Proxy(decl, {
+   }
+ });
+ 
++const __obscuraInvalidateLayout = () => { globalThis.__obscuraLayoutCache = null; };
++
++const __obscuraLayoutCache = () => {
++  if (globalThis.__obscuraLayoutCache) return globalThis.__obscuraLayoutCache;
++  const indexMap = (nodes) => {
++    const map = new Map();
++    nodes.forEach((node, index) => { if (node?._nid) map.set(node._nid, index); });
++    return map;
++  };
++  const allLinks = Array.from(document.querySelectorAll("a[href]") || []);
++  const footerLinks = Array.from(document.querySelectorAll("footer a[href]") || []);
++  const images = Array.from(document.querySelectorAll("img") || []);
++  const firstImageHint = images[0]
++    ? `${images[0].getAttribute("alt") || ""} ${images[0].getAttribute("src") || ""} ${images[0].className || ""}`.toLowerCase()
++    : "";
++  const footerIds = new Set(footerLinks.map((node) => node?._nid).filter(Boolean));
++  const cardLinks = allLinks.filter((node) => !footerIds.has(node?._nid));
++  const cache = {
++    links: indexMap(allLinks),
++    cardLinks: indexMap(cardLinks),
++    footerLinks: indexMap(footerLinks),
++    buttons: indexMap(Array.from(document.querySelectorAll("button") || [])),
++    images: indexMap(images),
++    leadingLogoImage: firstImageHint.includes("logo"),
++  };
++  globalThis.__obscuraLayoutCache = cache;
++  return cache;
++};
++
++const __obscuraRect = (x, y, width, height) => ({
++  x, y, width, height,
++  top: y, left: x, right: x + width, bottom: y + height,
++  toJSON() { return this; }
++});
++
++const __obscuraHeuristicRect = (el) => {
++  const tag = (el?.localName || "").toLowerCase();
++  const vw = Math.max(320, Math.min(globalThis.innerWidth || 1024, 1920));
++  if (tag === "html" || tag === "body") return __obscuraRect(0, 0, vw, globalThis.innerHeight || 900);
++  if (tag === "header") return __obscuraRect(0, 0, vw, 72);
++  if (tag === "input" || tag === "textarea" || tag === "select") {
++    return __obscuraRect(Math.max(24, vw - 520), 18, 360, 36);
++  }
++  if (tag === "button") {
++    const index = __obscuraLayoutCache().buttons.get(el._nid) || 0;
++    return __obscuraRect(Math.max(24, vw - 150), 18 + index * 48, 108, 36);
++  }
++  if (tag === "img") {
++    const cache = __obscuraLayoutCache();
++    const imageIndex = cache.images.get(el._nid) || 0;
++    if (imageIndex === 0 && cache.leadingLogoImage) return __obscuraRect(24, 16, 132, 40);
++    const cardIndex = cache.leadingLogoImage ? imageIndex - 1 : imageIndex;
++    const card = __obscuraCardRect(cardIndex, vw);
++    return __obscuraRect(card.x, card.y, card.width, Math.min(130, card.height));
++  }
++  if (tag === "a") {
++    const cache = __obscuraLayoutCache();
++    if (cache.footerLinks.has(el._nid)) {
++      const index = cache.footerLinks.get(el._nid) || 0;
++      return __obscuraRect(24 + index * 130, 820, 112, 24);
++    }
++    let index = cache.cardLinks.get(el._nid);
++    if (index === undefined) index = cache.links.get(el._nid) || 0;
++    return __obscuraCardRect(index, vw);
++  }
++  return __obscuraRect(24, 80, Math.min(240, vw - 48), 24);
++};
++
++const __obscuraCardRect = (index, vw) => {
++  const cardWidth = vw < 600 ? 96 : vw < 1000 ? 156 : 190;
++  const cardHeight = Math.round(cardWidth * 1.28);
++  const gap = vw < 600 ? 10 : 16;
++  const columns = Math.max(1, Math.floor((vw - 48 + gap) / (cardWidth + gap)));
++  const col = index % columns;
++  const row = Math.floor(index / columns);
++  return __obscuraRect(24 + col * (cardWidth + gap), 96 + row * (cardHeight + gap), cardWidth, cardHeight);
++};
++
+ class Node {
+   static ELEMENT_NODE = 1;
+   static TEXT_NODE = 3;
+@@ -228,6 +306,7 @@ class Node {
+       const tn = +_dom("create_text_node", String(v));
+       _dom("append_child", this._nid, tn);
+     }
++    __obscuraInvalidateLayout();
+   }
+   get nodeValue() {
+     const t = this.nodeType;
+@@ -238,6 +317,8 @@ class Node {
+     const t = this.nodeType;
+     if (t === 3 || t === 8) _dom("set_text_content", this._nid, String(v ?? ""));
+   }
++  get data() { return this.nodeValue ?? ""; }
++  set data(v) { this.nodeValue = v; }
+   get parentNode() { return _wrap(+_dom("parent_node", this._nid)); }
+   get parentElement() { const p = this.parentNode; return p && p.nodeType === 1 ? p : null; }
+   get childNodes() {
+@@ -253,6 +334,7 @@ class Node {
+   appendChild(c) {
+     if (!c) return c;
+     _dom("append_child", this._nid, c._nid);
++    __obscuraInvalidateLayout();
+     if (globalThis.__mutationObservers?.length) globalThis.__notifyMutation('childList', this._nid, [c._nid], []);
+     if (c instanceof Element && c.tagName === 'SCRIPT') {
+       const scriptType = c.getAttribute('type') || '';
+@@ -287,19 +369,22 @@ class Node {
+   removeChild(c) {
+     if (!c) return c;
+     _dom("remove_child", c._nid);
++    __obscuraInvalidateLayout();
+     if (globalThis.__mutationObservers?.length) globalThis.__notifyMutation('childList', this._nid, [], [c._nid]);
+     return c;
+   }
+   replaceChild(newChild, oldChild) {
+     if (!oldChild || !newChild) return oldChild;
+-    _dom("insert_before", this._nid, newChild._nid, oldChild._nid);
++    _dom("insert_before", newChild._nid, oldChild._nid);
+     _dom("remove_child", oldChild._nid);
++    __obscuraInvalidateLayout();
+     return oldChild;
+   }
+   insertBefore(n, ref) {
+     if (!n) return n;
+     if (!ref) { this.appendChild(n); return n; }
+-    _dom("insert_before", this._nid, n._nid, ref._nid);
++    _dom("insert_before", n._nid, ref._nid);
++    __obscuraInvalidateLayout();
+     return n;
+   }
+   contains(o) { return o ? _dom("contains", this._nid, o._nid) === "true" : false; }
+@@ -406,6 +491,7 @@ class Element extends Node {
+   getAttribute(n) { return _domParse("get_attribute", this._nid, n); }
+   setAttribute(n, v) {
+     _dom("set_attribute", this._nid, n + "\0" + String(v));
++    __obscuraInvalidateLayout();
+     if (globalThis.__mutationObservers?.length) globalThis.__notifyMutation('attributes', this._nid, [], [], n);
+   }
+   setAttributeNS(ns, n, v) { this.setAttribute(n, v); } // Simplified NS handling
+@@ -688,7 +774,7 @@ class Element extends Node {
+   get scrollLeft() { return 0; } set scrollLeft(v) {}
+   getBoundingClientRect() {
+     globalThis.__obscura_click_target = this;
+-    return {x:8,y:8,width:100,height:20,top:8,right:108,bottom:28,left:8,toJSON(){return this;}};
++    return __obscuraHeuristicRect(this);
+   }
+   getClientRects() { return [this.getBoundingClientRect()]; }
+   scrollIntoView() { globalThis.__obscura_click_target = this; }
+diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
+index ba51fa4..0eca92b 100644
+--- a/crates/obscura-js/src/runtime.rs
++++ b/crates/obscura-js/src/runtime.rs
+@@ -362,7 +362,7 @@ impl ObscuraJsRuntime {
+ 
+         let module_id = self
+             .runtime
+-            .load_side_es_module_from_code(&specifier, deno_core::ModuleCodeString::from_static(""))
++            .load_side_es_module(&specifier)
+             .await
+             .map_err(|e| format!("Module load error: {}", e))?;
+ 
+@@ -1043,6 +1043,68 @@ mod tests {
+         assert_eq!(text, serde_json::json!("A"));
+     }
+ 
++    #[test]
++    fn test_insert_before_preserves_parent_order() {
++        let mut rt = setup_runtime(r#"<div id="root"><span id="b">B</span></div>"#);
++        rt.execute_script("test", r#"
++            var root = document.getElementById('root');
++            var b = document.getElementById('b');
++            var a = document.createElement('span');
++            a.id = 'a';
++            a.textContent = 'A';
++            root.insertBefore(a, b);
++        "#).unwrap();
++
++        let text = rt.evaluate("document.getElementById('root').textContent").unwrap();
++        assert_eq!(text, serde_json::json!("AB"));
++        let first_id = rt.evaluate("document.getElementById('root').firstChild.id").unwrap();
++        assert_eq!(first_id, serde_json::json!("a"));
++    }
++
++    #[test]
++    fn test_text_node_data_updates_backing_dom() {
++        let mut rt = setup_runtime(r#"<head></head><body></body>"#);
++        rt.execute_script("test", r#"
++            var style = document.head.appendChild(document.createElement('style'));
++            style.innerHTML = ' ';
++            style.firstChild.data = style.firstChild.data + '.x{color:red}';
++        "#).unwrap();
++
++        let css = rt.evaluate("document.querySelector('style').textContent").unwrap();
++        assert_eq!(css, serde_json::json!(" .x{color:red}"));
++    }
++
++    #[test]
++    fn test_bounding_rects_are_distinct_for_interactive_elements() {
++        let mut rt = setup_runtime(r#"
++            <main>
++                <input id="search">
++                <button id="submit">Submit</button>
++                <a id="one" href="/one"><img src="/one.jpg" alt="One">One</a>
++                <a id="two" href="/two">Two</a>
++            </main>
++        "#);
++
++        let rects = rt.evaluate(r#"
++            JSON.stringify([
++                document.getElementById('search').getBoundingClientRect(),
++                document.getElementById('submit').getBoundingClientRect(),
++                document.getElementById('one').getBoundingClientRect(),
++                document.getElementById('two').getBoundingClientRect(),
++                document.querySelector('img').getBoundingClientRect()
++            ])
++        "#).unwrap();
++
++        let rects: serde_json::Value =
++            serde_json::from_str(rects.as_str().expect("rect JSON string")).unwrap();
++        let rects = rects.as_array().expect("rect array");
++        assert_ne!(rects[0], rects[1]);
++        assert_ne!(rects[2], rects[3]);
++        assert_eq!(rects[2]["x"], rects[4]["x"]);
++        assert_eq!(rects[2]["y"], rects[4]["y"]);
++        assert!(rects[2]["width"].as_i64().unwrap() > 100);
++    }
++
+     #[test]
+     fn test_input_value() {
+         let mut rt = setup_runtime(r#"<form><input id="name" type="text" value="initial"><textarea id="bio">old text</textarea></form>"#);

@@ -972,7 +972,7 @@ async fn obscura_snapshot_screenshot(
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let max_text_chars = if full_page { 24_000 } else { 12_000 };
     let ref_mode = snapshot_ref_mode(session);
-    let snapshot = snapshot_page(
+    let snapshot = snapshot_page_with_visual(
         &mut session.cdp,
         max_text_chars,
         /*max_elements*/ 120,
@@ -998,6 +998,10 @@ async fn obscura_snapshot_screenshot(
         session.viewport_height,
         full_page,
     )?;
+    let mut summary_snapshot = snapshot;
+    if let Some(snapshot_obj) = summary_snapshot.as_object_mut() {
+        snapshot_obj.remove("visual");
+    }
     let summary = json!({
         "session_id": session.id,
         "mode": mode_name(&session.mode),
@@ -1007,7 +1011,7 @@ async fn obscura_snapshot_screenshot(
         "mime_type": "image/png",
         "visual_source": "obscura_dom_snapshot",
         "note": "Obscura rendered this from the browser DOM/CDP snapshot; it is an agent review surface while native compositor screenshots are added.",
-        "snapshot": snapshot,
+        "snapshot": summary_snapshot,
     });
     Ok(FunctionToolOutput::from_content(
         vec![
@@ -2097,6 +2101,36 @@ async fn snapshot_page(
     evaluate_json(cdp, &expression).await
 }
 
+async fn snapshot_page_with_visual(
+    cdp: &mut CdpClient,
+    max_text_chars: usize,
+    max_elements: usize,
+    ref_mode: SnapshotRefMode,
+) -> Result<Value, FunctionCallError> {
+    let mut snapshot = snapshot_page(cdp, max_text_chars, max_elements, ref_mode).await?;
+    let visual = evaluate_json(
+        cdp,
+        r#"(() => {
+            const html = document.documentElement && document.documentElement.outerHTML || "";
+            const linkedCss = String(globalThis.__obscura_css || "");
+            return {
+                baseUrl: location.href,
+                html: html.slice(0, 500000),
+                linkedCss: linkedCss.slice(0, 200000),
+                htmlTruncated: html.length > 500000,
+                linkedCssTruncated: linkedCss.length > 200000
+            };
+        })()"#,
+    )
+    .await;
+    if let Ok(visual) = visual
+        && let Some(snapshot_obj) = snapshot.as_object_mut()
+    {
+        snapshot_obj.insert("visual".to_string(), visual);
+    }
+    Ok(snapshot)
+}
+
 fn snapshot_ref_mode(session: &BrowserSession) -> SnapshotRefMode {
     if session.access == ShareAccess::ReadOnly {
         SnapshotRefMode::ReadOnly
@@ -2742,7 +2776,7 @@ async fn refresh_obscura_visual_shell(
     viewport_height: u32,
     callback_url: Option<&str>,
 ) -> Result<(), FunctionCallError> {
-    let snapshot = snapshot_page(
+    let snapshot = snapshot_page_with_visual(
         cdp,
         /*max_text_chars*/ 16_000,
         /*max_elements*/ 160,
@@ -3399,6 +3433,36 @@ mod tests {
         assert_eq!(html.matches(r#"class="target""#).count(), 160);
         assert!(html.contains("<script>"));
         assert!(!html.contains("e&lt;160&gt;"));
+    }
+
+    #[test]
+    fn visual_shell_html_embeds_obscura_page_view() {
+        let snapshot = json!({
+            "url": "https://example.test/input",
+            "title": "Visual",
+            "text": "Fallback text",
+            "visual": {
+                "baseUrl": "https://example.test/input",
+                "html": "<html><head><script src=\"/app.js\"></script></head><body><noscript>No JS</noscript><img src=\"/logo.svg\"><button>Submit</button></body></html>",
+                "linkedCss": ".card{background:url('/thumb.jpg')}"
+            },
+            "elements": []
+        });
+
+        let html = agent_browser_visual::visual_shell_html(
+            &snapshot,
+            /*viewport_width*/ 900,
+            /*viewport_height*/ 700,
+            Some("http://127.0.0.1:12345/selection"),
+        );
+
+        assert!(html.contains(r#"id="page-frame""#));
+        assert!(html.contains("DOMParser"));
+        assert!(html.contains("data-codex-obscura-linked-css"));
+        assert!(html.contains("mirrorElement"));
+        assert!(html.contains("mirrorSelection"));
+        assert!(html.contains("\\u003cscript src=\\\"/app.js\\\"\\u003e"));
+        assert!(!html.contains(r#"<script src="/app.js">"#));
     }
 
     #[tokio::test]

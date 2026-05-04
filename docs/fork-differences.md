@@ -385,11 +385,12 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   screenshot PNG/base64 sizes alongside latency so transport-size tradeoffs stay
   visible. Obscura currently covers CDP navigation/evaluation/input/snapshot
   flows; screenshots use a lightweight DOM snapshot renderer until native
-  compositor screenshots are added. Obscura `mode = "headful"` opens a small
-  local mirror shell driven by the same CDP snapshot path so the Rust-native
-  backend is not limited to invisible sessions. The mirror has a localhost
-  selection bridge: when the human clicks a mirrored target or selects text in
-  the mirror, `agent_browser.selection_overview` includes that
+  compositor screenshots are added. Obscura `mode = "headful"` opens a local
+  mirror shell driven by the same CDP snapshot path so the Rust-native backend
+  is not limited to invisible sessions. The mirror renders captured page
+  HTML/CSS in an inert iframe when available, overlays agent target boxes, and
+  has a localhost selection bridge: when the human clicks the mirrored page or
+  selects text in the mirror, `agent_browser.selection_overview` includes that
   `mirrorSelection` payload for the agent.
 - Set `CODEX_AGENT_BROWSER_OBSCURA_BINARY` to point at a custom Obscura binary,
   bundle `obscura` next to the Codex executable, bundle it under
@@ -400,7 +401,9 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   while still letting app distributions ship Obscura as a first-party resource;
   `codex-cli/scripts/install_native_deps.py --component obscura` hydrates
   available pinned upstream Obscura release assets into that vendor resource
-  layout. Use `backend = "chromium"` to force the Chromium launch path.
+  layout, and `--obscura-binary <path> --target <triple>` installs a local
+  patched Obscura build into the same layout. Use `backend = "chromium"` to
+  force the Chromium launch path.
 - When attaching to an existing CDP endpoint, Codex creates an `about:blank`
   page target if `/json/list` has no debuggable page yet, then closes only that
   owned target when the session closes.

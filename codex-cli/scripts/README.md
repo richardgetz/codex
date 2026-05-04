@@ -29,6 +29,22 @@ Fetch the currently pinned upstream Obscura assets with:
 codex-cli/scripts/install_native_deps.py --component obscura
 ```
 
+For local patched Obscura builds, install a specific binary into the same vendor
+layout:
+
+```bash
+codex-cli/scripts/install_native_deps.py --component obscura \
+  --target aarch64-apple-darwin \
+  --obscura-binary /path/to/obscura
+```
+
+When `--obscura-binary` is provided without any `--component`, the helper only
+installs the local Obscura binary.
+
+`obscura-runtime-dom-render.patch` records the current local Obscura runtime
+patch used to render the Mobian React app during development while waiting for
+an upstream or forked Obscura release asset.
+
 The helper installs available Obscura release assets under
 `vendor/<target>/browser/`; platform packages and standalone installers then
 preserve that resource as `codex-resources/obscura` when present.
