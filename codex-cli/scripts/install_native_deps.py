@@ -14,6 +14,7 @@ import zipfile
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+import platform
 import sys
 from typing import Iterable, Sequence
 from urllib.parse import urlparse
@@ -224,6 +225,29 @@ def parse_args() -> argparse.Namespace:
         choices=BINARY_TARGETS,
         help="Target triple for --obscura-binary when selected targets are ambiguous.",
     )
+    parser.add_argument(
+        "--obscura-source-dir",
+        type=Path,
+        help=(
+            "Build Obscura from a local source checkout, then install the produced binary. "
+            "Use with --component obscura and exactly one --target, or pass "
+            "--obscura-binary-target."
+        ),
+    )
+    parser.add_argument(
+        "--obscura-source-patch",
+        type=Path,
+        default=SCRIPT_DIR / "obscura-runtime-dom-render.patch",
+        help=(
+            "Patch to apply when --obscura-source-dir is used. Defaults to the "
+            "tracked Codex Obscura runtime patch."
+        ),
+    )
+    parser.add_argument(
+        "--obscura-source-release",
+        action="store_true",
+        help="Build --obscura-source-dir with cargo --release before staging it.",
+    )
     return parser.parse_args()
 
 
@@ -234,7 +258,9 @@ def main() -> int:
     vendor_dir = codex_cli_root / VENDOR_DIR_NAME
     vendor_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.obscura_binary and args.components is None:
+    if args.obscura_binary and args.obscura_source_dir:
+        raise RuntimeError("--obscura-binary and --obscura-source-dir are mutually exclusive")
+    if (args.obscura_binary or args.obscura_source_dir) and args.components is None:
         components = ["obscura"]
     else:
         components = args.components or [
@@ -243,8 +269,8 @@ def main() -> int:
             "codex-command-runner",
             "rg",
         ]
-    if args.obscura_binary and "obscura" not in components:
-        raise RuntimeError("--obscura-binary requires --component obscura")
+    if (args.obscura_binary or args.obscura_source_dir) and "obscura" not in components:
+        raise RuntimeError("--obscura-binary/--obscura-source-dir requires --component obscura")
     selected_targets = args.targets or list(BINARY_TARGETS)
     selected_binary_components = [
         BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS
@@ -289,6 +315,19 @@ def main() -> int:
                     args.obscura_binary,
                 )
                 print(f"Installed local Obscura browser binary: {installed}")
+            elif args.obscura_source_dir:
+                target = resolve_local_obscura_target(
+                    selected_targets,
+                    binary_target=args.obscura_binary_target,
+                )
+                installed = build_and_install_local_obscura_from_source(
+                    vendor_dir,
+                    target,
+                    source_dir=args.obscura_source_dir,
+                    patch_path=args.obscura_source_patch,
+                    release=args.obscura_source_release,
+                )
+                print(f"Built and installed local Obscura browser binary: {installed}")
             else:
                 print(f"Fetching Obscura browser binaries from {args.obscura_version}...")
                 fetch_obscura(vendor_dir, selected_targets, release_version=args.obscura_version)
@@ -430,7 +469,7 @@ def resolve_local_obscura_target(
     if len(selected_targets) == 1:
         return selected_targets[0]
     raise RuntimeError(
-        "--obscura-binary requires exactly one --target or --obscura-binary-target"
+        "local Obscura install requires exactly one --target or --obscura-binary-target"
     )
 
 
@@ -447,6 +486,86 @@ def install_local_obscura_binary(vendor_dir: Path, target: str, source: Path) ->
     if "windows" not in target:
         dest.chmod(0o755)
     return dest
+
+
+def build_and_install_local_obscura_from_source(
+    vendor_dir: Path,
+    target: str,
+    *,
+    source_dir: Path,
+    patch_path: Path | None,
+    release: bool,
+) -> Path:
+    ensure_obscura_source_build_target_matches_host(target)
+    source_dir = source_dir.resolve()
+    if not (source_dir / "Cargo.toml").is_file():
+        raise FileNotFoundError(f"Obscura Cargo.toml not found under {source_dir}")
+    with tempfile.TemporaryDirectory(prefix="codex-obscura-source-") as tmp_dir_str:
+        tmp_dir = Path(tmp_dir_str)
+        build_dir = tmp_dir / "obscura-src"
+        shutil.copytree(
+            source_dir,
+            build_dir,
+            ignore=shutil.ignore_patterns(
+                ".git",
+                "target",
+                ".cargo",
+            ),
+        )
+        if patch_path:
+            apply_obscura_patch_if_needed(build_dir, patch_path.resolve())
+        target_dir = tmp_dir / "target"
+        cmd = ["cargo", "build", "--bin", "obscura"]
+        if release:
+            cmd.append("--release")
+        env = os.environ.copy()
+        env["CARGO_HOME"] = str(tmp_dir / "cargo-home")
+        env["CARGO_TARGET_DIR"] = str(target_dir)
+        subprocess.check_call(cmd, cwd=build_dir, env=env)
+        profile = "release" if release else "debug"
+        binary = target_dir / profile / ("obscura.exe" if sys.platform == "win32" else "obscura")
+        if not binary.is_file():
+            raise FileNotFoundError(f"Built Obscura binary not found: {binary}")
+        return install_local_obscura_binary(vendor_dir, target, binary)
+
+
+def ensure_obscura_source_build_target_matches_host(target: str) -> None:
+    host_system = platform.system()
+    host_machine = platform.machine().lower()
+    if host_system == "Darwin" and host_machine in {"arm64", "aarch64"}:
+        host_target = "aarch64-apple-darwin"
+    elif host_system == "Darwin" and host_machine in {"x86_64", "amd64"}:
+        host_target = "x86_64-apple-darwin"
+    elif host_system == "Windows" and host_machine in {"amd64", "x86_64"}:
+        host_target = "x86_64-pc-windows-msvc"
+    else:
+        raise RuntimeError(
+            f"--obscura-source-dir is only supported on macOS and x86_64 Windows hosts; "
+            f"detected {host_system} {host_machine}."
+        )
+    if target != host_target:
+        raise RuntimeError(
+            f"--obscura-source-dir builds a host binary for {host_target}; selected target "
+            f"{target}. Pass --target {host_target} or install a prebuilt binary with "
+            "--obscura-binary."
+        )
+
+
+def apply_obscura_patch_if_needed(source_dir: Path, patch_path: Path) -> None:
+    if not patch_path.is_file():
+        raise FileNotFoundError(f"Obscura patch not found: {patch_path}")
+    check_cmd = ["git", "apply", "--check", str(patch_path)]
+    reverse_check_cmd = ["git", "apply", "--reverse", "--check", str(patch_path)]
+    if subprocess.run(
+        check_cmd, cwd=source_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    ).returncode == 0:
+        subprocess.check_call(["git", "apply", str(patch_path)], cwd=source_dir)
+        return
+    if subprocess.run(
+        reverse_check_cmd, cwd=source_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    ).returncode == 0:
+        return
+    raise RuntimeError(f"Obscura patch cannot be applied to {source_dir}: {patch_path}")
 
 
 def _download_artifacts(workflow_id: str, dest_dir: Path, github_repo: str) -> None:

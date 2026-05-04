@@ -41,6 +41,21 @@ codex-cli/scripts/install_native_deps.py --component obscura \
 When `--obscura-binary` is provided without any `--component`, the helper only
 installs the local Obscura binary.
 
+The helper can also build from a local Obscura source checkout and apply the
+tracked runtime patch before staging the host binary:
+
+```bash
+codex-cli/scripts/install_native_deps.py --component obscura \
+  --target aarch64-apple-darwin \
+  --obscura-source-dir /path/to/obscura
+```
+
+When `--obscura-source-dir` is provided without any `--component`, the helper
+only builds and installs Obscura. This mode intentionally requires the selected
+target to match the current host; use `--obscura-binary` for cross-target
+staging. Source builds use temporary Cargo home and target directories so the
+package staging step does not depend on the caller's local Cargo cache.
+
 `obscura-runtime-dom-render.patch` records the current local Obscura runtime
 patch used to render the Mobian React app during development. The patch covers
 root ES module execution, DOM text/style collection support, linked stylesheet
