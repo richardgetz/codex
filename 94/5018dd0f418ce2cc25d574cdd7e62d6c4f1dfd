@@ -1,0 +1,33 @@
+intent:
+  id: "intent/2026-05-04/agent-browser-obscura-selection#945018dd0"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Ensure Obscura is bundled by normal platform packaging and make the Obscura headful mirror report human pointing state."
+  decision: "Add Obscura to native platform package component hydration for targets with upstream assets, and add a small localhost bridge for the Obscura mirror so clicked targets or selected mirror text are surfaced through agent_browser.selection_overview as mirrorSelection."
+  constraints:
+    - "Must keep Obscura as an external first-party resource rather than linking it into codex-core."
+    - "Must preserve existing CDP overlay selection and highlight behavior for Chromium and Obscura sessions."
+    - "Must keep the mirror callback local-only and bounded in request size."
+    - "Must not require the current already-running Codex process to rediscover newly hydrated binaries until rebuild/restart."
+  intent_priority: "must"
+  code_locations:
+    - "codex-cli/scripts/build_npm_package.py::PACKAGE_NATIVE_COMPONENTS"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_open"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_selection"
+    - "codex-rs/core/src/tools/handlers/agent_browser_visual.rs::VisualShellBridge"
+    - "codex-rs/core/src/tools/handlers/agent_browser_visual.rs::visual_shell_html"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "codex-cli/scripts/install_native_deps.py --component obscura --target aarch64-apple-darwin ../codex-cli"
+    - "python3 -m py_compile ../codex-cli/scripts/build_npm_package.py ../codex-cli/scripts/install_native_deps.py ../scripts/stage_npm_packages.py"
+    - "python3 packaging component import/assert smoke"
+    - "cargo fmt --all"
+    - "cargo test -p codex-core visual_shell_html_escapes_clamps_and_caps_targets -- --nocapture"
+    - "CODEX_AGENT_BROWSER_OBSCURA_BINARY=/Users/rick/.codex/worktrees/codex-rust-browser/codex-cli/vendor/aarch64-apple-darwin/browser/obscura CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 cargo test -p codex-core obscura_backend_renders_dom_screenshot -- --ignored --nocapture"
+    - "CODEX_AGENT_BROWSER_DISABLE_OPEN=1 CODEX_AGENT_BROWSER_OBSCURA_BINARY=/Users/rick/.codex/worktrees/codex-rust-browser/codex-cli/vendor/aarch64-apple-darwin/browser/obscura CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 cargo test -p codex-core obscura_highlight_marks_selection_and_clears_rect -- --ignored --nocapture"
+    - "cargo check -p codex-core"
+    - "cargo clippy -p codex-core --lib --tests -- -A clippy::large_enum_variant -D warnings"
+    - "git diff --check"
