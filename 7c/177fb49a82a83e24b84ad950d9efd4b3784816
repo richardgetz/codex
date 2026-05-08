@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-05-08/pr42-stable-merge#7c177fb49a82"
+  change_type: "chore"
+  scope: "scratchpad"
+  summary: "Update PR #42 default continuous scratchpad behavior onto current stable."
+  decision: "Merge current stable into the PR branch and resolve the app-server protocol conflict by keeping stable's split v2 protocol modules while porting the PR's `continuous_enabled` scratchpad notification field into `protocol/v2/turn.rs`, then regenerate affected schemas."
+  constraints:
+    - "Must preserve built-in scratchpad thread-id ownership and cross-thread redaction checks."
+    - "Must preserve fork-only `/continuous` behavior and configurable default_continuous policy."
+    - "Must keep app-server protocol and config schemas generated from the resolved Rust APIs."
+    - "Must not resurrect the deleted monolithic `app-server-protocol/src/protocol/v2.rs` file."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server-protocol/src/protocol/v2/turn.rs"
+    - "codex-rs/app-server-protocol/schema"
+    - "codex-rs/core/src/tools/handlers/builtin_scratchpad.rs"
+    - "codex-rs/core/src/session"
+    - "codex-rs/tui/src/history_cell.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
