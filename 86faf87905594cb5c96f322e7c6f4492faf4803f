@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-05-08/stable-rust-v0.129.0#86faf8790559"
+  change_type: "chore"
+  scope: "stable-release"
+  summary: "Merge upstream rust-v0.129.0 into the fork stable branch."
+  decision: "Use a stable-based merge of the upstream rust-v0.129.0 release tag and resolve conflicts by preserving fork-only account, orchestrator, scratchpad, scheduler, session overwatch, MCP visibility, and app-server additions while adopting upstream release structure and generated artifacts."
+  constraints:
+    - "Must preserve fork-only runtime features and slash commands."
+    - "Must keep generated config and app-server schemas in sync with resolved Rust APIs."
+    - "Must keep state migration numbering non-conflicting after upstream additions."
+    - "Must not touch sandbox network environment variable behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core"
+    - "codex-rs/tui"
+    - "codex-rs/app-server"
+    - "codex-rs/app-server-protocol"
+    - "codex-rs/thread-store"
+    - "codex-rs/protocol"
+    - "codex-rs/state/migrations"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
