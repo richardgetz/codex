@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-open-failure-cleanup#6f5e964ae"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Clean up owned browser launch resources when agent_browser.open fails after attach."
+  decision: "Route WebSocket connect, page initialization, and initial navigation failures through cleanup_launch so attached sessions that created an about:blank page close it even when open fails before a session is registered."
+  constraints:
+    - "Keep process cleanup for launched browsers unchanged."
+    - "Close only page targets Codex created while attaching; do not close preexisting attached pages."
+    - "Keep cleanup best-effort so the original open error is preserved."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_open"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::cleanup_launch"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

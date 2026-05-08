@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-05-04/obscura-source-build#77de6e9a8"
+  change_type: "build"
+  scope: "agent-browser"
+  summary: "Build patched Obscura from a local source checkout during native dependency staging."
+  decision: "Add --obscura-source-dir so Codex can apply the tracked Obscura runtime patch, build a host-compatible Obscura binary in isolated temporary Cargo directories, and install it into the existing vendor browser layout."
+  constraints:
+    - "Must keep Obscura source out of the Codex tree and vendor only the resulting browser binary."
+    - "Must avoid staging a source-built binary under a mismatched target triple."
+    - "Must not depend on the caller's local Cargo cache for source-build staging."
+  intent_priority: "should"
+  code_locations:
+    - "codex-cli/scripts/install_native_deps.py::build_and_install_local_obscura_from_source"
+    - "codex-cli/scripts/install_native_deps.py::apply_obscura_patch_if_needed"
+    - "codex-cli/scripts/README.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"

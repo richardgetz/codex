@@ -1,0 +1,1 @@
+Intent: prevent long-running sessions from losing non-lazy MCPs in model-visible inventory by deriving direct MCP server inventory from configured/started manager state instead of only successful tool listings; add red/green regression and lazy/direct scrub tests.

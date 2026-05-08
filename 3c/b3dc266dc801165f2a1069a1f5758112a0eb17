@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-owned-page-cleanup#3cb3dc266"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Close page targets that Codex creates while attaching to CDP endpoints."
+  decision: "Track the close URL for about:blank targets created by the attach fallback and close only those owned targets during agent_browser.close so attached sessions do not leak tabs."
+  constraints:
+    - "Do not close preexisting user/browser page targets when attaching."
+    - "Keep launched-browser cleanup process-based, since killing the child process already removes its targets."
+    - "Preserve explicit websocket attach behavior without assuming ownership of the target."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::BrowserSession"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_close"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::PageTarget"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::create_page"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

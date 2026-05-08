@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-04-14/source-build-version#dc89a5d87"
+  change_type: "fix"
+  scope: "version"
+  summary: "Make source builds display the current synced release line with an optional local suffix."
+  decision: "Introduce a small build-info crate that derives source-build display versions from an explicit override or the installed codex/codex-agent version, then append a local suffix like -rick without affecting update comparisons."
+  constraints:
+    - "Release builds must keep using the published package version."
+    - "Source-build suffixes must not break numeric version parsing for update checks."
+    - "Tests must stay deterministic and not depend on machine-local installed versions."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/build-info/build.rs::main"
+    - "codex-rs/build-info/src/lib.rs"
+    - "codex-rs/cli/src/main.rs::MultitoolCli"
+    - "codex-rs/tui/src/version.rs::CODEX_CLI_VERSION"
+    - "codex-rs/tui/src/updates.rs::parse_version"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

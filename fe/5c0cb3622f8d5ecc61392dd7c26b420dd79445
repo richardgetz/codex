@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-fractional-latency#fe5c0cb36"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Report browser latency timings with fractional milliseconds."
+  decision: "Replace integer millisecond timing fields with rounded f64 millisecond values so fast snapshot and screenshot benchmark steps do not collapse to 0ms."
+  constraints:
+    - "Keep existing timing field names ending in _ms."
+    - "Keep benchmark output compact by rounding to two decimal places."
+    - "Preserve existing tool behavior apart from more precise elapsed timing values."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::elapsed_ms"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::BenchmarkResult"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::average_ms"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

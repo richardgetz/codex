@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-04-25/scratchpad-resume#e54190b4f"
+  change_type: "feat"
+  scope: "orchestrator"
+  summary: "Add a built-in scratchpad resume tool for recovery parity."
+  decision: "Implement resume_scratchpad as a strict non-creating reopen by scratchpad_id, returning the full scratchpad and summary while requiring include_archived=true to inspect archived pads."
+  constraints:
+    - "Must not create a replacement scratchpad when resume is requested."
+    - "Must keep archived scratchpads protected by default."
+    - "Must remain additive to the built-in scratchpad fallback and not modify the scratchpad MCP implementation."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::resume_scratchpad"
+    - "codex-rs/core/src/tools/spec.rs::build_specs_with_discoverable_tools"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+    - "docs/fork-differences.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"

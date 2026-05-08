@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-04-23/stable-rust-v0.123.0-refresh#95629dec0dd3"
+  change_type: "chore"
+  scope: "stable"
+  summary: "Finish replaying the fork stable branch onto upstream rust-v0.123.0."
+  decision: "Preserve fork-only collaboration, MCP, and thread-control behavior while adapting conflict resolutions to the upstream 0.123.0 release shape."
+  constraints:
+    - "Must keep fork-added continuous and orchestrator collaboration behavior intact."
+    - "Must keep generated schemas, lockfile package versions, and TUI snapshots aligned with the 0.123.0 release."
+    - "Must avoid importing unrelated fork main changes beyond the intentional stable commit replay."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session/mod.rs"
+    - "codex-rs/core/src/session/turn_context.rs"
+    - "codex-rs/core/src/tools/handlers/multi_agents_tests.rs"
+    - "codex-rs/core/src/tools/handlers/tool_search.rs"
+    - "codex-rs/codex-mcp/src/mcp/mod.rs"
+    - "codex-rs/app-server-protocol/schema/typescript/ClientRequest.ts"
+    - "codex-rs/Cargo.lock"
+    - "codex-rs/tui/src/status/snapshots"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

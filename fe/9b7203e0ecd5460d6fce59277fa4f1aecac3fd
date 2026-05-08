@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-04-23/stable-pr-mergeability#fe9b7203e0ec"
+  change_type: "chore"
+  scope: "stable"
+  summary: "Record origin/stable as an ancestor without changing the tested rust-v0.123.0 refresh tree."
+  decision: "Use an ours-strategy merge so GitHub can merge the refresh PR while preserving the already replayed release tree instead of reapplying stale stable-history conflicts."
+  constraints:
+    - "Must not alter the tested 0.123.0 refresh tree."
+    - "Must make origin/stable an ancestor of the PR branch for GitHub mergeability."
+    - "Must avoid reintroducing stale pre-refresh stable files during conflict resolution."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs"
+    - "MODULE.bazel.lock"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

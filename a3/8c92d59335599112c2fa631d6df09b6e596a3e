@@ -1,0 +1,1 @@
+Audit/fix after bad stable refresh merge. Restore fork-owned FeatureOwner API and user-facing experimental owner labeling across features/TUI/app-server, and re-sync the stale app-server allowlist expectation for enable_mcp_approvals so the merged stable branch keeps prior fork behavior while retaining the 0.124.0 refresh.

@@ -1,0 +1,20 @@
+intent:
+  id: intent/2026-05-02/scratchpad-thread-id-squatting#b14a24d8fadf
+  change_type: fix
+  scope: scratchpad
+  summary: Prevent explicit scratchpad ids from reserving another thread's default id.
+  decision: Reject open_scratchpad calls that pass an explicit scratchpad_id which parses as a ThreadId and differs from the current runtime thread id, so a child spawned by one session cannot create or open a scratchpad as another session's default thread id.
+  constraints:
+    - A thread must not create a new scratchpad file named after another thread id before that other thread creates its default pad.
+    - A child launched by Session A must not become or reserve Session B's scratchpad, even when Session B is idle.
+    - Existing Session B scratchpads must remain reopenable by Session B and unchanged after a rejected Session A child attempt.
+    - Ordinary non-UUID custom scratchpad ids remain allowed; UUID-shaped custom ids are reserved for real thread ids.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::open_scratchpad
+    - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::open_scratchpad_rejects_explicit_other_thread_id_before_creation
+    - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::open_scratchpad_cannot_launch_child_as_existing_session_owner
+  requested_by: '@richardgetz'
+  recorded_by:
+    agent: codex-cli
+    model: gpt-5

@@ -1,0 +1,18 @@
+id: d65099974-orchestrator-spark-fallback
+intent: Prevent unsupported gpt-5.3-codex-spark usage from leaking into orchestrator helper paths for ChatGPT accounts, and prevent spawned subagents from recursively spawning more subagents.
+change_type: fix
+scope: codex-rs/core orchestrator memory, remote compact, multi-agent spawn, agent_jobs
+summary: Adds ChatGPT-account fallback from gpt-5.3-codex-spark to gpt-5.4-mini for memory agents, spawned subagents, and remote compact; adds shared recursive subagent spawn rejection for direct spawn and agent_jobs paths.
+decision: Use existing DEFAULT_ORCHESTRATOR_FALLBACK_MODEL instead of introducing a new config key, and block recursive subagent spawning at handler entry points.
+constraints: Keep fallback narrowly scoped to ChatGPT auth plus the default orchestrator Spark model; do not affect explicit non-Spark models.
+intent_priority: high
+code_locations:
+  - codex-rs/core/src/orchestrator_memory/model.rs
+  - codex-rs/core/src/orchestrator_memory/classifier.rs
+  - codex-rs/core/src/compact_remote.rs
+  - codex-rs/core/src/tools/handlers/multi_agents_common.rs
+  - codex-rs/core/src/tools/handlers/agent_jobs.rs
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: GPT-5.5

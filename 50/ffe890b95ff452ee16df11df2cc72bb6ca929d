@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-04-16/router-model-override#50ffe890b"
+  change_type: "feat"
+  scope: "app-server"
+  summary: "Add config-driven router model overrides for thread control wake-ups."
+  decision: "Expose `[thread_control.router].model` in config, carry it through app-server protocol/config reads, and apply it on router wake-up turns while preserving the current collaboration mode and reasoning settings."
+  constraints:
+    - "Keep the override scoped to router-mode wake-ups on the existing loaded thread control runtime."
+    - "Preserve the thread's collaboration mode semantics instead of resetting router wake-ups to default mode."
+    - "Re-arm router polling after transient wake-up submit failures so supervision does not silently stop."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/app-server/src/thread_control_runtime.rs::build_router_tick_turn"
+    - "codex-rs/core/src/codex_thread.rs::collaboration_mode"
+    - "codex-rs/config/src/types.rs::ThreadControlConfig"
+    - "codex-rs/app-server-protocol/src/protocol/v2.rs::ThreadControlConfig"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

@@ -1,0 +1,25 @@
+intent:
+  id: "intent/2026-04-22/rustls-webpki-advisory#04c4405b78b9"
+  change_type: "fix"
+  scope: "deps"
+  summary: "Update rustls-webpki to clear the cargo-deny advisory raised on the stable refresh PR."
+  decision: "Refresh Cargo and Bazel locks from rustls-webpki 0.103.12 to 0.103.13, the patched version range recommended by the advisory output."
+  constraints:
+    - "Must keep the PR mergeable and avoid unrelated dependency churn."
+    - "Must update MODULE.bazel.lock alongside Cargo.lock for Rust dependency drift."
+    - "Must preserve the broader rust-v0.122.0 refresh and Rick-specific guard tests."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/Cargo.lock"
+    - "MODULE.bazel.lock"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.4"
+  tests:
+    - "cargo test -p codex-client -- --test-threads=1"
+    - "bazel mod deps --lockfile_mode=error with sandbox-writable cache dirs"
+    - "git diff --check"
+  risks:
+    - "Local cargo-deny was unavailable; CI must re-run cargo-deny on the pushed branch."
+    - "The repo just bazel-lock-check wrapper is blocked by sandbox denial creating ~/Library/Caches/bazel, so the equivalent direct Bazel lock check was used."

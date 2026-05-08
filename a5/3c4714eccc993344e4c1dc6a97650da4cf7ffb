@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-04-23/fork-release-notes#a53c4714ecc"
+  change_type: "ci"
+  scope: "fork-release"
+  summary: "Show fork release notes on GitHub releases with fork and mainline sections."
+  decision: "Generate a markdown release body from first-parent history since the previous fork tag, classify stable-refresh merges as mainline Codex updates, and pass the file to the GitHub release action."
+  constraints:
+    - "Must preserve the existing arm64-only fork release lane and npm publish behavior."
+    - "Must keep generated notes readable without duplicating the full upstream changelog."
+    - "Must link to upstream Codex release notes for the included base version."
+  intent_priority: "must"
+  code_locations:
+    - ".github/workflows/fork-release.yml"
+    - "scripts/generate_fork_release_notes.py"
+    - "docs/fork-release.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.4"

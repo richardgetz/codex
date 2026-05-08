@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-04-21/router-wake-security-docs#e0f8996e2"
+  change_type: "docs"
+  scope: "app-server"
+  summary: "Warn MCP authors that router wake callbacks must be trusted and authenticated."
+  decision: "Document router wake channels as a security-sensitive callback surface and require trusted MCPs, approved channels, sender verification, channel rejection, event dedupe, and untrusted-input handling."
+  constraints:
+    - "Must keep the warning operational rather than adding informal legal warranty language."
+    - "Must make clear that wake events can resume agents, send content to the model, spend tokens, or trigger tools."
+    - "Must not imply the push callback endpoint is implemented in this PR."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server/README.md::Router wake channel integration shape"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.4"
+  tests:
+    - "Documentation-only change; no tests run."

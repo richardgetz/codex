@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-05-03/agent-browser#8926154b4"
+  change_type: "feat"
+  scope: "agent-browser"
+  summary: "Add an experimental built-in browser tool namespace for Codex agents."
+  decision: "Implement a small first-party CDP-backed browser handler behind the existing experimental supported-tools gate, with headful/headless launch, attach support, stealth defaults, snapshots, screenshots, input actions, selection overlay capture, and a benchmark hook."
+  constraints:
+    - "Must not expose the browser tools unless experimental supported tools includes agent_browser."
+    - "Must keep browser process/profile lifetime isolated per session and clean up launched processes on close or startup failure."
+    - "Must keep the stealth profile explicit and local rather than depending on a large bundled browser fork."
+    - "Must preserve model-visible registry/runtime coverage for the new tool namespace."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tools/src/agent_browser_tool.rs"
+    - "codex-rs/tools/src/tool_registry_plan.rs"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs"
+    - "codex-rs/core/src/tools/spec.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

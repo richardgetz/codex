@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-04-30/mcp-inventory-coverage#f69faa4d6ccb"
+  change_type: "fix"
+  scope: "mcp"
+  summary: "Avoid duplicate direct/lazy MCP inventory and add regression coverage for MCP inventory recovery paths."
+  decision: "Keep direct MCP inventory authoritative when the same server also appears in lazy inventory, and cover active refresh, compaction-style context reinjection, unavailable-tool placeholders, app connector filtering, and eager/lazy inventory transitions with targeted tests."
+  constraints:
+    - "Must preserve eager non-lazy MCP servers in model-visible inventory even when tool listing is unavailable."
+    - "Must keep unstarted lazy servers surfaced only as lazy inventory until they are requested."
+    - "Must not treat app connector filters as direct MCP server inventory filters."
+    - "Must preserve hidden scratchpad and compaction recovery behavior covered by prior intent notes."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/context/available_mcp_instructions.rs::AvailableMcpInstructions::new"
+    - "codex-rs/core/src/session/tests.rs"
+    - "codex-rs/core/src/enablement.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

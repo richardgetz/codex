@@ -1,0 +1,27 @@
+id: 2026-04-14-thread-control-contracts
+intent: Add authoritative thread control contracts for hard continuous-run and router-mode supervision.
+summary: Introduce sqlite-backed thread control contracts with app-server read/set/release APIs and core/app-server enforcement for continuous and router modes.
+change_type: feature
+scope: codex-rs app-server protocol, app-server runtime, core session control, sqlite state persistence
+decision: Persist thread control contracts in sqlite, expose app-server read/set/release RPCs, cache active control on loaded threads for hard continuous-run gating, and keep router wake scheduling alive across thread lifecycle while limiting router mode to loaded threads.
+constraints:
+  - Keep the router implementation scoped to loaded threads instead of inventing stored-thread wake/load orchestration.
+  - Make thread/control/read reflect active contracts only even though released records remain persisted for auditability.
+  - Revalidate router wake-ups against the full active control record before submitting a synthetic wake turn.
+intent_priority: high
+code_locations:
+  - codex-rs/app-server-protocol/src/protocol/common.rs
+  - codex-rs/app-server-protocol/src/protocol/v2.rs
+  - codex-rs/app-server/src/codex_message_processor.rs
+  - codex-rs/app-server/src/thread_control_runtime.rs
+  - codex-rs/app-server/src/thread_state.rs
+  - codex-rs/core/src/codex.rs
+  - codex-rs/core/src/codex_thread.rs
+  - codex-rs/core/src/state/session.rs
+  - codex-rs/state/src/model/thread_control.rs
+  - codex-rs/state/src/runtime/thread_control.rs
+  - codex-rs/state/migrations/0025_thread_controls.sql
+requested_by: Rick
+recorded_by: Codex
+agent: codex
+model: gpt-5

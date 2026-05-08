@@ -1,0 +1,26 @@
+intent:
+  id: "intent/2026-05-03/bundled-obscura-discovery#398e1073e"
+  change_type: "feat"
+  scope: "agent-browser"
+  summary: "Allow Codex app distributions to bundle Obscura without vendoring it into codex-core."
+  decision: "Search CODEX_AGENT_BROWSER_OBSCURA_BINARY, an `obscura` sibling next to the Codex executable, and macOS app Resources before falling back to PATH."
+  constraints:
+    - "Must keep CODEX_AGENT_BROWSER_OBSCURA_BINARY as the highest-priority override."
+    - "Must keep Obscura external to the Codex Rust crate graph to avoid pulling V8/Deno into codex-core."
+    - "Must preserve backend=chromium fallback when Obscura is unavailable."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::find_obscura_binary"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::obscura_binary_candidates_for_exe"
+    - "docs/fork-differences.md::Agent browser"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo test -p codex-core agent_browser -- --nocapture"
+    - "cargo test -p codex-tools agent_browser"
+    - "cargo check -p codex-core -p codex-tools -p codex-features"
+    - "cargo clippy -p codex-core -p codex-tools -p codex-features --lib --tests -- -A clippy::large_enum_variant -D warnings"
+    - "CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 CODEX_AGENT_BROWSER_OBSCURA_BINARY=/private/tmp/codex-obscura-target/debug/obscura cargo test -p codex-core tools::handlers::agent_browser::tests::obscura_backend_renders_dom_screenshot -- --ignored --exact --nocapture"
+    - "CODEX_AGENT_BROWSER_RUN_CHROME_TESTS=1 CODEX_AGENT_BROWSER_REMOTE_DEBUGGING_URL=http://127.0.0.1:9349 CODEX_AGENT_BROWSER_BENCHMARK_ITERATIONS=5 CODEX_AGENT_BROWSER_BENCHMARK_OUTPUT=/private/tmp/codex-agent-browser-benchmark.json cargo test -p codex-core tools::handlers::agent_browser::tests::headless_benchmark_launches_browser -- --ignored --exact --nocapture"

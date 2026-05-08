@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-04-17/fork-ci-gating#04ab0077d5d9"
+  change_type: "ci"
+  scope: "fork"
+  summary: "Skip Bazel-heavy and unsupported CI workflows on the fork to avoid failing checks and oversized runner costs."
+  decision: "Gate Bazel, sdk, ci, and Bazel-backed argument-comment-lint jobs so they run only in the upstream openai/codex repo, while leaving the fork's cargo-side and fork-release workflows intact."
+  constraints:
+    - "Must stop the failing fork PR checks tied to Bazel and unavailable runner infra."
+    - "Must avoid using macos-15-xlarge on the active fork PR path."
+    - "Must keep the fork release workflow unaffected."
+  intent_priority: "must"
+  code_locations:
+    - ".github/workflows/bazel.yml"
+    - ".github/workflows/ci.yml"
+    - ".github/workflows/sdk.yml"
+    - ".github/workflows/rust-ci.yml"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

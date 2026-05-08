@@ -1,0 +1,23 @@
+intent: satisfy argument comment lint for scratchpad continuous policy defaulting
+intent_priority: must
+agent: codex-cli
+model: gpt-5
+id: 18408b97-scratchpad-argument-comment-lint
+change_type: fix
+scope: scratchpad
+summary: Add the required argument-comment marker for the continuous policy enabled literal.
+requested_by: "@richardgetz"
+recorded_by: codex-cli gpt-5
+commit: 18408b97fb8e45edf45f8af74bc7dca95968378d
+decision: Follow CI's argument-comment-lint guidance by changing the default continuous policy call to set_continuous_policy_fields(&mut scratchpad, /*enabled*/ true).
+constraints:
+  - Keep behavior unchanged; this is a lint-only fix.
+  - Preserve the existing explicit continuous policy override behavior.
+  - Leave unrelated untracked .playwright-mcp files untouched.
+code_locations:
+  - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs
+tests:
+  - just fmt
+  - cargo test -p codex-core open_can_default_new_thread_scratchpads_to_continuous
+  - git diff --check
+  - just argument-comment-lint attempted but could not run locally because bazel is not installed

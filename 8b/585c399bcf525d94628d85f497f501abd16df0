@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-05-02/scratchpad-thread-id-runtime#8b585c399bcf"
+  change_type: "feat"
+  scope: "scratchpad"
+  summary: "Bind active scratchpad runtime operations to the real thread id."
+  decision: "Model-visible scratchpad tools must only create, resume, read, mutate, archive, export, and loop back the current real thread-id scratchpad. Custom scratchpad ids remain usable only as source references for explicit user actions such as /scratchpad-absorb, which copies context into the current pad without rehoming ownership or live control policy."
+  constraints:
+    - "Must not allow a model or subagent to choose a custom active scratchpad id at runtime."
+    - "Must not let a different thread read, mutate, archive, export, or loop back another thread's scratchpad."
+    - "Must preserve same-owner archived scratchpad readability/editability while keeping archived pads excluded from automatic loopback."
+    - "Must keep absorb as a contextual snapshot that excludes live control fields such as run_policy, action_policy, and communication_policy."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::ensure_current_thread_scratchpad_id"
+    - "codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::absorb_thread_scratchpad_context"
+    - "codex-rs/core/src/session/tests.rs::builtin_scratchpad_handler_rejects_custom_active_id_with_state_home"
+    - "codex-rs/tui/src/chatwidget/slash_dispatch.rs::dispatch_scratchpad_absorb_command"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

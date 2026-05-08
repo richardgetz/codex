@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-04-23/orchestrator-startup-rounds#05b277233"
+  change_type: "fix"
+  scope: "session-startup"
+  summary: "Apply orchestrator entry defaults immediately while preserving later manual overrides, and reconcile MCP startup status per round."
+  decision: "Treat thread_control.orchestrator settings as entry-time defaults, release orchestrator control on active-turn interrupts, and use McpStartupComplete as a reconciliation safety net without duplicating status updates across rounds."
+  constraints:
+    - "Must keep manual model and reasoning changes after orchestrator mode is already active."
+    - "Must allow Esc to stop an active orchestrator turn without misreporting startup progress."
+    - "Must preserve repeated lazy MCP startup rounds even when the terminal status repeats."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session/mod.rs::apply_orchestrator_mode_overrides"
+    - "codex-rs/core/src/session/turn_context.rs::new_turn_with_sub_id"
+    - "codex-rs/app-server/src/bespoke_event_handling.rs"
+    - "codex-rs/app-server/src/thread_state.rs"
+    - "codex-rs/app-server/src/thread_control_runtime.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "unknown"

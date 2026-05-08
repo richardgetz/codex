@@ -1,0 +1,17 @@
+intent:
+  id: intent/2026-05-02/scratchpad-shared-key-isolation-proof#217bc7f2d2fa
+  change_type: test
+  scope: scratchpad
+  summary: Add exact regression for two unaware threads using the same scratchpad objective and session_key.
+  decision: Cover the live canary failure shape by opening two thread-default scratchpads with identical objective and session_key, writing separate canary notes, and asserting each thread gets its own scratchpad with no note crossover.
+  constraints:
+    - The test must model the real two-agent canary probe that reused one scratchpad in the installed app runtime.
+    - The proof should not depend on model behavior or filesystem inspection.
+    - Keep thread-default scratchpad ids as the isolation boundary.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::unaware_threads_with_same_objective_and_session_key_get_isolated_pads
+  requested_by: '@richardgetz'
+  recorded_by:
+    agent: codex-cli
+    model: gpt-5

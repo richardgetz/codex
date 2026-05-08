@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-04-23/mcp-startup-cancel-retry#1f8595f34"
+  change_type: "fix"
+  scope: "mcp"
+  summary: "Retry MCP startup after a cancellation instead of memoizing the cancelled future."
+  decision: "Wrap startup futures in retryable state and clear the current startup future only when startup ends with `Cancelled`, preserving the same red/green proof test across the fix."
+  constraints:
+    - "Must keep the new regression test semantically unchanged across the fix."
+    - "Must not broaden retry behavior to non-cancelled startup failures in this patch."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/codex-mcp/src/mcp_connection_manager.rs::AsyncManagedClient::client"
+    - "codex-rs/codex-mcp/src/mcp_connection_manager_tests.rs::startup_started_client_retries_after_cancelled_startup"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "unknown"

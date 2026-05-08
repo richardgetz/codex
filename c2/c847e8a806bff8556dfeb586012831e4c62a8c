@@ -1,0 +1,1 @@
+Extend the tracked Obscura runtime patch artifact so the Rust browser can carry real CSS and imagery into the Codex mirror: expose style/image collections, inject linked CSS into the DOM, inline bounded image assets as data URLs, and document the local patched binary path while a durable release asset is pending.

@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-04-28/fast-session-resume#47594bd7bb97"
+  change_type: "feat"
+  scope: "resume"
+  summary: "Speed up large Codex session resume without sidecar files."
+  decision: "Add configurable latest-compaction resume loading over the existing rollout JSONL format, trim visible app-server history when lazy hydration is enabled, and inject active built-in scratchpad context for the resumed thread."
+  constraints:
+    - "Must not require sidecar cache files or change mainline-compatible rollout storage semantics."
+    - "Must keep defaults configurable and bounded with a 60 second resume load timeout."
+    - "Must preserve full resume fallback when no safe compaction anchor exists or lazy hydration is disabled."
+    - "Must keep public tests and docs free of private user data."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/rollout/src/recorder.rs::RolloutRecorder::get_rollout_history_with_options"
+    - "codex-rs/core/src/config/mod.rs::Config::resume_load_options"
+    - "codex-rs/core/src/session/mod.rs::Session::build_active_scratchpad_context"
+    - "codex-rs/app-server/src/codex_message_processor.rs::visible_rollout_items"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"

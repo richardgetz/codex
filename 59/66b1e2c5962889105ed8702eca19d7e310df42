@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-04-16/router-hardening-post-review"
+  change_type: "fix"
+  scope: "app-server/core/state"
+  summary: "Harden router wake cancellation and persistence handling after review feedback."
+  decision: "Replace router wake one-shot tracking with cancellation tokens, stop clearing current wake state from stale timers, keep continuous-mode in-memory control aligned with persistence failures, make thread-control release retries idempotent, and avoid pinning unloaded threads on control-read errors."
+  constraints:
+    - "Router wake teardown must cancel any in-flight timer when thread state is cleared or replaced."
+    - "Continuous-mode sync must not mutate in-memory active control if sqlite upsert or release fails."
+    - "Retrying release_thread_control must preserve the original released_at timestamp instead of rewriting audit state."
+    - "Thread unload retention should only keep router-controlled threads loaded when a live router contract is actually present."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server/src/thread_control_runtime.rs"
+    - "codex-rs/app-server/src/thread_state.rs"
+    - "codex-rs/app-server/src/codex_message_processor/thread_control_api.rs"
+    - "codex-rs/core/src/codex.rs"
+    - "codex-rs/state/src/runtime/thread_control.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

@@ -1,0 +1,3 @@
+Intent: make the built-in Obscura browser packaging path repo-native without vendoring Obscura source or requiring Codex to build Obscura locally. install_native_deps.py can now fetch pinned upstream Obscura release assets into vendor/<target>/browser, where existing npm/standalone packaging preserves them as codex-resources/obscura.
+
+Validation: Python 3.13 py_compile for install_native_deps.py and build_npm_package.py; install_native_deps.py --help exposes the obscura component; real smoke fetch for --component obscura --target aarch64-apple-darwin installed a Mach-O arm64 obscura binary under /private/tmp/codex-obscura-vendor-smoke-2/vendor; git diff --check.

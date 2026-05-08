@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-04-22/orchestrator-child-mode#a1085f82a839"
+  change_type: "feat"
+  scope: "orchestrator"
+  summary: "Allow Orchestrator and other agents to choose child collaboration modes through spawn_agent."
+  decision: "Add a collaboration_mode argument to spawn_agent, initialize selected child modes during thread spawn, and preserve fork inheritance through live parent state or persisted rollout TurnContext metadata while keeping explicit child/fork model overrides intact."
+  constraints:
+    - "Full-history spawn_agent forks must continue rejecting explicit child agent_type/model/reasoning/collaboration_mode overrides."
+    - "Partial forks and generic thread forks must preserve caller-provided model and reasoning config while inheriting collaboration mode semantics when available."
+    - "The first child turn and SessionConfigured metadata should see the selected collaboration mode without relying on a queued OverrideTurnContext."
+    - "Docs must describe callback/task-graph work as next steps, not as implemented transport."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tools/src/agent_tool.rs::spawn_agent_collaboration_mode_schema"
+    - "codex-rs/core/src/tools/handlers/multi_agents_common.rs::requested_spawn_agent_collaboration_mode"
+    - "codex-rs/core/src/agent/control.rs::spawn_agent_internal"
+    - "codex-rs/core/src/session/mod.rs::CodexSpawnArgs"
+    - "codex-rs/core/src/thread_manager.rs::latest_collaboration_mode_from_rollout_items"
+    - "codex-rs/collaboration-mode-templates/templates/orchestrator.md"
+    - "codex-rs/app-server/README.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

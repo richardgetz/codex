@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-attach-doc#46a3faf17"
+  change_type: "docs"
+  scope: "agent-browser"
+  summary: "Document that CDP attach creates a missing page target."
+  decision: "Add the attach fallback to fork-differences because it changes visible behavior for users attaching to an existing browser endpoint."
+  constraints:
+    - "Keep documentation brief and within the existing agent browser section."
+    - "Avoid expanding the implementation details beyond the behavior users need to know."
+  intent_priority: "should"
+  code_locations:
+    - "docs/fork-differences.md::Agent browser"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

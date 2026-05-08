@@ -1,0 +1,1 @@
+Why: the fork-stable-release skill was stale and treated stable as a tiny build-info-only fork, which allowed the 0.124.0 refresh to miss real fork-contract surfaces. What: update the skill to require a maintained fork-contract inventory, parity audit, proof-oriented verification, and explicit guidance to keep the skill current whenever the fork layer changes.

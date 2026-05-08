@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-clamp-viewport#07c7adb4e"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Clamp agent browser viewport dimensions to sane browser-sized bounds."
+  decision: "Bound requested viewport width and height before launching or attaching the browser session so accidental or model-provided extreme dimensions cannot create oversized emulation state or unstable screenshots."
+  constraints:
+    - "Preserve the existing default viewport dimensions."
+    - "Keep ordinary desktop and high-resolution review sizes available."
+    - "Do not change headful, headless, attach, or stealth profile behavior."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_open"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

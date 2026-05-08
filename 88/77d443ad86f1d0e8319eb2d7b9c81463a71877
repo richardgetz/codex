@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-04-20/fork-release-explicit-npm-tags#8877d443a"
+  change_type: "fix"
+  scope: "fork-release"
+  summary: "Make prerelease-form fork versions publishable to npm by assigning explicit dist-tags."
+  decision: "Publish the root @rickgetz/codex tarball with --tag latest so untagged installs keep working, while keeping the Apple Silicon payload package on its darwin-arm64 tag."
+  constraints:
+    - "Must keep the fork release lane arm64-only."
+    - "Must preserve the existing artifact upload fix, fetch hardening, build heartbeat logging, DotSlash install, and publish hardening in fork-release."
+    - "Must keep `npm install -g @rickgetz/codex` working without requiring users to specify a dist-tag."
+  intent_priority: "must"
+  code_locations:
+    - ".github/workflows/fork-release.yml"
+    - "docs/fork-release.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

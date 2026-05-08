@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-highlight-tool-summary#fea15eba9"
+  change_type: "docs"
+  scope: "agent-browser"
+  summary: "Mention collaborative highlights in the agent_browser namespace summary."
+  decision: "Update the model-visible namespace description to include highlights so tool discovery matches the new collaborative overlay capability."
+  constraints:
+    - "Keep the description concise."
+    - "Do not change tool schemas or runtime behavior."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tools/src/agent_browser_tool.rs::create_agent_browser_tool"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

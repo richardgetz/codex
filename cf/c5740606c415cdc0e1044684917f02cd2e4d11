@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-04-18/fork-release-artifact-upload-fix#cfc574060"
+  change_type: "fix"
+  scope: "fork-release"
+  summary: "Make the release job able to download the staged arm64 build artifacts from the build job."
+  decision: "Upload artifacts from the repo-root dist directory where the build job stages them instead of the nonexistent codex-rs/dist path."
+  constraints:
+    - "Must keep the fork release lane arm64-only."
+    - "Must preserve the existing fetch hardening and build heartbeat logging in fork-release."
+    - "Must not change the npm package target or release versioning behavior."
+  intent_priority: "must"
+  code_locations:
+    - ".github/workflows/fork-release.yml"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

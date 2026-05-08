@@ -1,0 +1,16 @@
+id: 2026-04-14-router-wake-submit-revalidation
+intent: Close the remaining router wake-up race between control release and synthetic wake submission.
+summary: Add a final active-control check immediately before router wake submission so released or changed contracts are dropped even if they pass the earlier timer revalidation.
+change_type: fix
+scope: codex-rs app-server router wake scheduling
+decision: Re-check the full active control record immediately before `conversation.submit(...)` and drop the wake if the control was released or changed after the earlier timer validation step.
+constraints:
+  - Keep the fix narrowly scoped to router wake submission rather than redesigning the wake path around a new serialization primitive.
+  - Preserve the existing active-control cache fallback behavior for transient sqlite read errors.
+intent_priority: high
+code_locations:
+  - codex-rs/app-server/src/thread_control_runtime.rs
+requested_by: Rick
+recorded_by: Codex
+agent: codex
+model: gpt-5

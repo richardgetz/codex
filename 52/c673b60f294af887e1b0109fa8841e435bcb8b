@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-highlight-cap#52c673b60"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Cap collaborative overlay highlights to bound page-side DOM growth."
+  decision: "Keep only the newest 40 agent_browser.highlight marks in the injected overlay so repeated issue marking during long review sessions cannot grow the overlay state and DOM without bound."
+  constraints:
+    - "Do not add API surface or change clear behavior."
+    - "Preserve newest highlights because they are most relevant during review."
+    - "Keep overlay injection lazy and page-local."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::overlay_script"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

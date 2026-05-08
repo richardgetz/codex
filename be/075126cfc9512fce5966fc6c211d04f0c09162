@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-04-28/session-overwatch-inbox#be075126c"
+  change_type: "feat"
+  scope: "orchestrator-session-overwatch"
+  summary: "Allow session_overwatch messages to cross local CLI process boundaries."
+  decision: "Store cross-process session messages in a durable thread inbox and have each live session mechanically poll its own inbox, injecting queued rows as normal user input without spending model turns when empty."
+  constraints:
+    - "Must allow separate Codex CLI processes to communicate through session_overwatch."
+    - "Must keep idle inbox checks model-less and avoid using subagents for message transport."
+    - "Must preserve immediate same-process delivery while making cross-process delivery explicit as queued durable inbox handoff."
+    - "Must not include sensitive user-specific data in tests or docs."
+  intent_priority: "must"
+  supersedes:
+    - "intent/2026-04-28/session-overwatch#d3b10dd74e71"
+  code_locations:
+    - "codex-rs/core/src/session/thread_inbound_messages.rs::start_thread_inbound_message_poller"
+    - "codex-rs/core/src/tools/handlers/session_overwatch.rs::handle_message"
+    - "codex-rs/state/src/runtime/thread_inbound_messages.rs"
+    - "codex-rs/state/migrations/0029_thread_inbound_messages.sql"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"

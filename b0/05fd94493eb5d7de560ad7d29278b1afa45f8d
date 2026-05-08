@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-04-25/orchestrator-recovery-defaults#b005fd944"
+  change_type: "feat"
+  scope: "orchestrator"
+  summary: "Make Rick's fork more self-recovering and easier to operate in Orchestrator mode."
+  decision: "Add model-less primary-contact polling, a built-in scratchpad fallback, post-compaction scratchpad recovery, patient supervision wording, fork-aware docs, and preserve session-scoped account alias behavior."
+  constraints:
+    - "Communication-facing work should remain in the orchestrator thread instead of being delegated by default."
+    - "Primary-contact polling must not wake the model unless a real user message is detected."
+    - "Scratchpad recovery must be additive and must not modify the local-agent-setup MCP implementation."
+    - "Public docs and tests must not include private links, private aliases, or personal email addresses."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/app/background_requests.rs::start_primary_contact_polling"
+    - "codex-rs/core/src/tools/handlers/builtin_scratchpad.rs"
+    - "codex-rs/tui/src/chatwidget.rs::submit_external_user_message"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+    - "docs/fork-differences.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"

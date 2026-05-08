@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-05-01/account-switch-rate-limits#f143c498bbd9"
+  change_type: "fix"
+  scope: "tui-account-rate-limits"
+  summary: "Invalidate cached rate-limit state when switching account aliases."
+  decision: "Clear status-line rate-limit state on live account alias changes, tag background rate-limit fetches with an account generation plus alias, and ignore stale or untagged rate-limit updates after a switch."
+  constraints:
+    - "Must not show rate limits from a previous account after /account changes the live alias."
+    - "Must reject in-flight refreshes even when the user switches away and back to the same alias before completion."
+    - "Must keep /status refresh handles finalized when stale results are dropped."
+    - "Must keep cargo-deny and cargo-audit advisory allowlists in sync for hickory-proto until rama can use a fixed hickory release."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/chatwidget.rs::ChatWidget::set_active_account_alias"
+    - "codex-rs/tui/src/chatwidget.rs::ChatWidget::rate_limit_refresh_matches_active_account"
+    - "codex-rs/tui/src/app/background_requests.rs::App::refresh_rate_limits"
+    - "codex-rs/tui/src/app/event_dispatch.rs::App::handle_event"
+    - "codex-rs/tui/src/app/app_server_adapter.rs::App::handle_server_notification_event"
+    - "codex-rs/deny.toml"
+    - "codex-rs/.cargo/audit.toml"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-04-29/orchestrator-gpt55-fallback#fe8768aaa2a9"
+  change_type: "feat"
+  scope: "orchestrator"
+  summary: "Prefer GPT-5.5 for orchestrator fallback and coding subagent guidance."
+  decision: "Change the ChatGPT-account fallback for the default Spark orchestrator model to gpt-5.5 at low reasoning, and update Orchestrator instructions to prefer gpt-5.5 for coding tasks while selecting reasoning effort by task complexity."
+  constraints:
+    - "Must keep the default orchestrator startup model as gpt-5.3-codex-spark low when available."
+    - "Must force the unsupported-model fallback retry and persisted collaboration settings to gpt-5.5 low."
+    - "Must keep xhigh reserved for extreme or explicitly requested tasks, with a user check before activation unless already instructed."
+    - "Must keep fork inventory and guardian prompt snapshots in sync with embedded guidance."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/config/mod.rs::DEFAULT_ORCHESTRATOR_FALLBACK_MODEL"
+    - "codex-rs/core/src/session/turn.rs::maybe_apply_orchestrator_model_fallback"
+    - "codex-rs/core/templates/agents/orchestrator.md"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

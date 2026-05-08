@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-ref-highlight-test#5c35b952d"
+  change_type: "test"
+  scope: "agent-browser"
+  summary: "Cover element-ref collaborative highlights in the Chrome-backed browser test."
+  decision: "Extend the ignored headless highlight regression to snapshot the benchmark page, mark a button by its stable element ref, mark a viewport rect, clear both highlights, and close the session."
+  constraints:
+    - "Keep the test behind CODEX_AGENT_BROWSER_RUN_CHROME_TESTS because it needs a local Chrome/Chromium CDP target."
+    - "Preserve the existing viewport-rect highlight coverage."
+    - "Continue closing the browser session before assertions."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::headless_highlight_marks_and_clears_rect"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

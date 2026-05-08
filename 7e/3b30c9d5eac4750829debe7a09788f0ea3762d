@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-04-27/subagent-completion-hooks#7e3b30c9d"
+  change_type: "fix"
+  scope: "orchestrator"
+  summary: "Wake parent agents when spawned subagents complete."
+  decision: "Mark spawned-agent terminal notifications as trigger-turn mailbox messages and include model-visible parent-handling guidance so orchestrator mode relays child results instead of treating them as inert watch state."
+  constraints:
+    - "Must keep communication ownership in the parent/orchestrator thread, not the child agent."
+    - "Must not wake the parent for memory extraction or consolidation agents."
+    - "Must keep completion notifications deduplicated through the existing ThreadSpawn lifecycle path."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session/mod.rs::maybe_notify_parent_of_terminal_turn"
+    - "codex-rs/core/src/agent/control.rs::maybe_start_completion_watcher"
+    - "codex-rs/core/src/context/subagent_notification.rs::SubagentNotification"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"

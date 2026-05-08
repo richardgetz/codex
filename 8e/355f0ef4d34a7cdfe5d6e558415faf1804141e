@@ -1,0 +1,40 @@
+intent:
+  id: "intent/2026-05-03/live-browser-share-sessions#8e355f0ef4d3"
+  change_type: "feat"
+  scope: "agent-browser"
+  summary: "Allow agents to share and attach to already-live browser sessions."
+  decision: "Add agent_browser.share plus share_id-based open support using local share metadata with read_only by default and optional read_write handoff access."
+  constraints:
+    - "Must let receiving agents snapshot and screenshot a live shared page without relaunching or rebrowsing."
+    - "Must keep read_only shares from navigating, clicking, typing, scrolling, pressing keys, or mutating overlays/highlights."
+    - "Must preserve Chromium, external-CDP, and Obscura backend behavior."
+    - "Must keep Obscura target attachment working through flattened CDP sessions."
+    - "Must expose screenshot payload-size metrics alongside benchmark latency."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_share"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::attach_shared_connection"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::ensure_write_access"
+    - "codex-rs/core/src/tools/handlers/agent_browser_cdp.rs::CdpClient"
+    - "codex-rs/core/src/tools/handlers/agent_browser_visual.rs::render_snapshot_png"
+    - "codex-rs/tools/src/agent_browser_tool.rs::share_schema"
+    - "docs/fork-differences.md::Agent browser"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo fmt --all"
+    - "cargo test -p codex-core agent_browser -- --nocapture"
+    - "cargo test -p codex-tools agent_browser"
+    - "cargo check -p codex-core -p codex-tools -p codex-features"
+    - "cargo clippy -p codex-core -p codex-tools -p codex-features --lib --tests -- -A clippy::large_enum_variant -D warnings"
+    - "CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 CODEX_AGENT_BROWSER_OBSCURA_BINARY=/private/tmp/codex-obscura-target/debug/obscura cargo test -p codex-core tools::handlers::agent_browser::tests::obscura_shared_browser_attaches_to_live_target -- --ignored --exact --nocapture"
+    - "CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 CODEX_AGENT_BROWSER_OBSCURA_BINARY=/private/tmp/codex-obscura-target/debug/obscura cargo test -p codex-core tools::handlers::agent_browser::tests::obscura_backend_renders_dom_screenshot -- --ignored --exact --nocapture"
+    - "CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 CODEX_AGENT_BROWSER_OBSCURA_BINARY=/private/tmp/codex-obscura-target/debug/obscura CODEX_AGENT_BROWSER_BENCHMARK_ITERATIONS=5 CODEX_AGENT_BROWSER_OBSCURA_BENCHMARK_OUTPUT=/private/tmp/codex-agent-browser-obscura-benchmark-final.json cargo test -p codex-core tools::handlers::agent_browser::tests::obscura_benchmark_launches_browser -- --ignored --exact --nocapture"
+    - "git diff --check"
+  known_environment_limits:
+    - "Chromium local-launch runtime tests were blocked in the current macOS sandbox by bootstrap_check_in MachPortRendezvous permission denial after the earlier attached-CDP share test had passed."
+  benchmark_results:
+    obscura: "launch 653.46ms; navigate 4.62ms; snapshot avg 1.60ms; screenshot avg 82.62ms; screenshot PNG avg 23730 bytes; base64 avg 31640 chars"
+    png_filter_tradeoff: "Sub filter kept screenshots around 23.7KB at about 82.6ms versus NoFilter around 1.7MB at about 136.7ms and Adaptive around 22KB at about 313ms"

@@ -1,0 +1,1 @@
+Updates the pending-input suite snapshots after accepting the new built-in scratchpad instructions and fork delta inventory text that are intentionally injected into developer context by this PR. Keeps the queueing/preemption proof snapshots aligned with the current prompt surface.

@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-page-ua-fallback#778491bfd"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Fallback to page-context navigator.userAgent when Browser.getVersion is unavailable."
+  decision: "Keep stealth user-agent normalization from failing attach or unusual CDP endpoints by falling back to Runtime.evaluate against navigator.userAgent."
+  constraints:
+    - "Keep Browser.getVersion as the first path when available."
+    - "Do not change explicit user_agent behavior."
+    - "Keep the fallback scoped to stealth initialization."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::browser_user_agent"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

@@ -1,0 +1,33 @@
+intent: default new scratchpads to configurable continuous mode
+intent_priority: must
+agent: codex-cli
+model: gpt-5
+id: e959cb7ce-scratchpad-default-continuous
+change_type: feat
+scope: scratchpad
+summary: Default new thread scratchpads to configurable continuous mode.
+requested_by: "@richardgetz"
+recorded_by: codex-cli gpt-5
+commit: e959cb7ce9d8b27a2f89d2d569e5a456864d41e9
+decision: Add [scratchpad].default_continuous and mode overrides defaulting on for execution-capable modes; seed new thread scratchpads with continuous policy unless an explicit run_policy.continuous.enabled is supplied; make continuous loopback require actionable next_steps only; surface continuous state in scratchpad update cards and app-server notifications.
+constraints:
+  - Preserve thread-id scratchpad ownership and same-thread mutation checks.
+  - Do not overwrite existing scratchpads or explicit continuous run policy values.
+  - Pending waits alone represent blocked work and must not keep continuous mode looping.
+  - Update generated config and app-server schemas, docs, and focused tests.
+code_locations:
+  - codex-rs/config/src/types.rs
+  - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs
+  - codex-rs/core/src/session/turn.rs
+  - codex-rs/core/src/session/mod.rs
+  - codex-rs/protocol/src/protocol.rs
+  - codex-rs/app-server-protocol/src/protocol/v2.rs
+  - codex-rs/tui/src/history_cell.rs
+  - docs/fork-differences.md
+tests:
+  - cargo test -p codex-core scratchpad
+  - cargo test -p codex-app-server-protocol
+  - cargo test -p codex-app-server test_handle_turn_scratchpad_update_emits_notification_for_v2
+  - cargo test -p codex-protocol
+  - cargo test -p codex-tui scratchpad_update
+  - cargo test -p codex-tui scratchpad_update_renders_history_cell

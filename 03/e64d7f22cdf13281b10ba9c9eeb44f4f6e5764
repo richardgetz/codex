@@ -1,0 +1,33 @@
+intent:
+  id: "intent/2026-04-22/lazy-mcp-startup-sharing#03e64d7f22cd"
+  change_type: "feat"
+  scope: "mcp"
+  summary: "Lazy-load MCP servers and share conservative read-only stdio MCP clients across sessions."
+  decision: "Add config-level startup/sharing modes, expose lazy MCP servers through tool_search, start them on demand with status events and retry semantics, and pool only conservative local stdio clients with cancellation and eviction safeguards."
+  constraints:
+    - "Must preserve tool discovery context for sessions and sub-agents without eagerly starting every MCP server."
+    - "Must not auto-share arbitrary or user-renamed stateful stdio servers."
+    - "Must allow standalone startup for non-shareable servers and recover after lazy startup or shared-client failures."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/codex-mcp/src/mcp_connection_manager.rs"
+    - "codex-rs/config/src/mcp_types.rs"
+    - "codex-rs/core/src/tools/handlers/tool_search.rs"
+    - "codex-rs/tools/src/tool_registry_plan.rs"
+    - "docs/config.md"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo check -p codex-mcp -p codex-tools -p codex-core"
+    - "cargo test -p codex-mcp mcp_connection_manager"
+    - "cargo test -p codex-tools code_mode"
+    - "cargo test -p codex-tools tool_registry_plan"
+    - "cargo test -p codex-core router_find_spec_returns_tool_search"
+    - "cargo test -p codex-core lazy_mcp_servers_are_searchable_before_startup"
+    - "cargo test -p codex-core handler_looks_up_namespaced_aliases_explicitly"
+    - "cargo test -p codex-config mcp"
+    - "cargo test -p codex-core blocking_replace_mcp_servers_serializes_tool_approval_overrides"
+    - "just fmt"
+    - "just fix -p codex-mcp / codex-tools / codex-core / codex-config"

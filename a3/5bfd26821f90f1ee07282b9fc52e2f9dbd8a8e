@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-04-27/builtin-scratchpad-primary#$(git rev-parse --short=12 HEAD)"
+  change_type: "feat"
+  scope: "scratchpad"
+  summary: "Make the built-in scratchpad the primary recovery ledger by collaboration mode."
+  decision: "Expose scratchpad tools and developer guidance by default in default, continuous, and orchestrator modes, keep plan mode opted out, and mechanically loop scratchpad state back after live compaction when enabled."
+  constraints:
+    - "Must keep scratchpad behavior configurable per collaboration mode."
+    - "Must preserve plan mode as disabled by default."
+    - "Must keep recovery mechanical instead of relying on a post-compaction recovery skill prompt."
+    - "Must not include private user data in tests or docs."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/config/src/types.rs::ScratchpadConfig"
+    - "codex-rs/core/src/context/scratchpad_instructions.rs"
+    - "codex-rs/core/src/session/mod.rs::build_initial_context"
+    - "codex-rs/core/src/tools/spec.rs::get_openai_tools"
+    - "codex-rs/tui/src/app/scratchpad_recovery.rs"
+    - "codex-rs/tui/src/chatwidget.rs::maybe_submit_scratchpad_recovery_after_compaction"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

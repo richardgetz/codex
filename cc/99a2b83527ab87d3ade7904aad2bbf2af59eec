@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-visual-shell-contract#cc99a2b83527"
+  change_type: "test"
+  scope: "agent-browser"
+  summary: "Cover the Obscura visual shell HTML contract directly."
+  decision: "Add a focused regression test that locks visual_shell_html escaping, viewport clamping, coordinate clamping, and the 160 target overlay cap."
+  constraints:
+    - "Must preserve generated visual shell HTML behavior for escaped title, URL, text, and target labels."
+    - "Must preserve viewport and target rectangle clamp semantics."
+    - "Must keep coverage isolated to the existing agent browser test module without changing runtime behavior."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::visual_shell_html_escapes_clamps_and_caps_targets"
+    - "codex-rs/core/src/tools/handlers/agent_browser_visual.rs::visual_shell_html"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo fmt --all"
+    - "cargo test -p codex-core visual_shell_html_escapes_clamps_and_caps_targets -- --nocapture"
+    - "cargo check -p codex-core"
+    - "cargo clippy -p codex-core --lib --tests -- -A clippy::large_enum_variant -D warnings"
+    - "git diff --check"

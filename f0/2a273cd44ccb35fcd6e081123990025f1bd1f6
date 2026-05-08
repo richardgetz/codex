@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-base64-size#f02a273cd"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Preserve canonical Base64 screenshot size accounting without decoding image bytes."
+  decision: "Use a no-allocation decoded-length helper that matches the previous STANDARD Base64 decoder acceptance boundary, including canonical padding and trailing-bit validation."
+  constraints:
+    - "Must not allocate decoded PNG bytes during benchmark accounting."
+    - "Must return 0 for malformed Base64 payloads that the previous decoder rejected."
+    - "Must keep benchmark base64 character accounting unchanged."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::screenshot_image_sizes"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::base64_decoded_len"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::base64_value"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

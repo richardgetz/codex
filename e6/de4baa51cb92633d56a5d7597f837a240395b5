@@ -1,0 +1,29 @@
+intent:
+  id: "intent/2026-05-03/obscura-screenshot-fast-png#e6de4baa5"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Reduce Obscura DOM screenshot latency without changing screenshot output shape."
+  decision: "Use the image crate's explicit PNG encoder with fast compression and no scanline filter instead of DynamicImage::write_to for Obscura DOM snapshot PNGs."
+  constraints:
+    - "Must keep the screenshot content type as PNG data URLs for existing tool consumers."
+    - "Must preserve the lightweight DOM snapshot renderer and headful mirror behavior."
+    - "Must not affect Chromium or external-CDP screenshot paths."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser_visual.rs::render_snapshot_png"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo test -p codex-core tools::handlers::agent_browser::tests::obscura_dom_renderer_outputs_png -- --exact --nocapture"
+    - "cargo test -p codex-core agent_browser -- --nocapture"
+    - "cargo test -p codex-tools agent_browser"
+    - "cargo check -p codex-core -p codex-tools -p codex-features"
+    - "cargo clippy -p codex-core -p codex-tools -p codex-features --lib --tests -- -A clippy::large_enum_variant -D warnings"
+    - "CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 CODEX_AGENT_BROWSER_OBSCURA_BINARY=/private/tmp/codex-obscura-target/debug/obscura cargo test -p codex-core tools::handlers::agent_browser::tests::obscura_backend_renders_dom_screenshot -- --ignored --exact --nocapture"
+    - "CODEX_AGENT_BROWSER_RUN_OBSCURA_TESTS=1 CODEX_AGENT_BROWSER_OBSCURA_BINARY=/private/tmp/codex-obscura-target/debug/obscura CODEX_AGENT_BROWSER_BENCHMARK_ITERATIONS=5 CODEX_AGENT_BROWSER_OBSCURA_BENCHMARK_OUTPUT=/private/tmp/codex-agent-browser-obscura-benchmark-fastpng.json cargo test -p codex-core tools::handlers::agent_browser::tests::obscura_benchmark_launches_browser -- --ignored --exact --nocapture"
+    - "git diff --check"
+  benchmark_results:
+    before: "Obscura screenshot avg 308.80ms"
+    after: "Obscura screenshot avg 130.02ms; launch 205.30ms; navigate 3.74ms; snapshot avg 1.31ms"

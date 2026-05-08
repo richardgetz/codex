@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-05-01/mcp-long-run-recovery#a3ede6a67bf4"
+  change_type: "fix"
+  scope: "mcp"
+  summary: "Recover stale MCP sessions during long-running Codex threads."
+  decision: "Refresh the session-owned MCP manager from effective config when stale startup/tool-list/resource failures indicate the stored client is unusable, route historical non-app MCP placeholders back through MCP only when allowed by current mode filters, and avoid replaying possibly delivered MCP tool calls after live transport failures."
+  constraints:
+    - "Must not let slash or status inventory hide stale session-owned MCP state."
+    - "Must not duplicate non-idempotent MCP tool side effects after maybe-delivered transport failures."
+    - "Must honor mode MCP filters for placeholder recovery."
+    - "Must include plugin and app MCP servers when rebuilding effective MCP config."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session/mcp.rs::call_tool_with_reconnect"
+    - "codex-rs/core/src/session/mcp.rs::refresh_mcp_servers_after_call_error"
+    - "codex-rs/core/src/tools/router.rs::ToolRouter::build_tool_call"
+    - "codex-rs/core/src/tools/handlers/tool_search.rs::ToolSearchHandler::search_output_tools"
+    - "codex-rs/core/src/codex_thread.rs::CodexThread::call_mcp_tool"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"

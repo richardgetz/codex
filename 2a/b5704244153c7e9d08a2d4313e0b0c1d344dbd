@@ -1,0 +1,21 @@
+intent:
+  id: intent/2026-05-02/scratchpad-thread-ownership#2ab570424415
+  change_type: fix
+  scope: scratchpad
+  summary: Prevent cross-thread scratchpad rebinding and loopback pollution while combining scratchpad PR branches.
+  decision: Bind built-in scratchpads to origin_thread_id, require matching thread ownership for mutating writes, stop objective-only cross-thread reuse, and suppress active-scratchpad compaction loopback when stored thread identity does not match the current thread. Keep PR 38 slash-output behavior and PR 39 run-policy behavior together in PR 39.
+  constraints:
+    - Preserve hidden actionable-only scratchpad recovery semantics.
+    - A thread-default scratchpad id must not be rebound to a different objective.
+    - Future writes should stamp ownership while legacy scratchpads without origin_thread_id remain readable when otherwise compatible.
+    - Combined branch must keep legacy continuous spawn compatibility by mapping it to default mode.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::open_scratchpad
+    - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::prepare_scratchpad_for_write
+    - codex-rs/core/src/session/mod.rs::build_active_scratchpad_context
+    - codex-rs/core/src/tools/handlers/multi_agents_tests.rs::multi_agent_v2_spawn_can_select_child_collaboration_mode
+  requested_by: '@richardgetz'
+  recorded_by:
+    agent: codex-cli
+    model: gpt-5

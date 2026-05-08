@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-bound-numeric-inputs#e78341ea6"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Bound numeric browser inputs before sending them to CDP or overlay code."
+  decision: "Validate direct click coordinates, scroll deltas, and explicit highlight rectangles as finite values within conservative browser-sized limits so accidental extreme model inputs fail fast instead of producing huge CDP events or overlay geometry."
+  constraints:
+    - "Preserve element-ref click, type, and highlight behavior."
+    - "Keep ordinary viewport coordinates, page scrolling, and large review rectangles available."
+    - "Do not change tool names or output shapes."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::bounded_number"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_click"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_scroll"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_highlight"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

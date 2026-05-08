@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-05-04/thread-manager-sample-config#7670f27caee6"
+  change_type: "fix"
+  scope: "core-api"
+  summary: "Update the thread-manager sample for new first-class commit guidance config fields."
+  decision: "Reexport the new effective config types from codex-core-api and set their defaults in the sample Config initializer so CI targets that compile the sample stay current with codex-core Config."
+  constraints:
+    - "Keep the sample limited to codex-core-api instead of depending on additional codex-* crates."
+    - "Preserve default-on behavior for conventional commits and git intent notes in manually constructed configs."
+    - "Do not change the runtime behavior of the first-class config toggles beyond fixing the stale initializer."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core-api/src/lib.rs"
+    - "codex-rs/thread-manager-sample/src/main.rs::new_config"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo check -p codex-thread-manager-sample"
+    - "cargo test -p codex-core git_intent_notes"
+    - "just fix -p codex-thread-manager-sample"
+    - "just fix -p codex-core-api"

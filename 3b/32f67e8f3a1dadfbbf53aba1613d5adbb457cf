@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-http-timeout#3b32f67e8"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Bound browser debugging HTTP calls with a timeout."
+  decision: "Use a 5-second reqwest client timeout for /json/list, /json/new, and owned target close calls so an unresponsive browser endpoint cannot hang agent_browser operations indefinitely."
+  constraints:
+    - "Keep CDP websocket command timeout separate at 30 seconds."
+    - "Do not fail agent_browser.close solely because best-effort owned target cleanup fails."
+    - "Preserve existing attach and launch behavior aside from timeout bounding."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::BROWSER_HTTP_TIMEOUT"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::browser_http_client"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::first_page"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::create_page"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_close"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

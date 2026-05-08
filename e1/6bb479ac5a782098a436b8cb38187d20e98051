@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-04-16/upstream-main-sync#e16bb479a"
+  change_type: "chore"
+  scope: "merge"
+  summary: "Sync upstream/main into the fork and resolve Cargo manifest conflicts."
+  decision: "Keep the fork's codex-build-info dependencies while also retaining upstream's new workspace crates in codex-cli and codex-tui."
+  constraints:
+    - "Must preserve the fork-specific source build version wiring."
+    - "Must not drop upstream's codex-api or codex-install-context dependencies introduced on main."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/cli/Cargo.toml"
+    - "codex-rs/tui/Cargo.toml"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

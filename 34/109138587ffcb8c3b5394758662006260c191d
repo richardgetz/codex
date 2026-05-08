@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-04-16/continuous-mode-collab-preset"
+  change_type: "feature"
+  scope: "collaboration"
+  summary: "Expose hard continuous-run behavior as a first-class collaboration mode while keeping thread-control enforcement authoritative underneath."
+  decision: "Add ModeKind::Continuous, ship a built-in continuous collaboration preset/template, and automatically sync the continuous thread-control contract whenever turns/settings enter or leave that mode."
+  constraints:
+    - "Continuous mode must remain a visible collaboration option in the TUI and app-server preset list."
+    - "Switching into Continuous must arm the hard continuous thread-control contract without relying on prompt memory."
+    - "Switching away from Continuous must release only the continuous contract and leave unrelated router control untouched."
+    - "The public collaboration preset should not require callers to manually set thread-control state separately."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/protocol/src/config_types.rs"
+    - "codex-rs/collaboration-mode-templates/templates/continuous.md"
+    - "codex-rs/models-manager/src/collaboration_mode_presets.rs"
+    - "codex-rs/core/src/codex.rs"
+    - "codex-rs/app-server/tests/suite/v2/thread_control.rs"
+    - "codex-rs/tui/src/chatwidget/tests/plan_mode.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

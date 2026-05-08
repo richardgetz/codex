@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-04-26/primary-contact-ambiguous-imessage#cf5f002f173c"
+  change_type: "fix"
+  scope: "tui-primary-contact"
+  summary: "Route ambiguous iMessage primary-contact replies into Orchestrator."
+  decision: "Treat iMessage follow-up payloads with crossed_message_warning and reply_messages as valid primary-contact user input when the ambiguity is an allowed orchestrator contact condition."
+  constraints:
+    - "Must not treat explicit no-reply status payloads as user messages."
+    - "Must ignore outbound reply_messages from the user-contact MCP payload."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/app/background_requests.rs::extract_primary_contact_message"
+    - "codex-rs/tui/src/app/background_requests.rs::ambiguous_primary_contact_message"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"

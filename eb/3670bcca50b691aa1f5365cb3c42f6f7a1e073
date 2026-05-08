@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-05-01/tui-scratchpad-slash-full#eb3670bcca50"
+  change_type: "fix"
+  scope: "tui"
+  summary: "Show the full built-in scratchpad when /scratchpad is invoked."
+  decision: "Add a full scratchpad snapshot display mode for the slash command while keeping live scratchpad update cards compact."
+  constraints:
+    - "Must keep inline and event-driven scratchpad updates concise with existing truncation behavior."
+    - "Must show all upcoming next steps and pending waits in explicit /scratchpad output."
+    - "Must cover both verbose slash-command output and compact live-update output with focused TUI tests."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/history_cell.rs::new_scratchpad_snapshot"
+    - "codex-rs/tui/src/history_cell.rs::append_scratchpad_section"
+    - "codex-rs/tui/src/chatwidget/slash_dispatch.rs::ChatWidget::add_current_scratchpad_output"
+    - "codex-rs/tui/src/chatwidget/tests/slash_commands.rs::slash_scratchpad_renders_current_session_scratchpad"
+    - "codex-rs/tui/src/chatwidget/tests/plan_mode.rs::scratchpad_update_renders_history_cell"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5"

@@ -1,0 +1,32 @@
+intent:
+  id: "intent/2026-04-22/rick-stable-guard-tests#596e347df9ed"
+  change_type: "test"
+  scope: "stable-refresh"
+  summary: "Guard Rick-specific thread-control and source-build behavior after replaying official rust-v0.122.0."
+  decision: "Keep Rick-specific safety coverage in standalone test files and clean up generated/lint drift introduced by the refresh."
+  constraints:
+    - "Must preserve official rust-v0.122.0 behavior, including /side support."
+    - "Must preserve Rick fork continuous-mode thread-control behavior across future upstream refreshes."
+    - "Must keep generated app-server/config fixtures consistent with replayed source."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/session/thread_control_tests.rs"
+    - "codex-rs/core/src/session/turn_context.rs::Session::sync_continuous_mode_control"
+    - "codex-rs/build-info/src/versioning.rs::derive_version"
+    - "codex-rs/app-server-protocol/schema/typescript/ClientRequest.ts"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
+  tests:
+    - "cargo test -p codex-build-info"
+    - "cargo test -p codex-app-server-protocol"
+    - "cargo test -p codex-core thread_control -- --test-threads=1"
+    - "cargo test -p codex-app-server thread_control -- --test-threads=1"
+    - "cargo test -p codex-models-manager collaboration_mode_presets -- --test-threads=1"
+    - "cargo test -p codex-tui side -- --test-threads=1"
+    - "cargo test -p codex-tui continuous -- --test-threads=1"
+    - "cargo test -p codex-tui bottom_pane::footer::tests::footer_snapshots -- --exact"
+    - "just fix -p codex-core; just fix -p codex-app-server-protocol; just fix -p codex-app-server; just fix -p codex-models-manager; just fix -p codex-build-info; just fix -p codex-tui"
+  risks:
+    - "Full codex-rs workspace test suite was not run locally."

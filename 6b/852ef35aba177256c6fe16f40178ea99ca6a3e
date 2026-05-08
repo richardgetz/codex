@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-05-03/browser-launch-isolation#6b852ef35"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Keep launched browser home/config/cache state inside the isolated session profile."
+  decision: "Set HOME, XDG_CONFIG_HOME, and XDG_CACHE_HOME to directories under the temporary browser profile before launching Chrome/Chromium."
+  constraints:
+    - "Must not let launched browser support processes touch the user's normal home configuration paths when an isolated session profile is expected."
+    - "Must keep launch environment changes scoped to the spawned browser process only."
+    - "Must preserve existing headful/headless and remote attach behavior."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::launch_connection"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

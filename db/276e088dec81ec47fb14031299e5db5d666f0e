@@ -1,0 +1,1 @@
+Preserve already-shipped fork state migration versions during rust-v0.125.0 refresh, move upstream device-key migration to next safe slot, skip BuildBuddy-only v8 canary in fork, and add thread/start environment validation regression coverage.

@@ -1,0 +1,25 @@
+intent:
+  id: "intent/2026-04-17/stable-fork-behavior#3976abf04"
+  change_type: "fix"
+  scope: "stable"
+  summary: "Carry forward the fork-only MCP approval toggle and fork version suffix behavior onto the release-based stable branch."
+  decision: "Replay the missing MCP approval feature from fork main and adapt build-info so release-branch source builds in a git checkout append the fork suffix while exact release-tag builds stay plain."
+  constraints:
+    - "Must keep stable based on upstream rust-v0.122.0 instead of merging fork main."
+    - "Must preserve the config flag enable_mcp_approvals = false for local use on stable."
+    - "Must report release-line source builds as <release version>-rick on the fork while leaving exact tag builds unsuffixed."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/build-info/build.rs"
+    - "codex-rs/build-info/src/versioning.rs"
+    - "codex-rs/build-info/tests/source_build_versioning.rs"
+    - "codex-rs/features/src/lib.rs"
+    - "codex-rs/core/src/mcp_tool_call.rs"
+    - "codex-rs/core/src/mcp_tool_call_tests.rs"
+    - "codex-rs/app-server/src/config_api.rs"
+    - "codex-rs/app-server/tests/suite/v2/experimental_feature_list.rs"
+    - "codex-rs/core/config.schema.json"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "unknown"

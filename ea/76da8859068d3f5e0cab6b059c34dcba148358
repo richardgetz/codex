@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-05-04/obscura-source-cache#ea76da885"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Reuse a writable Cargo cache for local patched Obscura source builds."
+  decision: "Keep source-build staging isolated by using a temp target directory, but reuse the caller's CARGO_HOME when it is writable and fall back to a temp Cargo home when it is not."
+  constraints:
+    - "Must continue to work in sandboxed sessions where the inherited Cargo home is not writable."
+    - "Must avoid depending on local Cargo cache permissions for package staging."
+    - "Must keep Obscura source-build staging host-target checked."
+  intent_priority: "should"
+  code_locations:
+    - "codex-cli/scripts/install_native_deps.py::source_build_cargo_home"
+    - "codex-cli/scripts/install_native_deps.py::build_and_install_local_obscura_from_source"
+    - "codex-cli/scripts/README.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"

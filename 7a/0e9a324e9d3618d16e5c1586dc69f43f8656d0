@@ -1,0 +1,21 @@
+intent:
+  id: intent/2026-05-02/scratchpad-denial-redaction#7a0e9a324e9d
+  change_type: fix
+  scope: scratchpad
+  summary: Redact scratchpad isolation denial and malformed-file metadata leaks.
+  decision: Make scratchpad read/list failures and cross-thread denials fail closed with generic messages, require requested ids to match embedded scratchpad ids, and verify ownership before compatibility checks so another session cannot learn or mutate foreign scratchpad metadata through errors or malformed files.
+  constraints:
+    - Cross-thread denial errors must not disclose owner thread ids, requester thread ids, scratchpad type, objective, session_key, canaries, archived state, or policy content.
+    - Existing custom scratchpad ids must check thread ownership before objective, session key, or archived compatibility.
+    - Malformed or mismatched scratchpad files must not be readable, discoverable through lookup, or writable through an alias path.
+    - Runtime isolation proof must be backed by regression tests and independent review.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::ScratchpadStore::read
+    - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::ScratchpadStore::list
+    - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::ensure_thread_owner
+    - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::open_scratchpad
+  requested_by: '@richardgetz'
+  recorded_by:
+    agent: codex-cli
+    model: gpt-5

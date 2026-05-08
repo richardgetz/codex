@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-05-04/agent-browser-obscura-assets#efd66bd5b"
+  change_type: "feat"
+  scope: "agent-browser"
+  summary: "Render Obscura headful mirror from captured page HTML/CSS and stage patched Obscura builds."
+  decision: "Keep Obscura as an external first-party browser resource, improve Codex mirror fidelity with inert iframe rendering, preserve exact ref-bearing target overlays, and record the local Obscura runtime patch until a forked or upstream release asset exists."
+  constraints:
+    - "Must keep Codex Rust crates lean and avoid vendoring the full Obscura source tree."
+    - "Must preserve human click/selection visibility through selection_overview."
+    - "Must allow local patched Obscura binaries to be staged into the same vendor layout as pinned release assets."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::snapshot_page_with_visual"
+    - "codex-rs/core/src/tools/handlers/agent_browser_visual.rs::visual_shell_html"
+    - "codex-cli/scripts/install_native_deps.py::install_local_obscura_binary"
+    - "codex-cli/scripts/obscura-runtime-dom-render.patch"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"

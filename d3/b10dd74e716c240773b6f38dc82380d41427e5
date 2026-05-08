@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-04-28/session-overwatch#d3b10dd74e71"
+  change_type: "feat"
+  scope: "orchestrator-session-overwatch"
+  summary: "Allow Orchestrator mode to watch and contact already-started Codex sessions."
+  decision: "Add a built-in session_overwatch namespace backed by thread-control targets, supervision-ledger watched-session state, and same-process message delivery, while reporting cross-process message injection as unsupported instead of pretending it works."
+  constraints:
+    - "Must keep idle supervision model-light by using durable state and existing poll checks instead of model turns for no-op watches."
+    - "Must not enable recursive orchestrator behavior for worker sessions."
+    - "Must keep cross-process delivery limitations explicit until durable message injection exists."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/session_overwatch.rs"
+    - "codex-rs/core/src/orchestrator_supervision.rs"
+    - "codex-rs/core/src/session/mod.rs::maybe_notify_overwatch_controllers"
+    - "codex-rs/state/src/runtime/thread_control.rs::list_active_thread_controls_targeting"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"

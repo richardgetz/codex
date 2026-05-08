@@ -1,0 +1,21 @@
+intent:
+  id: intent/2026-05-02/scratchpad-read-owner-gating#78d68be4b689
+  change_type: fix
+  scope: scratchpad
+  summary: Gate scratchpad read and discovery tools by origin_thread_id.
+  decision: Apply the same thread-owner check used by scratchpad writes to get_scratchpad, get_scratchpad_summary, resume_scratchpad, export_outcomes, and check_action_allowed, and filter lookup_scratchpads to only pads visible to the current thread. Legacy custom scratchpads without origin_thread_id are denied unless their scratchpad_id matches the current thread id.
+  constraints:
+    - Known-id reads must not expose another thread's canaries.
+    - Lookup must not disclose other threads' scratchpad ids or next-step canaries.
+    - Thread-default legacy pads without owner metadata can remain readable only by the matching thread id.
+    - The live fresh-build probe found this as a real remaining crosstalk gap.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::ensure_thread_owner
+    - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::get_scratchpad
+    - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::resume_scratchpad
+    - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::lookup_scratchpads
+  requested_by: '@richardgetz'
+  recorded_by:
+    agent: codex-cli
+    model: gpt-5

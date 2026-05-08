@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-ref-map-rebuild#e4696f325"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Rebuild the page-local element-ref map on each snapshot."
+  decision: "Keep non-enumerable element refs stable on elements, but replace the Map per snapshot so stale detached elements are not retained across long sessions."
+  constraints:
+    - "Keep refs from the latest snapshot usable for click/type."
+    - "Avoid visible DOM attributes."
+    - "Keep the snapshot output shape unchanged."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::snapshot_page"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

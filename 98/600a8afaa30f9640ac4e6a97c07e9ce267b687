@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-04-23/refresh-replay-adaptation#98600a8af"
+  change_type: "fix"
+  scope: "stable-refresh"
+  summary: "Adapt replayed lazy-MCP and session/tool-search surfaces to 0.124.0 API drift while continuing the stable refresh."
+  decision: "Checkpoint the resolved lazy-loading/tool-search adaptation before replaying the missing orchestrator and thread-control foundation commits from the older stable layer."
+  constraints:
+    - "Keep the MCP startup cancellation proof test semantically unchanged."
+    - "Do not drop fork lazy-loading or orchestrator goals while reconciling upstream API drift."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session/mod.rs"
+    - "codex-rs/core/src/session/turn_context.rs"
+    - "codex-rs/core/src/tools/handlers/tool_search.rs"
+    - "codex-rs/core/src/tools/tool_search_entry.rs"
+    - "codex-rs/state/src/model/mod.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "unknown"

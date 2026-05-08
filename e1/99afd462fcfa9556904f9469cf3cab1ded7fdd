@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-session-viewport-bounds#e199afd46"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Use each browser session viewport as the numeric input bound."
+  decision: "Store the clamped viewport size on BrowserSession and validate direct clicks, ref-click centers, and explicit highlight rectangles against that session's actual viewport instead of broad global coordinate caps."
+  constraints:
+    - "Preserve the existing viewport clamp defaults and maximums."
+    - "Keep scroll delta bounds independent because scrolling is not a viewport coordinate."
+    - "Do not change tool names or output shapes."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::BrowserSession"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_click"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_highlight"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

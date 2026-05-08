@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-page-ua-only#a3f8d7277"
+  change_type: "perf"
+  scope: "agent-browser"
+  summary: "Read the stealth default user agent from page context instead of Browser.getVersion."
+  decision: "Use Runtime.evaluate on navigator.userAgent after Runtime.enable, avoiding an extra Browser.getVersion CDP call and avoiding endpoint-specific Browser domain behavior."
+  constraints:
+    - "Keep explicit user_agent overrides unchanged."
+    - "Keep HeadlessChrome normalization behavior."
+    - "Retain pure unit coverage for the normalization itself."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::browser_user_agent"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

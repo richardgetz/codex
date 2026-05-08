@@ -1,0 +1,5 @@
+Intent: replace standalone Continuous collaboration mode with a scratchpad-backed run policy that can be toggled live through /continuous without trapping the user in a long-running loop.
+
+Scope: remove Continuous from public mode/template/TUI/app-server surfaces, keep legacy config/history deserialization compatibility, add durable scratchpad run_policy and communication_policy, add compact live scratchpad view configuration, add opt-in outcomes tracking and delegation lineage, wire app-server continuous-policy RPC, and improve resumed app-server turn startup UX.
+
+Validation: ran focused core/TUI/app-server/protocol tests, schema generation, fmt, cargo checks, diff checks, and repeated post-change-review swarms. just fix and bazel-lock-update were attempted but blocked by local tool/sandbox limitations.

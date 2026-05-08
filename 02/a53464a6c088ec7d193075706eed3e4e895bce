@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-04-14/source-build-version-followup#02a53464a"
+  change_type: "fix"
+  scope: "version"
+  summary: "Make release-profile source builds auto-resolve the official Codex release line and default to a -rick suffix."
+  decision: "For source builds, prefer the latest official openai/codex release tag during release-profile builds, fall back to the installed codex/codex-agent version only if that lookup fails, and append a default rick suffix unless CODEX_SOURCE_VERSION_SUFFIX overrides it."
+  constraints:
+    - "Release builds must keep using the published package version."
+    - "Source installs must not require a manually supplied base-version env var."
+    - "Non-release test builds must stay deterministic and avoid live release lookups."
+    - "Suffixed source versions must continue parsing as their numeric base for update checks."
+  intent_priority: "must"
+  supersedes:
+    - "intent/2026-04-14/source-build-version#dc89a5d87"
+  code_locations:
+    - "codex-rs/build-info/build.rs::source_build_base_version"
+    - "codex-rs/build-info/build.rs::source_version_suffix"
+    - "codex-rs/build-info/src/lib.rs"
+    - "codex-rs/tui/src/history_cell.rs"
+    - "codex-rs/tui/src/status/tests.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

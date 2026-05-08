@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-highlight-viewport-extents#ad65da60f"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Require explicit highlight rectangles to fit inside the session viewport."
+  decision: "Validate manual highlight rectangle width and height against the remaining viewport space after x and y, and remove extra wrapper allocation when applying the compatibility and overlay scripts to the current page."
+  constraints:
+    - "Preserve the existing agent_browser.highlight API and output shape."
+    - "Keep element-ref highlights working for visible elements."
+    - "Keep overlay injection lazy and page-local."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_highlight"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::initialize_page"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::inject_overlay"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

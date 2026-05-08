@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-03/agent-browser-weakmap-refs#cdc0001b6"
+  change_type: "fix"
+  scope: "agent-browser"
+  summary: "Keep snapshot element refs out of page element properties."
+  decision: "Store stable snapshot refs in a page-side WeakMap keyed by DOM element and rebuild the visible ref map each snapshot, preserving element-ref actions while avoiding private properties on page elements."
+  constraints:
+    - "Preserve stable refs for unchanged elements across snapshots in the same page context."
+    - "Keep the latest ref-to-element map available for click/type/highlight actions."
+    - "Do not add new tool API surface or change model-visible output shape."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::snapshot_page"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::headless_highlight_marks_and_clears_rect"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"

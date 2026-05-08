@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-04/obscura-visual-summary#6b20889a4"
+  change_type: "feat"
+  scope: "agent-browser"
+  summary: "Expose compact Obscura CSS and image asset counts in agent_browser.snapshot."
+  decision: "When snapshotting an Obscura session, add a small visual summary with style, linked CSS, image, data-image, and stylesheet counts so the agent can see whether page assets loaded without dumping serialized HTML or CSS into model output."
+  constraints:
+    - "Must keep snapshot output compact and avoid embedding full page HTML, CSS, or image data in normal snapshots."
+    - "Must not fail the snapshot if the visual-summary probe fails."
+    - "Must keep the richer iframe mirror path separate for rebuilt headful sessions."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::handle_snapshot"
+    - "codex-rs/core/src/tools/handlers/agent_browser.rs::obscura_visual_summary"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.5"

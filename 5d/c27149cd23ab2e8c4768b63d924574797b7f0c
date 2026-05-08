@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-04-23/mcp-smart-waits#5dc27149cd23"
+  change_type: "feat"
+  scope: "core"
+  summary: "Make Codex handle MCP poll endpoints that report no update without returning to the model."
+  decision: "Recognize successful MCP tool results with _meta['codex/wait'] v=1 state=no_update retry_after_ms, sleep for a bounded delay, and re-call the same tool with the same rewritten arguments and request metadata until a normal result or the retry cap is reached."
+  constraints:
+    - "Must preserve existing MCP behavior when metadata is absent, malformed, or uses an unknown state/version."
+    - "Must not hide MCP error results behind smart wait handling."
+    - "Must bound hidden polling to avoid indefinite harness loops."
+    - "Must keep the metadata contract small enough for dumb MCP clients to ignore safely."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/mcp_tool_call.rs::execute_mcp_tool_call"
+    - "codex-rs/core/src/mcp_tool_call.rs::mcp_smart_wait_retry_after"
+    - "docs/config.md::MCP smart wait metadata"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
