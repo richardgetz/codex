@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-05-08/pr43-stable-merge#2c8b4f8c96de"
+  change_type: "chore"
+  scope: "config"
+  summary: "Update PR #43 commit-guidance config toggles onto current stable."
+  decision: "Merge current stable into the PR branch and resolve config conflicts by keeping the first-class Conventional Commits and git intent notes toggles together with the updated stable plugin/config inputs and regenerated config schema."
+  constraints:
+    - "Must preserve fork-only stable behavior from the rust-v0.129.0 stable refresh."
+    - "Must keep config.schema.json generated from the resolved Rust config API."
+    - "Must preserve git intent notes metadata writable-root safety checks."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/config/src/types.rs"
+    - "codex-rs/core/src/config/mod.rs"
+    - "codex-rs/core/config.schema.json"
+    - "codex-rs/core/src/context"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
