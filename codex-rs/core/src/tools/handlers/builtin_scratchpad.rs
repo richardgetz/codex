@@ -14,6 +14,7 @@ use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
+use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use serde::Deserialize;
 use serde::Serialize;
@@ -224,6 +225,10 @@ pub(crate) struct BuiltinScratchpadHandler;
 
 impl ToolHandler for BuiltinScratchpadHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::namespaced(SCRATCHPAD_NAMESPACE, TOOL_OPEN)
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function

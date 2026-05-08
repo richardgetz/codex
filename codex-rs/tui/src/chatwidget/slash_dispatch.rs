@@ -5,6 +5,7 @@
 //! dispatch step and records the staged entry once the command has been handled, so
 //! slash-command recall follows the same submitted-input rule as ordinary text.
 
+use super::goal_validation::GoalObjectiveValidationSource;
 use super::*;
 use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
@@ -34,6 +35,7 @@ const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const CONTINUOUS_USAGE: &str = "Usage: /continuous [on|off|status]";
 const OUTCOMES_USAGE: &str = "Usage: /outcomes [on|off|status]";
 const SCRATCHPAD_ABSORB_USAGE: &str = "Usage: /scratchpad-absorb <scratchpad_id> [--exclude-pending] [--exclude-notes] [--exclude-outcomes] [--exclude-delegations] [--exclude-artifacts] [--exclude-worktrees] [--exclude-completed] [--exclude-next-steps] [--exclude-git-refs]";
+const RAW_USAGE: &str = "Usage: /raw [on|off]";
 
 fn scratchpad_update_event_from_value(value: &serde_json::Value) -> Option<ScratchpadUpdateEvent> {
     Some(ScratchpadUpdateEvent {
@@ -426,7 +428,7 @@ impl ChatWidget {
         match persist_outcomes_tracking_enabled(&self.config.codex_home, enabled) {
             Ok(()) => {
                 self.config.scratchpad.outcomes_enabled = enabled;
-                self.submit_op(Op::ReloadUserConfig);
+                self.submit_op(AppCommand::ReloadUserConfig);
                 let state = if enabled { "enabled" } else { "disabled" };
                 self.add_info_message(
                     format!("Scratchpad outcome tracking {state}."),
@@ -535,7 +537,7 @@ impl ChatWidget {
             );
             return;
         };
-        if !self.submit_op(Op::SetScratchpadContinuousPolicy { enabled }) {
+        if !self.submit_op(AppCommand::set_scratchpad_continuous_policy(enabled)) {
             self.add_error_message(format!(
                 "Could not submit continuous policy update for scratchpad `{thread_id}`."
             ));
@@ -593,6 +595,11 @@ impl ChatWidget {
             Some("status") => self.add_current_continuous_status(),
             Some(_) => self.add_error_message(CONTINUOUS_USAGE.to_string()),
         }
+    }
+
+    fn emit_raw_output_mode_changed(&self, enabled: bool) {
+        self.app_event_tx
+            .send(AppEvent::RawOutputModeChanged { enabled });
     }
 
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
@@ -670,12 +677,7 @@ impl ChatWidget {
                 self.open_model_popup();
             }
             SlashCommand::Fast => {
-                let next_tier = if matches!(self.current_service_tier(), Some(ServiceTier::Fast)) {
-                    None
-                } else {
-                    Some(ServiceTier::Fast)
-                };
-                self.set_service_tier_selection(next_tier);
+                self.toggle_fast_mode_from_ui();
             }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
@@ -729,11 +731,11 @@ impl ChatWidget {
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
-            SlashCommand::Approvals => {
-                self.open_permissions_popup();
-            }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
+            }
+            SlashCommand::Vim => {
+                self.toggle_vim_mode_and_notify();
             }
             SlashCommand::Keymap => {
                 self.open_keymap_picker();
@@ -808,25 +810,35 @@ impl ChatWidget {
             SlashCommand::Logout => {
                 self.app_event_tx.send(AppEvent::Logout);
             }
-            // SlashCommand::Undo => {
-            //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
-            // }
             SlashCommand::Copy => {
                 self.copy_last_agent_markdown();
+            }
+            SlashCommand::Raw => {
+                let enabled = self.toggle_raw_output_mode_and_notify();
+                self.emit_raw_output_mode_changed(enabled);
             }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
                 let tx = self.app_event_tx.clone();
+                let runner = self.workspace_command_runner.clone();
+                let cwd = self
+                    .current_cwd
+                    .clone()
+                    .unwrap_or_else(|| self.config.cwd.to_path_buf());
                 tokio::spawn(async move {
-                    let text = match get_git_diff().await {
-                        Ok((is_git_repo, diff_text)) => {
-                            if is_git_repo {
-                                diff_text
-                            } else {
-                                "`/diff` — _not inside a git repository_".to_string()
+                    let text = match runner {
+                        Some(runner) => match get_git_diff(runner.as_ref(), &cwd).await {
+                            Ok((is_git_repo, diff_text)) => {
+                                if is_git_repo {
+                                    diff_text
+                                } else {
+                                    "`/diff` — _not inside a git repository_".to_string()
+                                }
                             }
-                        }
-                        Err(e) => format!("Failed to compute diff: {e}"),
+                            Err(e) => format!("Failed to compute diff: {e}"),
+                        },
+                        None => "Failed to compute diff: workspace command runner unavailable"
+                            .to_string(),
                     };
                     tx.send(AppEvent::DiffResult(text));
                 });
@@ -836,6 +848,9 @@ impl ChatWidget {
             }
             SlashCommand::Skills => {
                 self.open_skills_menu();
+            }
+            SlashCommand::Hooks => {
+                self.add_hooks_output();
             }
             SlashCommand::Status => {
                 if self.should_prefetch_rate_limits() {
@@ -851,6 +866,9 @@ impl ChatWidget {
                         /*refreshing_rate_limits*/ false, /*request_id*/ None,
                     );
                 }
+            }
+            SlashCommand::Ide => {
+                self.handle_ide_command();
             }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
@@ -890,7 +908,7 @@ impl ChatWidget {
                             .to_string(),
                     ),
                 );
-                self.submit_op(Op::ConsolidateOrchestratorMemory);
+                self.submit_op(AppCommand::ConsolidateOrchestratorMemory);
             }
             SlashCommand::Scratchpad => {
                 self.add_current_scratchpad_output();
@@ -943,8 +961,8 @@ impl ChatWidget {
             SlashCommand::TestApproval => {
                 use std::collections::HashMap;
 
-                use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
-                use codex_protocol::protocol::FileChange;
+                use crate::approval_events::ApplyPatchApprovalRequestEvent;
+                use crate::diff_model::FileChange;
 
                 self.on_apply_patch_approval_request(
                     "1".to_string(),
@@ -1008,6 +1026,12 @@ impl ChatWidget {
         let trimmed = args.trim();
         if trimmed.is_empty() {
             self.dispatch_command(cmd);
+            return;
+        }
+
+        if cmd == SlashCommand::Goal
+            && !self.goal_objective_with_pending_pastes_is_allowed(&args, &text_elements)
+        {
             return;
         }
 
@@ -1103,6 +1127,9 @@ impl ChatWidget {
                     }
                 }
             }
+            SlashCommand::Ide => {
+                self.handle_ide_command_args(trimmed);
+            }
             SlashCommand::Mcp => match trimmed.to_ascii_lowercase().as_str() {
                 "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
                 _ => self.add_error_message("Usage: /mcp [verbose]".to_string()),
@@ -1144,6 +1171,31 @@ impl ChatWidget {
                     reason: crate::app_event::AccountSwitchReason::User,
                 });
             }
+            SlashCommand::Keymap => match trimmed.to_ascii_lowercase().as_str() {
+                "" => self.open_keymap_picker(),
+                "debug" => {
+                    match crate::keymap::RuntimeKeymap::from_config(&self.config.tui_keymap) {
+                        Ok(runtime_keymap) => self.open_keymap_debug(&runtime_keymap),
+                        Err(err) => {
+                            self.add_error_message(format!(
+                                "Invalid `tui.keymap` configuration: {err}"
+                            ));
+                        }
+                    }
+                }
+                _ => self.add_error_message("Usage: /keymap [debug]".to_string()),
+            },
+            SlashCommand::Raw => match trimmed.to_ascii_lowercase().as_str() {
+                "on" => {
+                    self.set_raw_output_mode_and_notify(/*enabled*/ true);
+                    self.emit_raw_output_mode_changed(/*enabled*/ true);
+                }
+                "off" => {
+                    self.set_raw_output_mode_and_notify(/*enabled*/ false);
+                    self.emit_raw_output_mode_changed(/*enabled*/ false);
+                }
+                _ => self.add_error_message(RAW_USAGE.to_string()),
+            },
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
                     return;
@@ -1228,6 +1280,13 @@ impl ChatWidget {
                     }
                     return;
                 }
+                let validation_source = match source {
+                    SlashCommandDispatchSource::Live => GoalObjectiveValidationSource::Live,
+                    SlashCommandDispatchSource::Queued => GoalObjectiveValidationSource::Queued,
+                };
+                if !self.goal_objective_is_allowed(objective, validation_source) {
+                    return;
+                }
                 let Some(thread_id) = self.thread_id else {
                     if source == SlashCommandDispatchSource::Live {
                         self.queue_user_message_with_options(
@@ -1276,9 +1335,8 @@ impl ChatWidget {
                 self.request_side_conversation(parent_thread_id, Some(user_message));
             }
             SlashCommand::Review if !trimmed.is_empty() => {
-                self.submit_op(AppCommand::review(ReviewRequest {
-                    target: ReviewTarget::Custom { instructions: args },
-                    user_facing_hint: None,
+                self.submit_op(AppCommand::review(ReviewTarget::Custom {
+                    instructions: args,
                 }));
             }
             SlashCommand::Resume if !trimmed.is_empty() => {
@@ -1361,6 +1419,11 @@ impl ChatWidget {
             rest_offset + leading_trimmed,
             &text_elements,
         );
+        if cmd == SlashCommand::Goal
+            && !self.goal_objective_is_allowed(trimmed_rest, GoalObjectiveValidationSource::Queued)
+        {
+            return QueueDrain::Continue;
+        }
         self.dispatch_prepared_command_with_args(
             cmd,
             PreparedSlashCommandArgs {
@@ -1404,6 +1467,7 @@ impl ChatWidget {
         }
         match cmd {
             SlashCommand::Fast
+            | SlashCommand::Ide
             | SlashCommand::Status
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
@@ -1423,6 +1487,8 @@ impl ChatWidget {
             | SlashCommand::Plugins
             | SlashCommand::Rollout
             | SlashCommand::Copy
+            | SlashCommand::Raw
+            | SlashCommand::Vim
             | SlashCommand::Diff
             | SlashCommand::Rename
             | SlashCommand::TestApproval => QueueDrain::Continue,
@@ -1445,7 +1511,6 @@ impl ChatWidget {
             | SlashCommand::Keymap
             | SlashCommand::Agent
             | SlashCommand::MultiAgents
-            | SlashCommand::Approvals
             | SlashCommand::Permissions
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
@@ -1457,6 +1522,7 @@ impl ChatWidget {
             | SlashCommand::Logout
             | SlashCommand::Mention
             | SlashCommand::Skills
+            | SlashCommand::Hooks
             | SlashCommand::Title
             | SlashCommand::Statusline
             | SlashCommand::Theme => QueueDrain::Stop,

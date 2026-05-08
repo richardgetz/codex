@@ -1,10 +1,16 @@
 use crate::shell::Shell;
 use crate::shell::ShellType;
-use crate::tools::handlers::agent_jobs::BatchJobHandler;
 use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::registry::ToolRegistryBuilder;
+use crate::tools::spec_plan::build_tool_registry_builder;
+use crate::tools::spec_plan_types::ToolNamespace;
+use crate::tools::spec_plan_types::ToolRegistryBuildDeferredTool;
+use crate::tools::spec_plan_types::ToolRegistryBuildLazyMcpServer;
+use crate::tools::spec_plan_types::ToolRegistryBuildMcpTool;
+use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use codex_mcp::LazyMcpServerInfo;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -12,18 +18,9 @@ use codex_tools::AdditionalProperties;
 use codex_tools::DiscoverableTool;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
-use codex_tools::ToolHandlerKind;
 use codex_tools::ToolName;
-use codex_tools::ToolNamespace;
-use codex_tools::ToolRegistryPlanDeferredTool;
-use codex_tools::ToolRegistryPlanLazyMcpServer;
-use codex_tools::ToolRegistryPlanMcpTool;
-use codex_tools::ToolRegistryPlanParams;
 use codex_tools::ToolUserShellType;
 use codex_tools::ToolsConfig;
-use codex_tools::WaitAgentTimeoutOptions;
-use codex_tools::augment_tool_spec_for_code_mode;
-use codex_tools::build_tool_registry_plan;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -39,7 +36,7 @@ pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
 }
 
 struct McpToolPlanInputs<'a> {
-    mcp_tools: Vec<ToolRegistryPlanMcpTool<'a>>,
+    mcp_tools: Vec<ToolRegistryBuildMcpTool<'a>>,
     tool_namespaces: HashMap<String, ToolNamespace>,
 }
 
@@ -47,7 +44,7 @@ fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanI
     McpToolPlanInputs {
         mcp_tools: mcp_tools
             .values()
-            .map(|tool| ToolRegistryPlanMcpTool {
+            .map(|tool| ToolRegistryBuildMcpTool {
                 name: tool.canonical_tool_name(),
                 tool: &tool.tool,
             })
@@ -59,10 +56,7 @@ fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanI
                     tool.callable_namespace.clone(),
                     ToolNamespace {
                         name: tool.callable_namespace.clone(),
-                        description: tool
-                            .connector_description
-                            .clone()
-                            .or_else(|| tool.server_instructions.clone()),
+                        description: tool.namespace_description.clone(),
                     },
                 )
             })
@@ -79,64 +73,35 @@ pub(crate) fn build_specs_with_discoverable_tools(
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
-    use crate::tools::handlers::ApplyPatchHandler;
-    use crate::tools::handlers::CodeModeExecuteHandler;
-    use crate::tools::handlers::CodeModeWaitHandler;
-    use crate::tools::handlers::DynamicToolHandler;
-    use crate::tools::handlers::GoalHandler;
-    use crate::tools::handlers::ListDirHandler;
-    use crate::tools::handlers::McpHandler;
-    use crate::tools::handlers::McpResourceHandler;
-    use crate::tools::handlers::PlanHandler;
-    use crate::tools::handlers::RequestPermissionsHandler;
-    use crate::tools::handlers::RequestUserInputHandler;
-    use crate::tools::handlers::ShellCommandHandler;
-    use crate::tools::handlers::ShellHandler;
-    use crate::tools::handlers::TestSyncHandler;
-    use crate::tools::handlers::ToolSearchHandler;
-    use crate::tools::handlers::ToolSuggestHandler;
     use crate::tools::handlers::UnavailableToolHandler;
-    use crate::tools::handlers::UnifiedExecHandler;
-    use crate::tools::handlers::ViewImageHandler;
     use crate::tools::handlers::builtin_schedule::BUILTIN_SCHEDULE_TOOL_NAMES;
     use crate::tools::handlers::builtin_schedule::BuiltinScheduleHandler;
     use crate::tools::handlers::builtin_schedule::schedule_namespace_spec;
     use crate::tools::handlers::builtin_scratchpad::BUILTIN_SCRATCHPAD_TOOL_NAMES;
     use crate::tools::handlers::builtin_scratchpad::BuiltinScratchpadHandler;
     use crate::tools::handlers::builtin_scratchpad::scratchpad_namespace_spec;
-    use crate::tools::handlers::multi_agents::CloseAgentHandler;
-    use crate::tools::handlers::multi_agents::ResumeAgentHandler;
-    use crate::tools::handlers::multi_agents::SendInputHandler;
-    use crate::tools::handlers::multi_agents::SpawnAgentHandler;
-    use crate::tools::handlers::multi_agents::WaitAgentHandler;
-    use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
-    use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
-    use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
-    use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
-    use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
-    use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
+    use crate::tools::handlers::mcp::McpHandler;
     use crate::tools::handlers::session_overwatch::SESSION_OVERWATCH_TOOL_NAMES;
     use crate::tools::handlers::session_overwatch::SessionOverwatchHandler;
     use crate::tools::handlers::session_overwatch::session_overwatch_namespace_spec;
     use crate::tools::handlers::unavailable_tool_message;
     use crate::tools::tool_search_entry::build_tool_search_entries_for_config;
 
-    let mut builder = ToolRegistryBuilder::new();
     let mcp_tool_plan_inputs = mcp_tools.as_ref().map(map_mcp_tools_for_plan);
     let deferred_mcp_tool_sources = deferred_mcp_tools.as_ref().map(|tools| {
         tools
             .values()
-            .map(|tool| ToolRegistryPlanDeferredTool {
+            .map(|tool| ToolRegistryBuildDeferredTool {
                 name: tool.canonical_tool_name(),
                 server_name: tool.server_name.as_str(),
                 connector_name: tool.connector_name.as_deref(),
-                connector_description: tool.connector_description.as_deref(),
+                description: tool.namespace_description.as_deref(),
             })
             .collect::<Vec<_>>()
     });
     let lazy_mcp_server_sources = lazy_mcp_servers
         .iter()
-        .map(|server| ToolRegistryPlanLazyMcpServer {
+        .map(|server| ToolRegistryBuildLazyMcpServer {
             server_name: server.server_name.as_str(),
             description: server.description.as_deref(),
         })
@@ -153,9 +118,20 @@ pub(crate) fn build_specs_with_discoverable_tools(
     };
     let default_wait_timeout_ms =
         DEFAULT_WAIT_TIMEOUT_MS.clamp(min_wait_timeout_ms, MAX_WAIT_TIMEOUT_MS);
-    let plan = build_tool_registry_plan(
+    let deferred_dynamic_tools = dynamic_tools
+        .iter()
+        .filter(|tool| tool.defer_loading && (config.namespace_tools || tool.namespace.is_none()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let tool_search_entries = build_tool_search_entries_for_config(
         config,
-        ToolRegistryPlanParams {
+        deferred_mcp_tools.as_ref(),
+        lazy_mcp_servers.as_slice(),
+        &deferred_dynamic_tools,
+    );
+    let mut builder = build_tool_registry_builder(
+        config,
+        ToolRegistryBuildParams {
             mcp_tools: mcp_tool_plan_inputs
                 .as_ref()
                 .map(|inputs| inputs.mcp_tools.as_slice()),
@@ -172,37 +148,19 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 min_timeout_ms: min_wait_timeout_ms,
                 max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
             },
+            tool_search_entries: &tool_search_entries,
         },
     );
-    let shell_handler = Arc::new(ShellHandler);
-    let unified_exec_handler = Arc::new(UnifiedExecHandler);
-    let plan_handler = Arc::new(PlanHandler);
-    let apply_patch_handler = Arc::new(ApplyPatchHandler);
-    let dynamic_tool_handler = Arc::new(DynamicToolHandler);
-    let goal_handler = Arc::new(GoalHandler);
-    let view_image_handler = Arc::new(ViewImageHandler);
-    let mcp_handler = Arc::new(McpHandler);
-    let mcp_resource_handler = Arc::new(McpResourceHandler);
-    let shell_command_handler = Arc::new(ShellCommandHandler::from(config.shell_command_backend));
-    let request_permissions_handler = Arc::new(RequestPermissionsHandler);
-    let request_user_input_handler = Arc::new(RequestUserInputHandler {
-        available_modes: config.request_user_input_available_modes.clone(),
-    });
-    let deferred_dynamic_tools = dynamic_tools
-        .iter()
-        .filter(|tool| tool.defer_loading && (config.namespace_tools || tool.namespace.is_none()))
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut tool_search_handler = None;
-    let tool_suggest_handler = Arc::new(ToolSuggestHandler);
-    let code_mode_handler = Arc::new(CodeModeExecuteHandler);
-    let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
-    let unavailable_tool_handler = Arc::new(UnavailableToolHandler);
+    let mcp_handler = Arc::new(McpHandler::new(ToolName::plain("mcp")));
     let has_unavailable_mcp_tools = unavailable_called_tools
         .iter()
         .any(|tool_name| tool_name.display().starts_with("mcp__"));
-    let mut existing_spec_names = plan
-        .specs
+    if has_unavailable_mcp_tools || !lazy_mcp_servers.is_empty() {
+        builder.register_fallback_mcp_handler(mcp_handler);
+    }
+
+    let mut existing_spec_names = builder
+        .specs()
         .iter()
         .filter(|configured_tool| {
             (!config.builtin_scratchpad_enabled || configured_tool.name() != "scratchpad")
@@ -213,150 +171,16 @@ pub(crate) fn build_specs_with_discoverable_tools(
         .map(|configured_tool| configured_tool.name().to_string())
         .collect::<HashSet<_>>();
 
-    if has_unavailable_mcp_tools || !lazy_mcp_servers.is_empty() {
-        builder.register_fallback_mcp_handler(mcp_handler.clone());
-    }
-
-    for spec in plan.specs {
-        if config.builtin_scratchpad_enabled && spec.name() == "scratchpad" {
-            continue;
-        }
-        if config.builtin_schedule_enabled && spec.name() == "schedule" {
-            continue;
-        }
-        if config.builtin_session_overwatch_enabled && spec.name() == "session_overwatch" {
-            continue;
-        }
-        if spec.supports_parallel_tool_calls {
-            builder.push_spec_with_parallel_support(
-                spec.spec, /*supports_parallel_tool_calls*/ true,
-            );
-        } else {
-            builder.push_spec(spec.spec);
-        }
-    }
-
-    for handler in plan.handlers {
-        match handler.kind {
-            ToolHandlerKind::AgentJobs => {
-                builder.register_handler(handler.name, Arc::new(BatchJobHandler));
-            }
-            ToolHandlerKind::ApplyPatch => {
-                builder.register_handler(handler.name, apply_patch_handler.clone());
-            }
-            ToolHandlerKind::CloseAgentV1 => {
-                builder.register_handler(handler.name, Arc::new(CloseAgentHandler));
-            }
-            ToolHandlerKind::CloseAgentV2 => {
-                builder.register_handler(handler.name, Arc::new(CloseAgentHandlerV2));
-            }
-            ToolHandlerKind::CodeModeExecute => {
-                builder.register_handler(handler.name, code_mode_handler.clone());
-            }
-            ToolHandlerKind::CodeModeWait => {
-                builder.register_handler(handler.name, code_mode_wait_handler.clone());
-            }
-            ToolHandlerKind::DynamicTool => {
-                builder.register_handler(handler.name, dynamic_tool_handler.clone());
-            }
-            ToolHandlerKind::FollowupTaskV2 => {
-                builder.register_handler(handler.name, Arc::new(FollowupTaskHandlerV2));
-            }
-            ToolHandlerKind::Goal => {
-                builder.register_handler(handler.name, goal_handler.clone());
-            }
-            ToolHandlerKind::ListAgentsV2 => {
-                builder.register_handler(handler.name, Arc::new(ListAgentsHandlerV2));
-            }
-            ToolHandlerKind::ListDir => {
-                builder.register_handler(handler.name, Arc::new(ListDirHandler));
-            }
-            ToolHandlerKind::Mcp => {
-                builder.register_handler(handler.name, mcp_handler.clone());
-            }
-            ToolHandlerKind::McpResource => {
-                builder.register_handler(handler.name, mcp_resource_handler.clone());
-            }
-            ToolHandlerKind::Plan => {
-                builder.register_handler(handler.name, plan_handler.clone());
-            }
-            ToolHandlerKind::RequestPermissions => {
-                builder.register_handler(handler.name, request_permissions_handler.clone());
-            }
-            ToolHandlerKind::RequestUserInput => {
-                builder.register_handler(handler.name, request_user_input_handler.clone());
-            }
-            ToolHandlerKind::ResumeAgentV1 => {
-                builder.register_handler(handler.name, Arc::new(ResumeAgentHandler));
-            }
-            ToolHandlerKind::SendInputV1 => {
-                builder.register_handler(handler.name, Arc::new(SendInputHandler));
-            }
-            ToolHandlerKind::SendMessageV2 => {
-                builder.register_handler(handler.name, Arc::new(SendMessageHandlerV2));
-            }
-            ToolHandlerKind::Shell => {
-                builder.register_handler(handler.name, shell_handler.clone());
-            }
-            ToolHandlerKind::ShellCommand => {
-                builder.register_handler(handler.name, shell_command_handler.clone());
-            }
-            ToolHandlerKind::SpawnAgentV1 => {
-                builder.register_handler(handler.name, Arc::new(SpawnAgentHandler));
-            }
-            ToolHandlerKind::SpawnAgentV2 => {
-                builder.register_handler(handler.name, Arc::new(SpawnAgentHandlerV2));
-            }
-            ToolHandlerKind::TestSync => {
-                builder.register_handler(handler.name, Arc::new(TestSyncHandler));
-            }
-            ToolHandlerKind::ToolSearch => {
-                if tool_search_handler.is_none() {
-                    let entries = build_tool_search_entries_for_config(
-                        config,
-                        deferred_mcp_tools.as_ref(),
-                        lazy_mcp_servers.as_slice(),
-                        &deferred_dynamic_tools,
-                    );
-                    tool_search_handler = Some(Arc::new(ToolSearchHandler::new(entries)));
-                }
-                if let Some(tool_search_handler) = tool_search_handler.as_ref() {
-                    builder.register_handler(handler.name, tool_search_handler.clone());
-                }
-            }
-            ToolHandlerKind::ToolSuggest => {
-                builder.register_handler(handler.name, tool_suggest_handler.clone());
-            }
-            ToolHandlerKind::UnifiedExec => {
-                builder.register_handler(handler.name, unified_exec_handler.clone());
-            }
-            ToolHandlerKind::ViewImage => {
-                builder.register_handler(handler.name, view_image_handler.clone());
-            }
-            ToolHandlerKind::WaitAgentV1 => {
-                builder.register_handler(handler.name, Arc::new(WaitAgentHandler));
-            }
-            ToolHandlerKind::WaitAgentV2 => {
-                builder.register_handler(handler.name, Arc::new(WaitAgentHandlerV2));
-            }
-        }
-    }
-    if let Some(deferred_mcp_tools) = deferred_mcp_tools.as_ref() {
-        for (name, _) in deferred_mcp_tools.iter().filter(|(name, _)| {
-            !mcp_tools
-                .as_ref()
-                .is_some_and(|tools| tools.contains_key(*name))
-        }) {
-            builder.register_handler(name.clone(), mcp_handler.clone());
-        }
-    }
-
     if config.builtin_scratchpad_enabled {
         let scratchpad_handler = Arc::new(BuiltinScratchpadHandler);
         existing_spec_names.insert("scratchpad".to_string());
-        builder.push_spec(scratchpad_namespace_spec());
+        builder.push_spec(
+            scratchpad_namespace_spec(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
         for tool_name in BUILTIN_SCRATCHPAD_TOOL_NAMES {
-            builder.register_handler(
+            builder.register_handler_with_name(
                 ToolName::namespaced("scratchpad", *tool_name),
                 scratchpad_handler.clone(),
             );
@@ -366,9 +190,13 @@ pub(crate) fn build_specs_with_discoverable_tools(
     if config.builtin_schedule_enabled {
         let schedule_handler = Arc::new(BuiltinScheduleHandler);
         existing_spec_names.insert("schedule".to_string());
-        builder.push_spec(schedule_namespace_spec());
+        builder.push_spec(
+            schedule_namespace_spec(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
         for tool_name in BUILTIN_SCHEDULE_TOOL_NAMES {
-            builder.register_handler(
+            builder.register_handler_with_name(
                 ToolName::namespaced("schedule", *tool_name),
                 schedule_handler.clone(),
             );
@@ -378,9 +206,13 @@ pub(crate) fn build_specs_with_discoverable_tools(
     if config.builtin_session_overwatch_enabled {
         let session_overwatch_handler = Arc::new(SessionOverwatchHandler);
         existing_spec_names.insert("session_overwatch".to_string());
-        builder.push_spec(session_overwatch_namespace_spec());
+        builder.push_spec(
+            session_overwatch_namespace_spec(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
         for tool_name in SESSION_OVERWATCH_TOOL_NAMES {
-            builder.register_handler(
+            builder.register_handler_with_name(
                 ToolName::namespaced("session_overwatch", *tool_name),
                 session_overwatch_handler.clone(),
             );
@@ -405,14 +237,13 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 output_schema: None,
                 defer_loading: None,
             });
-            let spec = if config.code_mode_enabled {
-                augment_tool_spec_for_code_mode(spec)
-            } else {
-                spec
-            };
-            builder.push_spec(spec);
+            builder.push_spec(
+                spec,
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
         }
-        builder.register_handler(unavailable_tool, unavailable_tool_handler.clone());
+        builder.register_handler(Arc::new(UnavailableToolHandler::new(unavailable_tool)));
     }
     builder
 }
