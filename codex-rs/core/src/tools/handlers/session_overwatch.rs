@@ -15,6 +15,7 @@ use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
+use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use serde::Serialize;
 use serde_json::Value;
@@ -85,6 +86,10 @@ pub(crate) struct SessionOverwatchHandler;
 
 impl ToolHandler for SessionOverwatchHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::namespaced(SESSION_OVERWATCH_NAMESPACE, TOOL_LIST)
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function

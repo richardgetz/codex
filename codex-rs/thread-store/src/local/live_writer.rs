@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::ThreadMemoryMode;
+use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::RolloutRecorderParams;
 use codex_rollout::builder_from_items;
@@ -55,9 +57,24 @@ pub(super) async fn resume_thread(
     let state_builder = history
         .as_deref()
         .and_then(|items| builder_from_items(items, rollout_path.as_path()));
+    let cwd = params
+        .metadata
+        .cwd
+        .clone()
+        .ok_or_else(|| ThreadStoreError::InvalidRequest {
+            message: "local thread store requires a cwd".to_string(),
+        })?;
+    let config = RolloutConfig {
+        codex_home: store.config.codex_home.clone(),
+        sqlite_home: store.config.sqlite_home.clone(),
+        cwd,
+        model_provider_id: params.metadata.model_provider.clone(),
+        generate_memories: matches!(params.metadata.memory_mode, ThreadMemoryMode::Enabled),
+        initial_memory_mode: Some(memory_mode_as_str(params.metadata.memory_mode).to_string()),
+    };
     let state_db_ctx = store.state_db().await;
     let recorder = RolloutRecorder::new(
-        &store.config,
+        &config,
         RolloutRecorderParams::resume(
             rollout_path,
             create_thread::event_persistence_mode(params.event_persistence_mode),
@@ -70,6 +87,13 @@ pub(super) async fn resume_thread(
         message: format!("failed to resume local thread recorder: {err}"),
     })?;
     store.insert_live_recorder(params.thread_id, recorder).await
+}
+
+fn memory_mode_as_str(mode: ThreadMemoryMode) -> &'static str {
+    match mode {
+        ThreadMemoryMode::Enabled => "enabled",
+        ThreadMemoryMode::Disabled => "disabled",
+    }
 }
 
 pub(super) async fn append_items(

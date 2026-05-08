@@ -315,6 +315,8 @@ impl TerminalTitleSetupView {
             name: item.to_string(),
             description: Some(item.description().to_string()),
             enabled,
+            orderable: true,
+            section_break_after: false,
         }
     }
 }
@@ -368,7 +370,7 @@ mod tests {
                         line.push_str(symbol);
                     }
                 }
-                line
+                line.trim_end().to_string()
             })
             .collect();
         lines.join("\n")
