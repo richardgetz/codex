@@ -5,21 +5,18 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
 use crate::codex_thread::ThreadConfigSnapshot;
-use crate::find_archived_thread_path_by_id_str;
-use crate::find_thread_path_by_id_str;
-use crate::rollout::RolloutRecorder;
 use crate::session::emit_subagent_session_started;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
-use crate::thread_manager::ResumeThreadFromRolloutOptions;
+use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_manager::latest_collaboration_mode_from_rollout_items;
-use crate::thread_manager::thread_store_from_config;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use crate::tools::handlers::multi_agents_common::inherited_spawn_agent_collaboration_mode;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::error::CodexErr;
@@ -30,13 +27,15 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
-use codex_rollout::state_db;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
+use codex_thread_store::ReadThreadParams;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -121,6 +120,7 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::Compaction { .. }
+            | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other,
         ) => false,
         // A forked child gets its own runtime config, including spawned-agent
@@ -138,6 +138,9 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
 /// which keeps the registry scoped to that root thread rather than the entire `ThreadManager`.
 #[derive(Clone, Default)]
 pub(crate) struct AgentControl {
+    /// ID shared by the whole agent control session. This means every sub-agents from a common
+    /// root share the same session ID.
+    session_id: SessionId,
     /// Weak handle back to the global thread registry/state.
     /// This is `Weak` to avoid reference cycles and shadow persistence of the form
     /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
@@ -152,6 +155,15 @@ impl AgentControl {
             manager,
             ..Default::default()
         }
+    }
+
+    pub(crate) fn with_session_id(mut self, session_id: SessionId) -> Self {
+        self.session_id = session_id;
+        self
+    }
+
+    pub(crate) fn session_id(&self) -> SessionId {
+        self.session_id
     }
 
     /// Spawn a new agent thread and submit the initial prompt.
@@ -246,10 +258,10 @@ impl AgentControl {
                 state
                     .spawn_new_thread_with_source(
                         config.clone(),
-                        thread_store_from_config(&config),
                         self.clone(),
                         session_source,
                         initial_collaboration_mode,
+                        /*thread_source*/ Some(ThreadSource::Subagent),
                         /*persist_extended_history*/ false,
                         /*metrics_service_name*/ None,
                         inherited_shell_snapshot,
@@ -258,15 +270,7 @@ impl AgentControl {
                     )
                     .await?
             }
-            (None, _) => {
-                state
-                    .spawn_new_thread(
-                        config.clone(),
-                        thread_store_from_config(&config),
-                        self.clone(),
-                    )
-                    .await?
-            }
+            (None, _) => state.spawn_new_thread(config.clone(), self.clone()).await?,
         };
         agent_metadata.agent_id = Some(new_thread.thread_id);
         reservation.commit(agent_metadata.clone());
@@ -412,33 +416,27 @@ impl AgentControl {
         let parent_thread_id = *parent_thread_id;
         let parent_thread = state.get_thread(parent_thread_id).await.ok();
         if let Some(parent_thread) = parent_thread.as_ref() {
-            // `record_conversation_items` only queues rollout writes asynchronously.
-            // Flush/materialize the live parent before snapshotting JSONL for a fork.
-            parent_thread
-                .codex
-                .session
-                .ensure_rollout_materialized()
-                .await;
-            parent_thread.codex.session.flush_rollout().await?;
+            // `record_conversation_items` only queues persistence writes asynchronously.
+            // Flush before snapshotting store history for a fork.
+            parent_thread.ensure_rollout_materialized().await;
+            parent_thread.flush_rollout().await?;
         }
 
-        let rollout_path = parent_thread
-            .as_ref()
-            .and_then(|parent_thread| parent_thread.rollout_path())
-            .or(find_thread_path_by_id_str(
-                config.codex_home.as_path(),
-                &parent_thread_id.to_string(),
-            )
-            .await?)
+        let parent_history = state
+            .read_stored_thread(ReadThreadParams {
+                thread_id: parent_thread_id,
+                include_archived: true,
+                include_history: true,
+            })
+            .await?
+            .history
             .ok_or_else(|| {
                 CodexErr::Fatal(format!(
-                    "parent thread rollout unavailable for fork: {parent_thread_id}"
+                    "parent thread history unavailable for fork: {parent_thread_id}"
                 ))
             })?;
 
-        let mut forked_rollout_items = RolloutRecorder::get_rollout_history(&rollout_path)
-            .await?
-            .get_rollout_items();
+        let mut forked_rollout_items = parent_history.items;
         let mut initial_collaboration_mode = self
             .initial_collaboration_mode_for_spawn(state, Some(&session_source), options)
             .await?;
@@ -503,11 +501,11 @@ impl AgentControl {
         state
             .fork_thread_with_source(
                 config.clone(),
-                thread_store_from_config(&config),
                 InitialHistory::Forked(forked_rollout_items),
                 self.clone(),
                 session_source,
                 initial_collaboration_mode,
+                /*thread_source*/ Some(ThreadSource::Subagent),
                 /*persist_extended_history*/ false,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
@@ -607,6 +605,7 @@ impl AgentControl {
             let _ = config.features.disable(Feature::Collab);
         }
         let state = self.upgrade()?;
+        let state_db_ctx = state.state_db();
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let (session_source, agent_metadata) = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -617,7 +616,7 @@ impl AgentControl {
                 agent_nickname: _,
             }) => {
                 let (resumed_agent_nickname, resumed_agent_role) =
-                    if let Some(state_db_ctx) = state_db::get_state_db(&config).await {
+                    if let Some(state_db_ctx) = state_db_ctx.as_ref() {
                         match state_db_ctx.get_thread(thread_id).await {
                             Ok(Some(metadata)) => (metadata.agent_nickname, metadata.agent_role),
                             Ok(None) | Err(_) => (None, None),
@@ -644,24 +643,26 @@ impl AgentControl {
         let inherited_exec_policy = self
             .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
             .await;
-        let rollout_path =
-            match find_thread_path_by_id_str(config.codex_home.as_path(), &thread_id.to_string())
-                .await?
-            {
-                Some(rollout_path) => rollout_path,
-                None => find_archived_thread_path_by_id_str(
-                    config.codex_home.as_path(),
-                    &thread_id.to_string(),
-                )
-                .await?
-                .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?,
-            };
+        let stored_thread = state
+            .read_stored_thread(ReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: true,
+            })
+            .await?;
+        let history = stored_thread
+            .history
+            .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?
+            .items;
 
         let resumed_thread = state
-            .resume_thread_from_rollout_with_source(ResumeThreadFromRolloutOptions {
+            .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
                 config: config.clone(),
-                thread_store: thread_store_from_config(&config),
-                rollout_path,
+                initial_history: InitialHistory::Resumed(ResumedHistory {
+                    conversation_id: thread_id,
+                    history,
+                    rollout_path: stored_thread.rollout_path,
+                }),
                 agent_control: self.clone(),
                 session_source,
                 inherited_shell_snapshot,

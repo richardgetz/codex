@@ -6,21 +6,26 @@ For advanced configuration instructions, see [this documentation](https://develo
 
 For a full configuration reference, see [this documentation](https://developers.openai.com/codex/config-reference).
 
-## Connecting to MCP servers
+## Commit attribution
 
-Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the configuration reference for the latest MCP server options:
+Codex can add a [git trailer](https://git-scm.com/docs/git-interpret-trailers) to
+generated commit messages so commits make Codex's involvement explicit. This
+behavior is gated by the `codex_git_commit` feature flag; the top-level
+`commit_attribution` setting is only used when that feature is enabled.
 
-- https://developers.openai.com/codex/config-reference
-
-MCP tools default to serialized calls. To mark every tool exposed by one server
-as eligible for parallel tool calls, set `supports_parallel_tool_calls` on that
-server:
+Add the following to `~/.codex/config.toml`:
 
 ```toml
-[mcp_servers.docs]
-command = "docs-server"
-supports_parallel_tool_calls = true
+commit_attribution = "Codex <noreply@openai.com>"
+
+[features]
+codex_git_commit = true
 ```
+
+When enabled, Codex appends a `Co-authored-by:` trailer using the configured
+attribution value. If `commit_attribution` is omitted, Codex uses
+`Codex <noreply@openai.com>`. Set `commit_attribution = ""` to disable the
+trailer while leaving the feature flag enabled.
 
 Only enable parallel calls for MCP servers whose tools are safe to run at the
 same time. If tools read and write shared state, files, databases, or external

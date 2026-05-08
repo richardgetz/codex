@@ -387,6 +387,7 @@ Check supervised sessions directly for new progress, blockers, or operator instr
             reasoning_effort: Some(ReasoningEffort::High),
             personality: Some(Personality::Friendly),
             session_source: SessionSource::default(),
+            thread_source: None,
         };
         let collaboration_mode = CollaborationMode {
             mode: ModeKind::Plan,
