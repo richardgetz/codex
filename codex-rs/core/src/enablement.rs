@@ -268,7 +268,7 @@ mod tests {
             server_name: server_name.to_string(),
             callable_name: tool_name.to_string(),
             callable_namespace: format!("mcp__{server_name}__"),
-            server_instructions: None,
+            namespace_description: None,
             tool: Tool {
                 name: tool_name.to_string().into(),
                 title: None,
@@ -283,7 +283,6 @@ mod tests {
             connector_id: connector_id.map(str::to_string),
             connector_name: connector_id.map(str::to_string),
             plugin_display_names: Vec::new(),
-            connector_description: None,
         }
     }
 

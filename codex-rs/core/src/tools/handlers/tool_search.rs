@@ -13,6 +13,7 @@ use bm25::SearchEngineBuilder;
 use codex_tools::LoadableToolSpec;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
+use codex_tools::ToolName;
 use codex_tools::coalesce_loadable_tool_specs;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -46,6 +47,10 @@ impl ToolSearchHandler {
 
 impl ToolHandler for ToolSearchHandler {
     type Output = ToolSearchOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(TOOL_SEARCH_TOOL_NAME)
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -530,7 +535,7 @@ mod tests {
             server_name: server_name.to_string(),
             callable_name: tool_name.to_string(),
             callable_namespace: format!("mcp__{server_name}__"),
-            server_instructions: None,
+            namespace_description: None,
             tool: Tool {
                 name: tool_name.to_string().into(),
                 title: None,
@@ -549,7 +554,6 @@ mod tests {
             connector_id: None,
             connector_name: None,
             plugin_display_names: Vec::new(),
-            connector_description: None,
         }
     }
 

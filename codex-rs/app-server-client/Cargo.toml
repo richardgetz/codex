@@ -19,6 +19,7 @@ codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-feedback = { workspace = true }
+codex-message-history = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
 futures = { workspace = true }
@@ -33,4 +34,5 @@ url = { workspace = true }
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
