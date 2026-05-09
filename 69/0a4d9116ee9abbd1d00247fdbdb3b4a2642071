@@ -1,0 +1,27 @@
+intent:
+  id: "intent/2026-05-09/agent-efficiency-tooling#690a4d9116ee"
+  change_type: "feat"
+  scope: "fork"
+  summary: "Add fork tooling for agent memory, scratchpad recovery, outcomes reporting, permission restoration, and situational requirements."
+  decision: "Bundle the requested fork-only agent efficiency improvements behind focused config/tooling surfaces: user_preferences_memory for all-mode preference injection and migration, editable thread-owned scratchpad objectives with blocked/waiting state, metric outcomes summaries and static reports, previous-custom permission restoration, macOS malloc diagnostic env cleanup, opt-in scratchpad fanout guidance, and opt-in situational requirements guidance."
+  constraints:
+    - "Must preserve built-in scratchpad thread-id ownership, foreign-thread denial, and open_scratchpad anti-rebinding invariants."
+    - "Must keep app-server protocol and config schemas generated from the resolved Rust APIs."
+    - "Must keep scratchpad fanout and situational requirements off by default."
+    - "Must preserve orchestrator_memory while allowing copy migration into user_preferences_memory and optional effective orchestrator disablement."
+    - "Must not touch sandbox network environment variable behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/config/src/types.rs"
+    - "codex-rs/core/src/tools/handlers/builtin_scratchpad.rs"
+    - "codex-rs/core/src/orchestrator_memory.rs"
+    - "codex-rs/core/src/context/situational_requirements_instructions.rs"
+    - "codex-rs/tui/src/chatwidget.rs"
+    - "codex-rs/tui/src/outcomes_report.rs"
+    - "codex-rs/protocol/src/shell_environment.rs"
+    - "codex-rs/app-server-protocol/src/protocol/v2/turn.rs"
+    - "docs/fork-differences.md"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
