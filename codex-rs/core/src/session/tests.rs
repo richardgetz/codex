@@ -7560,6 +7560,44 @@ async fn build_initial_context_injects_orchestrator_memory_in_default_mode_when_
 }
 
 #[tokio::test]
+async fn build_initial_context_injects_user_preferences_memory_in_default_mode() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.user_preferences_memory.enabled = true;
+            config.user_preferences_memory.scope = codex_config::types::MemoriesScope::All;
+        },
+    )
+    .await;
+    let user_preferences_dir = turn_context
+        .config
+        .codex_home
+        .join("user_preferences_memory");
+    std::fs::create_dir_all(&user_preferences_dir).expect("create user preferences memory dir");
+    std::fs::write(
+        user_preferences_dir.join("summary.md"),
+        "Prefer direct implementation status updates.",
+    )
+    .expect("write user preferences memory summary");
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+    let developer_texts = developer_input_texts(&initial_context);
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("User Preferences Memory")),
+        "expected user preferences memory in default mode, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("Prefer direct implementation status updates.")),
+        "expected user preferences memory summary in developer instructions, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
 async fn build_initial_context_surfaces_recent_orchestrator_memory_when_summary_is_stale() {
     let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),

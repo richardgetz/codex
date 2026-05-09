@@ -34,6 +34,7 @@ use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::context::ScheduleInstructions;
 use crate::context::ScratchpadInstructions;
+use crate::context::SituationalRequirementsInstructions;
 use crate::default_skill_metadata_budget;
 use crate::enablement::filter_connectors_for_mode;
 use crate::enablement::filter_lazy_mcp_servers_for_mode;
@@ -3153,6 +3154,18 @@ impl Session {
         {
             developer_sections.push(orchestrator_memory_prompt);
         }
+        if turn_context.config.user_preferences_memory.enabled
+            && (turn_context.config.user_preferences_memory.scope == MemoriesScope::All
+                || turn_context.collaboration_mode.mode == ModeKind::Orchestrator)
+            && let Some(user_preferences_memory_prompt) =
+                build_user_preferences_memory_developer_instructions(
+                    &turn_context.config.codex_home,
+                    &turn_context.config.user_preferences_memory.memory_config(),
+                )
+                .await
+        {
+            developer_sections.push(user_preferences_memory_prompt);
+        }
         if turn_context.collaboration_mode.mode == ModeKind::Orchestrator
             && let Some(orchestrator_supervision_prompt) = self
                 .services
@@ -3171,7 +3184,8 @@ impl Session {
             .for_mode(turn_context.collaboration_mode.mode)
             .enabled
         {
-            developer_sections.push(ScratchpadInstructions::new().render());
+            developer_sections
+                .push(ScratchpadInstructions::new(turn_context.config.scratchpad.fanout).render());
             if turn_context.config.resume.inject_scratchpad
                 && let Some(active_scratchpad) = Self::build_active_scratchpad_context(
                     &turn_context.config.codex_home,
@@ -3188,6 +3202,14 @@ impl Session {
             .enabled
         {
             developer_sections.push(ScheduleInstructions::new().render());
+        }
+        if turn_context.config.situational_requirements.enabled {
+            developer_sections.push(
+                SituationalRequirementsInstructions::new(
+                    &turn_context.config.situational_requirements,
+                )
+                .render(),
+            );
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
@@ -3939,6 +3961,7 @@ fn compact_active_scratchpad_summary(value: &Value) -> Value {
         "completed",
         "next_steps",
         "pending_waits",
+        "blocked",
         "run_policy",
         "communication_policy",
         "outcomes",
@@ -3996,12 +4019,14 @@ pub(crate) fn scratchpad_has_uncompleted_items(value: &Value) -> bool {
     ) {
         return false;
     }
-    ["next_steps", "pending_waits"].iter().any(|key| {
-        value
-            .get(key)
-            .and_then(Value::as_array)
-            .is_some_and(|items| !items.is_empty())
-    })
+    ["next_steps", "pending_waits", "blocked"]
+        .iter()
+        .any(|key| {
+            value
+                .get(key)
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty())
+        })
 }
 
 pub(crate) fn scratchpad_has_continuous_work(value: &Value) -> bool {
@@ -4045,6 +4070,7 @@ pub(crate) fn active_thread_scratchpad(codex_home: &Path, thread_id: ThreadId) -
 }
 
 use crate::orchestrator_memory::build_developer_instructions as build_orchestrator_memory_developer_instructions;
+use crate::orchestrator_memory::build_user_preferences_developer_instructions as build_user_preferences_memory_developer_instructions;
 use codex_memories_read::build_memory_tool_developer_instructions;
 
 /// Builds the hook engine for one config snapshot, including any enabled plugin hooks.

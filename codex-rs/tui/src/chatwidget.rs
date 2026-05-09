@@ -262,6 +262,7 @@ use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
 use crate::app_event::RateLimitRefreshOrigin;
+use crate::app_event::RestorablePermissionSelection;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -767,6 +768,7 @@ pub(crate) struct ChatWidget {
     /// where the overlay may briefly treat new tail content as already cached.
     active_cell_revision: u64,
     config: Config,
+    previous_custom_permission_selection: Option<RestorablePermissionSelection>,
     raw_output_mode: bool,
     /// Runtime value resolved by core. `config.service_tier` remains the explicit user choice.
     effective_service_tier: Option<ServiceTier>,
@@ -5088,6 +5090,7 @@ impl ChatWidget {
             active_cell_revision: 0,
             raw_output_mode: config.tui_raw_output_mode,
             config,
+            previous_custom_permission_selection: None,
             effective_service_tier,
             skills_all: Vec::new(),
             skills_initial_state: None,
@@ -6508,6 +6511,7 @@ impl ChatWidget {
                     completed: notification.completed,
                     next_steps: notification.next_steps,
                     pending_waits: notification.pending_waits,
+                    blocked: notification.blocked,
                     updated_at: notification.updated_at,
                     archived_at: notification.archived_at,
                 })
@@ -8775,6 +8779,7 @@ impl ChatWidget {
         let current_review_policy = self.config.approvals_reviewer;
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
+        let restorable_current_selection = self.restorable_current_permission_selection();
 
         #[cfg(target_os = "windows")]
         let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
@@ -8831,12 +8836,15 @@ impl ChatWidget {
                     .unwrap_or(false);
             let default_actions: Vec<SelectionAction> = if requires_confirmation {
                 let preset_clone = preset.clone();
-                vec![Box::new(move |tx| {
-                    tx.send(AppEvent::OpenFullAccessConfirmation {
-                        preset: preset_clone.clone(),
-                        return_to_permissions: !include_read_only,
-                    });
-                })]
+                Self::with_restorable_permission_action(
+                    vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenFullAccessConfirmation {
+                            preset: preset_clone.clone(),
+                            return_to_permissions: !include_read_only,
+                        });
+                    })],
+                    restorable_current_selection.clone(),
+                )
             } else if preset.id == "auto" {
                 #[cfg(target_os = "windows")]
                 {
@@ -8849,55 +8857,73 @@ impl ChatWidget {
                                 self.config.codex_home.as_path(),
                             )
                         {
-                            vec![Box::new(move |tx| {
-                                tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
-                                    preset: preset_clone.clone(),
-                                    mode: WindowsSandboxEnableMode::Elevated,
-                                });
-                            })]
+                            Self::with_restorable_permission_action(
+                                vec![Box::new(move |tx| {
+                                    tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                                        preset: preset_clone.clone(),
+                                        mode: WindowsSandboxEnableMode::Elevated,
+                                    });
+                                })],
+                                restorable_current_selection.clone(),
+                            )
                         } else {
-                            vec![Box::new(move |tx| {
-                                tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
-                                    preset: preset_clone.clone(),
-                                });
-                            })]
+                            Self::with_restorable_permission_action(
+                                vec![Box::new(move |tx| {
+                                    tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
+                                        preset: preset_clone.clone(),
+                                    });
+                                })],
+                                restorable_current_selection.clone(),
+                            )
                         }
                     } else if let Some((sample_paths, extra_count, failed_scan)) =
                         self.world_writable_warning_details()
                     {
                         let preset_clone = preset.clone();
-                        vec![Box::new(move |tx| {
-                            tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
-                                preset: Some(preset_clone.clone()),
-                                sample_paths: sample_paths.clone(),
-                                extra_count,
-                                failed_scan,
-                            });
-                        })]
+                        Self::with_restorable_permission_action(
+                            vec![Box::new(move |tx| {
+                                tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+                                    preset: Some(preset_clone.clone()),
+                                    sample_paths: sample_paths.clone(),
+                                    extra_count,
+                                    failed_scan,
+                                });
+                            })],
+                            restorable_current_selection.clone(),
+                        )
                     } else {
-                        Self::approval_preset_actions(
-                            preset_approval,
-                            preset.permission_profile.clone(),
-                            base_name.clone(),
-                            ApprovalsReviewer::User,
+                        Self::with_restorable_permission_action(
+                            Self::approval_preset_actions(
+                                preset_approval,
+                                preset.permission_profile.clone(),
+                                base_name.clone(),
+                                ApprovalsReviewer::User,
+                            ),
+                            restorable_current_selection.clone(),
                         )
                     }
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
+                    Self::with_restorable_permission_action(
+                        Self::approval_preset_actions(
+                            preset_approval,
+                            preset.permission_profile.clone(),
+                            base_name.clone(),
+                            ApprovalsReviewer::User,
+                        ),
+                        restorable_current_selection.clone(),
+                    )
+                }
+            } else {
+                Self::with_restorable_permission_action(
                     Self::approval_preset_actions(
                         preset_approval,
                         preset.permission_profile.clone(),
                         base_name.clone(),
                         ApprovalsReviewer::User,
-                    )
-                }
-            } else {
-                Self::approval_preset_actions(
-                    preset_approval,
-                    preset.permission_profile.clone(),
-                    base_name.clone(),
-                    ApprovalsReviewer::User,
+                    ),
+                    restorable_current_selection.clone(),
                 )
             };
             if preset.id == "auto" {
@@ -8931,11 +8957,14 @@ impl ChatWidget {
                                 self.config.cwd.as_path(),
                                 &preset,
                             ),
-                        actions: Self::approval_preset_actions(
-                            preset_approval,
-                            preset.permission_profile.clone(),
-                            "Auto-review".to_string(),
-                            ApprovalsReviewer::AutoReview,
+                        actions: Self::with_restorable_permission_action(
+                            Self::approval_preset_actions(
+                                preset_approval,
+                                preset.permission_profile.clone(),
+                                "Auto-review".to_string(),
+                                ApprovalsReviewer::AutoReview,
+                            ),
+                            restorable_current_selection.clone(),
                         ),
                         dismiss_on_select: true,
                         disabled_reason: approval_disabled_reason
@@ -8959,6 +8988,37 @@ impl ChatWidget {
                     ..Default::default()
                 });
             }
+        }
+
+        if let Some(previous_selection) = self.previous_custom_permission_selection.clone()
+            && !self.permission_selection_matches_current(&previous_selection)
+        {
+            let disabled_reason = self
+                .config
+                .permissions
+                .approval_policy
+                .can_set(&previous_selection.approval_policy.to_core())
+                .err()
+                .map(|err| err.to_string())
+                .or_else(|| {
+                    self.config
+                        .permissions
+                        .permission_profile
+                        .can_set(&previous_selection.permission_profile)
+                        .err()
+                        .map(|err| err.to_string())
+                });
+            items.push(SelectionItem {
+                name: "Previous Custom".to_string(),
+                description: Some(
+                    "Return to the custom permissions used before switching presets.".to_string(),
+                ),
+                is_current: false,
+                actions: Self::restorable_permission_actions(previous_selection),
+                dismiss_on_select: true,
+                disabled_reason,
+                ..Default::default()
+            });
         }
 
         let footer_note = show_elevate_sandbox_hint.then(|| {
@@ -9071,6 +9131,73 @@ impl ChatWidget {
 
         let view = ExperimentalFeaturesView::new(features, self.app_event_tx.clone());
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn restorable_current_permission_selection(&self) -> Option<RestorablePermissionSelection> {
+        let selection = RestorablePermissionSelection {
+            approval_policy: AskForApproval::from(self.config.permissions.approval_policy.value()),
+            permission_profile: self.config.permissions.permission_profile(),
+            approvals_reviewer: self.config.approvals_reviewer,
+        };
+
+        (!Self::is_builtin_permission_selection(&selection)).then_some(selection)
+    }
+
+    fn is_builtin_permission_selection(selection: &RestorablePermissionSelection) -> bool {
+        builtin_approval_presets().into_iter().any(|preset| {
+            let preset_approval = AskForApproval::from(preset.approval);
+            if selection.approval_policy != preset_approval
+                || selection.permission_profile != preset.permission_profile
+            {
+                return false;
+            }
+
+            match preset.id {
+                "auto" => matches!(
+                    selection.approvals_reviewer,
+                    ApprovalsReviewer::User | ApprovalsReviewer::AutoReview
+                ),
+                _ => selection.approvals_reviewer == ApprovalsReviewer::User,
+            }
+        })
+    }
+
+    fn permission_selection_matches_current(
+        &self,
+        selection: &RestorablePermissionSelection,
+    ) -> bool {
+        selection.approval_policy
+            == AskForApproval::from(self.config.permissions.approval_policy.value())
+            && selection.permission_profile == self.config.permissions.permission_profile()
+            && selection.approvals_reviewer == self.config.approvals_reviewer
+    }
+
+    fn with_restorable_permission_action(
+        actions: Vec<SelectionAction>,
+        selection: Option<RestorablePermissionSelection>,
+    ) -> Vec<SelectionAction> {
+        let Some(selection) = selection else {
+            return actions;
+        };
+
+        let mut actions_with_remember: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::RememberCustomPermissionSelection(
+                selection.clone(),
+            ));
+        })];
+        actions_with_remember.extend(actions);
+        actions_with_remember
+    }
+
+    fn restorable_permission_actions(
+        selection: RestorablePermissionSelection,
+    ) -> Vec<SelectionAction> {
+        Self::approval_preset_actions(
+            selection.approval_policy,
+            selection.permission_profile,
+            "Previous Custom".to_string(),
+            selection.approvals_reviewer,
+        )
     }
 
     fn approval_preset_actions(
@@ -9688,6 +9815,13 @@ impl ChatWidget {
         profile: PermissionProfile,
     ) -> ConstraintResult<()> {
         self.config.permissions.set_permission_profile(profile)
+    }
+
+    pub(crate) fn remember_custom_permission_selection(
+        &mut self,
+        selection: RestorablePermissionSelection,
+    ) {
+        self.previous_custom_permission_selection = Some(selection);
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]

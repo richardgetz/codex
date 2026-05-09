@@ -62,6 +62,66 @@ async fn build_developer_instructions_falls_back_to_profile() {
 }
 
 #[tokio::test]
+async fn build_user_preferences_instructions_reads_user_preferences_root() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path().abs();
+    let user_preferences_dir = codex_home.join("user_preferences_memory");
+    tokio_fs::create_dir_all(&user_preferences_dir)
+        .await
+        .unwrap();
+    tokio_fs::write(
+        user_preferences_dir.join("summary.md"),
+        "Prefer concise implementation updates.",
+    )
+    .await
+    .unwrap();
+
+    let instructions = build_user_preferences_developer_instructions(
+        &codex_home,
+        &OrchestratorMemoryConfig {
+            scope: codex_config::types::MemoriesScope::All,
+            ..OrchestratorMemoryConfig::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(instructions.contains("User Preferences Memory"));
+    assert!(instructions.contains(&format!(
+        "- {} (already provided below; do NOT open again)",
+        user_preferences_dir.join("summary.md").display()
+    )));
+    assert!(instructions.contains("Prefer concise implementation updates."));
+}
+
+#[test]
+fn migrate_orchestrator_memory_to_user_preferences_copies_missing_files() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path().abs();
+    let orchestrator_memory_dir = codex_home.join("orchestrator_memory");
+    let user_preferences_dir = codex_home.join("user_preferences_memory");
+    std::fs::create_dir_all(orchestrator_memory_dir.join("buckets")).unwrap();
+    std::fs::write(orchestrator_memory_dir.join("summary.md"), "summary").unwrap();
+    std::fs::write(
+        orchestrator_memory_dir.join("buckets/followup_state.jsonl"),
+        "bucket",
+    )
+    .unwrap();
+
+    let migrated = migrate_orchestrator_memory_to_user_preferences(&codex_home).unwrap();
+
+    assert!(migrated);
+    assert_eq!(
+        std::fs::read_to_string(user_preferences_dir.join("summary.md")).unwrap(),
+        "summary"
+    );
+    assert_eq!(
+        std::fs::read_to_string(user_preferences_dir.join("buckets/followup_state.jsonl")).unwrap(),
+        "bucket"
+    );
+}
+
+#[tokio::test]
 async fn prune_entries_matching_needle_rewrites_preferences_and_generated_artifacts() {
     let temp = tempdir().unwrap();
     let codex_home = temp.path().abs();

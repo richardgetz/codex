@@ -213,6 +213,38 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - Legacy memory events that predate bucketed schemas are migrated on the next
   read or consolidation, with a `preferences.jsonl.pre-bucket-migration` backup.
 
+### User preferences memory
+
+- User preferences memory is the everywhere-available successor/parallel path
+  for the fork's orchestrator-memory data. It defaults to enabled and scoped to
+  all collaboration modes, but only injects context when
+  `<codex_home>/user_preferences_memory/summary.md` or `profile.md` has
+  content.
+
+  ```toml
+  [user_preferences_memory]
+  enabled = true
+  scope = "all"
+  migrate_from_orchestrator_memory = false
+  disable_orchestrator_memory_after_migration = false
+
+  [user_preferences_memory.cleanup]
+  enabled = true
+  schedule = "03:30"
+  ```
+
+- Startup migration can copy missing files from
+  `<codex_home>/orchestrator_memory` into
+  `<codex_home>/user_preferences_memory`. Set
+  `migrate_from_orchestrator_memory = true` to run the copy pass. Set
+  `disable_orchestrator_memory_after_migration = true` when you want the
+  effective `orchestrator_memory` config disabled after that pass succeeds.
+- `/user-preferences-memory-migrate` runs the same copy pass on demand for the
+  current Codex home. It does not edit config; use the TOML option above when
+  you want orchestrator memory disabled after migration.
+- `<codex_home>/user_preferences_memory` is created on startup and added to
+  workspace-write writable roots alongside `orchestrator_memory`.
+
 ### Built-in scratchpad
 
 - Default and Orchestrator modes treat scratchpad as a first-class
@@ -247,7 +279,14 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   creating a replacement. Archived pads remain readable and editable by their
   owning thread until lifecycle deletion.
 - Built-in scratchpad supports active and archived lookup, archive/unarchive,
-  next-step and pending-wait updates, action-policy checks, and wait check-ins.
+  next-step, pending-wait, and blocked-item updates, action-policy checks, and
+  wait check-ins. Continuous mode treats `next_steps` as the actionable queue;
+  `pending_waits` and `blocked` are recovery context and do not keep the loop
+  alive on their own. Use `wait_type = "user_confirmation"` for waits that need
+  the user to grant access, confirm a decision, or merge/unblock something.
+- The current thread scratchpad objective can be renamed through
+  `update_scratchpad.objective`. `open_scratchpad` still refuses to rebind an
+  existing thread-owned scratchpad to a different objective.
 - Scratchpads can record measurable outcomes with `record_outcome`, using
   portable datapoints scoped to a service, endpoint, function, feature, or other
   surface. Outcome entries can include metric/unit, baseline/current/delta,
@@ -265,6 +304,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - Scratchpads can record delegated work lineage with `record_delegation`,
   including the subagent id/label, parent item references, child scratchpad id,
   status, notes, and artifacts so parent-child work ownership survives restart.
+- Scratchpad fanout is opt-in. When enabled, developer guidance allows agents
+  to delegate independent, disconnected `next_steps` to up to `max_agents`
+  child agents while keeping the parent responsible for integration, follow-up
+  fixes, merge safety, and instruction-compliance checks.
 - `/scratchpad` renders the current session's built-in scratchpad on demand,
   including current objective, status, completed work, next steps, and waits.
 - `/scratchpad-absorb <scratchpad_id>` copies another scratchpad into the
@@ -299,6 +342,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   auto_archive_after_days = 30
   delete_archived_after_days = 90
 
+  [scratchpad.fanout]
+  enabled = false
+  max_agents = 3
+
   [scratchpad.view]
   enabled = true
   show_id = true
@@ -319,6 +366,37 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
 - The legacy `[orchestrator].recover_scratchpad_after_compaction` key remains
   supported as an Orchestrator-only compatibility alias.
+
+### Situational requirements
+
+- Situational requirements are off by default. When enabled, Codex injects
+  deterministic trigger/action rules into developer context so recurring guard
+  actions are mechanically required when a situation applies.
+
+  ```toml
+  [situational_requirements]
+  enabled = true
+
+  [[situational_requirements.rules]]
+  trigger = "code_change"
+  actions = [
+    { action = "git_intent_note", mcp = "git-intent-notes" },
+  ]
+
+  [[situational_requirements.rules]]
+  trigger = "iac_change"
+  actions = [
+    { action = "aws_docs_check", mcp = "aws-docs" },
+    { action = "post_change_review", skill = "post-change-review" },
+  ]
+  ```
+
+- Supported triggers are `code_change`, `test_change`, `iac_change`,
+  `doc_change`, `web_search`, and `pr_open`.
+- Supported actions are `git_intent_note`, `aws_docs_check`,
+  `post_change_review`, `skill`, `mcp`, and `web_search_citation`. Rules can
+  name an MCP or skill so the model-visible requirement points at the exact
+  guard surface to use.
 
 ### Fast resume
 

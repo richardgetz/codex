@@ -1879,6 +1879,8 @@ pub struct ScratchpadUpdateEvent {
     pub completed: Vec<String>,
     pub next_steps: Vec<String>,
     pub pending_waits: Vec<String>,
+    #[serde(default)]
+    pub blocked: Vec<String>,
     pub updated_at: String,
     pub archived_at: Option<String>,
 }

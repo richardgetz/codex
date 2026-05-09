@@ -33,8 +33,8 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the ma
 const GOAL_USAGE: &str = "Usage: /goal <objective>";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const CONTINUOUS_USAGE: &str = "Usage: /continuous [on|off|status]";
-const OUTCOMES_USAGE: &str = "Usage: /outcomes [on|off|status]";
-const SCRATCHPAD_ABSORB_USAGE: &str = "Usage: /scratchpad-absorb <scratchpad_id> [--exclude-pending] [--exclude-notes] [--exclude-outcomes] [--exclude-delegations] [--exclude-artifacts] [--exclude-worktrees] [--exclude-completed] [--exclude-next-steps] [--exclude-git-refs]";
+const OUTCOMES_USAGE: &str = "Usage: /outcomes [on|off|status|report]";
+const SCRATCHPAD_ABSORB_USAGE: &str = "Usage: /scratchpad-absorb <scratchpad_id> [--exclude-pending] [--exclude-blocked] [--exclude-notes] [--exclude-outcomes] [--exclude-delegations] [--exclude-artifacts] [--exclude-worktrees] [--exclude-completed] [--exclude-next-steps] [--exclude-git-refs]";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
 
 fn scratchpad_update_event_from_value(value: &serde_json::Value) -> Option<ScratchpadUpdateEvent> {
@@ -62,6 +62,11 @@ fn scratchpad_update_event_from_value(value: &serde_json::Value) -> Option<Scrat
             .get("pending_waits")
             .and_then(serde_json::Value::as_array)
             .map(|waits| waits.iter().map(format_pending_wait).collect())
+            .unwrap_or_default(),
+        blocked: value
+            .get("blocked")
+            .and_then(serde_json::Value::as_array)
+            .map(|blocked| blocked.iter().map(format_blocked_item).collect())
             .unwrap_or_default(),
         updated_at: value
             .get("updated_at")
@@ -121,65 +126,24 @@ fn format_pending_wait(wait: &serde_json::Value) -> String {
         .to_string()
 }
 
-fn outcomes_markdown(
-    thread_id: ThreadId,
-    objective: &str,
-    outcomes: &[serde_json::Value],
-) -> String {
-    let mut lines = vec![
-        format!("# Outcomes for {objective}"),
-        String::new(),
-        format!("Scratchpad: `{thread_id}`"),
-        String::new(),
-    ];
-    if outcomes.is_empty() {
-        lines.push("No outcomes recorded.".to_string());
-        return lines.join("\n");
+fn format_blocked_item(blocked: &serde_json::Value) -> String {
+    if let Some(text) = blocked.as_str() {
+        return text.to_string();
     }
-
-    for outcome in outcomes {
-        let object = outcome.as_object();
-        let scope = object
-            .and_then(|object| object.get("scope"))
-            .map(format_outcome_value)
-            .unwrap_or_else(|| "general".to_string());
-        let metric = object
-            .and_then(|object| object.get("metric"))
-            .map(format_outcome_value)
-            .unwrap_or_else(|| "metric".to_string());
-        lines.push(format!("## {scope} - {metric}"));
-        for key in [
-            "baseline",
-            "current",
-            "delta",
-            "unit",
-            "summary",
-            "tradeoffs",
-            "commit",
-            "pr",
-            "recorded_at",
-        ] {
-            if let Some(value) = object.and_then(|object| object.get(key)) {
-                lines.push(format!("- {key}: {}", format_outcome_value(value)));
-            }
-        }
-        if let Some(provenance) = object.and_then(|object| object.get("provenance")) {
-            lines.push(format!(
-                "- provenance: {}",
-                format_outcome_value(provenance)
-            ));
-        }
-        lines.push(String::new());
-    }
-
-    lines.join("\n")
-}
-
-fn format_outcome_value(value: &serde_json::Value) -> String {
-    value
-        .as_str()
-        .map(ToString::to_string)
-        .unwrap_or_else(|| value.to_string())
+    let Some(object) = blocked.as_object() else {
+        return blocked.to_string();
+    };
+    [
+        "summary",
+        "blocked_on",
+        "required_user_action",
+        "blocker_id",
+        "reason",
+    ]
+    .iter()
+    .find_map(|key| object.get(*key).and_then(serde_json::Value::as_str))
+    .unwrap_or("blocked item")
+    .to_string()
 }
 
 impl ChatWidget {
@@ -379,12 +343,12 @@ impl ChatWidget {
         }
     }
 
-    fn add_current_outcomes_output(&mut self) {
+    fn read_current_outcomes(&mut self) -> Option<(ThreadId, String, Vec<serde_json::Value>)> {
         let Some((thread_id, path)) = self.current_scratchpad_path() else {
             self.add_error_message(
                 "'/outcomes' is unavailable before the session starts.".to_string(),
             );
-            return;
+            return None;
         };
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
@@ -393,13 +357,13 @@ impl ChatWidget {
                     format!("No outcomes are available because scratchpad `{thread_id}` does not exist yet."),
                     Some("Record outcomes with the built-in scratchpad record_outcome tool during measurable work.".to_string()),
                 );
-                return;
+                return None;
             }
             Err(err) => {
                 self.add_error_message(format!(
                     "Could not read built-in scratchpad `{thread_id}`: {err}"
                 ));
-                return;
+                return None;
             }
         };
         let value = match serde_json::from_str::<serde_json::Value>(&text) {
@@ -408,26 +372,59 @@ impl ChatWidget {
                 self.add_error_message(format!(
                     "Built-in scratchpad `{thread_id}` is invalid JSON: {err}"
                 ));
-                return;
+                return None;
             }
         };
         if !scratchpad_value_matches_thread(&value, &thread_id) {
             self.add_error_message(format!(
                 "Built-in scratchpad `{thread_id}` is owned by another thread and cannot be exported."
             ));
-            return;
+            return None;
         }
         let objective = value
             .get("objective")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or("Scratchpad outcomes");
+            .unwrap_or("Scratchpad outcomes")
+            .to_string();
         let outcomes = value
             .get("outcomes")
             .and_then(serde_json::Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let markdown = outcomes_markdown(thread_id, objective, &outcomes);
+        Some((thread_id, objective, outcomes))
+    }
+
+    fn add_current_outcomes_output(&mut self) {
+        let Some((thread_id, objective, outcomes)) = self.read_current_outcomes() else {
+            return;
+        };
+        let markdown = crate::outcomes_report::markdown(thread_id, &objective, &outcomes);
         self.add_to_history(history_cell::new_outcomes_export(markdown));
+    }
+
+    fn write_current_outcomes_report(&mut self) {
+        let Some((thread_id, objective, outcomes)) = self.read_current_outcomes() else {
+            return;
+        };
+        match crate::outcomes_report::write_html_report(
+            &self.config.codex_home,
+            thread_id,
+            &objective,
+            &outcomes,
+        ) {
+            Ok(path) => {
+                self.add_info_message(
+                    format!("Outcomes report written to {}", path.display()),
+                    Some(
+                        "The report is a static local HTML file with embedded SVG charts."
+                            .to_string(),
+                    ),
+                );
+            }
+            Err(err) => {
+                self.add_error_message(format!("Could not write outcomes report: {err}"));
+            }
+        }
     }
 
     fn set_outcomes_tracking_enabled(&mut self, enabled: bool) {
@@ -466,6 +463,7 @@ impl ChatWidget {
             Some("on") => self.set_outcomes_tracking_enabled(/*enabled*/ true),
             Some("off") => self.set_outcomes_tracking_enabled(/*enabled*/ false),
             Some("status") => self.add_outcomes_tracking_status(),
+            Some("report") => self.write_current_outcomes_report(),
             Some(_) => self.add_error_message(OUTCOMES_USAGE.to_string()),
             None => self.add_current_outcomes_output(),
         }
@@ -926,6 +924,25 @@ impl ChatWidget {
                     ),
                 );
                 self.submit_op(AppCommand::ConsolidateOrchestratorMemory);
+            }
+            SlashCommand::UserPreferencesMemoryMigrate => {
+                self.add_info_message(
+                    "User preferences memory migration started.".to_string(),
+                    Some(
+                        "This copies missing files from orchestrator_memory into user_preferences_memory."
+                            .to_string(),
+                    ),
+                );
+                let tx = self.app_event_tx.clone();
+                let codex_home = self.config.codex_home.clone();
+                tokio::spawn(async move {
+                    let result =
+                        crate::legacy_core::migrate_orchestrator_memory_to_user_preferences(
+                            &codex_home,
+                        )
+                        .map_err(|err| err.to_string());
+                    tx.send(AppEvent::UserPreferencesMemoryMigrateResult { result });
+                });
             }
             SlashCommand::Scratchpad => {
                 self.add_current_scratchpad_output();
@@ -1494,6 +1511,7 @@ impl ChatWidget {
             | SlashCommand::Mcp
             | SlashCommand::OrchestratorMemoryForget
             | SlashCommand::OrchestratorMemoryConsolidate
+            | SlashCommand::UserPreferencesMemoryMigrate
             | SlashCommand::Scratchpad
             | SlashCommand::ScratchpadAbsorb
             | SlashCommand::ScratchpadUnarchive
@@ -1649,6 +1667,7 @@ fn parse_scratchpad_absorb_args(
             "--exclude-completed" => options.include_completed = false,
             "--exclude-next-steps" => options.include_next_steps = false,
             "--exclude-pending" => options.include_pending_waits = false,
+            "--exclude-blocked" => options.include_blocked = false,
             "--exclude-notes" => options.include_notes = false,
             "--exclude-git-refs" => options.include_git_refs = false,
             "--exclude-artifacts" => options.include_artifacts = false,

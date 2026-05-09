@@ -52,6 +52,7 @@ use codex_core_api::ScratchpadConfig;
 use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
 use codex_core_api::ShellEnvironmentPolicy;
+use codex_core_api::SituationalRequirementsConfig;
 use codex_core_api::SkillsConfig;
 use codex_core_api::TerminalResizeReflowConfig;
 use codex_core_api::ThreadControlConfig;
@@ -62,6 +63,7 @@ use codex_core_api::TuiKeymap;
 use codex_core_api::TuiNotificationSettings;
 use codex_core_api::UriBasedFileOpener;
 use codex_core_api::UserInput;
+use codex_core_api::UserPreferencesMemoryConfig;
 use codex_core_api::WebSearchMode;
 use codex_core_api::arg0_dispatch_or_else;
 use codex_core_api::built_in_model_providers;
@@ -238,7 +240,9 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         orchestrator_memory: OrchestratorMemoryConfig::default(),
+        user_preferences_memory: UserPreferencesMemoryConfig::default(),
         scratchpad: ScratchpadConfig::default(),
+        situational_requirements: SituationalRequirementsConfig::default(),
         schedule: ScheduleConfig::default(),
         resume: ResumeConfig::default(),
         accounts: AccountsConfig::default(),

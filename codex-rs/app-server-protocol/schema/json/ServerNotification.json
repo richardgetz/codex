@@ -4590,6 +4590,12 @@
             "null"
           ]
         },
+        "blocked": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "completed": {
           "items": {
             "type": "string"
@@ -4631,6 +4637,7 @@
         }
       },
       "required": [
+        "blocked",
         "completed",
         "continuousEnabled",
         "nextSteps",

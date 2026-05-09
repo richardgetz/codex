@@ -1909,6 +1909,7 @@ async fn scratchpad_update_renders_history_cell() {
                 "Add scratchpad history cell 6".to_string(),
             ],
             pending_waits: vec!["Wait for manual UI feedback".to_string()],
+            blocked: vec!["Need AWS role update".to_string()],
             updated_at: "2026-04-28T19:00:00Z".to_string(),
             archived_at: None,
         }),
@@ -1932,6 +1933,7 @@ async fn scratchpad_update_renders_history_cell() {
     assert!(!blob.contains("Add scratchpad history cell 6"));
     assert!(blob.contains("… 1 more"));
     assert!(blob.contains("Wait for manual UI feedback"));
+    assert!(blob.contains("Need AWS role update"));
 }
 
 #[tokio::test]
@@ -1943,6 +1945,7 @@ async fn scratchpad_update_respects_tui_view_config() {
         completed_items: 2,
         next_steps: 1,
         pending_waits: 0,
+        blocked: 0,
     };
 
     let event = Event {
@@ -1959,6 +1962,7 @@ async fn scratchpad_update_respects_tui_view_config() {
             ],
             next_steps: vec!["First next".to_string(), "Second next".to_string()],
             pending_waits: vec!["Hidden wait".to_string()],
+            blocked: vec!["Hidden blocker".to_string()],
             updated_at: "2026-04-28T19:00:00Z".to_string(),
             archived_at: None,
         }),
@@ -1975,6 +1979,7 @@ async fn scratchpad_update_respects_tui_view_config() {
     assert!(blob.contains("First next"));
     assert!(!blob.contains("Second next"));
     assert!(!blob.contains("Hidden wait"));
+    assert!(!blob.contains("Hidden blocker"));
 
     chat.config.scratchpad.view.enabled = false;
     chat.handle_codex_event(event);

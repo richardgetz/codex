@@ -54,6 +54,8 @@ pub enum SlashCommand {
     OrchestratorMemoryForget,
     #[strum(serialize = "orchestrator-memory-consolidate")]
     OrchestratorMemoryConsolidate,
+    #[strum(serialize = "user-preferences-memory-migrate")]
+    UserPreferencesMemoryMigrate,
     Scratchpad,
     #[strum(serialize = "scratchpad-absorb")]
     ScratchpadAbsorb,
@@ -147,6 +149,9 @@ impl SlashCommand {
             SlashCommand::OrchestratorMemoryConsolidate => {
                 "run orchestrator memory cleanup and consolidation now"
             }
+            SlashCommand::UserPreferencesMemoryMigrate => {
+                "copy orchestrator memory into user preferences memory"
+            }
             SlashCommand::Scratchpad => "show the built-in scratchpad for this session",
             SlashCommand::ScratchpadAbsorb => {
                 "copy another scratchpad into this session as contextual history"
@@ -191,6 +196,7 @@ impl SlashCommand {
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
                 | SlashCommand::OrchestratorMemoryForget
+                | SlashCommand::UserPreferencesMemoryMigrate
                 | SlashCommand::Account
         )
     }
@@ -248,6 +254,7 @@ impl SlashCommand {
             | SlashCommand::Mcp
             | SlashCommand::OrchestratorMemoryForget
             | SlashCommand::OrchestratorMemoryConsolidate
+            | SlashCommand::UserPreferencesMemoryMigrate
             | SlashCommand::Scratchpad
             | SlashCommand::ScratchpadAbsorb
             | SlashCommand::ScratchpadUnarchive

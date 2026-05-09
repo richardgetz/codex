@@ -59,6 +59,7 @@ pub use network_proxy_loader::build_network_proxy_state;
 pub use network_proxy_loader::build_network_proxy_state_and_reloader;
 mod orchestrator_memory;
 pub use orchestrator_memory::OrchestratorMemoryPruneResult;
+pub use orchestrator_memory::migrate_orchestrator_memory_to_user_preferences;
 pub use orchestrator_memory::prune_entries_matching_needle as prune_orchestrator_memory_entries_matching_needle;
 mod orchestrator_supervision;
 pub use orchestrator_supervision::OrchestratorSupervisionPollState;

@@ -1395,6 +1395,7 @@ async fn handle_turn_scratchpad_update(
         completed: scratchpad_update_event.completed,
         next_steps: scratchpad_update_event.next_steps,
         pending_waits: scratchpad_update_event.pending_waits,
+        blocked: scratchpad_update_event.blocked,
         updated_at: scratchpad_update_event.updated_at,
         archived_at: scratchpad_update_event.archived_at,
     };
@@ -4034,6 +4035,7 @@ mod tests {
             completed: vec!["wire core event".to_string()],
             next_steps: vec!["render history card".to_string()],
             pending_waits: vec!["manual TUI test".to_string()],
+            blocked: vec!["awaiting AWS role".to_string()],
             updated_at: "2026-04-28T20:00:00Z".to_string(),
             archived_at: None,
         };
@@ -4056,6 +4058,7 @@ mod tests {
                 assert_eq!(n.completed, vec!["wire core event".to_string()]);
                 assert_eq!(n.next_steps, vec!["render history card".to_string()]);
                 assert_eq!(n.pending_waits, vec!["manual TUI test".to_string()]);
+                assert_eq!(n.blocked, vec!["awaiting AWS role".to_string()]);
                 assert_eq!(n.updated_at, "2026-04-28T20:00:00Z");
                 assert_eq!(n.archived_at, None);
             }

@@ -51,6 +51,13 @@ use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
 
 use crate::history_cell::HistoryCell;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RestorablePermissionSelection {
+    pub approval_policy: AskForApproval,
+    pub permission_profile: PermissionProfile,
+    pub approvals_reviewer: ApprovalsReviewer,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RealtimeAudioDeviceKind {
     Microphone,
@@ -312,6 +319,11 @@ pub(crate) enum AppEvent {
     OrchestratorMemoryForgetResult {
         needle: String,
         result: Result<crate::legacy_core::OrchestratorMemoryPruneResult, String>,
+    },
+
+    /// Result of copying orchestrator memory into user-preferences memory.
+    UserPreferencesMemoryMigrateResult {
+        result: Result<bool, String>,
     },
 
     /// Open the app link view in the bottom pane.
@@ -724,6 +736,9 @@ pub(crate) enum AppEvent {
 
     /// Update the current approvals reviewer in the running app and widget.
     UpdateApprovalsReviewer(ApprovalsReviewer),
+
+    /// Remember a custom permissions shape so users can switch back after trying a preset.
+    RememberCustomPermissionSelection(RestorablePermissionSelection),
 
     /// Update feature flags and persist them to the top-level config.
     UpdateFeatureFlags {

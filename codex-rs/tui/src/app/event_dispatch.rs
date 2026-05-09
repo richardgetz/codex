@@ -430,6 +430,25 @@ impl App {
                     ));
                 }
             },
+            AppEvent::UserPreferencesMemoryMigrateResult { result } => match result {
+                Ok(true) => self.chat_widget.add_info_message(
+                    "User preferences memory migration completed.".to_string(),
+                    Some(
+                        "Copied missing files from orchestrator_memory into user_preferences_memory."
+                            .to_string(),
+                    ),
+                ),
+                Ok(false) => self.chat_widget.add_info_message(
+                    "User preferences memory is already up to date.".to_string(),
+                    Some(
+                        "No missing orchestrator_memory files needed to be copied."
+                            .to_string(),
+                    ),
+                ),
+                Err(err) => self.chat_widget.add_error_message(format!(
+                    "Failed migrating orchestrator memory to user preferences memory: {err}"
+                )),
+            },
             AppEvent::OpenAppLink {
                 app_id,
                 title,
@@ -1577,6 +1596,10 @@ impl App {
                     self.chat_widget
                         .add_error_message(format!("Failed to save approvals reviewer: {err}"));
                 }
+            }
+            AppEvent::RememberCustomPermissionSelection(selection) => {
+                self.chat_widget
+                    .remember_custom_permission_selection(selection);
             }
             AppEvent::UpdateFeatureFlags { updates } => {
                 self.update_feature_flags(updates).await;

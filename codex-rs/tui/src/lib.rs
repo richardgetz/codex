@@ -150,6 +150,7 @@ mod notifications;
 mod npm_registry;
 pub(crate) mod onboarding;
 mod oss_selection;
+mod outcomes_report;
 mod pager_overlay;
 mod permission_compat;
 pub(crate) mod public_widgets;
