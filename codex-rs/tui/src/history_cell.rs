@@ -3045,6 +3045,7 @@ pub(crate) fn new_scratchpad_update_verbose(update: ScratchpadUpdateEvent) -> Sc
             completed_items: usize::MAX,
             next_steps: usize::MAX,
             pending_waits: usize::MAX,
+            blocked: usize::MAX,
         },
     }
 }
@@ -3272,7 +3273,7 @@ impl HistoryCell for ScratchpadUpdateCell {
             body.extend(wrap_scratchpad_line(
                 width,
                 "Continuous: ",
-                "on - runs until Next up is done or only Waiting remains",
+                "on - runs until Next up is done",
                 Style::default().cyan(),
             ));
         }
@@ -3300,6 +3301,14 @@ impl HistoryCell for ScratchpadUpdateCell {
             &self.update.pending_waits,
             ScratchpadSectionStyle::Waiting,
             self.view.pending_waits,
+        );
+        append_scratchpad_section(
+            &mut body,
+            width,
+            "Blocked",
+            &self.update.blocked,
+            ScratchpadSectionStyle::Blocked,
+            self.view.blocked,
         );
 
         if body.is_empty() {
@@ -3331,6 +3340,7 @@ impl HistoryCell for ScratchpadUpdateCell {
         append_scratchpad_raw_section(&mut lines, "Completed", &self.update.completed);
         append_scratchpad_raw_section(&mut lines, "Next up", &self.update.next_steps);
         append_scratchpad_raw_section(&mut lines, "Waiting", &self.update.pending_waits);
+        append_scratchpad_raw_section(&mut lines, "Blocked", &self.update.blocked);
         lines
     }
 }
@@ -3339,6 +3349,7 @@ enum ScratchpadSectionStyle {
     Completed,
     Next,
     Waiting,
+    Blocked,
 }
 
 fn append_scratchpad_section(
@@ -3366,6 +3377,7 @@ fn append_scratchpad_section(
             ScratchpadSectionStyle::Completed => ("✔ ", Style::default().dim().crossed_out()),
             ScratchpadSectionStyle::Next => ("□ ", Style::default().cyan().bold()),
             ScratchpadSectionStyle::Waiting => ("□ ", Style::default().dim()),
+            ScratchpadSectionStyle::Blocked => ("! ", Style::default().magenta().bold()),
         };
         let opts = RtOptions::new(width.saturating_sub(6).max(1) as usize)
             .initial_indent(marker.into())

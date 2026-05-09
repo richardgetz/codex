@@ -125,6 +125,78 @@ fn orchestrator_memory_config_uses_explicit_values() {
 }
 
 #[test]
+fn user_preferences_memory_defaults_to_enabled_all_scope() {
+    assert_eq!(
+        UserPreferencesMemoryConfig::default(),
+        UserPreferencesMemoryConfig {
+            enabled: true,
+            scope: MemoriesScope::All,
+            debounce_seconds: 60,
+            min_observations: 2,
+            recent_turn_window: 8,
+            max_summary_items: 24,
+            model_on_heuristic_miss: false,
+            model_consolidation: false,
+            migrate_from_orchestrator_memory: false,
+            disable_orchestrator_memory_after_migration: false,
+            cleanup: OrchestratorMemoryCleanupConfig::default(),
+        }
+    );
+}
+
+#[test]
+fn situational_requirements_filters_incomplete_rules() {
+    let config = SituationalRequirementsConfig::from(SituationalRequirementsToml {
+        enabled: Some(true),
+        rules: vec![
+            SituationalRequirementRuleToml {
+                trigger: Some(SituationalRequirementTrigger::CodeChange),
+                actions: vec![SituationalRequirementActionToml {
+                    action: Some(SituationalRequirementAction::GitIntentNote),
+                    mcp: Some(" git-intent-notes ".to_string()),
+                    skill: None,
+                    reason: Some(" preserve intent ".to_string()),
+                }],
+            },
+            SituationalRequirementRuleToml {
+                trigger: Some(SituationalRequirementTrigger::DocChange),
+                actions: Vec::new(),
+            },
+        ],
+    });
+
+    assert_eq!(
+        config,
+        SituationalRequirementsConfig {
+            enabled: true,
+            rules: vec![SituationalRequirementRuleConfig {
+                trigger: SituationalRequirementTrigger::CodeChange,
+                actions: vec![SituationalRequirementActionConfig {
+                    action: SituationalRequirementAction::GitIntentNote,
+                    mcp: Some("git-intent-notes".to_string()),
+                    skill: None,
+                    reason: Some("preserve intent".to_string()),
+                }],
+            }],
+        }
+    );
+}
+
+#[test]
+fn scratchpad_fanout_defaults_off_and_clamps_max_agents() {
+    assert_eq!(
+        ScratchpadFanoutConfig::from(Some(ScratchpadFanoutToml {
+            enabled: Some(true),
+            max_agents: Some(99),
+        })),
+        ScratchpadFanoutConfig {
+            enabled: true,
+            max_agents: 16,
+        }
+    );
+}
+
+#[test]
 fn accounts_config_trims_blank_active_alias() {
     let config = AccountsConfig::from(AccountsToml {
         active: Some("   ".to_string()),

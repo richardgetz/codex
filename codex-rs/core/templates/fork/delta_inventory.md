@@ -57,6 +57,18 @@ stable/mainline is pulled in.
     semantic merge pass before regenerating summary/profile artifacts.
   - Legacy unbucketed memory events are migrated on next read/consolidation with
     a `preferences.jsonl.pre-bucket-migration` backup.
+- User preferences memory:
+  - Config: `[user_preferences_memory]`
+  - Defaults: `enabled = true`, `scope = "all"`.
+  - Stores under `<codex_home>/user_preferences_memory`, which is created and
+    added to workspace-write writable roots automatically.
+  - Startup copy migration is available with
+    `migrate_from_orchestrator_memory = true`.
+  - `disable_orchestrator_memory_after_migration = true` disables the effective
+    orchestrator-memory config after that copy pass succeeds.
+  - Slash command: `/user-preferences-memory-migrate` copies missing files from
+    `<codex_home>/orchestrator_memory` into
+    `<codex_home>/user_preferences_memory` without editing config.
 - Mode-scoped enablement filters:
   - `[enablement.modes.<mode>]`
   - Supports `skills`, `mcps`, and `plugins`
@@ -116,6 +128,10 @@ stable/mainline is pulled in.
     `[scratchpad.modes.<mode>]`
   - Keys: `enabled`, `default_continuous`, `recover_after_compaction`,
     `auto_archive_after_days`, `delete_archived_after_days`
+  - Config: `[scratchpad.fanout]`, default `enabled = false`,
+    `max_agents = 3`; when enabled, developer guidance allows fanout of
+    independent disconnected `next_steps` while keeping the parent as
+    integrator/checker.
   - Built-in scratchpad tools are bound to the current thread/session id:
     `open_scratchpad` defaults `scratchpad_id` to that id, and model-visible
     tools reject custom or other-thread scratchpad ids.
@@ -167,10 +183,19 @@ stable/mainline is pulled in.
     into hidden developer context when the thread-id scratchpad exists with
     uncompleted work (`next_steps` or `pending_waits`).
   - Supports active/archived lookup, archive/unarchive, next-step and
-    pending-wait updates, action-policy checks, and wait check-ins.
+    pending-wait updates, blocked-item updates, action-policy checks, and wait
+    check-ins.
   - Lifecycle cleanup runs during config load. Defaults: archive non-archived
     pads after 30 days without updates; delete archived pads after 90 days in
     archive. Set either day value to `0` to disable that phase.
+- Situational requirements:
+  - Config: `[situational_requirements]`, default `enabled = false`.
+  - Rules map triggers such as `code_change`, `test_change`, `iac_change`,
+    `doc_change`, `web_search`, and `pr_open` to actions such as
+    `git_intent_note`, `aws_docs_check`, `post_change_review`, `skill`, `mcp`,
+    and `web_search_citation`.
+  - Enabled rules are injected as deterministic developer requirements and can
+    name the expected MCP or skill guard surface.
 - Post-compaction recovery:
   - Config: `[scratchpad].recover_after_compaction` and
     `[scratchpad.modes.<mode>].recover_after_compaction`

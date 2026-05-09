@@ -31,11 +31,13 @@ use crate::types::SandboxWorkspaceWrite;
 use crate::types::ScheduleToml;
 use crate::types::ScratchpadToml;
 use crate::types::ShellEnvironmentPolicyToml;
+use crate::types::SituationalRequirementsToml;
 use crate::types::SkillsConfig;
 use crate::types::ThreadControlToml;
 use crate::types::ToolSuggestConfig;
 use crate::types::Tui;
 use crate::types::UriBasedFileOpener;
+use crate::types::UserPreferencesMemoryToml;
 use crate::types::WindowsToml;
 use codex_app_server_protocol::OrchestratorThreadControlConfigV1;
 use codex_app_server_protocol::ThreadControlConfigV1;
@@ -399,8 +401,14 @@ pub struct ConfigToml {
     /// Orchestrator-memory subsystem settings.
     pub orchestrator_memory: Option<OrchestratorMemoryToml>,
 
+    /// User-preferences memory subsystem settings.
+    pub user_preferences_memory: Option<UserPreferencesMemoryToml>,
+
     /// Built-in scratchpad subsystem settings.
     pub scratchpad: Option<ScratchpadToml>,
+
+    /// Opt-in situational trigger/action requirements.
+    pub situational_requirements: Option<SituationalRequirementsToml>,
 
     /// Built-in schedule subsystem settings.
     pub schedule: Option<ScheduleToml>,

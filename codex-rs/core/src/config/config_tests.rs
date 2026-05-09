@@ -70,11 +70,19 @@ use codex_config::types::ScheduleConfig;
 use codex_config::types::ScheduleModeToml;
 use codex_config::types::ScheduleToml;
 use codex_config::types::ScratchpadConfig;
+use codex_config::types::ScratchpadFanoutConfig;
+use codex_config::types::ScratchpadFanoutToml;
 use codex_config::types::ScratchpadModeToml;
 use codex_config::types::ScratchpadToml;
 use codex_config::types::ScratchpadViewConfig;
 use codex_config::types::ScratchpadViewToml;
 use codex_config::types::SessionPickerViewMode;
+use codex_config::types::SituationalRequirementAction;
+use codex_config::types::SituationalRequirementActionToml;
+use codex_config::types::SituationalRequirementRuleToml;
+use codex_config::types::SituationalRequirementTrigger;
+use codex_config::types::SituationalRequirementsConfig;
+use codex_config::types::SituationalRequirementsToml;
 use codex_config::types::SkillModeFilterConfig;
 use codex_config::types::SkillModeFilterMode;
 use codex_config::types::SkillsConfig;
@@ -85,6 +93,8 @@ use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
+use codex_config::types::UserPreferencesMemoryConfig;
+use codex_config::types::UserPreferencesMemoryToml;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_config::types::WindowsToml;
 use codex_core_plugins::PluginsManager;
@@ -439,6 +449,75 @@ retain_forget_events_days = 14
         }
     );
 
+    let user_preferences_memory = r#"
+[user_preferences_memory]
+enabled = true
+scope = "all"
+debounce_seconds = 20
+min_observations = 4
+recent_turn_window = 12
+max_summary_items = 40
+migrate_from_orchestrator_memory = true
+disable_orchestrator_memory_after_migration = true
+
+[user_preferences_memory.cleanup]
+enabled = false
+schedule = "05:45"
+"#;
+    let user_preferences_memory_cfg = toml::from_str::<ConfigToml>(user_preferences_memory)
+        .expect("TOML deserialization should succeed");
+    assert_eq!(
+        Some(UserPreferencesMemoryToml {
+            enabled: Some(true),
+            scope: Some(MemoriesScope::All),
+            debounce_seconds: Some(20),
+            min_observations: Some(4),
+            recent_turn_window: Some(12),
+            max_summary_items: Some(40),
+            model_on_heuristic_miss: None,
+            model_consolidation: None,
+            migrate_from_orchestrator_memory: Some(true),
+            disable_orchestrator_memory_after_migration: Some(true),
+            cleanup: Some(OrchestratorMemoryCleanupToml {
+                enabled: Some(false),
+                schedule: Some("05:45".to_string()),
+                run_missed_on_startup: None,
+                dedupe_raw_events: None,
+                deep_consolidation: None,
+                model_consolidation: None,
+                retain_forget_events_days: None,
+            }),
+        }),
+        user_preferences_memory_cfg.user_preferences_memory
+    );
+    let config = Config::load_from_base_config_with_overrides(
+        user_preferences_memory_cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config from user preferences memory settings");
+    assert_eq!(
+        config.user_preferences_memory,
+        UserPreferencesMemoryConfig {
+            enabled: true,
+            scope: MemoriesScope::All,
+            debounce_seconds: 20,
+            min_observations: 4,
+            recent_turn_window: 12,
+            max_summary_items: 40,
+            model_on_heuristic_miss: false,
+            model_consolidation: false,
+            migrate_from_orchestrator_memory: true,
+            disable_orchestrator_memory_after_migration: true,
+            cleanup: OrchestratorMemoryCleanupConfig {
+                enabled: false,
+                schedule: "05:45".to_string(),
+                ..OrchestratorMemoryCleanupConfig::default()
+            },
+        }
+    );
+
     let legacy_memories_cfg =
         toml::from_str::<ConfigToml>("[memories]\nno_memories_if_mcp_or_web_search = true\n")
             .expect("legacy memories TOML should deserialize");
@@ -449,6 +528,38 @@ retain_forget_events_days = 14
                 .expect("legacy memories config")
         )
         .disable_on_external_context
+    );
+
+    let migration_home = tempdir().expect("tempdir").abs();
+    std::fs::create_dir_all(migration_home.join("orchestrator_memory"))
+        .expect("create orchestrator memory root");
+    std::fs::write(
+        migration_home.join("orchestrator_memory/summary.md"),
+        "legacy orchestration preference",
+    )
+    .expect("write orchestrator memory summary");
+    let migrated_config = Config::load_from_base_config_with_overrides(
+        toml::from_str::<ConfigToml>(
+            r#"
+[orchestrator_memory]
+enabled = true
+
+[user_preferences_memory]
+migrate_from_orchestrator_memory = true
+disable_orchestrator_memory_after_migration = true
+"#,
+        )
+        .expect("TOML deserialization should succeed"),
+        ConfigOverrides::default(),
+        migration_home.clone(),
+    )
+    .await
+    .expect("load config with user preferences migration");
+    assert!(!migrated_config.orchestrator_memory.enabled);
+    assert_eq!(
+        std::fs::read_to_string(migration_home.join("user_preferences_memory/summary.md"))
+            .expect("read migrated summary"),
+        "legacy orchestration preference"
     );
 
     let thread_control = r#"
@@ -679,12 +790,17 @@ auto_archive_after_days = 14
 delete_archived_after_days = 120
 outcomes_enabled = true
 
+[scratchpad.fanout]
+enabled = true
+max_agents = 6
+
 [scratchpad.view]
 enabled = true
 show_id = false
 completed_items = 2
 next_steps = 3
 pending_waits = 4
+blocked = 5
 
 [scratchpad.modes.plan]
 enabled = false
@@ -707,12 +823,17 @@ recover_after_compaction = false
             auto_archive_after_days: Some(14),
             delete_archived_after_days: Some(120),
             outcomes_enabled: Some(true),
+            fanout: Some(ScratchpadFanoutToml {
+                enabled: Some(true),
+                max_agents: Some(6),
+            }),
             view: Some(ScratchpadViewToml {
                 enabled: Some(true),
                 show_id: Some(false),
                 completed_items: Some(2),
                 next_steps: Some(3),
                 pending_waits: Some(4),
+                blocked: Some(5),
             }),
             modes: [
                 (
@@ -778,6 +899,65 @@ enabled = true
     );
 }
 
+#[test]
+fn parses_situational_requirements_config() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[situational_requirements]
+enabled = true
+
+[[situational_requirements.rules]]
+trigger = "code_change"
+actions = [
+  { action = "git_intent_note", mcp = "git-intent-notes", reason = "record code-change intent" },
+]
+
+[[situational_requirements.rules]]
+trigger = "iac_change"
+actions = [
+  { action = "aws_docs_check", mcp = "aws-docs" },
+  { action = "post_change_review", skill = "post-change-review" },
+]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.situational_requirements,
+        Some(SituationalRequirementsToml {
+            enabled: Some(true),
+            rules: vec![
+                SituationalRequirementRuleToml {
+                    trigger: Some(SituationalRequirementTrigger::CodeChange),
+                    actions: vec![SituationalRequirementActionToml {
+                        action: Some(SituationalRequirementAction::GitIntentNote),
+                        mcp: Some("git-intent-notes".to_string()),
+                        skill: None,
+                        reason: Some("record code-change intent".to_string()),
+                    }],
+                },
+                SituationalRequirementRuleToml {
+                    trigger: Some(SituationalRequirementTrigger::IacChange),
+                    actions: vec![
+                        SituationalRequirementActionToml {
+                            action: Some(SituationalRequirementAction::AwsDocsCheck),
+                            mcp: Some("aws-docs".to_string()),
+                            skill: None,
+                            reason: None,
+                        },
+                        SituationalRequirementActionToml {
+                            action: Some(SituationalRequirementAction::PostChangeReview),
+                            mcp: None,
+                            skill: Some("post-change-review".to_string()),
+                            reason: None,
+                        },
+                    ],
+                },
+            ],
+        })
+    );
+}
+
 #[tokio::test]
 async fn scratchpad_defaults_on_except_plan_and_supports_mode_overrides() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
@@ -798,6 +978,11 @@ show_id = false
 completed_items = 1
 next_steps = 2
 pending_waits = 3
+blocked = 4
+
+[scratchpad.fanout]
+enabled = true
+max_agents = 5
 "#,
         )
         .expect("TOML deserialization should succeed"),
@@ -824,6 +1009,13 @@ pending_waits = 3
     assert_eq!(config.scratchpad.auto_archive_after_days, 30);
     assert_eq!(config.scratchpad.delete_archived_after_days, 90);
     assert_eq!(
+        config.scratchpad.fanout,
+        ScratchpadFanoutConfig {
+            enabled: true,
+            max_agents: 5,
+        }
+    );
+    assert_eq!(
         config.scratchpad.view,
         ScratchpadViewConfig {
             enabled: false,
@@ -831,6 +1023,7 @@ pending_waits = 3
             completed_items: 1,
             next_steps: 2,
             pending_waits: 3,
+            blocked: 4,
         }
     );
     assert!(
@@ -1565,6 +1758,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
 
     let memories_root = codex_home.path().join("memories").abs();
     let orchestrator_memory_root = codex_home.path().join("orchestrator_memory").abs();
+    let user_preferences_memory_root = codex_home.path().join("user_preferences_memory").abs();
     let orchestrator_supervision_root = codex_home.path().join("orchestrator_supervision").abs();
     let scratchpad_root = codex_home.path().join("scratchpad").abs();
     let schedule_root = codex_home.path().join("schedule").abs();
@@ -1603,6 +1797,12 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
+                    path: user_preferences_memory_root.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
                     path: orchestrator_supervision_root.clone(),
                 },
                 access: FileSystemAccessMode::Write,
@@ -1627,6 +1827,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
             writable_roots: vec![
                 memories_root,
                 orchestrator_memory_root,
+                user_preferences_memory_root,
                 orchestrator_supervision_root,
                 scratchpad_root,
                 schedule_root
@@ -1799,6 +2000,7 @@ async fn permission_profile_override_applies_runtime_roots_to_legacy_projection(
 
     let memories_root = codex_home.path().join("memories").abs();
     let orchestrator_memory_root = codex_home.path().join("orchestrator_memory").abs();
+    let user_preferences_memory_root = codex_home.path().join("user_preferences_memory").abs();
     let orchestrator_supervision_root = codex_home.path().join("orchestrator_supervision").abs();
     let scratchpad_root = codex_home.path().join("scratchpad").abs();
     let schedule_root = codex_home.path().join("schedule").abs();
@@ -1814,6 +2016,7 @@ async fn permission_profile_override_applies_runtime_roots_to_legacy_projection(
             writable_roots: vec![
                 memories_root,
                 orchestrator_memory_root,
+                user_preferences_memory_root,
                 orchestrator_supervision_root,
                 scratchpad_root,
                 schedule_root,
@@ -2457,6 +2660,9 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     let orchestrator_memory_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
         codex_home.path().join("orchestrator_memory"),
     )?)?;
+    let user_preferences_memory_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
+        codex_home.path().join("user_preferences_memory"),
+    )?)?;
     let orchestrator_supervision_root = AbsolutePathBuf::from_absolute_path(
         std::fs::canonicalize(codex_home.path().join("orchestrator_supervision"))?,
     )?;
@@ -2479,6 +2685,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
                 external_write_path,
                 memories_root,
                 orchestrator_memory_root,
+                user_preferences_memory_root,
                 orchestrator_supervision_root,
                 scratchpad_root,
                 schedule_root,
@@ -4085,6 +4292,7 @@ async fn workspace_write_always_includes_runtime_roots_once() -> std::io::Result
     let codex_home = TempDir::new()?;
     let memories_root = codex_home.path().join("memories");
     let orchestrator_memory_root = codex_home.path().join("orchestrator_memory");
+    let user_preferences_memory_root = codex_home.path().join("user_preferences_memory");
     let scratchpad_root = codex_home.path().join("scratchpad");
     let schedule_root = codex_home.path().join("schedule");
     let config = Config::load_from_base_config_with_overrides(
@@ -4120,6 +4328,11 @@ async fn workspace_write_always_includes_runtime_roots_once() -> std::io::Result
             orchestrator_memory_root.display()
         );
         assert!(
+            user_preferences_memory_root.is_dir(),
+            "expected user preferences memory root directory to exist at {}",
+            user_preferences_memory_root.display()
+        );
+        assert!(
             scratchpad_root.is_dir(),
             "expected scratchpad root directory to exist at {}",
             scratchpad_root.display()
@@ -4131,6 +4344,7 @@ async fn workspace_write_always_includes_runtime_roots_once() -> std::io::Result
         );
         let expected_memories_root = memories_root.abs();
         let expected_orchestrator_memory_root = orchestrator_memory_root.abs();
+        let expected_user_preferences_memory_root = user_preferences_memory_root.abs();
         let expected_scratchpad_root = scratchpad_root.abs();
         let expected_schedule_root = schedule_root.abs();
         match config.legacy_sandbox_policy() {
@@ -4152,6 +4366,15 @@ async fn workspace_write_always_includes_runtime_roots_once() -> std::io::Result
                     1,
                     "expected single writable root entry for {}",
                     expected_orchestrator_memory_root.display()
+                );
+                assert_eq!(
+                    writable_roots
+                        .iter()
+                        .filter(|root| **root == expected_user_preferences_memory_root)
+                        .count(),
+                    1,
+                    "expected single writable root entry for {}",
+                    expected_user_preferences_memory_root.display()
                 );
                 assert_eq!(
                     writable_roots
@@ -7779,7 +8002,9 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             orchestrator_memory: OrchestratorMemoryConfig::default(),
+            user_preferences_memory: UserPreferencesMemoryConfig::default(),
             scratchpad: ScratchpadConfig::default(),
+            situational_requirements: SituationalRequirementsConfig::default(),
             schedule: ScheduleConfig::default(),
             resume: ResumeConfig::default(),
             orchestrator: OrchestratorConfig::default(),
@@ -8049,7 +8274,9 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         orchestrator_memory: OrchestratorMemoryConfig::default(),
+        user_preferences_memory: UserPreferencesMemoryConfig::default(),
         scratchpad: ScratchpadConfig::default(),
+        situational_requirements: SituationalRequirementsConfig::default(),
         schedule: ScheduleConfig::default(),
         resume: ResumeConfig::default(),
         orchestrator: OrchestratorConfig::default(),
@@ -8218,7 +8445,9 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         orchestrator_memory: OrchestratorMemoryConfig::default(),
+        user_preferences_memory: UserPreferencesMemoryConfig::default(),
         scratchpad: ScratchpadConfig::default(),
+        situational_requirements: SituationalRequirementsConfig::default(),
         schedule: ScheduleConfig::default(),
         resume: ResumeConfig::default(),
         orchestrator: OrchestratorConfig::default(),
@@ -8372,7 +8601,9 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         orchestrator_memory: OrchestratorMemoryConfig::default(),
+        user_preferences_memory: UserPreferencesMemoryConfig::default(),
         scratchpad: ScratchpadConfig::default(),
+        situational_requirements: SituationalRequirementsConfig::default(),
         schedule: ScheduleConfig::default(),
         resume: ResumeConfig::default(),
         orchestrator: OrchestratorConfig::default(),

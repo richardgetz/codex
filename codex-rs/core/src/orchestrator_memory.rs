@@ -54,6 +54,22 @@ pub(crate) fn root(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
     codex_home.join("orchestrator_memory")
 }
 
+pub(crate) fn user_preferences_root(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+    codex_home.join("user_preferences_memory")
+}
+
+fn user_preferences_summary_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+    user_preferences_root(codex_home).join("summary.md")
+}
+
+fn user_preferences_profile_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+    user_preferences_root(codex_home).join("profile.md")
+}
+
+fn user_preferences_preferences_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+    user_preferences_root(codex_home).join("preferences.jsonl")
+}
+
 pub(crate) fn summary_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
     root(codex_home).join("summary.md")
 }
@@ -129,6 +145,35 @@ pub(crate) async fn build_developer_instructions(
         .ok()
 }
 
+pub(crate) async fn build_user_preferences_developer_instructions(
+    codex_home: &AbsolutePathBuf,
+    config: &OrchestratorMemoryConfig,
+) -> Option<String> {
+    let base_path = user_preferences_root(codex_home);
+    let (summary_source, summary) = read_user_preferences_summary_source(codex_home).await?;
+    let summary = with_recent_user_preferences_supplement(codex_home, config, &summary).await;
+    let summary = truncate_text(
+        &summary,
+        TruncationPolicy::Tokens(ORCHESTRATOR_MEMORY_SUMMARY_TOKEN_LIMIT),
+    );
+    if summary.is_empty() {
+        return None;
+    }
+
+    let summary = format!(
+        "## User Preferences Memory\n\n{summary}\n\nUse this as durable user preference and working-context memory across modes. It is the successor/parallel path to orchestrator memory; do not edit files directly unless the user asks."
+    );
+    let base_path = base_path.display().to_string();
+    let summary_source = summary_source.display().to_string();
+    ORCHESTRATOR_MEMORY_DEVELOPER_INSTRUCTIONS_TEMPLATE
+        .render([
+            ("base_path", base_path.as_str()),
+            ("summary_source", summary_source.as_str()),
+            ("summary", summary.as_str()),
+        ])
+        .ok()
+}
+
 pub(crate) fn maybe_learn_from_completed_turn(
     session: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -172,6 +217,24 @@ pub(crate) async fn run_cleanup_now_for_session(
 
 async fn read_summary_source(codex_home: &AbsolutePathBuf) -> Option<(AbsolutePathBuf, String)> {
     for candidate in [summary_path(codex_home), profile_path(codex_home)] {
+        if let Ok(summary) = fs::read_to_string(&candidate).await {
+            let summary = summary.trim().to_string();
+            if !summary.is_empty() {
+                return Some((candidate, summary));
+            }
+        }
+    }
+
+    None
+}
+
+async fn read_user_preferences_summary_source(
+    codex_home: &AbsolutePathBuf,
+) -> Option<(AbsolutePathBuf, String)> {
+    for candidate in [
+        user_preferences_summary_path(codex_home),
+        user_preferences_profile_path(codex_home),
+    ] {
         if let Ok(summary) = fs::read_to_string(&candidate).await {
             let summary = summary.trim().to_string();
             if !summary.is_empty() {
@@ -228,6 +291,91 @@ async fn with_recent_memory_supplement(
         supplemented.push('\n');
     }
     supplemented
+}
+
+async fn with_recent_user_preferences_supplement(
+    codex_home: &AbsolutePathBuf,
+    config: &OrchestratorMemoryConfig,
+    existing_summary: &str,
+) -> String {
+    let raw = match fs::read_to_string(user_preferences_preferences_path(codex_home)).await {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return existing_summary.to_string();
+        }
+        Err(err) => {
+            warn!(
+                "failed reading user preferences memory events for developer instructions: {err}"
+            );
+            return existing_summary.to_string();
+        }
+    };
+
+    let snapshot = live::aggregate_memory_items(&raw, config);
+    let missing_recent_items = snapshot
+        .preferences
+        .iter()
+        .chain(snapshot.personal_context.iter())
+        .chain(snapshot.relational_attunement.iter())
+        .chain(snapshot.operator_playbook.iter())
+        .chain(snapshot.ongoing_threads.iter())
+        .chain(snapshot.followups.iter())
+        .filter(|item| item.direct_observations > 0)
+        .filter(|item| !existing_summary.contains(&item.candidate))
+        .map(|item| item.candidate.as_str())
+        .collect::<Vec<_>>();
+
+    if missing_recent_items.is_empty() {
+        return existing_summary.to_string();
+    }
+
+    let mut supplemented = existing_summary.trim().to_string();
+    if !supplemented.is_empty() {
+        supplemented.push_str("\n\n");
+    }
+    supplemented.push_str("## Recent Continuity Items\n");
+    for candidate in missing_recent_items {
+        supplemented.push_str("- ");
+        supplemented.push_str(candidate);
+        supplemented.push('\n');
+    }
+    supplemented
+}
+
+pub fn migrate_orchestrator_memory_to_user_preferences(
+    codex_home: &AbsolutePathBuf,
+) -> std::io::Result<bool> {
+    let source = root(codex_home);
+    let destination = user_preferences_root(codex_home);
+    if !source.as_path().is_dir() {
+        std::fs::create_dir_all(&destination)?;
+        return Ok(false);
+    }
+    std::fs::create_dir_all(&destination)?;
+    copy_dir_if_missing(source.as_path(), destination.as_path())
+}
+
+fn copy_dir_if_missing(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::io::Result<bool> {
+    let mut copied_any = false;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            std::fs::create_dir_all(&destination_path)?;
+            if copy_dir_if_missing(&source_path, &destination_path)? {
+                copied_any = true;
+            }
+        } else if file_type.is_file() && !destination_path.exists() {
+            std::fs::copy(&source_path, &destination_path)?;
+            copied_any = true;
+        }
+    }
+    Ok(copied_any)
 }
 
 pub(crate) async fn remove_generated_memory_files(

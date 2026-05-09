@@ -2,6 +2,7 @@ use crate::agents_md::AgentsMdManager;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::orchestrator_memory::root as orchestrator_memory_root;
+use crate::orchestrator_memory::user_preferences_root;
 use crate::orchestrator_supervision::root as orchestrator_supervision_root;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::tools::handlers::builtin_scratchpad::run_lifecycle_cleanup as run_scratchpad_lifecycle_cleanup;
@@ -63,6 +64,7 @@ use codex_config::types::ScheduleConfig;
 use codex_config::types::ScratchpadConfig;
 use codex_config::types::ScratchpadToml;
 use codex_config::types::SessionPickerViewMode;
+use codex_config::types::SituationalRequirementsConfig;
 use codex_config::types::SkillsConfig;
 use codex_config::types::ThreadControlConfig;
 use codex_config::types::ToolSuggestConfig;
@@ -71,6 +73,7 @@ use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
+use codex_config::types::UserPreferencesMemoryConfig;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::CreateDirectoryOptions;
@@ -841,8 +844,14 @@ pub struct Config {
     /// Orchestrator-memory subsystem settings.
     pub orchestrator_memory: OrchestratorMemoryConfig,
 
+    /// User-preferences memory subsystem settings.
+    pub user_preferences_memory: UserPreferencesMemoryConfig,
+
     /// Built-in scratchpad subsystem settings.
     pub scratchpad: ScratchpadConfig,
+
+    /// Opt-in situational trigger/action requirements.
+    pub situational_requirements: SituationalRequirementsConfig,
 
     /// Built-in schedule subsystem settings.
     pub schedule: ScheduleConfig,
@@ -2638,6 +2647,14 @@ impl Config {
         {
             additional_writable_roots.push(orchestrator_memory_root);
         }
+        let user_preferences_memory_root = user_preferences_root(&codex_home);
+        std::fs::create_dir_all(&user_preferences_memory_root)?;
+        if !additional_writable_roots
+            .iter()
+            .any(|existing| existing == &user_preferences_memory_root)
+        {
+            additional_writable_roots.push(user_preferences_memory_root);
+        }
         let orchestrator_supervision_root = orchestrator_supervision_root(&codex_home);
         std::fs::create_dir_all(&orchestrator_supervision_root)?;
         if !additional_writable_roots
@@ -3363,8 +3380,34 @@ impl Config {
         }
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
             .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
-        let orchestrator_memory: OrchestratorMemoryConfig =
+        let user_preferences_memory: UserPreferencesMemoryConfig = cfg
+            .user_preferences_memory
+            .unwrap_or_default()
+            .into();
+        let mut orchestrator_memory: OrchestratorMemoryConfig =
             cfg.orchestrator_memory.unwrap_or_default().into();
+        let mut user_preferences_memory_migrated = false;
+        if user_preferences_memory.enabled
+            && user_preferences_memory.migrate_from_orchestrator_memory
+        {
+            match crate::orchestrator_memory::migrate_orchestrator_memory_to_user_preferences(
+                &codex_home,
+            ) {
+                Ok(_) => {
+                    user_preferences_memory_migrated = true;
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to migrate orchestrator memory to user preferences memory");
+                }
+            }
+        }
+        if user_preferences_memory.enabled
+            && user_preferences_memory.migrate_from_orchestrator_memory
+            && user_preferences_memory.disable_orchestrator_memory_after_migration
+            && user_preferences_memory_migrated
+        {
+            orchestrator_memory.enabled = false;
+        }
         let scratchpad = resolve_scratchpad_config(cfg.scratchpad, cfg.orchestrator.as_ref());
         if let Err(err) = run_scratchpad_lifecycle_cleanup(
             codex_home.as_path(),
@@ -3455,7 +3498,12 @@ impl Config {
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
             orchestrator_memory,
+            user_preferences_memory,
             scratchpad,
+            situational_requirements: cfg
+                .situational_requirements
+                .unwrap_or_default()
+                .into(),
             schedule: cfg.schedule.unwrap_or_default().into(),
             resume: cfg.resume.unwrap_or_default().into(),
             accounts: cfg.accounts.unwrap_or_default().into(),

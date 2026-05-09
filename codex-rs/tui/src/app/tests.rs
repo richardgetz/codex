@@ -95,7 +95,9 @@ use tokio::time;
 
 #[tokio::test]
 async fn startup_orchestrator_mode_applies_thread_control_model_to_session_config() {
+    let codex_home = tempdir().expect("tempdir");
     let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
         .build()
         .await
         .expect("config should build");
@@ -111,7 +113,9 @@ async fn startup_orchestrator_mode_applies_thread_control_model_to_session_confi
 
 #[tokio::test]
 async fn startup_session_override_replaces_existing_account_alias() {
+    let codex_home = tempdir().expect("tempdir");
     let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
         .build()
         .await
         .expect("config should build");
@@ -138,7 +142,9 @@ async fn startup_session_override_replaces_existing_account_alias() {
 
 #[tokio::test]
 async fn startup_primary_contact_override_enables_orchestrator_contact_mcp() {
+    let codex_home = tempdir().expect("tempdir");
     let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
         .build()
         .await
         .expect("config should build");

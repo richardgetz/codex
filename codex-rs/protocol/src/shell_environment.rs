@@ -75,6 +75,16 @@ where
     let matches_any = |name: &str, patterns: &[EnvironmentVariablePattern]| -> bool {
         patterns.iter().any(|pattern| pattern.matches(name))
     };
+    let is_apple_malloc_diagnostic_var = |name: &str| {
+        let lower = name.to_ascii_lowercase();
+        lower.starts_with("malloclogfile") || lower.starts_with("mallocstacklogging")
+    };
+
+    // Apple malloc diagnostic variables are removed even when the normal
+    // default exclude list is disabled. Values like `MallocStackLogging=0`
+    // can make child processes print noisy diagnostics before their own code
+    // starts, which leaks into the TUI input area.
+    env_map.retain(|k, _| !is_apple_malloc_diagnostic_var(k));
 
     // Step 2 - Apply the default exclude if not disabled.
     if !policy.ignore_default_excludes {
@@ -244,6 +254,25 @@ mod non_windows_tests {
             ("home".to_string(), "/home/codex".to_string()),
             ("TmpDir".to_string(), "/tmp/custom".to_string()),
         ]);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn default_excludes_remove_macos_malloc_stack_logging_vars() {
+        let vars = make_vars(&[
+            ("PATH", "/usr/bin"),
+            ("MallocStackLogging", "0"),
+            ("MallocStackLoggingNoCompact", "0"),
+            ("MallocLogFile", "/tmp/malloc.log"),
+        ]);
+        let policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::All,
+            ..Default::default()
+        };
+
+        let result = populate_env(vars, &policy, /*thread_id*/ None);
+        let expected = HashMap::from([("PATH".to_string(), "/usr/bin".to_string())]);
 
         assert_eq!(result, expected);
     }

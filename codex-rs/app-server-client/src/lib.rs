@@ -79,6 +79,7 @@ pub mod legacy_core {
     pub use codex_core::check_execpolicy_for_warnings;
     pub use codex_core::format_exec_policy_error_with_source;
     pub use codex_core::grant_read_root_non_elevated;
+    pub use codex_core::migrate_orchestrator_memory_to_user_preferences;
     pub use codex_core::prune_orchestrator_memory_entries_matching_needle;
     pub use codex_core::unarchive_thread_scratchpad;
     pub use codex_core::web_search_detail;

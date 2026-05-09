@@ -553,6 +553,39 @@ pub struct OrchestratorMemoryToml {
     pub cleanup: Option<OrchestratorMemoryCleanupToml>,
 }
 
+/// User-preferences memory settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct UserPreferencesMemoryToml {
+    /// When `false`, skip injecting user-preferences memory into developer prompts.
+    pub enabled: Option<bool>,
+    /// Which collaboration modes may read user-preferences memory.
+    pub scope: Option<MemoriesScope>,
+    /// Seconds to wait after a newly observed preference before consolidating the summary.
+    pub debounce_seconds: Option<u64>,
+    /// Number of similar steering observations required before inferring a preference automatically.
+    #[schemars(range(min = 1, max = 8))]
+    pub min_observations: Option<usize>,
+    /// Number of recent user turns to inspect when looking for repeated steering patterns.
+    #[schemars(range(min = 1, max = 64))]
+    pub recent_turn_window: Option<usize>,
+    /// Maximum number of consolidated preference lines kept in the injected summary.
+    #[schemars(range(min = 1, max = 128))]
+    pub max_summary_items: Option<usize>,
+    /// When true, run a model classifier even when heuristic extraction finds no memory signal.
+    pub model_on_heuristic_miss: Option<bool>,
+    /// When true, use a model agent to rewrite summary/profile artifacts after memory writes.
+    pub model_consolidation: Option<bool>,
+    /// When true, copy existing `<codex_home>/orchestrator_memory` files into
+    /// `<codex_home>/user_preferences_memory` on startup when needed.
+    pub migrate_from_orchestrator_memory: Option<bool>,
+    /// When true and migration is enabled, the effective orchestrator-memory
+    /// config is disabled after the startup migration pass succeeds.
+    pub disable_orchestrator_memory_after_migration: Option<bool>,
+    /// Scheduled raw-event cleanup and deep mechanical consolidation.
+    pub cleanup: Option<OrchestratorMemoryCleanupToml>,
+}
+
 /// Scheduled cleanup settings for orchestrator memory.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -608,11 +641,53 @@ pub struct ScratchpadToml {
     pub delete_archived_after_days: Option<u64>,
     /// When true, agents may proactively record measurable outcome datapoints.
     pub outcomes_enabled: Option<bool>,
+    /// Optional agent fanout policy for disconnected scratchpad next_steps.
+    pub fanout: Option<ScratchpadFanoutToml>,
     /// TUI rendering controls for live scratchpad update cards.
     pub view: Option<ScratchpadViewToml>,
     /// Collaboration-mode-specific overrides.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub modes: HashMap<ModeKind, ScratchpadModeToml>,
+}
+
+/// Opt-in scratchpad agent fanout settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ScratchpadFanoutToml {
+    /// When true, agents may fan out disconnected scratchpad next_steps to subagents.
+    pub enabled: Option<bool>,
+    /// Maximum number of simultaneous scratchpad fanout subagents.
+    #[schemars(range(min = 1, max = 16))]
+    pub max_agents: Option<usize>,
+}
+
+/// Effective scratchpad agent fanout settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScratchpadFanoutConfig {
+    pub enabled: bool,
+    pub max_agents: usize,
+}
+
+impl Default for ScratchpadFanoutConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_agents: 3,
+        }
+    }
+}
+
+impl From<Option<ScratchpadFanoutToml>> for ScratchpadFanoutConfig {
+    fn from(toml: Option<ScratchpadFanoutToml>) -> Self {
+        let defaults = ScratchpadFanoutConfig::default();
+        let Some(toml) = toml else {
+            return defaults;
+        };
+        Self {
+            enabled: toml.enabled.unwrap_or(defaults.enabled),
+            max_agents: toml.max_agents.unwrap_or(defaults.max_agents).clamp(1, 16),
+        }
+    }
 }
 
 /// TUI rendering controls for live scratchpad update cards.
@@ -629,6 +704,8 @@ pub struct ScratchpadViewToml {
     pub next_steps: Option<usize>,
     /// Maximum pending-wait items to show in live cards.
     pub pending_waits: Option<usize>,
+    /// Maximum blocked items to show in live cards.
+    pub blocked: Option<usize>,
 }
 
 /// Effective TUI rendering controls for live scratchpad update cards.
@@ -639,6 +716,7 @@ pub struct ScratchpadViewConfig {
     pub completed_items: usize,
     pub next_steps: usize,
     pub pending_waits: usize,
+    pub blocked: usize,
 }
 
 impl Default for ScratchpadViewConfig {
@@ -649,6 +727,7 @@ impl Default for ScratchpadViewConfig {
             completed_items: 1,
             next_steps: 5,
             pending_waits: 5,
+            blocked: 5,
         }
     }
 }
@@ -665,6 +744,7 @@ impl From<Option<ScratchpadViewToml>> for ScratchpadViewConfig {
             completed_items: toml.completed_items.unwrap_or(defaults.completed_items),
             next_steps: toml.next_steps.unwrap_or(defaults.next_steps),
             pending_waits: toml.pending_waits.unwrap_or(defaults.pending_waits),
+            blocked: toml.blocked.unwrap_or(defaults.blocked),
         }
     }
 }
@@ -703,6 +783,7 @@ pub struct ScratchpadConfig {
     pub auto_archive_after_days: u64,
     pub delete_archived_after_days: u64,
     pub outcomes_enabled: bool,
+    pub fanout: ScratchpadFanoutConfig,
     pub view: ScratchpadViewConfig,
 }
 
@@ -723,6 +804,7 @@ impl Default for ScratchpadConfig {
             auto_archive_after_days: 30,
             delete_archived_after_days: 90,
             outcomes_enabled: false,
+            fanout: ScratchpadFanoutConfig::default(),
             view: ScratchpadViewConfig::default(),
         }
     }
@@ -775,9 +857,114 @@ impl From<ScratchpadToml> for ScratchpadConfig {
                 .delete_archived_after_days
                 .unwrap_or(default_delete_archived_after_days),
             outcomes_enabled: toml.outcomes_enabled.unwrap_or(defaults.outcomes_enabled),
+            fanout: toml.fanout.into(),
             view: toml.view.into(),
         }
     }
+}
+
+/// Situational requirement settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SituationalRequirementsToml {
+    /// Global enable switch. Defaults to false.
+    pub enabled: Option<bool>,
+    /// Ordered trigger/action rules to expose as mechanical requirements.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<SituationalRequirementRuleToml>,
+}
+
+/// A trigger/action requirement rule loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SituationalRequirementRuleToml {
+    pub trigger: Option<SituationalRequirementTrigger>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<SituationalRequirementActionToml>,
+}
+
+/// A required action loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SituationalRequirementActionToml {
+    pub action: Option<SituationalRequirementAction>,
+    /// Optional MCP server name, for MCP-backed actions such as `aws-docs`.
+    pub mcp: Option<String>,
+    /// Optional skill name, for skill-backed actions such as `post-change-review`.
+    pub skill: Option<String>,
+    /// Optional human-readable reason to show in model guidance.
+    pub reason: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SituationalRequirementTrigger {
+    CodeChange,
+    TestChange,
+    IacChange,
+    DocChange,
+    WebSearch,
+    PrOpen,
+}
+
+impl fmt::Display for SituationalRequirementTrigger {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            SituationalRequirementTrigger::CodeChange => "code_change",
+            SituationalRequirementTrigger::TestChange => "test_change",
+            SituationalRequirementTrigger::IacChange => "iac_change",
+            SituationalRequirementTrigger::DocChange => "doc_change",
+            SituationalRequirementTrigger::WebSearch => "web_search",
+            SituationalRequirementTrigger::PrOpen => "pr_open",
+        };
+        f.write_str(value)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SituationalRequirementAction {
+    GitIntentNote,
+    AwsDocsCheck,
+    PostChangeReview,
+    Skill,
+    Mcp,
+    WebSearchCitation,
+}
+
+impl fmt::Display for SituationalRequirementAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            SituationalRequirementAction::GitIntentNote => "git_intent_note",
+            SituationalRequirementAction::AwsDocsCheck => "aws_docs_check",
+            SituationalRequirementAction::PostChangeReview => "post_change_review",
+            SituationalRequirementAction::Skill => "skill",
+            SituationalRequirementAction::Mcp => "mcp",
+            SituationalRequirementAction::WebSearchCitation => "web_search_citation",
+        };
+        f.write_str(value)
+    }
+}
+
+/// Effective situational requirement settings.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SituationalRequirementsConfig {
+    pub enabled: bool,
+    pub rules: Vec<SituationalRequirementRuleConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SituationalRequirementRuleConfig {
+    pub trigger: SituationalRequirementTrigger,
+    pub actions: Vec<SituationalRequirementActionConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SituationalRequirementActionConfig {
+    pub action: SituationalRequirementAction,
+    pub mcp: Option<String>,
+    pub skill: Option<String>,
+    pub reason: Option<String>,
 }
 
 /// Built-in schedule behavior for one collaboration mode.
@@ -1010,6 +1197,96 @@ impl From<OrchestratorMemoryToml> for OrchestratorMemoryConfig {
     }
 }
 
+/// Effective user-preferences memory settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserPreferencesMemoryConfig {
+    pub enabled: bool,
+    pub scope: MemoriesScope,
+    pub debounce_seconds: u64,
+    pub min_observations: usize,
+    pub recent_turn_window: usize,
+    pub max_summary_items: usize,
+    pub model_on_heuristic_miss: bool,
+    pub model_consolidation: bool,
+    pub migrate_from_orchestrator_memory: bool,
+    pub disable_orchestrator_memory_after_migration: bool,
+    pub cleanup: OrchestratorMemoryCleanupConfig,
+}
+
+impl Default for UserPreferencesMemoryConfig {
+    fn default() -> Self {
+        let orchestrator_defaults = OrchestratorMemoryConfig::default();
+        Self {
+            enabled: true,
+            scope: MemoriesScope::All,
+            debounce_seconds: orchestrator_defaults.debounce_seconds,
+            min_observations: orchestrator_defaults.min_observations,
+            recent_turn_window: orchestrator_defaults.recent_turn_window,
+            max_summary_items: orchestrator_defaults.max_summary_items,
+            model_on_heuristic_miss: orchestrator_defaults.model_on_heuristic_miss,
+            model_consolidation: orchestrator_defaults.model_consolidation,
+            migrate_from_orchestrator_memory: false,
+            disable_orchestrator_memory_after_migration: false,
+            cleanup: OrchestratorMemoryCleanupConfig::default(),
+        }
+    }
+}
+
+impl UserPreferencesMemoryConfig {
+    pub fn memory_config(&self) -> OrchestratorMemoryConfig {
+        OrchestratorMemoryConfig {
+            enabled: self.enabled,
+            scope: self.scope,
+            debounce_seconds: self.debounce_seconds,
+            min_observations: self.min_observations,
+            recent_turn_window: self.recent_turn_window,
+            max_summary_items: self.max_summary_items,
+            model_on_heuristic_miss: self.model_on_heuristic_miss,
+            model_consolidation: self.model_consolidation,
+            cleanup: self.cleanup.clone(),
+        }
+    }
+}
+
+impl From<UserPreferencesMemoryToml> for UserPreferencesMemoryConfig {
+    fn from(toml: UserPreferencesMemoryToml) -> Self {
+        let defaults = Self::default();
+        Self {
+            enabled: toml.enabled.unwrap_or(defaults.enabled),
+            scope: toml.scope.unwrap_or(defaults.scope),
+            debounce_seconds: toml
+                .debounce_seconds
+                .unwrap_or(defaults.debounce_seconds)
+                .clamp(5, 3600),
+            min_observations: toml
+                .min_observations
+                .unwrap_or(defaults.min_observations)
+                .clamp(1, 8),
+            recent_turn_window: toml
+                .recent_turn_window
+                .unwrap_or(defaults.recent_turn_window)
+                .clamp(1, 64),
+            max_summary_items: toml
+                .max_summary_items
+                .unwrap_or(defaults.max_summary_items)
+                .clamp(1, 128),
+            model_on_heuristic_miss: toml
+                .model_on_heuristic_miss
+                .unwrap_or(defaults.model_on_heuristic_miss),
+            model_consolidation: toml
+                .model_consolidation
+                .unwrap_or(defaults.model_consolidation),
+            migrate_from_orchestrator_memory: toml
+                .migrate_from_orchestrator_memory
+                .unwrap_or(defaults.migrate_from_orchestrator_memory),
+            disable_orchestrator_memory_after_migration: toml
+                .disable_orchestrator_memory_after_migration
+                .unwrap_or(defaults.disable_orchestrator_memory_after_migration),
+            cleanup: toml.cleanup.unwrap_or_default().into(),
+        }
+    }
+}
+
 impl From<OrchestratorMemoryCleanupToml> for OrchestratorMemoryCleanupConfig {
     fn from(toml: OrchestratorMemoryCleanupToml) -> Self {
         let defaults = Self::default();
@@ -1035,6 +1312,45 @@ impl From<OrchestratorMemoryCleanupToml> for OrchestratorMemoryCleanupConfig {
                 .retain_forget_events_days
                 .unwrap_or(defaults.retain_forget_events_days)
                 .min(365),
+        }
+    }
+}
+
+impl From<SituationalRequirementsToml> for SituationalRequirementsConfig {
+    fn from(toml: SituationalRequirementsToml) -> Self {
+        let rules = toml
+            .rules
+            .into_iter()
+            .filter_map(|rule| {
+                let trigger = rule.trigger?;
+                let actions = rule
+                    .actions
+                    .into_iter()
+                    .filter_map(|action| {
+                        Some(SituationalRequirementActionConfig {
+                            action: action.action?,
+                            mcp: action
+                                .mcp
+                                .map(|mcp| mcp.trim().to_string())
+                                .filter(|mcp| !mcp.is_empty()),
+                            skill: action
+                                .skill
+                                .map(|skill| skill.trim().to_string())
+                                .filter(|skill| !skill.is_empty()),
+                            reason: action
+                                .reason
+                                .map(|reason| reason.trim().to_string())
+                                .filter(|reason| !reason.is_empty()),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                (!actions.is_empty())
+                    .then_some(SituationalRequirementRuleConfig { trigger, actions })
+            })
+            .collect();
+        Self {
+            enabled: toml.enabled.unwrap_or_default(),
+            rules,
         }
     }
 }

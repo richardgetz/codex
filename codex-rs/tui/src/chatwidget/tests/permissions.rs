@@ -473,6 +473,80 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
 }
 
 #[tokio::test]
+async fn permissions_selection_remembers_custom_before_switching_to_preset() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
+    chat.config.notices.hide_full_access_warning = Some(true);
+    let custom_profile = app_server_workspace_write_profile(test_path_buf("/tmp/extra").abs());
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest.to_core())
+        .expect("set approval policy");
+    chat.config
+        .permissions
+        .set_permission_profile(custom_profile.clone())
+        .expect("set permission profile");
+
+    chat.open_permissions_popup();
+    #[cfg(target_os = "windows")]
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let mut remembered = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::RememberCustomPermissionSelection(selection) = event {
+            remembered = Some(selection);
+        }
+    }
+
+    let remembered = remembered.expect("custom permissions should be remembered");
+    assert_eq!(remembered.approval_policy, AskForApproval::OnRequest);
+    assert_eq!(remembered.permission_profile, custom_profile);
+    assert_eq!(remembered.approvals_reviewer, ApprovalsReviewer::User);
+}
+
+#[tokio::test]
+async fn permissions_selection_shows_previous_custom_swap_back() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
+    let custom_profile = app_server_workspace_write_profile(test_path_buf("/tmp/extra").abs());
+    chat.remember_custom_permission_selection(RestorablePermissionSelection {
+        approval_policy: AskForApproval::OnRequest,
+        permission_profile: custom_profile,
+        approvals_reviewer: ApprovalsReviewer::User,
+    });
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::Never.to_core())
+        .expect("set approval policy");
+    chat.config
+        .permissions
+        .set_permission_profile(PermissionProfile::Disabled)
+        .expect("set permission profile");
+
+    chat.open_permissions_popup();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        popup.contains("Previous Custom"),
+        "expected previous custom swap-back option, got: {popup}"
+    );
+}
+
+#[tokio::test]
 async fn permissions_selection_emits_history_cell_when_current_is_selected() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]

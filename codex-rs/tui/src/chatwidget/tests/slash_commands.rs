@@ -1844,6 +1844,47 @@ async fn slash_orchestrator_memory_consolidate_submits_core_op() {
 }
 
 #[tokio::test]
+async fn slash_user_preferences_memory_migrate_copies_orchestrator_files() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let orchestrator_dir = chat.config.codex_home.join("orchestrator_memory");
+    tokio::fs::create_dir_all(&orchestrator_dir)
+        .await
+        .expect("create orchestrator memory dir");
+    tokio::fs::write(
+        orchestrator_dir.join("summary.md"),
+        "prefer focused updates",
+    )
+    .await
+    .expect("write orchestrator summary");
+
+    chat.dispatch_command(SlashCommand::UserPreferencesMemoryMigrate);
+
+    match rx.try_recv().expect("expected start message") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(rendered.contains("User preferences memory migration started."));
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    let event = rx.recv().await.expect("expected migration result event");
+    match event {
+        AppEvent::UserPreferencesMemoryMigrateResult { result } => {
+            assert!(result.expect("expected successful migration"));
+        }
+        other => panic!("expected UserPreferencesMemoryMigrateResult, got {other:?}"),
+    }
+    let migrated = tokio::fs::read_to_string(
+        chat.config
+            .codex_home
+            .join("user_preferences_memory/summary.md"),
+    )
+    .await
+    .expect("read migrated summary");
+    assert_eq!(migrated, "prefer focused updates");
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
 async fn slash_scratchpad_renders_current_session_scratchpad() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
@@ -2286,6 +2327,62 @@ async fn slash_outcomes_exports_current_session_outcomes() {
         }
         other => panic!("expected InsertHistoryCell outcomes export, got {other:?}"),
     }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_outcomes_report_writes_static_html() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let scratchpad_dir = chat.config.codex_home.join("scratchpad").join("entries");
+    tokio::fs::create_dir_all(&scratchpad_dir)
+        .await
+        .expect("create scratchpad dir");
+    tokio::fs::write(
+        scratchpad_dir.join(format!("{thread_id}.json")),
+        serde_json::json!({
+            "scratchpad_id": thread_id.to_string(),
+            "objective": "Improve vector-search throughput",
+            "status": "active",
+            "outcomes": [{
+                "scope": "vector-search",
+                "metric": "qps",
+                "unit": "req/s",
+                "baseline": 930,
+                "current": 1840,
+                "summary": "Sharded fanout improved hot-query throughput",
+                "commit": "abc123"
+            }],
+            "created_at": "2026-04-28T20:00:00Z",
+            "updated_at": "2026-04-28T20:01:00Z",
+            "archived_at": null
+        })
+        .to_string(),
+    )
+    .await
+    .expect("write scratchpad");
+
+    submit_composer_text(&mut chat, "/outcomes report");
+
+    match rx.try_recv().expect("expected report status") {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
+            assert!(rendered.contains("Outcomes report written to"));
+            assert!(rendered.contains("outcomes.html"));
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    let report_path = chat
+        .config
+        .codex_home
+        .join("scratchpad")
+        .join("reports")
+        .join(format!("{thread_id}-outcomes.html"));
+    let html = std::fs::read_to_string(report_path).expect("report should be written");
+    assert!(html.contains("Improve vector-search throughput"));
+    assert!(html.contains("vector-search"));
+    assert!(html.contains("<svg"));
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }
 

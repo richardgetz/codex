@@ -28,6 +28,7 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
 use codex_protocol::protocol::ScratchpadUpdateEvent;
 
 const SCRATCHPAD_NAMESPACE: &str = "scratchpad";
@@ -84,12 +85,22 @@ const ABSORBED_SCRATCHPAD_CONTROL_FIELDS: &[&str] = &[
     "run_policy",
     "stop_conditions",
 ];
+const DELEGATION_STATUS_VALUES: &[&str] = &[
+    "active",
+    "blocked",
+    "cancelled",
+    "complete",
+    "deleted",
+    "delegated",
+    "failed",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScratchpadAbsorbOptions {
     pub include_completed: bool,
     pub include_next_steps: bool,
     pub include_pending_waits: bool,
+    pub include_blocked: bool,
     pub include_notes: bool,
     pub include_git_refs: bool,
     pub include_artifacts: bool,
@@ -104,6 +115,7 @@ impl Default for ScratchpadAbsorbOptions {
             include_completed: true,
             include_next_steps: true,
             include_pending_waits: true,
+            include_blocked: true,
             include_notes: true,
             include_git_refs: true,
             include_artifacts: true,
@@ -367,6 +379,11 @@ pub(crate) fn scratchpad_update_event_from_result(result: &Value) -> Option<Scra
             .and_then(Value::as_array)
             .map(|waits| waits.iter().map(format_pending_wait).collect())
             .unwrap_or_default(),
+        blocked: scratchpad
+            .get("blocked")
+            .and_then(Value::as_array)
+            .map(|blocked| blocked.iter().map(format_blocked_item).collect())
+            .unwrap_or_default(),
         updated_at: scratchpad
             .get("updated_at")
             .and_then(Value::as_str)
@@ -406,6 +423,26 @@ fn format_pending_wait(wait: &Value) -> String {
         .to_string()
 }
 
+fn format_blocked_item(blocked: &Value) -> String {
+    if let Some(text) = blocked.as_str() {
+        return text.to_string();
+    }
+    let Some(object) = blocked.as_object() else {
+        return blocked.to_string();
+    };
+    [
+        "summary",
+        "blocked_on",
+        "required_user_action",
+        "blocker_id",
+        "reason",
+    ]
+    .iter()
+    .find_map(|key| object.get(*key).and_then(Value::as_str))
+    .unwrap_or("blocked item")
+    .to_string()
+}
+
 fn scratchpad_continuous_enabled(scratchpad: &Value) -> bool {
     scratchpad
         .get("run_policy")
@@ -441,6 +478,8 @@ struct Scratchpad {
     next_steps: Vec<String>,
     #[serde(default)]
     pending_waits: Vec<Value>,
+    #[serde(default)]
+    blocked: Vec<Value>,
     #[serde(default)]
     git_refs: Vec<Value>,
     #[serde(default)]
@@ -720,6 +759,7 @@ pub(crate) fn set_thread_continuous_policy(
                 completed: Vec::new(),
                 next_steps: Vec::new(),
                 pending_waits: Vec::new(),
+                blocked: Vec::new(),
                 git_refs: Vec::new(),
                 artifacts: Vec::new(),
                 stop_conditions: Vec::new(),
@@ -895,6 +935,7 @@ fn open_scratchpad_with_default_continuous(
         completed: string_array_arg(args, "completed"),
         next_steps: string_array_arg(args, "next_steps"),
         pending_waits: array_arg(args, "pending_waits"),
+        blocked: array_arg(args, "blocked"),
         git_refs: array_arg(args, "git_refs"),
         artifacts: array_arg(args, "artifacts"),
         stop_conditions: string_array_arg(args, "stop_conditions"),
@@ -950,6 +991,7 @@ fn new_absorb_target_scratchpad(current_thread_id: &str) -> Scratchpad {
         completed: Vec::new(),
         next_steps: Vec::new(),
         pending_waits: Vec::new(),
+        blocked: Vec::new(),
         git_refs: Vec::new(),
         artifacts: Vec::new(),
         stop_conditions: Vec::new(),
@@ -989,6 +1031,10 @@ fn absorbed_context(
             serde_json::json!(source.pending_waits),
         );
         counts.insert("pending_waits".to_string(), source.pending_waits.len());
+    }
+    if options.include_blocked {
+        included.insert("blocked".to_string(), serde_json::json!(source.blocked));
+        counts.insert("blocked".to_string(), source.blocked.len());
     }
     if options.include_notes {
         included.insert("notes".to_string(), serde_json::json!(source.notes));
@@ -1273,6 +1319,9 @@ fn update_scratchpad(
     ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
     prepare_scratchpad_for_write(&mut scratchpad, default_scratchpad_id)?;
+    if args.get("objective").is_some() {
+        scratchpad.objective = scratchpad_objective_arg(args)?;
+    }
     merge_update(&mut scratchpad, args);
     touch(&mut scratchpad);
     store.write(&scratchpad)?;
@@ -1326,8 +1375,10 @@ fn record_outcome(
         "unit",
         "baseline",
         "current",
+        "value",
         "delta",
         "change",
+        "direction",
         "summary",
         "tradeoffs",
         "provenance",
@@ -1425,14 +1476,17 @@ fn record_delegation(
             delegation.insert(key.to_string(), value.clone());
         }
     }
-    if !delegation.contains_key("status") {
-        delegation.insert("status".to_string(), Value::String("delegated".to_string()));
-    }
-    if let Some(existing) = scratchpad.delegations.iter_mut().find(|item| {
+    let existing_index = scratchpad.delegations.iter().position(|item| {
         item.get("delegation_id")
             .and_then(Value::as_str)
             .is_some_and(|value| value == delegation_id)
-    }) {
+    });
+    if args.get("status").is_some() || existing_index.is_none() {
+        let status = delegation_status_arg(args)?;
+        delegation.insert("status".to_string(), Value::String(status));
+    }
+    if let Some(index) = existing_index {
+        let existing = &mut scratchpad.delegations[index];
         let mut merged = existing.as_object().cloned().unwrap_or_default();
         for (key, value) in delegation {
             merged.insert(key, value);
@@ -1571,6 +1625,7 @@ fn schema_payload() -> Value {
             "completed",
             "next_steps",
             "pending_waits",
+            "blocked",
             "git_refs",
             "artifacts",
             "stop_conditions",
@@ -1585,6 +1640,37 @@ fn schema_payload() -> Value {
         ],
         "storage": "Built-in scratchpads are JSON files under <codex_home>/scratchpad/entries unless state_home is provided.",
         "thread_id_default": "Built-in scratchpad tools are bound to the current Codex thread/session id. open_scratchpad defaults scratchpad_id to that id when omitted, and model-visible tools reject custom or other-thread scratchpad ids. Archived pads remain readable/editable by the owning thread until lifecycle deletion.",
+        "objective_updates": "Use update_scratchpad with objective to rename the current working objective. open_scratchpad still rejects rebinding an existing thread scratchpad to a different objective.",
+        "continuous_work_policy": "Keep next_steps limited to actionable work. Move external waits to pending_waits and true blockers to blocked. A wait can use wait_type='user_confirmation' when the user must confirm or grant access. Continuous mode only loops for actionable next_steps; pending_waits and blocked alone are recovery context, not active work.",
+        "pending_wait_shape": {
+            "wait_id": "stable optional id",
+            "target": "thing being waited on, such as aws-role/Admin or PR #123",
+            "summary": "why work cannot proceed",
+            "wait_type": "external | user_confirmation | scheduled_check | other",
+            "next_check_at": "optional RFC3339 time for non-user-confirmation waits",
+            "fallback_work": "optional list of independent actionable work"
+        },
+        "blocked_shape": {
+            "blocker_id": "stable optional id",
+            "summary": "why work is blocked",
+            "blocked_on": "person, permission, dependency, credential, or decision needed",
+            "required_user_action": "optional concrete user action needed to unblock",
+            "created_at": "optional RFC3339 timestamp"
+        },
+        "outcome_shape": {
+            "scope": "metric identity scope, such as vector-search or auth/login",
+            "metric": "metric name, such as qps, p95_latency, failures",
+            "unit": "display unit, such as req/s, ms, failures",
+            "value": "numeric datapoint for repeated series",
+            "baseline": "optional numeric starting value",
+            "current": "optional numeric current value",
+            "direction": "higher_is_better | lower_is_better | neutral",
+            "summary": "short proof statement",
+            "commit": "optional commit provenance",
+            "pr": "optional PR provenance",
+            "artifacts": "optional benchmark logs, report paths, or other proof artifacts"
+        },
+        "delegation_status_values": DELEGATION_STATUS_VALUES,
         "tools": [
             TOOL_OPEN,
             TOOL_RESUME,
@@ -1648,6 +1734,9 @@ fn merge_update(scratchpad: &mut Scratchpad, args: &Value) {
     if args.get("pending_waits").is_some() {
         scratchpad.pending_waits = array_arg(args, "pending_waits");
     }
+    if args.get("blocked").is_some() {
+        scratchpad.blocked = array_arg(args, "blocked");
+    }
     if args.get("git_refs").is_some() {
         scratchpad.git_refs = array_arg(args, "git_refs");
     }
@@ -1677,6 +1766,7 @@ fn summary(scratchpad: &Scratchpad) -> Value {
         "origin_thread_id": scratchpad.origin_thread_id,
         "next_steps": scratchpad.next_steps,
         "pending_waits": scratchpad.pending_waits,
+        "blocked": scratchpad.blocked,
         "stop_conditions": scratchpad.stop_conditions,
         "run_policy": scratchpad.run_policy,
         "communication_policy": scratchpad.communication_policy,
@@ -1964,6 +2054,39 @@ fn string_arg(args: &Value, key: &str) -> Result<String, FunctionCallError> {
     })
 }
 
+fn scratchpad_objective_arg(args: &Value) -> Result<String, FunctionCallError> {
+    let value = args
+        .get("objective")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel("objective must be a string".to_string())
+        })?;
+    if value.is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "objective must not be empty".to_string(),
+        ));
+    }
+    if value.chars().count() > MAX_THREAD_GOAL_OBJECTIVE_CHARS {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "objective must be at most {MAX_THREAD_GOAL_OBJECTIVE_CHARS} characters"
+        )));
+    }
+    Ok(value.to_string())
+}
+
+fn delegation_status_arg(args: &Value) -> Result<String, FunctionCallError> {
+    let status = optional_string_arg(args, "status").unwrap_or_else(|| "delegated".to_string());
+    if DELEGATION_STATUS_VALUES.contains(&status.as_str()) {
+        Ok(status)
+    } else {
+        Err(FunctionCallError::RespondToModel(format!(
+            "delegation status must be one of: {}",
+            DELEGATION_STATUS_VALUES.join(", ")
+        )))
+    }
+}
+
 fn optional_string_arg(args: &Value, key: &str) -> Option<String> {
     args.get(key)
         .and_then(Value::as_str)
@@ -2074,6 +2197,7 @@ mod tests {
             completed: Vec::new(),
             next_steps: Vec::new(),
             pending_waits: Vec::new(),
+            blocked: Vec::new(),
             git_refs: Vec::new(),
             artifacts: Vec::new(),
             stop_conditions: Vec::new(),
@@ -2309,6 +2433,146 @@ mod tests {
         assert_eq!(
             stored.next_steps,
             vec!["continue vector-search tests".to_string()]
+        );
+    }
+
+    #[test]
+    fn update_scratchpad_can_rename_current_thread_objective() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "Initial objective",
+                "next_steps": ["keep working"],
+                "pending_waits": [{
+                    "wait_id": "aws-role",
+                    "wait_type": "user_confirmation",
+                    "summary": "Need role access"
+                }],
+                "blocked": [{
+                    "blocker_id": "infra-access",
+                    "summary": "Cannot deploy without AWS role"
+                }],
+                "run_policy": {
+                    "continuous": {
+                        "enabled": true
+                    }
+                },
+                "resume_instructions": "resume here"
+            }),
+            "thread-rename",
+        )
+        .unwrap();
+
+        let updated = update_scratchpad(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "thread-rename",
+                "objective": "Renamed objective"
+            }),
+            "thread-rename",
+        )
+        .unwrap();
+
+        assert_eq!(
+            updated["scratchpad"]["objective"],
+            serde_json::json!("Renamed objective")
+        );
+        assert_eq!(
+            updated["scratchpad"]["next_steps"],
+            serde_json::json!(["keep working"])
+        );
+        assert_eq!(
+            updated["scratchpad"]["pending_waits"][0]["wait_type"],
+            serde_json::json!("user_confirmation")
+        );
+        assert_eq!(
+            updated["scratchpad"]["blocked"][0]["blocker_id"],
+            serde_json::json!("infra-access")
+        );
+        assert_eq!(
+            updated["scratchpad"]["run_policy"]["continuous"]["enabled"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            updated["scratchpad"]["resume_instructions"],
+            serde_json::json!("resume here")
+        );
+    }
+
+    #[test]
+    fn update_scratchpad_rejects_empty_objective_without_mutating() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+
+        open_scratchpad(
+            &store,
+            &serde_json::json!({ "objective": "Original objective" }),
+            "thread-empty-objective",
+        )
+        .unwrap();
+
+        let result = update_scratchpad(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "thread-empty-objective",
+                "objective": "   "
+            }),
+            "thread-empty-objective",
+        );
+
+        let message = result
+            .expect_err("empty objective should be rejected")
+            .to_string();
+        assert!(message.contains("objective must not be empty"));
+        assert_eq!(
+            store.read("thread-empty-objective").unwrap().objective,
+            "Original objective"
+        );
+    }
+
+    #[test]
+    fn different_thread_cannot_update_objective() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+
+        open_scratchpad(
+            &store,
+            &serde_json::json!({ "objective": "Owner objective" }),
+            "thread-owner",
+        )
+        .unwrap();
+
+        let result = update_scratchpad(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "thread-owner",
+                "objective": "Foreign update"
+            }),
+            "thread-foreign",
+        );
+
+        let message = result
+            .expect_err("foreign thread id should be rejected")
+            .to_string();
+        assert!(message.contains("current thread id"));
+        assert_eq!(
+            store.read("thread-owner").unwrap().objective,
+            "Owner objective"
         );
     }
 
@@ -2820,6 +3084,7 @@ mod tests {
                 completed: Vec::new(),
                 next_steps: vec!["CANARY_LEGACY_CUSTOM_FRESH_BUILD_019DE918".to_string()],
                 pending_waits: Vec::new(),
+                blocked: Vec::new(),
                 git_refs: Vec::new(),
                 artifacts: Vec::new(),
                 stop_conditions: Vec::new(),
@@ -3277,6 +3542,7 @@ mod tests {
             completed: Vec::new(),
             next_steps: vec!["MISMATCHED_CONTINUOUS_CANARY".to_string()],
             pending_waits: Vec::new(),
+            blocked: Vec::new(),
             git_refs: Vec::new(),
             artifacts: Vec::new(),
             stop_conditions: Vec::new(),
@@ -3335,6 +3601,7 @@ mod tests {
                 completed: Vec::new(),
                 next_steps: Vec::new(),
                 pending_waits: Vec::new(),
+                blocked: Vec::new(),
                 git_refs: Vec::new(),
                 artifacts: Vec::new(),
                 stop_conditions: Vec::new(),
@@ -3366,6 +3633,7 @@ mod tests {
                 completed: Vec::new(),
                 next_steps: Vec::new(),
                 pending_waits: Vec::new(),
+                blocked: Vec::new(),
                 git_refs: Vec::new(),
                 artifacts: Vec::new(),
                 stop_conditions: Vec::new(),
@@ -3397,6 +3665,7 @@ mod tests {
                 completed: Vec::new(),
                 next_steps: Vec::new(),
                 pending_waits: Vec::new(),
+                blocked: Vec::new(),
                 git_refs: Vec::new(),
                 artifacts: Vec::new(),
                 stop_conditions: Vec::new(),
