@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-05-09/account-alias-registry#4b4f6cb61212"
+  change_type: "feat"
+  scope: "accounts"
+  summary: "Expose managed Codex account aliases through a non-secret local registry for app UIs."
+  decision: "Store account alias discovery metadata in <codex_home>/accounts/registry.json, self-heal it from config, alias directories, root auth, and account use, and serialize registry updates with locking and backup/quarantine handling."
+  constraints:
+    - "Must not store tokens, refresh tokens, API keys, or other auth secrets in the registry."
+    - "Must preserve root/default auth compatibility at <codex_home>/auth.json."
+    - "Must keep managed aliases keychain-first by using auto storage when default file storage would otherwise be inherited."
+    - "Must allow keychain-only aliases to be discoverable even when no fallback auth.json exists."
+    - "Must keep scratchpad continuous recovery and pending-wait output explicit enough to recover active work."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/config/src/account_registry.rs"
+    - "codex-rs/core/src/config/mod.rs::Config::load"
+    - "codex-rs/login/src/auth/manager.rs::AuthManager::set_auth_storage_selection"
+    - "codex-rs/core/src/session/turn.rs::build_continuous_run_block_message"
+    - "codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::format_pending_wait"
+    - "codex-rs/tui/src/chatwidget/slash_dispatch.rs::format_pending_wait"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
