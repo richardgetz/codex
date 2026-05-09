@@ -1,0 +1,21 @@
+---
+source: tui/src/chatwidget/tests/plan_mode.rs
+assertion_line: 1874
+expression: blob
+---
+• Scratchpad (id: thread-1)
+  └ Working on: Ship visible scratchpad UX
+    Status: in_progress
+    Continuous: on - runs until Next up is done or only Waiting remains
+    Completed:
+    ✔ Trace plan rendering
+    … 1 earlier completed
+    Next up:
+    □ Add scratchpad history cell 1
+    □ Add scratchpad history cell 2
+    □ Add scratchpad history cell 3
+    □ Add scratchpad history cell 4
+    □ Add scratchpad history cell 5
+    … 1 more
+    Waiting:
+    □ Wait for manual UI feedback

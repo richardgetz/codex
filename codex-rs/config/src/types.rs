@@ -581,6 +581,9 @@ pub struct ScratchpadModeToml {
     /// When false, the built-in scratchpad tool namespace and scratchpad
     /// developer guidance are not exposed in this mode.
     pub enabled: Option<bool>,
+    /// When true, newly created thread scratchpads start with continuous run
+    /// policy enabled.
+    pub default_continuous: Option<bool>,
     /// When false, live compaction events do not mechanically loop recovered
     /// scratchpad state back into the next model turn in this mode.
     pub recover_after_compaction: Option<bool>,
@@ -592,6 +595,9 @@ pub struct ScratchpadModeToml {
 pub struct ScratchpadToml {
     /// Global default for built-in scratchpad tool/guidance exposure.
     pub enabled: Option<bool>,
+    /// Global default for enabling continuous run policy on newly created
+    /// thread scratchpads.
+    pub default_continuous: Option<bool>,
     /// Global default for live compaction recovery loopback.
     pub recover_after_compaction: Option<bool>,
     /// Archive non-archived scratchpads after this many days without updates.
@@ -666,6 +672,7 @@ impl From<Option<ScratchpadViewToml>> for ScratchpadViewConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScratchpadModeConfig {
     pub enabled: bool,
+    pub default_continuous: bool,
     pub recover_after_compaction: bool,
 }
 
@@ -674,6 +681,7 @@ impl ScratchpadModeConfig {
         match mode {
             ModeKind::Plan => Self {
                 enabled: false,
+                default_continuous: false,
                 recover_after_compaction: false,
             },
             ModeKind::Default
@@ -681,6 +689,7 @@ impl ScratchpadModeConfig {
             | ModeKind::PairProgramming
             | ModeKind::Execute => Self {
                 enabled: true,
+                default_continuous: true,
                 recover_after_compaction: true,
             },
         }
@@ -745,6 +754,10 @@ impl From<ScratchpadToml> for ScratchpadConfig {
                             .and_then(|config| config.enabled)
                             .or(toml.enabled)
                             .unwrap_or(default.enabled),
+                        default_continuous: mode_toml
+                            .and_then(|config| config.default_continuous)
+                            .or(toml.default_continuous)
+                            .unwrap_or(default.default_continuous),
                         recover_after_compaction: mode_toml
                             .and_then(|config| config.recover_after_compaction)
                             .or(toml.recover_after_compaction)
