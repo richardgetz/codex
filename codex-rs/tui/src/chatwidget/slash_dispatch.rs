@@ -119,11 +119,43 @@ fn format_pending_wait(wait: &serde_json::Value) -> String {
     let Some(object) = wait.as_object() else {
         return wait.to_string();
     };
-    ["summary", "target", "wait_id", "reason", "next_check_at"]
-        .iter()
-        .find_map(|key| object.get(*key).and_then(serde_json::Value::as_str))
-        .unwrap_or("pending wait")
-        .to_string()
+    let title = [
+        "summary",
+        "description",
+        "reason",
+        "target",
+        "wait_id",
+        "id",
+        "next_check_at",
+    ]
+    .iter()
+    .find_map(|key| object.get(*key).and_then(serde_json::Value::as_str))
+    .unwrap_or("pending wait");
+
+    let mut details = Vec::new();
+    for key in [
+        "id",
+        "status",
+        "owner",
+        "wait_type",
+        "target",
+        "check_method",
+        "next_check_at",
+        "reuse_session_id",
+        "details",
+    ] {
+        if let Some(value) = object.get(key).and_then(serde_json::Value::as_str)
+            && value != title
+        {
+            details.push(format!("{key}: {value}"));
+        }
+    }
+
+    if details.is_empty() {
+        title.to_string()
+    } else {
+        format!("{title} ({})", details.join("; "))
+    }
 }
 
 fn format_blocked_item(blocked: &serde_json::Value) -> String {

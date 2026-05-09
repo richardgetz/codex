@@ -974,6 +974,23 @@ async fn auth_manager_switches_storage_selection_per_session() {
         auth_manager.auth_credentials_store_mode(),
         AuthCredentialsStoreMode::Auto
     );
+
+    let registry_path = codex_config::account_registry::registry_path(codex_home.path());
+    let registry: codex_config::account_registry::AccountRegistry =
+        serde_json::from_str(&std::fs::read_to_string(registry_path).expect("registry json"))
+            .expect("parse registry");
+    let work = registry
+        .accounts
+        .iter()
+        .find(|entry| entry.alias == "work")
+        .expect("work account registry entry");
+    assert_eq!(
+        work.source,
+        codex_config::account_registry::AccountRegistrySource::Usage
+    );
+    assert_eq!(work.credentials_store, AuthCredentialsStoreMode::Auto);
+    assert!(!work.auth_file_present);
+    assert!(work.last_used_at_unix_secs.is_some());
 }
 
 fn agent_identity_record(account_id: &str) -> AgentIdentityAuthRecord {

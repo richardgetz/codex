@@ -1,3 +1,4 @@
+pub mod account_registry;
 mod cloud_requirements;
 mod config_requirements;
 pub mod config_toml;

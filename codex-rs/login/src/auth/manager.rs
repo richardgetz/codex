@@ -37,6 +37,7 @@ use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use crate::token_data::parse_jwt_expiration;
 use codex_client::CodexHttpClient;
+use codex_config::account_registry;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::PlanType as InternalPlanType;
@@ -1587,6 +1588,7 @@ impl AuthManager {
             changed = true;
         }
         if changed {
+            self.record_account_registry_use();
             self.reload().await;
         }
     }
@@ -1610,6 +1612,7 @@ impl AuthManager {
             changed = true;
         }
         if changed {
+            self.record_account_registry_use();
             self.reload().await;
         }
     }
@@ -1628,6 +1631,23 @@ impl AuthManager {
             .ok()
             .map(|guard| *guard)
             .unwrap_or(AuthCredentialsStoreMode::File)
+    }
+
+    fn record_account_registry_use(&self) {
+        let auth_storage_home = self.auth_storage_home();
+        let Some(alias) =
+            account_registry::alias_from_auth_storage_home(&self.codex_home, &auth_storage_home)
+        else {
+            return;
+        };
+
+        if let Err(err) = account_registry::record_account_alias_use(
+            &self.codex_home,
+            &alias,
+            self.auth_credentials_store_mode(),
+        ) {
+            tracing::warn!(error = %err, alias, "failed to update account alias registry");
+        }
     }
 
     pub fn forced_chatgpt_workspace_id(&self) -> Option<String> {
