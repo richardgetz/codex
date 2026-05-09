@@ -41,7 +41,9 @@ use codex_config::sandbox_mode_requirement_for_permission_profile;
 use codex_config::types::AccountsConfig;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_config::types::ConventionalCommitsConfig;
 use codex_config::types::DEFAULT_OTEL_ENVIRONMENT;
+use codex_config::types::GitIntentNotesConfig;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
@@ -71,6 +73,7 @@ use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_core_plugins::PluginsConfigInput;
+use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_features::AppsMcpPathOverrideConfigToml;
@@ -197,6 +200,183 @@ pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+
+async fn git_intent_note_writable_roots(
+    fs: &dyn ExecutorFileSystem,
+    cwd: &AbsolutePathBuf,
+) -> Vec<AbsolutePathBuf> {
+    let mut git_entry = None;
+    for dir in cwd.ancestors() {
+        let candidate = dir.join(".git");
+        if fs.get_metadata(&candidate, /*sandbox*/ None).await.is_ok() {
+            git_entry = Some((candidate, dir));
+            break;
+        }
+    }
+    let Some((dot_git, git_boundary)) = git_entry else {
+        return Vec::new();
+    };
+    let git_dir = match fs.get_metadata(&dot_git, /*sandbox*/ None).await {
+        Ok(metadata) if metadata.is_symlink => return Vec::new(),
+        Ok(metadata) if metadata.is_directory => dot_git,
+        Ok(metadata) if metadata.is_file => {
+            let Ok(contents) = fs.read_file_text(&dot_git, /*sandbox*/ None).await else {
+                return Vec::new();
+            };
+            let Some(git_dir) = contents.trim().strip_prefix("gitdir:").map(str::trim) else {
+                return Vec::new();
+            };
+            if git_dir.is_empty() {
+                return Vec::new();
+            }
+            let Some(repo_root) = dot_git.parent() else {
+                return Vec::new();
+            };
+            AbsolutePathBuf::resolve_path_against_base(git_dir, repo_root.as_path())
+        }
+        Ok(_) => return Vec::new(),
+        Err(_) => return Vec::new(),
+    };
+    if !git_dir.as_path().starts_with(git_boundary.as_path()) {
+        return Vec::new();
+    }
+    let common_dir_file = git_dir.join("commondir");
+    let git_common_dir = fs
+        .read_file_text(&common_dir_file, /*sandbox*/ None)
+        .await
+        .ok()
+        .map(|contents| {
+            AbsolutePathBuf::resolve_path_against_base(contents.trim(), git_dir.as_path())
+        })
+        .unwrap_or(git_dir);
+    if !git_common_dir.as_path().starts_with(git_boundary.as_path()) {
+        return Vec::new();
+    }
+    if !existing_git_path_components_are_safe(
+        fs,
+        &git_boundary,
+        &git_common_dir,
+        MissingPathComponents::Reject,
+    )
+    .await
+        || !fs
+            .get_metadata(&git_common_dir, /*sandbox*/ None)
+            .await
+            .is_ok_and(|metadata| metadata.is_directory && !metadata.is_symlink)
+    {
+        return Vec::new();
+    }
+
+    let objects = git_common_dir.join("objects");
+    let notes_refs = git_common_dir.join("refs").join("notes");
+    let notes_logs = git_common_dir.join("logs").join("refs").join("notes");
+    for root in [&objects, &notes_refs, &notes_logs] {
+        if !existing_git_path_components_are_safe(
+            fs,
+            &git_common_dir,
+            root,
+            MissingPathComponents::Allow,
+        )
+        .await
+        {
+            return Vec::new();
+        }
+    }
+    if !fs
+        .get_metadata(&objects, /*sandbox*/ None)
+        .await
+        .is_ok_and(|metadata| metadata.is_directory && !metadata.is_symlink)
+    {
+        return Vec::new();
+    }
+    vec![objects, notes_refs, notes_logs]
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MissingPathComponents {
+    Allow,
+    Reject,
+}
+
+async fn existing_git_path_components_are_safe(
+    fs: &dyn ExecutorFileSystem,
+    boundary: &AbsolutePathBuf,
+    path: &AbsolutePathBuf,
+    missing: MissingPathComponents,
+) -> bool {
+    let Ok(relative_path) = path.as_path().strip_prefix(boundary.as_path()) else {
+        return false;
+    };
+    let mut current = boundary.clone();
+    for component in relative_path.components() {
+        current = current.join(component.as_os_str());
+        match fs.get_metadata(&current, /*sandbox*/ None).await {
+            Ok(metadata) if metadata.is_symlink || !metadata.is_directory => return false,
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return missing == MissingPathComponents::Allow;
+            }
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
+async fn ensure_git_intent_note_writable_roots(
+    fs: &dyn ExecutorFileSystem,
+    roots: &[AbsolutePathBuf],
+) -> Vec<AbsolutePathBuf> {
+    let Some((objects_root, note_roots)) = roots.split_first() else {
+        return Vec::new();
+    };
+    let Some(git_common_dir) = objects_root.parent() else {
+        return Vec::new();
+    };
+    for root in note_roots {
+        if root == objects_root {
+            continue;
+        }
+        let _ = fs
+            .create_directory(
+                root,
+                CreateDirectoryOptions { recursive: true },
+                /*sandbox*/ None,
+            )
+            .await;
+    }
+    let mut verified = Vec::new();
+    for root in roots {
+        if existing_git_path_components_are_safe(
+            fs,
+            &git_common_dir,
+            root,
+            MissingPathComponents::Reject,
+        )
+        .await
+        {
+            verified.push(root.clone());
+        }
+    }
+    if verified.len() == roots.len() {
+        verified
+    } else {
+        Vec::new()
+    }
+}
+
+async fn additional_writable_roots_with_git_intent_notes(
+    fs: &dyn ExecutorFileSystem,
+    additional_writable_roots: &[AbsolutePathBuf],
+    git_intent_note_roots: &[AbsolutePathBuf],
+) -> Vec<AbsolutePathBuf> {
+    let mut roots = additional_writable_roots.to_vec();
+    for root in ensure_git_intent_note_writable_roots(fs, git_intent_note_roots).await {
+        if !roots.iter().any(|existing| existing == &root) {
+            roots.push(root);
+        }
+    }
+    roots
+}
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
@@ -505,6 +685,12 @@ pub struct Config {
     /// - `Some("")` or whitespace-only: disable commit attribution
     /// - `Some("...")`: use the provided attribution text verbatim
     pub commit_attribution: Option<String>,
+
+    /// First-class Conventional Commits guidance.
+    pub conventional_commits: ConventionalCommitsConfig,
+
+    /// First-class git intent notes guidance and metadata access.
+    pub git_intent_notes: GitIntentNotesConfig,
 
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
@@ -2340,6 +2526,10 @@ impl Config {
             None => ConfigProfile::default(),
         };
         let tool_suggest = resolve_tool_suggest_config(&cfg, &config_layer_stack);
+        let conventional_commits: ConventionalCommitsConfig =
+            cfg.conventional_commits.clone().unwrap_or_default().into();
+        let git_intent_notes: GitIntentNotesConfig =
+            cfg.git_intent_notes.clone().unwrap_or_default().into();
         let feature_overrides = FeatureOverrides {
             include_apply_patch_tool: include_apply_patch_tool_override,
             web_search_request: override_tools_web_search_request,
@@ -2472,6 +2662,12 @@ impl Config {
         {
             additional_writable_roots.push(schedule_root);
         }
+        let git_intent_note_roots =
+            if git_intent_notes.enabled && git_intent_notes.allow_git_metadata_writes {
+                git_intent_note_writable_roots(fs, &resolved_cwd).await
+            } else {
+                Vec::new()
+            };
 
         let profiles_are_active = default_permissions_override.is_some()
             || matches!(
@@ -2516,6 +2712,12 @@ impl Config {
                 resolved_cwd.as_path(),
             );
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
+                let additional_writable_roots = additional_writable_roots_with_git_intent_notes(
+                    fs,
+                    &additional_writable_roots,
+                    &git_intent_note_roots,
+                )
+                .await;
                 file_system_sandbox_policy = file_system_sandbox_policy
                     .with_additional_writable_roots(
                         resolved_cwd.as_path(),
@@ -2571,6 +2773,12 @@ impl Config {
                 resolved_cwd.as_path(),
             );
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
+                let additional_writable_roots = additional_writable_roots_with_git_intent_notes(
+                    fs,
+                    &additional_writable_roots,
+                    &git_intent_note_roots,
+                )
+                .await;
                 file_system_sandbox_policy = if using_implicit_builtin_profile {
                     file_system_sandbox_policy
                         .with_additional_legacy_workspace_writable_roots(
@@ -2675,6 +2883,12 @@ impl Config {
                 )
                 && !file_system_sandbox_policy.has_full_disk_write_access()
             {
+                let additional_writable_roots = additional_writable_roots_with_git_intent_notes(
+                    fs,
+                    &additional_writable_roots,
+                    &git_intent_note_roots,
+                )
+                .await;
                 // Keep legacy behavior for extra writable roots while storing
                 // the result as the canonical permission profile. Explicit
                 // extra roots are concrete paths, so their metadata carveouts
@@ -3197,6 +3411,8 @@ impl Config {
             developer_instructions,
             compact_prompt,
             commit_attribution,
+            conventional_commits,
+            git_intent_notes,
             include_permissions_instructions,
             include_apps_instructions,
             include_skill_instructions,

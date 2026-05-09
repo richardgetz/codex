@@ -736,6 +736,17 @@
       },
       "type": "object"
     },
+    "ConventionalCommitsToml": {
+      "additionalProperties": false,
+      "description": "Conventional Commits guidance settings loaded from config.toml.",
+      "properties": {
+        "enabled": {
+          "description": "When false, skip injecting first-class Conventional Commits guidance.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "DebugConfigLockToml": {
       "additionalProperties": false,
       "properties": {
@@ -933,6 +944,21 @@
           "description": "Legacy no-op setting retained for compatibility.",
           "format": "int64",
           "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "GitIntentNotesToml": {
+      "additionalProperties": false,
+      "description": "Git intent note guidance settings loaded from config.toml.",
+      "properties": {
+        "allow_git_metadata_writes": {
+          "description": "When true, workspace-write sessions add narrow write access for git note refs/logs and object storage so agents can write refs/notes/intention.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "When false, skip injecting first-class git intent note guidance.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -4512,6 +4538,15 @@
       "description": "Compact prompt used for history compaction.",
       "type": "string"
     },
+    "conventional_commits": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ConventionalCommitsToml"
+        }
+      ],
+      "default": null,
+      "description": "First-class Conventional Commits guidance."
+    },
     "debug": {
       "allOf": [
         {
@@ -4887,6 +4922,15 @@
       ],
       "default": null,
       "description": "Compatibility-only settings retained so legacy `ghost_snapshot` config still loads."
+    },
+    "git_intent_notes": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/GitIntentNotesToml"
+        }
+      ],
+      "default": null,
+      "description": "First-class git intent notes guidance and metadata access."
     },
     "hide_agent_reasoning": {
       "default": false,

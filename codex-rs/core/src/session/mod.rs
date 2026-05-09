@@ -26,7 +26,9 @@ use crate::context::AvailablePluginsInstructions;
 use crate::context::AvailableSkillsInstructions;
 use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
+use crate::context::ConventionalCommitsInstructions;
 use crate::context::ForkHelpInstructions;
+use crate::context::GitIntentNotesInstructions;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
@@ -3114,6 +3116,12 @@ impl Session {
                 )
                 .render(),
             );
+        }
+        if turn_context.config.conventional_commits.enabled {
+            developer_sections.push(ConventionalCommitsInstructions::new().render());
+        }
+        if turn_context.config.git_intent_notes.enabled {
+            developer_sections.push(GitIntentNotesInstructions::new().render());
         }
         let separate_guardian_developer_message =
             crate::guardian::is_guardian_reviewer_source(&session_source);

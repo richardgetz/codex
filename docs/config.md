@@ -127,6 +127,31 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
 
+## Conventional Commits and Git Intent Notes
+
+This fork injects Conventional Commits and git intent notes guidance by default.
+To disable either block:
+
+```toml
+[conventional_commits]
+enabled = false
+
+[git_intent_notes]
+enabled = false
+```
+
+When git intent notes are enabled, workspace-write sessions add narrow write
+access for `refs/notes/intention` when Codex can resolve the git metadata inside
+the trusted project: git note refs, git note logs, and git object storage. Git
+hooks and config stay protected. Worktrees whose gitdir escapes the trusted
+project need the normal rules or approval path instead. To keep the guidance but
+opt out of that metadata write access:
+
+```toml
+[git_intent_notes]
+allow_git_metadata_writes = false
+```
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.

@@ -44,6 +44,37 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   - `codex --disable enable_mcp_approvals`
 - `codex features list` marks Rick-owned features with `(rick)`.
 
+### Commit and intent guidance
+
+- Conventional Commits guidance is first-class and enabled by default.
+  Disable it with:
+
+  ```toml
+  [conventional_commits]
+  enabled = false
+  ```
+
+- Git intent notes guidance is first-class and enabled by default. When enabled,
+  workspace-write sessions add narrow write access to git note refs/logs and
+  object storage when the git metadata resolves inside the trusted project, so
+  agents can use `refs/notes/intention` without reopening all of `.git`. Gitdir
+  layouts that escape the trusted project still use the normal rules or approval
+  path.
+  Disable the guidance entirely with:
+
+  ```toml
+  [git_intent_notes]
+  enabled = false
+  ```
+
+- To keep the guidance but require normal approval/escalation for note writes,
+  use:
+
+  ```toml
+  [git_intent_notes]
+  allow_git_metadata_writes = false
+  ```
+
 ### Orchestrator mode defaults
 
 - Orchestrator mode can be selected at launch with `--collab orchestrator`.

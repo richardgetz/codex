@@ -12,8 +12,10 @@ use crate::types::AnalyticsConfigToml;
 use crate::types::ApprovalsReviewer;
 use crate::types::AppsConfigToml;
 use crate::types::AuthCredentialsStoreMode;
+use crate::types::ConventionalCommitsToml;
 use crate::types::EnablementConfig;
 use crate::types::FeedbackConfigToml;
+use crate::types::GitIntentNotesToml;
 use crate::types::History;
 use crate::types::MarketplaceConfig;
 use crate::types::McpServerConfig;
@@ -192,6 +194,14 @@ pub struct ConfigToml {
     /// When enabled and unset, Codex uses `Codex <noreply@openai.com>`.
     /// Set to an empty string to disable automatic commit attribution.
     pub commit_attribution: Option<String>,
+
+    /// First-class Conventional Commits guidance.
+    #[serde(default)]
+    pub conventional_commits: Option<ConventionalCommitsToml>,
+
+    /// First-class git intent notes guidance and metadata access.
+    #[serde(default)]
+    pub git_intent_notes: Option<GitIntentNotesToml>,
 
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     #[serde(default)]

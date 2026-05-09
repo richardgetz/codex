@@ -334,6 +334,74 @@ pub struct ToolSuggestConfig {
     pub disabled_tools: Vec<ToolSuggestDisabledTool>,
 }
 
+/// Conventional Commits guidance settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ConventionalCommitsToml {
+    /// When false, skip injecting first-class Conventional Commits guidance.
+    pub enabled: Option<bool>,
+}
+
+/// Effective Conventional Commits guidance settings after defaults are applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConventionalCommitsConfig {
+    pub enabled: bool,
+}
+
+impl Default for ConventionalCommitsConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+impl From<ConventionalCommitsToml> for ConventionalCommitsConfig {
+    fn from(toml: ConventionalCommitsToml) -> Self {
+        let defaults = Self::default();
+        Self {
+            enabled: toml.enabled.unwrap_or(defaults.enabled),
+        }
+    }
+}
+
+/// Git intent note guidance settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct GitIntentNotesToml {
+    /// When false, skip injecting first-class git intent note guidance.
+    pub enabled: Option<bool>,
+    /// When true, workspace-write sessions add narrow write access for git
+    /// note refs/logs and object storage so agents can write refs/notes/intention.
+    pub allow_git_metadata_writes: Option<bool>,
+}
+
+/// Effective git intent note settings after defaults are applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GitIntentNotesConfig {
+    pub enabled: bool,
+    pub allow_git_metadata_writes: bool,
+}
+
+impl Default for GitIntentNotesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allow_git_metadata_writes: true,
+        }
+    }
+}
+
+impl From<GitIntentNotesToml> for GitIntentNotesConfig {
+    fn from(toml: GitIntentNotesToml) -> Self {
+        let defaults = Self::default();
+        Self {
+            enabled: toml.enabled.unwrap_or(defaults.enabled),
+            allow_git_metadata_writes: toml
+                .allow_git_metadata_writes
+                .unwrap_or(defaults.allow_git_metadata_writes),
+        }
+    }
+}
+
 /// Memories settings loaded from config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]

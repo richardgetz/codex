@@ -32,10 +32,12 @@ use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::BundledSkillsConfig;
+use codex_config::types::ConventionalCommitsToml;
 use codex_config::types::EnablementConfig;
 use codex_config::types::EnablementFilterConfig;
 use codex_config::types::EnablementFilterMode;
 use codex_config::types::FeedbackConfigToml;
+use codex_config::types::GitIntentNotesToml;
 use codex_config::types::HistoryPersistence;
 use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerToolConfig;
@@ -7812,6 +7814,8 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             include_environment_context: true,
             compact_prompt: None,
             commit_attribution: None,
+            conventional_commits: Default::default(),
+            git_intent_notes: Default::default(),
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -8080,6 +8084,8 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
+        conventional_commits: Default::default(),
+        git_intent_notes: Default::default(),
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
         include_apply_patch_tool: false,
@@ -8247,6 +8253,8 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
+        conventional_commits: Default::default(),
+        git_intent_notes: Default::default(),
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
         include_apply_patch_tool: false,
@@ -8399,6 +8407,8 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
+        conventional_commits: Default::default(),
+        git_intent_notes: Default::default(),
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
         include_apply_patch_tool: false,
@@ -9652,6 +9662,380 @@ include_environment_context = true
     assert!(!config.include_apps_instructions);
     assert!(!config.include_skill_instructions);
     assert!(config.include_environment_context);
+    Ok(())
+}
+
+#[tokio::test]
+async fn first_class_commit_guidance_defaults_enabled_and_can_be_disabled() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let default_config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(default_config.conventional_commits.enabled);
+    assert!(default_config.git_intent_notes.enabled);
+    assert!(default_config.git_intent_notes.allow_git_metadata_writes);
+
+    let disabled_config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            conventional_commits: Some(ConventionalCommitsToml {
+                enabled: Some(false),
+            }),
+            git_intent_notes: Some(GitIntentNotesToml {
+                enabled: Some(false),
+                allow_git_metadata_writes: Some(false),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().abs(),
+    )
+    .await?;
+
+    assert!(!disabled_config.conventional_commits.enabled);
+    assert!(!disabled_config.git_intent_notes.enabled);
+    assert!(!disabled_config.git_intent_notes.allow_git_metadata_writes);
+    Ok(())
+}
+
+#[tokio::test]
+async fn git_intent_notes_adds_narrow_git_metadata_write_roots() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::create_dir_all(cwd.path().join(".git/objects"))?;
+    assert!(!cwd.path().join(".git/refs/notes").exists());
+    assert!(!cwd.path().join(".git/logs/refs/notes").exists());
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":workspace".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().abs(),
+    )
+    .await?;
+    let policy = config.permissions.file_system_sandbox_policy();
+
+    assert!(cwd.path().join(".git/refs/notes").is_dir());
+    assert!(cwd.path().join(".git/logs/refs/notes").is_dir());
+    assert!(
+        policy.can_write_path_with_cwd(&cwd.path().join(".git/refs/notes/intention"), cwd.path(),),
+        "expected intent notes refs to be writable, policy: {policy:?}"
+    );
+    assert!(
+        policy.can_write_path_with_cwd(
+            &cwd.path().join(".git/logs/refs/notes/intention"),
+            cwd.path(),
+        ),
+        "expected intent notes reflogs to be writable, policy: {policy:?}"
+    );
+    assert!(
+        policy.can_write_path_with_cwd(&cwd.path().join(".git/objects/aa/bb"), cwd.path()),
+        "expected git object storage to be writable for note objects, policy: {policy:?}"
+    );
+    assert!(
+        !policy.can_write_path_with_cwd(&cwd.path().join(".git/config"), cwd.path()),
+        "expected git config to remain protected, policy: {policy:?}"
+    );
+    assert!(
+        !policy.can_write_path_with_cwd(&cwd.path().join(".git/hooks/pre-commit"), cwd.path()),
+        "expected git hooks to remain protected, policy: {policy:?}"
+    );
+
+    let disabled_config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":workspace".to_string()),
+            git_intent_notes: Some(GitIntentNotesToml {
+                enabled: Some(true),
+                allow_git_metadata_writes: Some(false),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().abs(),
+    )
+    .await?;
+    let disabled_policy = disabled_config.permissions.file_system_sandbox_policy();
+
+    assert!(
+        !disabled_policy
+            .can_write_path_with_cwd(&cwd.path().join(".git/refs/notes/intention"), cwd.path(),),
+        "expected git intent note metadata writes to respect config opt-out"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn git_intent_notes_rejects_linked_worktree_common_dir_escape() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let main_repo = workspace.path().join("repo");
+    let main_git = main_repo.join(".git");
+    let worktree = workspace.path().join("worktree");
+    let worktree_git_dir = main_git.join("worktrees/main");
+    std::fs::create_dir_all(&main_repo)?;
+    std::fs::create_dir_all(&worktree)?;
+    std::fs::create_dir_all(&worktree_git_dir)?;
+    std::fs::create_dir_all(main_git.join("objects"))?;
+    std::fs::write(
+        worktree.join(".git"),
+        format!("gitdir: {}\n", worktree_git_dir.display()),
+    )?;
+    std::fs::write(worktree_git_dir.join("commondir"), "../..")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":workspace".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(worktree.clone()),
+            ..Default::default()
+        },
+        codex_home.path().abs(),
+    )
+    .await?;
+    let policy = config.permissions.file_system_sandbox_policy();
+
+    assert!(!main_git.join("refs/notes").exists());
+    assert!(!main_git.join("logs/refs/notes").exists());
+    assert!(
+        !policy.entries.iter().any(|entry| {
+            entry.access == FileSystemAccessMode::Write
+                && matches!(&entry.path, FileSystemPath::Path { path } if path.as_path().starts_with(&main_git))
+        }),
+        "expected escaped linked-worktree common dir to avoid explicit writable roots, policy: {policy:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn git_intent_notes_rejects_commondir_escape() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let outside = TempDir::new()?;
+    let dot_git = cwd.path().join(".git");
+    let escaped_git = outside.path().join("escaped.git");
+    std::fs::create_dir_all(&dot_git)?;
+    std::fs::create_dir_all(escaped_git.join("objects"))?;
+    std::fs::write(dot_git.join("commondir"), escaped_git.display().to_string())?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":workspace".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().abs(),
+    )
+    .await?;
+    let policy = config.permissions.file_system_sandbox_policy();
+
+    assert!(!escaped_git.join("refs/notes").exists());
+    assert!(!escaped_git.join("logs/refs/notes").exists());
+    assert!(
+        !policy.entries.iter().any(|entry| {
+            entry.access == FileSystemAccessMode::Write
+                && matches!(&entry.path, FileSystemPath::Path { path } if path.as_path().starts_with(&escaped_git))
+        }),
+        "expected escaped commondir to avoid explicit writable roots, policy: {policy:?}"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn git_intent_notes_rejects_symlinked_dot_git_escape() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let outside = TempDir::new()?;
+    let escaped_git = outside.path().join("escaped.git");
+    std::fs::create_dir_all(escaped_git.join("objects"))?;
+    std::os::unix::fs::symlink(&escaped_git, cwd.path().join(".git"))?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":workspace".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().abs(),
+    )
+    .await?;
+    let policy = config.permissions.file_system_sandbox_policy();
+
+    assert!(!escaped_git.join("refs/notes").exists());
+    assert!(!escaped_git.join("logs/refs/notes").exists());
+    assert!(
+        !policy.entries.iter().any(|entry| {
+            entry.access == FileSystemAccessMode::Write
+                && matches!(&entry.path, FileSystemPath::Path { path } if path.as_path().starts_with(&escaped_git))
+        }),
+        "expected symlinked .git escape to avoid explicit writable roots, policy: {policy:?}"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn git_intent_notes_rejects_symlinked_child_metadata_escape() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let outside = TempDir::new()?;
+    let escaped_refs = outside.path().join("refs");
+    std::fs::create_dir_all(cwd.path().join(".git/objects"))?;
+    std::fs::create_dir_all(&escaped_refs)?;
+    std::os::unix::fs::symlink(&escaped_refs, cwd.path().join(".git/refs"))?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":workspace".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().abs(),
+    )
+    .await?;
+    let policy = config.permissions.file_system_sandbox_policy();
+
+    assert!(!escaped_refs.join("notes").exists());
+    assert!(
+        !policy.entries.iter().any(|entry| {
+            entry.access == FileSystemAccessMode::Write
+                && matches!(&entry.path, FileSystemPath::Path { path } if path.as_path().starts_with(&escaped_refs))
+        }),
+        "expected symlinked refs escape to avoid explicit writable roots, policy: {policy:?}"
+    );
+    assert!(
+        !policy.can_write_path_with_cwd(&cwd.path().join(".git/objects/aa/bb"), cwd.path()),
+        "expected unsafe child metadata to skip all intent-note roots"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn git_intent_notes_rejects_dangling_symlinked_child_metadata_escape() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let outside = TempDir::new()?;
+    let escaped_refs = outside.path().join("missing-refs");
+    std::fs::create_dir_all(cwd.path().join(".git/objects"))?;
+    std::os::unix::fs::symlink(&escaped_refs, cwd.path().join(".git/refs"))?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":workspace".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().abs(),
+    )
+    .await?;
+    let policy = config.permissions.file_system_sandbox_policy();
+
+    assert!(!escaped_refs.exists());
+    assert!(
+        !policy.can_write_path_with_cwd(&cwd.path().join(".git/objects/aa/bb"), cwd.path()),
+        "expected dangling symlinked refs to skip all intent-note roots"
+    );
+    assert!(
+        !policy.entries.iter().any(|entry| {
+            entry.access == FileSystemAccessMode::Write
+                && matches!(&entry.path, FileSystemPath::Path { path } if path.as_path().starts_with(cwd.path().join(".git/refs")))
+        }),
+        "expected dangling symlinked refs to avoid explicit writable roots, policy: {policy:?}"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn git_intent_notes_rejects_symlinked_objects_escape() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let outside = TempDir::new()?;
+    let escaped_objects = outside.path().join("objects");
+    std::fs::create_dir_all(cwd.path().join(".git"))?;
+    std::fs::create_dir_all(&escaped_objects)?;
+    std::os::unix::fs::symlink(&escaped_objects, cwd.path().join(".git/objects"))?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":workspace".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().abs(),
+    )
+    .await?;
+    let policy = config.permissions.file_system_sandbox_policy();
+
+    assert!(!cwd.path().join(".git/refs/notes").exists());
+    assert!(
+        !policy.entries.iter().any(|entry| {
+            entry.access == FileSystemAccessMode::Write
+                && matches!(&entry.path, FileSystemPath::Path { path } if path.as_path().starts_with(&escaped_objects))
+        }),
+        "expected symlinked objects escape to avoid explicit writable roots, policy: {policy:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn git_intent_notes_does_not_create_note_dirs_for_read_only() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::create_dir_all(cwd.path().join(".git/objects"))?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":read-only".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().abs(),
+    )
+    .await?;
+    let policy = config.permissions.file_system_sandbox_policy();
+
+    assert!(!cwd.path().join(".git/refs/notes").exists());
+    assert!(!cwd.path().join(".git/logs/refs/notes").exists());
+    assert!(
+        !policy.can_write_path_with_cwd(&cwd.path().join(".git/refs/notes/intention"), cwd.path(),),
+        "expected read-only sessions to avoid intent-note write access"
+    );
     Ok(())
 }
 

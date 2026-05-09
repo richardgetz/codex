@@ -6,6 +6,16 @@ stable/mainline is pulled in.
 
 ## Introduced In 0.124.0-rick.2 (Recent)
 
+- First-class commit and intent guidance:
+  - Conventional Commits developer guidance is enabled by default.
+  - Config: `[conventional_commits].enabled`, default `true`.
+  - Git intent notes developer guidance is enabled by default.
+  - Config: `[git_intent_notes].enabled`, default `true`.
+  - Config: `[git_intent_notes].allow_git_metadata_writes`, default `true`.
+  - When enabled, workspace-write adds narrow git metadata write roots for
+    `refs/notes/intention`, note reflogs, and git object storage when the git
+    metadata resolves inside the trusted project, without making `.git/config`
+    or hooks writable.
 - Account alias switching:
   - CLI: `codex --account <alias>`
   - In-session: `/account <alias>` and `/account default`
@@ -239,3 +249,6 @@ stable/mainline is pulled in.
   completed or archived scratchpads.
 - Verify memory helper naming still shows `Memory [extractor]` and
   `Memory [memory builder]`.
+- Verify first-class Conventional Commits and git intent notes guidance appears
+  by default, can be disabled by config, and intent-note metadata access does
+  not make `.git/config`, hooks, or escaped linked-worktree metadata writable.
