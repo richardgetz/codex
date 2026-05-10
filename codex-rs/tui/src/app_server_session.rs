@@ -149,6 +149,11 @@ pub(crate) struct AppServerBootstrap {
     pub(crate) available_models: Vec<ModelPreset>,
 }
 
+pub(crate) struct AccountSwitchOutcome {
+    pub(crate) needs_auth_selection: bool,
+    pub(crate) account_status_error: Option<String>,
+}
+
 pub(crate) struct AppServerSession {
     client: AppServerClient,
     next_request_id: i64,
@@ -757,7 +762,10 @@ impl AppServerSession {
         Ok(())
     }
 
-    pub(crate) async fn switch_account(&mut self, alias: Option<String>) -> Result<()> {
+    pub(crate) async fn switch_account(
+        &mut self,
+        alias: Option<String>,
+    ) -> Result<AccountSwitchOutcome> {
         let request_id = self.next_request_id();
         let _: SwitchAccountResponse = self
             .client
@@ -767,7 +775,19 @@ impl AppServerSession {
             })
             .await
             .wrap_err("account/switch failed in TUI")?;
-        Ok(())
+        let (needs_auth_selection, account_status_error) = match self.read_account().await {
+            Ok(account) => (account_switch_needs_auth_selection(&account), None),
+            Err(err) => (
+                false,
+                Some(format!(
+                    "Account switched, but account status could not be read: {err}"
+                )),
+            ),
+        };
+        Ok(AccountSwitchOutcome {
+            needs_auth_selection,
+            account_status_error,
+        })
     }
 
     pub(crate) async fn thread_unsubscribe(&mut self, thread_id: ThreadId) -> Result<()> {
@@ -1052,7 +1072,6 @@ pub(crate) fn status_account_display_from_auth_mode(
     }
 }
 
-#[cfg(test)]
 pub(crate) fn status_account_display_from_account(
     account: Option<Account>,
     active_alias: Option<&str>,
@@ -1223,6 +1242,10 @@ fn permissions_selection_from_config(
         .permissions
         .active_permission_profile()
         .map(permissions_selection_from_active_profile)
+}
+
+fn account_switch_needs_auth_selection(account: &GetAccountResponse) -> bool {
+    account.requires_openai_auth && account.account.is_none()
 }
 
 fn thread_start_params_from_config(
@@ -1636,6 +1659,24 @@ mod tests {
         );
 
         assert_eq!(params.session_start_source, Some(ThreadStartSource::Clear));
+    }
+
+    #[test]
+    fn account_switch_needs_auth_selection_for_openai_provider_with_blank_alias_store() {
+        assert!(account_switch_needs_auth_selection(&GetAccountResponse {
+            account: None,
+            requires_openai_auth: true,
+        }));
+
+        assert!(!account_switch_needs_auth_selection(&GetAccountResponse {
+            account: None,
+            requires_openai_auth: false,
+        }));
+
+        assert!(!account_switch_needs_auth_selection(&GetAccountResponse {
+            account: Some(Account::ApiKey {}),
+            requires_openai_auth: true,
+        }));
     }
 
     #[test]

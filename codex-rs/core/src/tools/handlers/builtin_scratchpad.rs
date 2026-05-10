@@ -416,11 +416,43 @@ fn format_pending_wait(wait: &Value) -> String {
     let Some(object) = wait.as_object() else {
         return wait.to_string();
     };
-    ["summary", "target", "wait_id", "reason", "next_check_at"]
-        .iter()
-        .find_map(|key| object.get(*key).and_then(Value::as_str))
-        .unwrap_or("pending wait")
-        .to_string()
+    let title = [
+        "summary",
+        "description",
+        "reason",
+        "target",
+        "wait_id",
+        "id",
+        "next_check_at",
+    ]
+    .iter()
+    .find_map(|key| object.get(*key).and_then(Value::as_str))
+    .unwrap_or("pending wait");
+
+    let mut details = Vec::new();
+    for key in [
+        "id",
+        "status",
+        "owner",
+        "wait_type",
+        "target",
+        "check_method",
+        "next_check_at",
+        "reuse_session_id",
+        "details",
+    ] {
+        if let Some(value) = object.get(key).and_then(Value::as_str)
+            && value != title
+        {
+            details.push(format!("{key}: {value}"));
+        }
+    }
+
+    if details.is_empty() {
+        title.to_string()
+    } else {
+        format!("{title} ({})", details.join("; "))
+    }
 }
 
 fn format_blocked_item(blocked: &Value) -> String {
@@ -2212,6 +2244,19 @@ mod tests {
             updated_at: now(),
             archived_at: None,
         }
+    }
+
+    #[test]
+    fn pending_wait_formatter_uses_description_and_metadata() {
+        assert_eq!(
+            format_pending_wait(&serde_json::json!({
+                "id": "keepalive",
+                "description": "Stop keepalive before final",
+                "status": "pending",
+                "details": "session_id=abc"
+            })),
+            "Stop keepalive before final (id: keepalive; status: pending; details: session_id=abc)"
+        );
     }
 
     #[test]

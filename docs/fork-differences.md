@@ -310,6 +310,9 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   fixes, merge safety, and instruction-compliance checks.
 - `/scratchpad` renders the current session's built-in scratchpad on demand,
   including current objective, status, completed work, next steps, and waits.
+  Structured waits prefer human-readable fields like `summary`, `description`,
+  `reason`, and `details` instead of falling back to a generic pending-wait
+  label.
 - `/scratchpad-absorb <scratchpad_id>` copies another scratchpad into the
   current thread scratchpad as contextual history without changing source
   ownership or importing live control policy. It includes pending waits by
@@ -325,6 +328,9 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   scratchpad id and compact scratchpad state into hidden developer context so
   the agent can continue the same recovery ledger without searching. Completed
   and archived scratchpads are skipped.
+- When continuous mode prevents a final answer, the recovery prompt includes
+  the current next steps, waits, and blockers so the agent can see stale or
+  incomplete scratchpad state immediately.
 - Scratchpad lifecycle cleanup runs mechanically during config load. By
   default, non-archived pads are archived after 30 days without updates, and
   archived pads are deleted after 90 days in the archive.
@@ -461,6 +467,15 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   when an alias is active.
 - Account alias selection is session-scoped so multiple Codex sessions can spend
   against different accounts concurrently.
+- Codex maintains a non-secret alias registry at
+  `<codex_home>/accounts/registry.json` for UIs and app servers. It records the
+  alias, label, storage home, auth file path, auth-file presence, credential
+  store mode, source, and last-seen/last-used timestamps. It does not store
+  tokens or account credentials.
+- The registry self-heals from `[accounts]` config, existing
+  `<codex_home>/accounts/<alias>` folders, the root default auth store, and
+  first use of `--account` or `/account`, so keychain-only aliases can still be
+  discoverable before an `auth.json` fallback file exists.
 
 ### MCP visibility and inventory
 

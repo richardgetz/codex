@@ -327,10 +327,12 @@ impl AccountRequestProcessor {
             }
         }
 
+        let auth_storage_home = self.auth_manager.auth_storage_home();
+        let auth_credentials_store_mode = self.auth_manager.auth_credentials_store_mode();
         match login_with_api_key(
-            &self.config.codex_home,
+            &auth_storage_home,
             &params.api_key,
-            self.config.cli_auth_credentials_store_mode,
+            auth_credentials_store_mode,
         ) {
             Ok(()) => {
                 self.auth_manager.reload().await;
@@ -375,10 +377,10 @@ impl AccountRequestProcessor {
             open_browser: false,
             codex_streamlined_login,
             ..LoginServerOptions::new(
-                config.codex_home.to_path_buf(),
+                self.auth_manager.auth_storage_home(),
                 CLIENT_ID.to_string(),
                 config.forced_chatgpt_workspace_id.clone(),
-                config.cli_auth_credentials_store_mode,
+                self.auth_manager.auth_credentials_store_mode(),
             )
         };
         #[cfg(debug_assertions)]
@@ -632,8 +634,9 @@ impl AccountRequestProcessor {
             )));
         }
 
+        let auth_storage_home = self.auth_manager.auth_storage_home();
         login_with_chatgpt_auth_tokens(
-            &self.config.codex_home,
+            &auth_storage_home,
             &access_token,
             &chatgpt_account_id,
             chatgpt_plan_type.as_deref(),

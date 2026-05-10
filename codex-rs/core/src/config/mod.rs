@@ -3416,6 +3416,18 @@ impl Config {
         ) {
             tracing::warn!(error = %err, "failed to run built-in scratchpad lifecycle cleanup");
         }
+        let cli_auth_credentials_store_mode = resolve_cli_auth_credentials_store_mode(
+            cfg.cli_auth_credentials_store.unwrap_or_default(),
+            env!("CARGO_PKG_VERSION"),
+        );
+        let accounts: AccountsConfig = cfg.accounts.unwrap_or_default().into();
+        if let Err(err) = codex_config::account_registry::self_heal_account_registry(
+            codex_home.as_path(),
+            &accounts,
+            cli_auth_credentials_store_mode,
+        ) {
+            tracing::warn!(error = %err, "failed to self-heal account alias registry");
+        }
         let effective_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
             effective_permission_profile.enforcement(),
             &effective_file_system_sandbox_policy,
@@ -3462,12 +3474,7 @@ impl Config {
             skills: cfg.skills.clone().unwrap_or_default(),
             enablement: cfg.enablement.clone().unwrap_or_default(),
             include_environment_context,
-            // The config.toml omits "_mode" because it's a config file. However, "_mode"
-            // is important in code to differentiate the mode from the store implementation.
-            cli_auth_credentials_store_mode: resolve_cli_auth_credentials_store_mode(
-                cfg.cli_auth_credentials_store.unwrap_or_default(),
-                env!("CARGO_PKG_VERSION"),
-            ),
+            cli_auth_credentials_store_mode,
             mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
@@ -3506,7 +3513,7 @@ impl Config {
                 .into(),
             schedule: cfg.schedule.unwrap_or_default().into(),
             resume: cfg.resume.unwrap_or_default().into(),
-            accounts: cfg.accounts.unwrap_or_default().into(),
+            accounts,
             orchestrator: cfg.orchestrator.unwrap_or_default().into(),
             thread_control: cfg.thread_control.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,

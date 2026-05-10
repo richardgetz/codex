@@ -25,6 +25,12 @@ stable/mainline is pulled in.
   - Storage policy: root/default auth stays file-compatible for mainline, while
     managed aliases default to keychain-first `auto` storage with file
     fallback when keychain is unavailable.
+  - Non-secret alias registry:
+    `<codex_home>/accounts/registry.json`
+  - Registry behavior: self-heals from the root auth store, existing alias
+    directories, `[accounts].active`, `[accounts].rotation`, and first alias
+    use through `--account` or `/account`, so keychain-only aliases remain
+    discoverable for app-server UIs even when no fallback `auth.json` exists.
 - Orchestrator startup mode selection:
   - CLI: `codex --collab <mode>`
   - Supports non-case-sensitive values and one-letter shorthands such as `o`
@@ -140,6 +146,8 @@ stable/mainline is pulled in.
     owning thread until lifecycle deletion.
   - Slash command: `/scratchpad` renders the current session scratchpad on
     demand with the full completed, next-step, and pending-wait lists.
+    Structured waits render human-readable `summary`, `description`, `reason`,
+    and metadata fields instead of a generic pending-wait label.
   - Slash command: `/scratchpad-absorb <scratchpad_id>` copies another
     scratchpad into the current thread scratchpad as contextual history without
     changing source ownership or importing live control policy. It includes
@@ -182,6 +190,9 @@ stable/mainline is pulled in.
   - Resume injects the active thread scratchpad id and compact scratchpad state
     into hidden developer context when the thread-id scratchpad exists with
     uncompleted work (`next_steps` or `pending_waits`).
+  - Continuous-mode recovery prompts include the current next steps, waits, and
+    blockers so stale or incomplete scratchpad state is visible when a final
+    answer is blocked.
   - Supports active/archived lookup, archive/unarchive, next-step and
     pending-wait updates, blocked-item updates, action-policy checks, and wait
     check-ins.

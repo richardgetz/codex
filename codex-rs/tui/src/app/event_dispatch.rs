@@ -322,7 +322,7 @@ impl App {
             },
             AppEvent::SwitchAccount { alias, reason } => {
                 match app_server.switch_account(alias.clone()).await {
-                    Ok(()) => {
+                    Ok(outcome) => {
                         self.config.accounts.active = alias.clone();
                         self.chat_widget.set_active_account_alias(alias.clone());
                         let label = alias.unwrap_or_else(|| "default".to_string());
@@ -343,6 +343,80 @@ impl App {
                                     .to_string(),
                             ),
                         );
+                        if let Some(err) = outcome.account_status_error {
+                            self.chat_widget.add_error_message(err);
+                        }
+                        if outcome.needs_auth_selection {
+                            match reason {
+                                crate::app_event::AccountSwitchReason::User => {
+                                    self.chat_widget.add_info_message(
+                                        format!(
+                                            "No saved credentials were found for account alias {label}."
+                                        ),
+                                        Some(
+                                            "Choose how you want to authenticate this alias."
+                                                .to_string(),
+                                        ),
+                                    );
+                                    let onboarding_result =
+                                        crate::onboarding::onboarding_screen::run_onboarding_app(
+                                            crate::onboarding::onboarding_screen::OnboardingScreenArgs {
+                                                show_welcome_screen: false,
+                                                show_login_screen: true,
+                                                show_trust_screen: false,
+                                                login_status: crate::LoginStatus::NotAuthenticated,
+                                                app_server_request_handle: Some(
+                                                    app_server.request_handle(),
+                                                ),
+                                                config: self.config.clone(),
+                                                exit_on_auth_cancel: false,
+                                            },
+                                            Some(&mut *app_server),
+                                            tui,
+                                        )
+                                        .await?;
+                                    let _ = tui.terminal.clear();
+                                    tui.frame_requester().schedule_frame();
+                                    if !onboarding_result.should_exit {
+                                        match app_server.read_account().await {
+                                            Ok(account) => {
+                                                let plan_type =
+                                                    account.account.as_ref().and_then(|account| {
+                                                        match account {
+                                                            codex_app_server_protocol::Account::Chatgpt {
+                                                                plan_type,
+                                                                ..
+                                                            } => Some(*plan_type),
+                                                            _ => None,
+                                                        }
+                                                    });
+                                                self.chat_widget.update_account_state(
+                                                    crate::app_server_session::status_account_display_from_account(
+                                                        account.account.clone(),
+                                                        self.config.active_account_alias(),
+                                                    ),
+                                                    plan_type,
+                                                    matches!(
+                                                        account.account,
+                                                        Some(codex_app_server_protocol::Account::Chatgpt { .. })
+                                                    ),
+                                                );
+                                            }
+                                            Err(err) => {
+                                                self.chat_widget.add_error_message(format!(
+                                                    "Account auth completed, but account status could not be refreshed: {err}"
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                                crate::app_event::AccountSwitchReason::AutoRotation => {
+                                    self.chat_widget.add_error_message(format!(
+                                        "Account alias {label} has no saved credentials. Use `/account {label}` to choose how to authenticate it."
+                                    ));
+                                }
+                            }
+                        }
                     }
                     Err(err) => {
                         self.chat_widget

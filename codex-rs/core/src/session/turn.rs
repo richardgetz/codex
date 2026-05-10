@@ -750,7 +750,81 @@ fn build_continuous_run_block_message(scratchpad: &serde_json::Value) -> String 
         "Continue working from the scratchpad until every actionable next_steps item is complete. Move external waits to pending_waits and true blockers to blocked before ending the continuous session; pending_waits and blocked alone are not active work."
             .to_string(),
     );
+    append_scratchpad_recovery_section(&mut lines, scratchpad, "next_steps", "Next up");
+    append_scratchpad_recovery_section(&mut lines, scratchpad, "pending_waits", "Waiting");
+    append_scratchpad_recovery_section(&mut lines, scratchpad, "blocked", "Blocked");
     lines.join("\n")
+}
+
+fn append_scratchpad_recovery_section(
+    lines: &mut Vec<String>,
+    scratchpad: &serde_json::Value,
+    field: &str,
+    heading: &str,
+) {
+    let Some(items) = scratchpad.get(field).and_then(serde_json::Value::as_array) else {
+        return;
+    };
+    if items.is_empty() {
+        return;
+    }
+
+    lines.push(format!("{heading}:"));
+    for item in items.iter().take(5) {
+        lines.push(format!("- {}", format_scratchpad_recovery_item(item)));
+    }
+    if items.len() > 5 {
+        lines.push(format!("- ... {} more", items.len() - 5));
+    }
+}
+
+fn format_scratchpad_recovery_item(item: &serde_json::Value) -> String {
+    if let Some(text) = item.as_str() {
+        return text.to_string();
+    }
+    let Some(object) = item.as_object() else {
+        return item.to_string();
+    };
+
+    let title = [
+        "summary",
+        "description",
+        "step",
+        "reason",
+        "target",
+        "wait_id",
+        "id",
+        "next_check_at",
+        "blocked_on",
+        "required_user_action",
+    ]
+    .iter()
+    .find_map(|key| object.get(*key).and_then(serde_json::Value::as_str))
+    .unwrap_or("item");
+
+    let mut details = Vec::new();
+    for key in [
+        "id",
+        "status",
+        "owner",
+        "wait_type",
+        "target",
+        "check_method",
+        "next_check_at",
+        "details",
+    ] {
+        if let Some(value) = object.get(key).and_then(serde_json::Value::as_str)
+            && value != title
+        {
+            details.push(format!("{key}: {value}"));
+        }
+    }
+
+    if details.is_empty() {
+        title.to_string()
+    } else {
+        format!("{title} ({})", details.join("; "))
+    }
 }
 
 async fn maybe_apply_orchestrator_model_fallback(
@@ -843,12 +917,22 @@ mod thread_control_tests {
     fn continuous_run_block_message_points_back_to_scratchpad_policy() {
         assert_eq!(
             build_continuous_run_block_message(&serde_json::json!({
-                "scratchpad_id": "thread-123"
+                "scratchpad_id": "thread-123",
+                "next_steps": ["finish registry"],
+                "pending_waits": [{
+                    "id": "keepalive",
+                    "description": "Stop keepalive",
+                    "details": "session_id=abc"
+                }]
             })),
             "Scratchpad continuous run policy is enabled for this thread.\n\
 Scratchpad: thread-123\n\
 You are not allowed to stop, finalize, or hand off a completed answer yet.\n\
-Continue working from the scratchpad until every actionable next_steps item is complete. Move external waits to pending_waits and true blockers to blocked before ending the continuous session; pending_waits and blocked alone are not active work."
+Continue working from the scratchpad until every actionable next_steps item is complete. Move external waits to pending_waits and true blockers to blocked before ending the continuous session; pending_waits and blocked alone are not active work.\n\
+Next up:\n\
+- finish registry\n\
+Waiting:\n\
+- Stop keepalive (id: keepalive; details: session_id=abc)"
         );
     }
 
