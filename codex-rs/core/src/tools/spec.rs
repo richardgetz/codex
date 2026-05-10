@@ -40,17 +40,17 @@ struct McpToolPlanInputs<'a> {
     tool_namespaces: HashMap<String, ToolNamespace>,
 }
 
-fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanInputs<'_> {
+fn map_mcp_tools_for_plan(mcp_tools: &[ToolInfo]) -> McpToolPlanInputs<'_> {
     McpToolPlanInputs {
         mcp_tools: mcp_tools
-            .values()
+            .iter()
             .map(|tool| ToolRegistryBuildMcpTool {
                 name: tool.canonical_tool_name(),
                 tool: &tool.tool,
             })
             .collect(),
         tool_namespaces: mcp_tools
-            .values()
+            .iter()
             .map(|tool| {
                 (
                     tool.callable_namespace.clone(),
@@ -66,8 +66,8 @@ fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanI
 
 pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, ToolInfo>>,
-    deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
+    mcp_tools: Option<Vec<ToolInfo>>,
+    deferred_mcp_tools: Option<Vec<ToolInfo>>,
     lazy_mcp_servers: Vec<LazyMcpServerInfo>,
     unavailable_called_tools: Vec<ToolName>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
@@ -87,10 +87,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::unavailable_tool_message;
     use crate::tools::tool_search_entry::build_tool_search_entries_for_config;
 
-    let mcp_tool_plan_inputs = mcp_tools.as_ref().map(map_mcp_tools_for_plan);
+    let mcp_tool_plan_inputs = mcp_tools.as_deref().map(map_mcp_tools_for_plan);
     let deferred_mcp_tool_sources = deferred_mcp_tools.as_ref().map(|tools| {
         tools
-            .values()
+            .iter()
             .map(|tool| ToolRegistryBuildDeferredTool {
                 name: tool.canonical_tool_name(),
                 server_name: tool.server_name.as_str(),
@@ -125,7 +125,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         .collect::<Vec<_>>();
     let tool_search_entries = build_tool_search_entries_for_config(
         config,
-        deferred_mcp_tools.as_ref(),
+        deferred_mcp_tools.as_deref(),
         lazy_mcp_servers.as_slice(),
         &deferred_dynamic_tools,
     );
@@ -177,7 +177,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.push_spec(
             scratchpad_namespace_spec(),
             /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
         );
         for tool_name in BUILTIN_SCRATCHPAD_TOOL_NAMES {
             builder.register_handler_with_name(
@@ -193,7 +192,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.push_spec(
             schedule_namespace_spec(),
             /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
         );
         for tool_name in BUILTIN_SCHEDULE_TOOL_NAMES {
             builder.register_handler_with_name(
@@ -209,7 +207,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.push_spec(
             session_overwatch_namespace_spec(),
             /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
         );
         for tool_name in SESSION_OVERWATCH_TOOL_NAMES {
             builder.register_handler_with_name(
@@ -237,13 +234,15 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 output_schema: None,
                 defer_loading: None,
             });
-            builder.push_spec(
+            builder.register_handler(Arc::new(UnavailableToolHandler::new(
+                unavailable_tool,
                 spec,
-                /*supports_parallel_tool_calls*/ false,
-                config.code_mode_enabled,
-            );
+            )));
+        } else {
+            builder.register_handler(Arc::new(UnavailableToolHandler::without_spec(
+                unavailable_tool,
+            )));
         }
-        builder.register_handler(Arc::new(UnavailableToolHandler::new(unavailable_tool)));
     }
     builder
 }

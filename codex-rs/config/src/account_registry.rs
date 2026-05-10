@@ -320,11 +320,9 @@ fn upsert_entry(
             if changed || mark_used {
                 entry.last_seen_at_unix_secs = now;
             }
-            if mark_used {
-                if entry.last_used_at_unix_secs != Some(now) {
-                    entry.last_used_at_unix_secs = Some(now);
-                    changed = true;
-                }
+            if mark_used && entry.last_used_at_unix_secs != Some(now) {
+                entry.last_used_at_unix_secs = Some(now);
+                changed = true;
             }
             changed
         }
@@ -405,10 +403,11 @@ fn choose_source(
     existing: AccountRegistrySource,
     incoming: AccountRegistrySource,
 ) -> AccountRegistrySource {
-    source_rank(incoming)
-        .ge(&source_rank(existing))
-        .then_some(incoming)
-        .unwrap_or(existing)
+    if source_rank(incoming).ge(&source_rank(existing)) {
+        incoming
+    } else {
+        existing
+    }
 }
 
 fn source_rank(source: AccountRegistrySource) -> u8 {
@@ -454,6 +453,7 @@ impl RegistryLock {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(lock_path)?;
         file.lock()?;
         Ok(Self {

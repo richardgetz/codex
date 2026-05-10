@@ -205,3 +205,24 @@ the realtime start message in prompt history and does not change websocket
 backend prompt settings or the realtime end/inactive message.
 
 Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).
+
+## OpenTelemetry Trace Metadata
+
+Codex can add static OpenTelemetry span attributes to exported trace spans and
+static W3C tracestate fields to propagated trace context:
+
+```toml
+[otel.span_attributes]
+"example.trace_attr" = "enabled"
+
+[otel.tracestate.example]
+alpha = "one"
+beta = "two"
+```
+
+Nested `otel.tracestate` tables are encoded as semicolon-separated `key:value`
+fields inside the named tracestate member. If propagated trace context already
+has the named member, Codex upserts configured fields and preserves other fields
+in that member. This config shape does not support setting opaque tracestate
+member values. Invalid trace metadata entries are ignored during config load and
+reported as startup warnings.

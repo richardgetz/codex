@@ -2,6 +2,7 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolSearchOutput;
+use crate::tools::handlers::tool_search_spec::create_tool_search_tool;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::tool_search_entry::ToolSearchEntry;
@@ -14,6 +15,8 @@ use codex_tools::LoadableToolSpec;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolName;
+use codex_tools::ToolSearchSourceInfo;
+use codex_tools::ToolSpec;
 use codex_tools::coalesce_loadable_tool_specs;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -24,11 +27,15 @@ const COMPUTER_USE_TOOL_SEARCH_LIMIT: usize = 20;
 
 pub struct ToolSearchHandler {
     entries: Vec<ToolSearchEntry>,
+    search_source_infos: Vec<ToolSearchSourceInfo>,
     search_engine: SearchEngine<usize>,
 }
 
 impl ToolSearchHandler {
-    pub(crate) fn new(entries: Vec<ToolSearchEntry>) -> Self {
+    pub(crate) fn new(
+        entries: Vec<ToolSearchEntry>,
+        search_source_infos: Vec<ToolSearchSourceInfo>,
+    ) -> Self {
         let documents: Vec<Document<usize>> = entries
             .iter()
             .map(|entry| entry.search_text.clone())
@@ -40,6 +47,7 @@ impl ToolSearchHandler {
 
         Self {
             entries,
+            search_source_infos,
             search_engine,
         }
     }
@@ -50,6 +58,17 @@ impl ToolHandler for ToolSearchHandler {
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain(TOOL_SEARCH_TOOL_NAME)
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_tool_search_tool(
+            &self.search_source_infos,
+            TOOL_SEARCH_DEFAULT_LIMIT,
+        ))
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
     }
 
     fn kind(&self) -> ToolKind {
@@ -180,16 +199,12 @@ impl ToolSearchHandler {
                             continue;
                         }
                     };
-                    let mcp_tools = mcp_tools
-                        .into_iter()
-                        .map(|tool| (tool.canonical_tool_name().display(), tool))
-                        .collect::<std::collections::HashMap<_, _>>();
                     let entries = crate::tools::tool_search_entry::build_tool_search_entries(
                         Some(&mcp_tools),
                         &[],
                         &[],
                     );
-                    let handler = ToolSearchHandler::new(entries);
+                    let handler = ToolSearchHandler::new(entries, Vec::new());
                     let mut started_tools = handler
                         .search(query, limit, use_default_limit, session, turn)
                         .await?;
@@ -316,19 +331,11 @@ mod tests {
             }),
             defer_loading: true,
         }];
-        let handler = handler_from_tools(
-            Some(&std::collections::HashMap::from([
-                (
-                    "mcp__calendar__create_event".to_string(),
-                    tool_info("calendar", "create_event", "Create events"),
-                ),
-                (
-                    "mcp__calendar__list_events".to_string(),
-                    tool_info("calendar", "list_events", "List events"),
-                ),
-            ])),
-            &dynamic_tools,
-        );
+        let mcp_tools = vec![
+            tool_info("calendar", "create_event", "Create events"),
+            tool_info("calendar", "list_events", "List events"),
+        ];
+        let handler = handler_from_tools(Some(&mcp_tools), &dynamic_tools);
         let results = [
             &handler.entries[0],
             &handler.entries[2],
@@ -471,7 +478,7 @@ mod tests {
             }],
             &[],
         );
-        let handler = ToolSearchHandler::new(entries);
+        let handler = ToolSearchHandler::new(entries, Vec::new());
 
         let results = handler.search_result_entries(
             "browser automation",
@@ -514,18 +521,11 @@ mod tests {
         assert!(count_results_for_server(&results, "other-server") <= TOOL_SEARCH_DEFAULT_LIMIT);
     }
 
-    fn numbered_tools(
-        server_name: &str,
-        description_prefix: &str,
-        count: usize,
-    ) -> std::collections::HashMap<String, ToolInfo> {
+    fn numbered_tools(server_name: &str, description_prefix: &str, count: usize) -> Vec<ToolInfo> {
         (0..count)
             .map(|index| {
                 let tool_name = format!("tool_{index:03}");
-                (
-                    format!("mcp__{server_name}__{tool_name}"),
-                    tool_info(server_name, &tool_name, description_prefix),
-                )
+                tool_info(server_name, &tool_name, description_prefix)
             })
             .collect()
     }
@@ -565,9 +565,12 @@ mod tests {
     }
 
     fn handler_from_tools(
-        mcp_tools: Option<&std::collections::HashMap<String, ToolInfo>>,
+        mcp_tools: Option<&[ToolInfo]>,
         dynamic_tools: &[DynamicToolSpec],
     ) -> ToolSearchHandler {
-        ToolSearchHandler::new(build_tool_search_entries(mcp_tools, &[], dynamic_tools))
+        ToolSearchHandler::new(
+            build_tool_search_entries(mcp_tools, &[], dynamic_tools),
+            Vec::new(),
+        )
     }
 }
