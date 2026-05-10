@@ -1196,6 +1196,7 @@ async fn run_ratatui_app(
         let show_login_screen = should_show_login_screen(login_status, &initial_config);
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
+                show_welcome_screen: true,
                 show_login_screen,
                 show_trust_screen: should_show_trust_screen_flag,
                 login_status,
@@ -1203,6 +1204,7 @@ async fn run_ratatui_app(
                     .as_ref()
                     .map(AppServerSession::request_handle),
                 config: initial_config.clone(),
+                exit_on_auth_cancel: true,
             },
             if show_login_screen {
                 app_server.as_mut()

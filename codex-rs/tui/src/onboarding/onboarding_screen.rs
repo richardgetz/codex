@@ -78,14 +78,17 @@ pub(crate) struct OnboardingScreen {
     steps: Vec<Step>,
     is_done: bool,
     should_exit: bool,
+    exit_on_auth_cancel: bool,
 }
 
 pub(crate) struct OnboardingScreenArgs {
+    pub show_welcome_screen: bool,
     pub show_trust_screen: bool,
     pub show_login_screen: bool,
     pub login_status: LoginStatus,
     pub app_server_request_handle: Option<AppServerRequestHandle>,
     pub config: Config,
+    pub exit_on_auth_cancel: bool,
 }
 
 pub(crate) struct OnboardingResult {
@@ -109,16 +112,20 @@ impl OnboardingScreen {
             login_status,
             app_server_request_handle,
             config,
+            show_welcome_screen,
+            exit_on_auth_cancel,
         } = args;
         let cwd = config.cwd.to_path_buf();
         let codex_home = config.codex_home.to_path_buf();
         let forced_login_method = config.forced_login_method;
         let mut steps: Vec<Step> = Vec::new();
-        steps.push(Step::Welcome(WelcomeWidget::new(
-            !matches!(login_status, LoginStatus::NotAuthenticated),
-            tui.frame_requester(),
-            config.animations,
-        )));
+        if show_welcome_screen {
+            steps.push(Step::Welcome(WelcomeWidget::new(
+                !matches!(login_status, LoginStatus::NotAuthenticated),
+                tui.frame_requester(),
+                config.animations,
+            )));
+        }
         if show_login_screen {
             let highlighted_mode = match forced_login_method {
                 Some(ForcedLoginMethod::Api) => SignInOption::ApiKey,
@@ -167,6 +174,7 @@ impl OnboardingScreen {
             steps,
             is_done: false,
             should_exit: false,
+            exit_on_auth_cancel,
         }
     }
 
@@ -309,7 +317,7 @@ impl KeyboardHandler for OnboardingScreen {
                 self.cancel_auth_if_active();
                 // If the user cancels the auth menu, exit the app rather than
                 // leave the user at a prompt in an unauthed state.
-                self.should_exit = true;
+                self.should_exit = self.exit_on_auth_cancel;
             }
             self.is_done = true;
         } else {
