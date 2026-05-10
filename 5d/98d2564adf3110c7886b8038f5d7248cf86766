@@ -1,0 +1,19 @@
+intent:
+  id: account-alias-auth-picker
+change_type: fix
+scope: codex-rs tui/app-server account auth
+summary: Show the auth selection flow for blank user-switched aliases and keep login persistence scoped to the selected alias store.
+decision: Reuse the onboarding auth picker for in-session blank alias authentication instead of auto-starting ChatGPT, while preserving startup cancel semantics and avoiding auth UI on auto-rotation.
+constraints:
+  - Do not commit auth artifacts or secrets.
+  - Account switching remains session-scoped.
+  - API key, ChatGPT browser, and external ChatGPT token auth must write to the selected alias storage home.
+intent_priority: must
+code_locations:
+  - codex-rs/tui/src/app/event_dispatch.rs
+  - codex-rs/tui/src/app_server_session.rs
+  - codex-rs/tui/src/onboarding/onboarding_screen.rs
+  - codex-rs/tui/src/lib.rs
+  - codex-rs/app-server/src/request_processors/account_processor.rs
+requested_by: Rick
+recorded_by: Codex
