@@ -1,0 +1,25 @@
+intent:
+  id: "intent/2026-05-10/stable-rust-v0.130.0#59a0d135"
+change_type: "chore"
+scope: "stable-release"
+summary: "Merge upstream rust-v0.130.0 into the fork stable branch."
+decision: "Use a stable-based merge of upstream rust-v0.130.0 and resolve conflicts by preserving fork account, orchestrator, scratchpad, MCP, app-server, config, docs, packaging, and migration surfaces while adopting upstream 0.130.0 changes."
+constraints:
+  - "Must preserve fork-only runtime features and slash commands."
+  - "Must keep generated config and app-server schemas in sync with resolved Rust APIs."
+  - "Must preserve shipped migration filenames/checksums; upstream drop-device-key migration moved to 0033."
+  - "Must preserve root/default auth compatibility and non-secret account alias registry."
+  - "Must not touch sandbox network environment variable behavior."
+intent_priority: "must"
+code_locations:
+  - "codex-rs/core"
+  - "codex-rs/config"
+  - "codex-rs/codex-mcp"
+  - "codex-rs/app-server"
+  - "codex-rs/app-server-protocol"
+  - "codex-rs/state/migrations"
+  - "docs/config.md"
+requested_by: "@rick"
+recorded_by:
+  agent: "codex-cli"
+  model: "gpt-5"
