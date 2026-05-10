@@ -222,7 +222,7 @@ impl Session {
         };
 
         if !should_refresh_mcp_manager_after_resource_error(&first_error)
-            || !self.effective_mcp_servers().await.contains_key(server)
+            || !self.effective_mcp_server_names().await.contains(server)
         {
             return Err(first_error);
         }
@@ -266,7 +266,7 @@ impl Session {
         };
 
         if !should_refresh_mcp_manager_after_resource_error(&first_error)
-            || !self.effective_mcp_servers().await.contains_key(server)
+            || !self.effective_mcp_server_names().await.contains(server)
         {
             return Err(first_error);
         }
@@ -310,7 +310,7 @@ impl Session {
         };
 
         if !should_refresh_mcp_manager_after_resource_error(&first_error)
-            || !self.effective_mcp_servers().await.contains_key(server)
+            || !self.effective_mcp_server_names().await.contains(server)
         {
             return Err(first_error);
         }
@@ -362,7 +362,7 @@ impl Session {
         };
 
         if !should_retry_mcp_call_after_refresh(&first_error)
-            || !self.effective_mcp_servers().await.contains_key(server)
+            || !self.effective_mcp_server_names().await.contains(server)
         {
             return Err(first_error);
         }
@@ -392,7 +392,7 @@ impl Session {
 
         let should_retry = should_retry_mcp_call_after_refresh(&first_error);
         if !(should_retry || should_refresh_mcp_manager_after_live_error(&first_error))
-            || !self.effective_mcp_servers().await.contains_key(server)
+            || !self.effective_mcp_server_names().await.contains(server)
         {
             return Err(first_error);
         }
@@ -417,7 +417,7 @@ impl Session {
         warn!(
             "refreshing MCP servers after call failed for server '{server}', operation '{operation}': {first_error:#}"
         );
-        let mcp_servers = self.effective_mcp_servers().await;
+        let mcp_servers = self.configured_mcp_servers().await;
         let config = self.get_config().await;
         self.refresh_mcp_servers_now(
             turn_context,
@@ -475,17 +475,27 @@ impl Session {
         ))
     }
 
-    async fn effective_mcp_servers(&self) -> HashMap<String, McpServerConfig> {
+    async fn configured_mcp_servers(&self) -> HashMap<String, McpServerConfig> {
+        let config = self.get_config().await;
+        let mcp_config = config
+            .to_mcp_config(self.services.plugins_manager.as_ref())
+            .await;
+        mcp_config.configured_mcp_servers
+    }
+
+    async fn effective_mcp_server_names(&self) -> HashSet<String> {
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
         let mcp_config = config
             .to_mcp_config(self.services.plugins_manager.as_ref())
             .await;
-        with_codex_apps_mcp(
+        effective_mcp_servers_from_configured(
             mcp_config.configured_mcp_servers.clone(),
-            auth.as_ref(),
             &mcp_config,
+            auth.as_ref(),
         )
+        .into_keys()
+        .collect()
     }
 
     async fn refresh_mcp_servers_inner(
@@ -505,7 +515,8 @@ impl Session {
             .mcp_manager
             .tool_plugin_provenance(config.as_ref())
             .await;
-        let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
+        let mcp_servers =
+            effective_mcp_servers_from_configured(mcp_servers, &mcp_config, auth.as_ref());
         let host_owned_codex_apps_enabled =
             host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
         let auth_statuses =

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use codex_app_server_protocol::AppInfo;
 use codex_config::EnablementFilterConfig;
 use codex_config::EnablementFilterMode;
@@ -119,12 +117,12 @@ pub(crate) fn mcp_tool_parts_allowed_in_mode(
 pub(crate) fn filter_mcp_tools_for_mode(
     config: &Config,
     mode: ModeKind,
-    tools: &HashMap<String, ToolInfo>,
-) -> HashMap<String, ToolInfo> {
+    tools: &[ToolInfo],
+) -> Vec<ToolInfo> {
     tools
         .iter()
-        .filter(|(_, tool)| mcp_tool_allowed_in_mode(config, mode, tool))
-        .map(|(name, tool)| (name.clone(), tool.clone()))
+        .filter(|tool| mcp_tool_allowed_in_mode(config, mode, tool))
+        .cloned()
         .collect()
 }
 
@@ -229,7 +227,6 @@ pub(crate) fn filter_discoverable_tools_for_mode(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use codex_app_server_protocol::AppInfo;
@@ -300,27 +297,21 @@ mod tests {
             },
         );
 
-        let tools = HashMap::from([
-            (
-                "mcp__scratchpad__get".to_string(),
-                make_mcp_tool("scratchpad", "get", /*connector_id*/ None),
+        let tools = vec![
+            make_mcp_tool("scratchpad", "get", /*connector_id*/ None),
+            make_mcp_tool("other", "run", /*connector_id*/ None),
+            make_mcp_tool(
+                CODEX_APPS_MCP_SERVER_NAME,
+                "calendar_list",
+                Some("calendar"),
             ),
-            (
-                "mcp__other__run".to_string(),
-                make_mcp_tool("other", "run", /*connector_id*/ None),
-            ),
-            (
-                "mcp__codex_apps__calendar_list".to_string(),
-                make_mcp_tool(
-                    CODEX_APPS_MCP_SERVER_NAME,
-                    "calendar_list",
-                    Some("calendar"),
-                ),
-            ),
-        ]);
+        ];
 
         let filtered = filter_mcp_tools_for_mode(&config, ModeKind::Orchestrator, &tools);
-        let mut names = filtered.keys().cloned().collect::<Vec<_>>();
+        let mut names = filtered
+            .iter()
+            .map(|tool| tool.canonical_tool_name().display())
+            .collect::<Vec<_>>();
         names.sort();
         assert_eq!(
             names,
@@ -433,16 +424,10 @@ mod tests {
             },
         );
 
-        let tools = HashMap::from([
-            (
-                "mcp__scratchpad__get".to_string(),
-                make_mcp_tool("scratchpad", "get", /*connector_id*/ None),
-            ),
-            (
-                "mcp__other__run".to_string(),
-                make_mcp_tool("other", "run", /*connector_id*/ None),
-            ),
-        ]);
+        let tools = vec![
+            make_mcp_tool("scratchpad", "get", /*connector_id*/ None),
+            make_mcp_tool("other", "run", /*connector_id*/ None),
+        ];
 
         let filtered = filter_mcp_tools_for_mode(&config, ModeKind::Orchestrator, &tools);
         assert_eq!(filtered.len(), 2);

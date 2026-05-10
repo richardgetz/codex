@@ -56,9 +56,6 @@ use tracing::warn;
 
 mod agent_jobs;
 mod backfill;
-mod device_key;
-#[cfg(test)]
-mod device_key_tests;
 mod goals;
 mod logs;
 mod memories;
@@ -69,7 +66,6 @@ mod thread_control;
 mod thread_inbound_messages;
 mod threads;
 
-pub use device_key::DeviceKeyBindingRecord;
 pub use goals::ThreadGoalAccountingMode;
 pub use goals::ThreadGoalAccountingOutcome;
 pub use goals::ThreadGoalUpdate;
