@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-05-10/agents-prune-session#1ddbafff004c"
+  change_type: "feat"
+  scope: "agents"
+  summary: "Add a session-scoped /agents-prune slash command to close idle spawned agents."
+  decision: "Route /agents-prune through a local PruneIdleAgents op that walks the current session's AgentControl tree, closes only idle subtrees, and preserves the current thread plus running or initializing agents and their ancestors."
+  constraints:
+    - "Must only prune agents in the current session's shared AgentControl tree, not all sessions."
+    - "Must not close running or initializing agents, or any subtree containing active work."
+    - "Must preserve fork-only slash command inventory."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/slash_command.rs"
+    - "codex-rs/tui/src/chatwidget/slash_dispatch.rs"
+    - "codex-rs/core/src/agent/control.rs"
+    - "codex-rs/core/src/session/handlers.rs"
+    - "codex-rs/protocol/src/protocol.rs"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
