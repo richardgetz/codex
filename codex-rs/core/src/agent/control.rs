@@ -1058,13 +1058,6 @@ impl AgentControl {
                 })
         });
 
-        let mut statuses = HashMap::new();
-        for metadata in &live_agents {
-            if let Some(thread_id) = metadata.agent_id {
-                statuses.insert(thread_id, self.get_status(thread_id).await);
-            }
-        }
-
         let protected = HashSet::from([current_thread_id]);
         let mut handled = HashSet::new();
         let mut report = PruneIdleAgentsReport::default();
@@ -1073,19 +1066,34 @@ impl AgentControl {
             let Some(thread_id) = metadata.agent_id else {
                 continue;
             };
-            if handled.contains(&thread_id)
-                || subtree_contains_active_or_protected(
-                    thread_id,
-                    &children_by_parent,
-                    &statuses,
-                    &protected,
-                )
+            if handled.contains(&thread_id) {
+                continue;
+            }
+
+            let descendants = collect_descendants(thread_id, &children_by_parent);
+            if std::iter::once(thread_id)
+                .chain(descendants.iter().copied())
+                .any(|candidate| protected.contains(&candidate))
             {
                 continue;
             }
 
+            let mut subtree_contains_active_work = false;
+            for candidate in std::iter::once(thread_id).chain(descendants.iter().copied()) {
+                if matches!(
+                    self.get_status(candidate).await,
+                    AgentStatus::PendingInit | AgentStatus::Running
+                ) {
+                    subtree_contains_active_work = true;
+                    break;
+                }
+            }
+            if subtree_contains_active_work {
+                continue;
+            }
+
             let mut subtree = vec![thread_id];
-            subtree.extend(collect_descendants(thread_id, &children_by_parent));
+            subtree.extend(descendants);
             match self.close_agent(thread_id).await {
                 Ok(_) | Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) => {
                     handled.extend(subtree.iter().copied());
@@ -1397,13 +1405,6 @@ fn agent_matches_prefix(agent_path: Option<&AgentPath>, prefix: &AgentPath) -> b
     })
 }
 
-fn agent_status_is_actively_working(status: Option<&AgentStatus>) -> bool {
-    matches!(
-        status,
-        Some(AgentStatus::PendingInit | AgentStatus::Running)
-    )
-}
-
 fn collect_descendants(
     root_thread_id: ThreadId,
     children_by_parent: &HashMap<ThreadId, Vec<(ThreadId, AgentMetadata)>>,
@@ -1428,26 +1429,6 @@ fn collect_descendants(
     }
 
     descendants
-}
-
-fn subtree_contains_active_or_protected(
-    root_thread_id: ThreadId,
-    children_by_parent: &HashMap<ThreadId, Vec<(ThreadId, AgentMetadata)>>,
-    statuses: &HashMap<ThreadId, AgentStatus>,
-    protected: &HashSet<ThreadId>,
-) -> bool {
-    if protected.contains(&root_thread_id)
-        || agent_status_is_actively_working(statuses.get(&root_thread_id))
-    {
-        return true;
-    }
-
-    collect_descendants(root_thread_id, children_by_parent)
-        .into_iter()
-        .any(|thread_id| {
-            protected.contains(&thread_id)
-                || agent_status_is_actively_working(statuses.get(&thread_id))
-        })
 }
 
 pub(crate) fn render_input_preview(initial_operation: &Op) -> String {

@@ -819,6 +819,37 @@ fn thread_shell_command_response_round_trip() {
 }
 
 #[test]
+fn thread_agents_prune_params_round_trip() {
+    let params = ThreadAgentsPruneParams {
+        thread_id: "thr_123".to_string(),
+    };
+
+    let value = serde_json::to_value(&params).expect("serialize thread/agents/prune params");
+    assert_eq!(
+        value,
+        json!({
+            "threadId": "thr_123",
+        })
+    );
+
+    let decoded = serde_json::from_value::<ThreadAgentsPruneParams>(value)
+        .expect("deserialize thread/agents/prune params");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn thread_agents_prune_response_round_trip() {
+    let response = ThreadAgentsPruneResponse {};
+
+    let value = serde_json::to_value(&response).expect("serialize thread/agents/prune response");
+    assert_eq!(value, json!({}));
+
+    let decoded = serde_json::from_value::<ThreadAgentsPruneResponse>(value)
+        .expect("deserialize thread/agents/prune response");
+    assert_eq!(decoded, response);
+}
+
+#[test]
 fn fs_changed_notification_round_trips() {
     let notification = FsChangedNotification {
         watch_id: "0195ec6b-1d6f-7c2e-8c7a-56f2c4a8b9d1".to_string(),
