@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-05-11/agents-prune-app-server#43e92e196"
+  change_type: "fix"
+  scope: "agents"
+  summary: "Route /agents-prune through app-server-backed TUI sessions and narrow idle-prune races."
+  decision: "Expose an experimental thread/agents/prune app-server request, route AppCommand::PruneIdleAgents through it from the TUI app-server session, and re-read candidate subtree statuses immediately before pruning so running or initializing work is skipped at close time."
+  constraints:
+    - "Must preserve session-scoped pruning only."
+    - "Must reach core in app-server-backed TUI sessions."
+    - "Must preserve running and initializing agents and active descendants."
+    - "Must preserve the current thread and any subtree containing it."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server-protocol/src/protocol/common.rs"
+    - "codex-rs/app-server-protocol/src/protocol/v2/thread.rs"
+    - "codex-rs/app-server/src/request_processors/thread_processor.rs"
+    - "codex-rs/app-server/src/message_processor.rs"
+    - "codex-rs/tui/src/app_server_session.rs"
+    - "codex-rs/tui/src/app/thread_routing.rs"
+    - "codex-rs/core/src/agent/control.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
