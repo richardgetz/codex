@@ -239,6 +239,11 @@ async fn wait_for_live_thread_spawn_children(
     .expect("expected persisted child tree");
 }
 
+async fn send_agent_event(thread: &Arc<CodexThread>, msg: EventMsg) {
+    let turn = thread.codex.session.new_default_turn().await;
+    thread.codex.session.send_event(turn.as_ref(), msg).await;
+}
+
 #[tokio::test]
 async fn send_input_errors_when_manager_dropped() {
     let control = AgentControl::default();
@@ -1972,6 +1977,182 @@ async fn shutdown_agent_tree_closes_live_descendants() {
     let mut shutdown_ids = shutdown_ids;
     shutdown_ids.sort_by_key(std::string::ToString::to_string);
     assert_eq!(shutdown_ids, expected_shutdown_ids);
+}
+
+#[tokio::test]
+async fn prune_idle_agents_closes_only_idle_subtrees_in_current_session() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+
+    let idle_child_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("idle child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(AgentPath::root().join("idle").expect("idle path")),
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+        )
+        .await
+        .expect("idle child spawn should succeed");
+    let running_child_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("running child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(AgentPath::root().join("running").expect("running path")),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("running child spawn should succeed");
+    let idle_parent_path = AgentPath::root()
+        .join("idle_parent")
+        .expect("idle parent path");
+    let idle_parent_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("idle parent"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(idle_parent_path.clone()),
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+        )
+        .await
+        .expect("idle parent spawn should succeed");
+    let running_grandchild_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("running grandchild"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: idle_parent_id,
+                depth: 2,
+                agent_path: Some(
+                    idle_parent_path
+                        .join("running_grandchild")
+                        .expect("running grandchild path"),
+                ),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("running grandchild spawn should succeed");
+
+    wait_for_live_thread_spawn_children(
+        &harness.control,
+        parent_thread_id,
+        &[idle_child_id, running_child_id, idle_parent_id],
+    )
+    .await;
+    wait_for_live_thread_spawn_children(&harness.control, idle_parent_id, &[running_grandchild_id])
+        .await;
+
+    let idle_child = harness
+        .manager
+        .get_thread(idle_child_id)
+        .await
+        .expect("idle child should exist");
+    send_agent_event(
+        &idle_child,
+        EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "idle-child".to_string(),
+            last_agent_message: Some("done".to_string()),
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        }),
+    )
+    .await;
+    let running_child = harness
+        .manager
+        .get_thread(running_child_id)
+        .await
+        .expect("running child should exist");
+    send_agent_event(
+        &running_child,
+        EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "running-child".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    )
+    .await;
+    let idle_parent = harness
+        .manager
+        .get_thread(idle_parent_id)
+        .await
+        .expect("idle parent should exist");
+    send_agent_event(
+        &idle_parent,
+        EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "idle-parent".to_string(),
+            last_agent_message: Some("done".to_string()),
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        }),
+    )
+    .await;
+    let running_grandchild = harness
+        .manager
+        .get_thread(running_grandchild_id)
+        .await
+        .expect("running grandchild should exist");
+    send_agent_event(
+        &running_grandchild,
+        EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "running-grandchild".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    )
+    .await;
+
+    let report = harness
+        .control
+        .prune_idle_agents(parent_thread_id)
+        .await
+        .expect("idle prune should succeed");
+
+    assert_eq!(
+        report,
+        PruneIdleAgentsReport {
+            closed: vec![idle_child_id],
+            failed: Vec::new(),
+        }
+    );
+    assert_eq!(
+        harness.control.get_status(idle_child_id).await,
+        AgentStatus::NotFound
+    );
+    assert_ne!(
+        harness.control.get_status(running_child_id).await,
+        AgentStatus::NotFound
+    );
+    assert_ne!(
+        harness.control.get_status(idle_parent_id).await,
+        AgentStatus::NotFound
+    );
+    assert_ne!(
+        harness.control.get_status(running_grandchild_id).await,
+        AgentStatus::NotFound
+    );
 }
 
 #[tokio::test]

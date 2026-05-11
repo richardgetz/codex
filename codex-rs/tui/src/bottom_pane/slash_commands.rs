@@ -109,6 +109,14 @@ mod tests {
     }
 
     #[test]
+    fn agents_prune_command_resolves_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("agents-prune", all_enabled_flags()),
+            Some(SlashCommand::AgentsPrune)
+        );
+    }
+
+    #[test]
     fn clean_command_alias_resolves_for_dispatch() {
         assert_eq!(
             find_builtin_command("clean", all_enabled_flags()),

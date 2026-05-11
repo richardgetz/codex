@@ -83,6 +83,12 @@ stable/mainline is pulled in.
 - Orchestrator spawn safety:
   - `[orchestrator].allowed_spawn_modes`
   - Default child mode allow-list is `["default"]`
+- Session-scoped agent pruning:
+  - Slash command: `/agents-prune`
+  - Closes idle spawned agents from the current session's shared agent control
+    tree only.
+  - Preserves running and initializing agents, the current thread, and any
+    agent subtree that still contains active work.
 - Orchestrator inline MCP usage:
   - Explicitly enabled Orchestrator MCPs may run in the parent Orchestrator
     thread for communication/state work instead of forcing a child worker.

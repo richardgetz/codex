@@ -38,6 +38,7 @@ use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_thread_store::ReadThreadParams;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -73,6 +74,12 @@ pub(crate) struct ListedAgent {
     pub(crate) agent_name: String,
     pub(crate) agent_status: AgentStatus,
     pub(crate) last_task_message: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PruneIdleAgentsReport {
+    pub(crate) closed: Vec<ThreadId>,
+    pub(crate) failed: Vec<(ThreadId, String)>,
 }
 
 fn default_agent_nickname_list() -> Vec<&'static str> {
@@ -1028,6 +1035,76 @@ impl AgentControl {
         Ok(agents)
     }
 
+    pub(crate) async fn prune_idle_agents(
+        &self,
+        current_thread_id: ThreadId,
+    ) -> CodexResult<PruneIdleAgentsReport> {
+        let mut children_by_parent = self.live_thread_spawn_children().await?;
+        for children in children_by_parent.values_mut() {
+            children.sort_by(|left, right| left.0.to_string().cmp(&right.0.to_string()));
+        }
+
+        let mut live_agents = self.state.live_agents();
+        live_agents.sort_by(|left, right| {
+            left.agent_path
+                .as_deref()
+                .unwrap_or_default()
+                .cmp(right.agent_path.as_deref().unwrap_or_default())
+                .then_with(|| {
+                    left.agent_id
+                        .map(|id| id.to_string())
+                        .unwrap_or_default()
+                        .cmp(&right.agent_id.map(|id| id.to_string()).unwrap_or_default())
+                })
+        });
+
+        let mut statuses = HashMap::new();
+        for metadata in &live_agents {
+            if let Some(thread_id) = metadata.agent_id {
+                statuses.insert(thread_id, self.get_status(thread_id).await);
+            }
+        }
+
+        let protected = HashSet::from([current_thread_id]);
+        let mut handled = HashSet::new();
+        let mut report = PruneIdleAgentsReport::default();
+
+        for metadata in live_agents {
+            let Some(thread_id) = metadata.agent_id else {
+                continue;
+            };
+            if handled.contains(&thread_id)
+                || subtree_contains_active_or_protected(
+                    thread_id,
+                    &children_by_parent,
+                    &statuses,
+                    &protected,
+                )
+            {
+                continue;
+            }
+
+            let mut subtree = vec![thread_id];
+            subtree.extend(collect_descendants(thread_id, &children_by_parent));
+            match self.close_agent(thread_id).await {
+                Ok(_) | Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) => {
+                    handled.extend(subtree.iter().copied());
+                    report.closed.extend(subtree);
+                }
+                Err(err) => {
+                    handled.insert(thread_id);
+                    report.failed.push((thread_id, err.to_string()));
+                }
+            }
+        }
+
+        report.closed.sort_by_key(std::string::ToString::to_string);
+        report
+            .failed
+            .sort_by_key(|(thread_id, _)| thread_id.to_string());
+        Ok(report)
+    }
+
     /// Starts a detached watcher for sub-agents spawned from another thread.
     ///
     /// This is only enabled for `SubAgentSource::ThreadSpawn`, where a parent thread exists and
@@ -1318,6 +1395,59 @@ fn agent_matches_prefix(agent_path: Option<&AgentPath>, prefix: &AgentPath) -> b
                 .strip_prefix(prefix.as_str())
                 .is_some_and(|suffix| suffix.starts_with('/'))
     })
+}
+
+fn agent_status_is_actively_working(status: Option<&AgentStatus>) -> bool {
+    matches!(
+        status,
+        Some(AgentStatus::PendingInit | AgentStatus::Running)
+    )
+}
+
+fn collect_descendants(
+    root_thread_id: ThreadId,
+    children_by_parent: &HashMap<ThreadId, Vec<(ThreadId, AgentMetadata)>>,
+) -> Vec<ThreadId> {
+    let mut descendants = Vec::new();
+    let mut stack = children_by_parent
+        .get(&root_thread_id)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(child_thread_id, _)| child_thread_id)
+        .rev()
+        .collect::<Vec<_>>();
+
+    while let Some(thread_id) = stack.pop() {
+        descendants.push(thread_id);
+        if let Some(children) = children_by_parent.get(&thread_id) {
+            for (child_thread_id, _) in children.iter().rev() {
+                stack.push(*child_thread_id);
+            }
+        }
+    }
+
+    descendants
+}
+
+fn subtree_contains_active_or_protected(
+    root_thread_id: ThreadId,
+    children_by_parent: &HashMap<ThreadId, Vec<(ThreadId, AgentMetadata)>>,
+    statuses: &HashMap<ThreadId, AgentStatus>,
+    protected: &HashSet<ThreadId>,
+) -> bool {
+    if protected.contains(&root_thread_id)
+        || agent_status_is_actively_working(statuses.get(&root_thread_id))
+    {
+        return true;
+    }
+
+    collect_descendants(root_thread_id, children_by_parent)
+        .into_iter()
+        .any(|thread_id| {
+            protected.contains(&thread_id)
+                || agent_status_is_actively_working(statuses.get(&thread_id))
+        })
 }
 
 pub(crate) fn render_input_preview(initial_operation: &Op) -> String {

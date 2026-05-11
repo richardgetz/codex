@@ -98,6 +98,7 @@ pub(crate) enum AppCommand {
         name: String,
     },
     ConsolidateOrchestratorMemory,
+    PruneIdleAgents,
     SetScratchpadContinuousPolicy {
         enabled: bool,
     },
@@ -260,6 +261,10 @@ impl AppCommand {
         Self::SetThreadName { name }
     }
 
+    pub(crate) fn prune_idle_agents() -> Self {
+        Self::PruneIdleAgents
+    }
+
     pub(crate) fn set_scratchpad_continuous_policy(enabled: bool) -> Self {
         Self::SetScratchpadContinuousPolicy { enabled }
     }
@@ -297,6 +302,7 @@ impl From<Op> for AppCommand {
         match value {
             Op::ReloadUserConfig => AppCommand::ReloadUserConfig,
             Op::ConsolidateOrchestratorMemory => AppCommand::ConsolidateOrchestratorMemory,
+            Op::PruneIdleAgents => AppCommand::PruneIdleAgents,
             Op::SetScratchpadContinuousPolicy { enabled } => {
                 AppCommand::SetScratchpadContinuousPolicy { enabled }
             }

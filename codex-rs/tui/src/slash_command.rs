@@ -39,6 +39,8 @@ pub enum SlashCommand {
     Goal,
     Collab,
     Agent,
+    #[strum(serialize = "agents-prune")]
+    AgentsPrune,
     Side,
     Copy,
     Raw,
@@ -131,6 +133,7 @@ impl SlashCommand {
             SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
+            SlashCommand::AgentsPrune => "close idle agents in this session",
             SlashCommand::Side => "start a side conversation in an ephemeral fork",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::Keymap => "remap TUI shortcuts",
@@ -269,6 +272,7 @@ impl SlashCommand {
             | SlashCommand::Ide
             | SlashCommand::Quit
             | SlashCommand::Exit
+            | SlashCommand::AgentsPrune
             | SlashCommand::Side => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
