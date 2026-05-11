@@ -86,7 +86,7 @@ stable/mainline is pulled in.
 - Session-scoped agent pruning:
   - Slash command: `/agents-prune`
   - Closes idle spawned agents from the current session's shared agent control
-    tree only.
+    registry and live thread-spawn tree only.
   - Preserves running and initializing agents, the current thread, and any
     agent subtree that still contains active work.
 - Orchestrator inline MCP usage:

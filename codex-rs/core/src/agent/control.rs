@@ -1043,13 +1043,72 @@ impl AgentControl {
         for children in children_by_parent.values_mut() {
             children.sort_by(|left, right| left.0.to_string().cmp(&right.0.to_string()));
         }
+        let mut parent_by_child = HashMap::new();
+        for (parent_thread_id, children) in &children_by_parent {
+            for (child_thread_id, _) in children {
+                parent_by_child.insert(*child_thread_id, *parent_thread_id);
+            }
+        }
+        let mut session_root_thread_id = current_thread_id;
+        let mut visited_ancestors = HashSet::new();
+        while let Some(parent_thread_id) = parent_by_child.get(&session_root_thread_id).copied() {
+            if !visited_ancestors.insert(parent_thread_id) {
+                break;
+            }
+            session_root_thread_id = parent_thread_id;
+        }
+        let mut session_thread_ids = HashSet::from([session_root_thread_id]);
+        session_thread_ids.extend(collect_descendants(
+            session_root_thread_id,
+            &children_by_parent,
+        ));
+        let mut thread_spawn_depths = HashMap::new();
+        let mut depth_queue = VecDeque::from([(session_root_thread_id, 0usize)]);
+        while let Some((thread_id, depth)) = depth_queue.pop_front() {
+            if thread_spawn_depths.insert(thread_id, depth).is_some() {
+                continue;
+            }
+            if let Some(children) = children_by_parent.get(&thread_id) {
+                for (child_thread_id, _) in children {
+                    depth_queue.push_back((*child_thread_id, depth.saturating_add(1)));
+                }
+            }
+        }
 
         let mut live_agents = self.state.live_agents();
+        let mut live_agent_ids = HashSet::new();
+        live_agents.retain(|metadata| {
+            metadata
+                .agent_id
+                .is_some_and(|thread_id| live_agent_ids.insert(thread_id))
+        });
+        for children in children_by_parent.values() {
+            for (thread_id, metadata) in children {
+                if !session_thread_ids.contains(thread_id) || !live_agent_ids.insert(*thread_id) {
+                    continue;
+                }
+                let mut metadata = metadata.clone();
+                metadata.agent_id = Some(*thread_id);
+                live_agents.push(metadata);
+            }
+        }
         live_agents.sort_by(|left, right| {
-            left.agent_path
-                .as_deref()
-                .unwrap_or_default()
-                .cmp(right.agent_path.as_deref().unwrap_or_default())
+            let left_depth = left
+                .agent_id
+                .and_then(|thread_id| thread_spawn_depths.get(&thread_id).copied())
+                .unwrap_or(usize::MAX);
+            let right_depth = right
+                .agent_id
+                .and_then(|thread_id| thread_spawn_depths.get(&thread_id).copied())
+                .unwrap_or(usize::MAX);
+            left_depth
+                .cmp(&right_depth)
+                .then_with(|| {
+                    left.agent_path
+                        .as_deref()
+                        .unwrap_or_default()
+                        .cmp(right.agent_path.as_deref().unwrap_or_default())
+                })
                 .then_with(|| {
                     left.agent_id
                         .map(|id| id.to_string())
@@ -1094,10 +1153,14 @@ impl AgentControl {
 
             let mut subtree = vec![thread_id];
             subtree.extend(descendants);
+            let unhandled_subtree = subtree
+                .into_iter()
+                .filter(|candidate| !handled.contains(candidate))
+                .collect::<Vec<_>>();
             match self.close_agent(thread_id).await {
                 Ok(_) | Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) => {
-                    handled.extend(subtree.iter().copied());
-                    report.closed.extend(subtree);
+                    handled.extend(unhandled_subtree.iter().copied());
+                    report.closed.extend(unhandled_subtree);
                 }
                 Err(err) => {
                     handled.insert(thread_id);
