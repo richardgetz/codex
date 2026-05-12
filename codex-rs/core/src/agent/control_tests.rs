@@ -2203,7 +2203,7 @@ async fn prune_idle_agents_closes_unregistered_thread_spawn_children() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, _parent_thread) = harness.start_thread().await;
     let (child_thread_id, child_thread) =
-        start_unregistered_thread_spawn_child(&harness, parent_thread_id, 1).await;
+        start_unregistered_thread_spawn_child(&harness, parent_thread_id, /*depth*/ 1).await;
     send_agent_event(
         &child_thread,
         EventMsg::TurnComplete(TurnCompleteEvent {
@@ -2246,7 +2246,7 @@ async fn prune_idle_agents_preserves_running_unregistered_thread_spawn_children(
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, _parent_thread) = harness.start_thread().await;
     let (child_thread_id, child_thread) =
-        start_unregistered_thread_spawn_child(&harness, parent_thread_id, 1).await;
+        start_unregistered_thread_spawn_child(&harness, parent_thread_id, /*depth*/ 1).await;
     send_agent_event(
         &child_thread,
         EventMsg::TurnStarted(TurnStartedEvent {
@@ -2283,7 +2283,7 @@ async fn prune_idle_agents_ignores_unregistered_thread_spawn_children_from_other
     let (current_parent_thread_id, _current_parent_thread) = harness.start_thread().await;
     let (other_parent_thread_id, _other_parent_thread) = harness.start_thread().await;
     let (other_child_thread_id, other_child_thread) =
-        start_unregistered_thread_spawn_child(&harness, other_parent_thread_id, 1).await;
+        start_unregistered_thread_spawn_child(&harness, other_parent_thread_id, /*depth*/ 1).await;
     send_agent_event(
         &other_child_thread,
         EventMsg::TurnComplete(TurnCompleteEvent {
@@ -2330,7 +2330,7 @@ async fn prune_idle_agents_reports_unregistered_descendants_once() {
         .await
         .expect("idle parent spawn should succeed");
     let (unregistered_child_id, unregistered_child_thread) =
-        start_unregistered_thread_spawn_child(&harness, idle_parent_id, 2).await;
+        start_unregistered_thread_spawn_child(&harness, idle_parent_id, /*depth*/ 2).await;
 
     let idle_parent_thread = harness
         .manager
