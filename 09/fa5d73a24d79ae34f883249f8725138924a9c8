@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-12/analytics-thread-response-fixtures#09fa5d73a24d"
+  change_type: "fix"
+  scope: "analytics"
+  summary: "Keep analytics test fixtures aligned with thread lifecycle response schema changes."
+  decision: "Add the default user_preferences_memory_policy field to analytics ThreadStart/Resume/Fork response fixtures so CI argument-comment lint targets compile the updated app-server protocol shape."
+  constraints:
+    - "Must keep analytics fixture defaults behaviorally neutral."
+    - "Must preserve the app-server response schema requiring user_preferences_memory_policy."
+    - "Must unblock the Linux, macOS, and Windows argument-comment lint jobs without loosening the lint."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/analytics/src/client_tests.rs"
+    - "codex-rs/analytics/src/analytics_client_tests.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
