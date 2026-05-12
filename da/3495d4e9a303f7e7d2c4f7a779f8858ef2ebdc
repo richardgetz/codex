@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-05-11/agents-prune-remote-cli#da3495d4e9a3"
+  change_type: "feat"
+  scope: "agents"
+  summary: "Add a non-TUI CLI path for pruning idle agents on long-lived app servers."
+  decision: "Expose `codex agents-prune <thread-id> --remote <ws://host:port>` as a lightweight remote app-server client that invokes the existing experimental `thread/agents/prune` request with experimental API enabled, preserving the existing session-scoped prune semantics."
+  constraints:
+    - "Must remain scoped to the requested thread/session id, not all loaded app-server sessions."
+    - "Must target an existing long-lived remote app-server and not launch a TUI or embedded server."
+    - "Must support the existing remote auth token environment flow."
+    - "Must preserve running and initializing agents through the existing core prune implementation."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/cli/src/main.rs::AgentsPruneCommand"
+    - "codex-rs/cli/src/main.rs::run_agents_prune_command"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
