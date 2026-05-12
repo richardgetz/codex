@@ -794,6 +794,44 @@ pub async fn set_scratchpad_continuous_policy(sess: &Arc<Session>, sub_id: Strin
     }
 }
 
+pub async fn prune_idle_agents(sess: &Arc<Session>, sub_id: String) {
+    match sess
+        .services
+        .agent_control
+        .prune_idle_agents(sess.conversation_id)
+        .await
+    {
+        Ok(report) => {
+            if !report.failed.is_empty() {
+                let failed = report
+                    .failed
+                    .into_iter()
+                    .map(|(thread_id, err)| format!("{thread_id}: {err}"))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("Failed to prune some idle agents: {failed}"),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                })
+                .await;
+            }
+        }
+        Err(err) => {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: format!("Failed to prune idle agents: {err}"),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            })
+            .await;
+        }
+    }
+}
+
 /// Persists thread-level memory mode metadata for the active session.
 ///
 /// This does not involve the model and only affects whether the thread is
@@ -1095,6 +1133,10 @@ pub(super) async fn submission_loop(
                 }
                 Op::SetScratchpadContinuousPolicy { enabled } => {
                     set_scratchpad_continuous_policy(&sess, sub.id.clone(), enabled).await;
+                    false
+                }
+                Op::PruneIdleAgents => {
+                    prune_idle_agents(&sess, sub.id.clone()).await;
                     false
                 }
                 Op::SetThreadMemoryMode { mode } => {

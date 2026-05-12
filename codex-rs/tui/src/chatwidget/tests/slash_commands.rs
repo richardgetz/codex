@@ -1607,6 +1607,22 @@ async fn slash_stop_submits_background_terminal_cleanup() {
 }
 
 #[tokio::test]
+async fn slash_agents_prune_submits_idle_agent_cleanup() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::AgentsPrune);
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::PruneIdleAgents));
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected prune confirmation message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Pruning idle agents for this session."),
+        "expected prune confirmation, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn slash_clear_requests_ui_clear_when_idle() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

@@ -778,6 +778,20 @@ impl ChatWidget {
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
+            SlashCommand::AgentsPrune => {
+                self.add_info_message(
+                    "Pruning idle agents for this session.".to_string(),
+                    Some(
+                        "Running agents and agents with running descendants will remain active."
+                            .to_string(),
+                    ),
+                );
+                if !self.submit_op(AppCommand::prune_idle_agents()) {
+                    self.add_error_message(
+                        "Could not submit idle-agent prune request.".to_string(),
+                    );
+                }
+            }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
             }
@@ -1550,6 +1564,7 @@ impl ChatWidget {
             | SlashCommand::Outcomes
             | SlashCommand::Continuous
             | SlashCommand::Account
+            | SlashCommand::AgentsPrune
             | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Rollout

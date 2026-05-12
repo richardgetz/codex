@@ -3,6 +3,12 @@ use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
 use clap_complete::generate;
+use codex_app_server_client::RemoteAppServerClient;
+use codex_app_server_client::RemoteAppServerConnectArgs;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadAgentsPruneParams;
+use codex_app_server_protocol::ThreadAgentsPruneResponse;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_chatgpt::apply_command::ApplyCommand;
@@ -126,6 +132,10 @@ enum Subcommand {
 
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
+
+    /// [experimental] Prune idle agents for a thread on a running app-server.
+    #[clap(name = "agents-prune")]
+    AgentsPrune(AgentsPruneCommand),
 
     /// [experimental] Start a headless app-server with remote control enabled.
     RemoteControl,
@@ -489,6 +499,16 @@ struct AppServerProxyCommand {
     /// Path to the app-server Unix domain socket to connect to.
     #[arg(long = "sock", value_name = "SOCKET_PATH", value_parser = parse_socket_path)]
     socket_path: Option<AbsolutePathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct AgentsPruneCommand {
+    /// Thread/session id whose idle agent tree should be pruned.
+    #[arg(value_name = "THREAD_ID")]
+    thread_id: String,
+
+    #[clap(flatten)]
+    remote: InteractiveRemoteOptions,
 }
 
 #[derive(Debug, Args)]
@@ -915,6 +935,10 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 }
             }
         }
+        Some(Subcommand::AgentsPrune(cmd)) => {
+            run_agents_prune_command(cmd, root_remote.clone(), root_remote_auth_token_env.clone())
+                .await?;
+        }
         Some(Subcommand::RemoteControl) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -1335,6 +1359,54 @@ async fn run_exec_server_command(
     codex_exec_server::run_main(listen_url, runtime_paths)
         .await
         .map_err(anyhow::Error::from_boxed)
+}
+
+async fn run_agents_prune_command(
+    cmd: AgentsPruneCommand,
+    root_remote: Option<String>,
+    root_remote_auth_token_env: Option<String>,
+) -> anyhow::Result<()> {
+    let AgentsPruneCommand { thread_id, remote } = cmd;
+    let remote_addr = remote.remote.or(root_remote).ok_or_else(|| {
+        anyhow::anyhow!(
+            "`codex agents-prune` requires `--remote <ws://host:port>` for the target app-server"
+        )
+    })?;
+    let websocket_url = codex_tui::normalize_remote_addr(&remote_addr)
+        .map_err(|err| anyhow::anyhow!("invalid remote app-server address: {err}"))?;
+    let remote_auth_token_env = remote.remote_auth_token_env.or(root_remote_auth_token_env);
+    let auth_token = remote_auth_token_env
+        .as_deref()
+        .map(read_remote_auth_token_from_env_var)
+        .transpose()?;
+
+    let client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+        websocket_url,
+        auth_token,
+        client_name: "codex-cli".to_string(),
+        client_version: env!("CARGO_PKG_VERSION").to_string(),
+        experimental_api: true,
+        opt_out_notification_methods: Vec::new(),
+        channel_capacity: 64,
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!("failed to connect to remote app-server: {err}"))?;
+
+    let prune_result = client
+        .request_typed::<ThreadAgentsPruneResponse>(ClientRequest::ThreadAgentsPrune {
+            request_id: RequestId::Integer(1),
+            params: ThreadAgentsPruneParams {
+                thread_id: thread_id.clone(),
+            },
+        })
+        .await;
+    let shutdown_result = client.shutdown().await;
+
+    prune_result.map_err(|err| anyhow::anyhow!("{err}"))?;
+    shutdown_result
+        .map_err(|err| anyhow::anyhow!("failed to close remote app-server client: {err}"))?;
+    println!("Prune requested for thread {thread_id}.");
+    Ok(())
 }
 
 async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
@@ -2497,6 +2569,56 @@ mod tests {
             panic!("expected resume subcommand");
         };
         assert_eq!(remote.remote.as_deref(), Some("ws://127.0.0.1:4500"));
+    }
+
+    #[test]
+    fn agents_prune_remote_flag_parses_after_subcommand() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "agents-prune",
+            "019e14c4-2049-7c50-8979-f96aab9bca7e",
+            "--remote",
+            "ws://127.0.0.1:4500",
+        ])
+        .expect("parse");
+        let Subcommand::AgentsPrune(cmd) = cli.subcommand.expect("agents-prune present") else {
+            panic!("expected agents-prune subcommand");
+        };
+        assert_eq!(cmd.thread_id, "019e14c4-2049-7c50-8979-f96aab9bca7e");
+        assert_eq!(cmd.remote.remote.as_deref(), Some("ws://127.0.0.1:4500"));
+    }
+
+    #[test]
+    fn agents_prune_accepts_root_remote_flag() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "--remote",
+            "ws://127.0.0.1:4500",
+            "agents-prune",
+            "019e14c4-2049-7c50-8979-f96aab9bca7e",
+        ])
+        .expect("parse");
+        assert_eq!(cli.remote.remote.as_deref(), Some("ws://127.0.0.1:4500"));
+        assert_matches!(
+            cli.subcommand,
+            Some(Subcommand::AgentsPrune(AgentsPruneCommand { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn agents_prune_requires_remote_app_server() {
+        let err = run_agents_prune_command(
+            AgentsPruneCommand {
+                thread_id: "019e14c4-2049-7c50-8979-f96aab9bca7e".to_string(),
+                remote: InteractiveRemoteOptions::default(),
+            },
+            /*root_remote*/ None,
+            /*root_remote_auth_token_env*/ None,
+        )
+        .await
+        .expect_err("agents-prune should require a remote app-server");
+
+        assert!(err.to_string().contains("requires `--remote"));
     }
 
     #[test]

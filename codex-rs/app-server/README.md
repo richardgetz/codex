@@ -168,6 +168,7 @@ Example with notification opt-out:
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
+- `thread/agents/prune` — close idle spawned-agent subtrees for the loaded thread's current session (experimental; requires `capabilities.experimentalApi`); returns `{}` when the prune request is accepted. Running and initializing agents, the current thread, and any subtree containing active work are preserved.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. Prefer experimental `permissions` profile selection for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success.
@@ -831,6 +832,17 @@ Use `thread/backgroundTerminals/clean` to terminate all running background termi
     "threadId": "thr_123"
 } }
 { "id": 35, "result": {} }
+```
+
+### Example: Prune idle agents
+
+Use `thread/agents/prune` to close idle spawned-agent subtrees for the loaded thread's current session. This method is experimental and requires `capabilities.experimentalApi = true`.
+
+```json
+{ "method": "thread/agents/prune", "id": 36, "params": {
+    "threadId": "thr_123"
+} }
+{ "id": 36, "result": {} }
 ```
 
 ### Example: Steer an active turn

@@ -742,6 +742,12 @@ pub enum Op {
     /// Trigger a single manual orchestrator-memory cleanup/consolidation pass.
     ConsolidateOrchestratorMemory,
 
+    /// Close idle spawned agents in the current session only.
+    ///
+    /// Agents that are running, still initializing, or in a subtree containing a
+    /// running/initializing agent are preserved.
+    PruneIdleAgents,
+
     /// Set a user-facing thread name in the persisted rollout metadata.
     /// This is a local-only operation handled by codex-core; it does not
     /// involve the model.
@@ -880,6 +886,7 @@ impl Op {
             Self::DropMemories => "drop_memories",
             Self::UpdateMemories => "update_memories",
             Self::ConsolidateOrchestratorMemory => "consolidate_orchestrator_memory",
+            Self::PruneIdleAgents => "prune_idle_agents",
             Self::SetThreadName { .. } => "set_thread_name",
             Self::SetScratchpadContinuousPolicy { .. } => "set_scratchpad_continuous_policy",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",

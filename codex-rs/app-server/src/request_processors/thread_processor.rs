@@ -567,6 +567,16 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_agents_prune(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadAgentsPruneParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_agents_prune_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn thread_rollback(
         &self,
         request_id: &ConnectionRequestId,
@@ -1738,6 +1748,20 @@ impl ThreadRequestProcessor {
                 internal_error(format!("failed to clean background terminals: {err}"))
             })?;
         Ok(ThreadBackgroundTerminalsCleanResponse {})
+    }
+
+    async fn thread_agents_prune_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadAgentsPruneParams,
+    ) -> Result<ThreadAgentsPruneResponse, JSONRPCErrorError> {
+        let ThreadAgentsPruneParams { thread_id } = params;
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        self.submit_core_op(request_id, thread.as_ref(), Op::PruneIdleAgents)
+            .await
+            .map_err(|err| internal_error(format!("failed to prune idle agents: {err}")))?;
+        Ok(ThreadAgentsPruneResponse {})
     }
 
     async fn thread_shell_command_inner(

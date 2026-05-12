@@ -672,6 +672,10 @@ impl App {
                     .await?;
                 Ok(true)
             }
+            AppCommand::PruneIdleAgents => {
+                app_server.thread_agents_prune(thread_id).await?;
+                Ok(true)
+            }
             AppCommand::RealtimeConversationStart { transport, voice } => {
                 app_server
                     .thread_realtime_start(thread_id, transport.clone(), voice.clone())

@@ -574,6 +574,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadBackgroundTerminalsCleanResponse,
     },
+    #[experimental("thread/agents/prune")]
+    ThreadAgentsPrune => "thread/agents/prune" {
+        params: v2::ThreadAgentsPruneParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadAgentsPruneResponse,
+    },
     ThreadRollback => "thread/rollback" {
         params: v2::ThreadRollbackParams,
         serialization: thread_id(params.thread_id),
@@ -2648,6 +2654,27 @@ mod tests {
         assert_eq!(
             json!({
                 "method": "thread/backgroundTerminals/clean",
+                "id": 8,
+                "params": {
+                    "threadId": "thr_123"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_agents_prune() -> Result<()> {
+        let request = ClientRequest::ThreadAgentsPrune {
+            request_id: RequestId::Integer(8),
+            params: v2::ThreadAgentsPruneParams {
+                thread_id: "thr_123".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/agents/prune",
                 "id": 8,
                 "params": {
                     "threadId": "thr_123"
