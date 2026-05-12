@@ -1,0 +1,29 @@
+intent:
+  id: "intent/2026-05-12/user-preferences-memory-canonical#5b162518a6ca"
+  change_type: "feat"
+  scope: "memory"
+  summary: "Make user_preferences_memory the canonical live memory store with per-session bucket policy controls."
+  decision: "Route live memory reads, writes, cleanup, consolidation, and developer-context injection through <codex_home>/user_preferences_memory, keep legacy orchestrator_memory only as a migration/compatibility surface, and expose read/write bucket policy through config plus app-server thread lifecycle and live update APIs."
+  constraints:
+    - "Must create and grant workspace-write access to the canonical user_preferences_memory folder."
+    - "Must allow per-session read and write control for individual memory buckets without editing config.toml."
+    - "Must prevent restricted read policies from leaking disallowed buckets through stale summary/profile artifacts."
+    - "Must keep app-server protocol and config schemas generated from the Rust API."
+    - "Must preserve legacy migration and compatibility commands without injecting the legacy orchestrator_memory root into model context."
+  intent_priority: "must"
+  supersedes:
+    - "intent/2026-05-09/agent-efficiency-tooling#690a4d9116ee"
+  code_locations:
+    - "codex-rs/protocol/src/config_types.rs"
+    - "codex-rs/config/src/types.rs"
+    - "codex-rs/core/src/orchestrator_memory.rs"
+    - "codex-rs/core/src/orchestrator_memory/live.rs"
+    - "codex-rs/core/src/session"
+    - "codex-rs/app-server-protocol/src/protocol/v2/thread.rs"
+    - "codex-rs/app-server/src/request_processors/thread_processor.rs"
+    - "codex-rs/tui/src/app_server_session.rs"
+    - "docs/fork-differences.md"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
