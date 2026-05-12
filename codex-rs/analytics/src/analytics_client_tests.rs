@@ -105,6 +105,7 @@ use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::HookEventName;
@@ -177,6 +178,7 @@ fn sample_thread_start_response(
         permission_profile: None,
         active_permission_profile: None,
         reasoning_effort: None,
+        user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
     })
 }
 
@@ -233,6 +235,7 @@ fn sample_thread_resume_response_with_source(
         permission_profile: None,
         active_permission_profile: None,
         reasoning_effort: None,
+        user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
     })
 }
 
