@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-05-11/agents-prune-depth-comments#124f8900639f"
+  change_type: "fix"
+  scope: "agents"
+  summary: "Annotate prune test depth literals required by CI argument-comment lint."
+  decision: "Add `/*depth*/` comments to the four numeric depth arguments passed to the unregistered thread-spawn test helper, matching the existing argument-comment lint convention without changing test behavior."
+  constraints:
+    - "Must only address the CI lint failure and avoid behavioral changes."
+    - "Must preserve the prune regression tests for live thread-spawn agents."
+    - "Must keep PR #48 merge path unblocked without broad refactors."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/agent/control_tests.rs::prune_idle_agents_closes_unregistered_thread_spawn_children"
+    - "codex-rs/core/src/agent/control_tests.rs::prune_idle_agents_preserves_running_unregistered_thread_spawn_children"
+    - "codex-rs/core/src/agent/control_tests.rs::prune_idle_agents_ignores_unregistered_thread_spawn_children_from_other_sessions"
+    - "codex-rs/core/src/agent/control_tests.rs::prune_idle_agents_reports_unregistered_descendants_once"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
