@@ -3494,6 +3494,17 @@
             }
           ],
           "description": "Optional client-supplied analytics source classification for this forked thread."
+        },
+        "userPreferencesMemoryPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Session-local memory bucket policy for this thread. Omitted inherits the server's `[user_preferences_memory]` config defaults."
         }
       },
       "required": [
@@ -3894,6 +3905,17 @@
         },
         "threadId": {
           "type": "string"
+        },
+        "userPreferencesMemoryPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Session-local memory bucket policy for this thread. Omitted uses the server's `[user_preferences_memory]` config defaults."
         }
       },
       "required": [
@@ -4113,6 +4135,17 @@
             }
           ],
           "description": "Optional client-supplied analytics source classification for this thread."
+        },
+        "userPreferencesMemoryPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Session-local memory bucket policy for this thread. Omitted uses the server's `[user_preferences_memory]` config defaults."
         }
       },
       "type": "object"
@@ -4142,6 +4175,21 @@
         }
       },
       "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadUserPreferencesMemoryPolicySetParams": {
+      "properties": {
+        "policy": {
+          "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy",
         "threadId"
       ],
       "type": "object"
@@ -4452,6 +4500,38 @@
         }
       ]
     },
+    "UserPreferencesMemoryBucket": {
+      "enum": [
+        "durable_preference",
+        "personal_context",
+        "relational_attunement",
+        "operator_playbook",
+        "ongoing_threads",
+        "followup_state"
+      ],
+      "type": "string"
+    },
+    "UserPreferencesMemoryBucketPolicy": {
+      "properties": {
+        "readBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        },
+        "writeBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "readBuckets",
+        "writeBuckets"
+      ],
+      "type": "object"
+    },
     "WindowsSandboxSetupMode": {
       "enum": [
         "elevated",
@@ -4674,6 +4754,30 @@
         "params"
       ],
       "title": "Thread/scratchpad/continuousPolicy/setRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/userPreferencesMemoryPolicy/set"
+          ],
+          "title": "Thread/userPreferencesMemoryPolicy/setRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadUserPreferencesMemoryPolicySetParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/userPreferencesMemoryPolicy/setRequest",
       "type": "object"
     },
     {

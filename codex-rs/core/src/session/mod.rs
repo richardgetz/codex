@@ -642,6 +642,7 @@ impl Codex {
             codex_home: config.codex_home.clone(),
             thread_name: None,
             environments: environment_selections.to_selections(),
+            user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
             app_server_client_name: None,
@@ -3174,25 +3175,13 @@ impl Session {
         {
             developer_sections.push(memory_prompt);
         }
-        if turn_context.config.orchestrator_memory.enabled
-            && (turn_context.config.orchestrator_memory.scope == MemoriesScope::All
-                || turn_context.collaboration_mode.mode == ModeKind::Orchestrator)
-            && let Some(orchestrator_memory_prompt) =
-                build_orchestrator_memory_developer_instructions(
-                    &turn_context.config.codex_home,
-                    &turn_context.config.orchestrator_memory,
-                )
-                .await
-        {
-            developer_sections.push(orchestrator_memory_prompt);
-        }
         if turn_context.config.user_preferences_memory.enabled
             && (turn_context.config.user_preferences_memory.scope == MemoriesScope::All
                 || turn_context.collaboration_mode.mode == ModeKind::Orchestrator)
             && let Some(user_preferences_memory_prompt) =
                 build_user_preferences_memory_developer_instructions(
                     &turn_context.config.codex_home,
-                    &turn_context.config.user_preferences_memory.memory_config(),
+                    &turn_context.config.user_preferences_memory,
                 )
                 .await
         {
@@ -4101,7 +4090,6 @@ pub(crate) fn active_thread_scratchpad(codex_home: &Path, thread_id: ThreadId) -
     scratchpad_matches_thread(&value, &scratchpad_id).then_some(value)
 }
 
-use crate::orchestrator_memory::build_developer_instructions as build_orchestrator_memory_developer_instructions;
 use crate::orchestrator_memory::build_user_preferences_developer_instructions as build_user_preferences_memory_developer_instructions;
 use codex_memories_read::build_memory_tool_developer_instructions;
 

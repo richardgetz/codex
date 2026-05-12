@@ -430,6 +430,8 @@ impl Session {
         per_turn_config.service_tier = session_configuration.service_tier.clone();
         per_turn_config.personality = session_configuration.personality;
         per_turn_config.approvals_reviewer = session_configuration.approvals_reviewer;
+        per_turn_config.user_preferences_memory.bucket_policy =
+            session_configuration.user_preferences_memory_policy.clone();
         per_turn_config.permissions.permission_profile =
             session_configuration.permission_profile.clone();
         let permission_profile = session_configuration.permission_profile();

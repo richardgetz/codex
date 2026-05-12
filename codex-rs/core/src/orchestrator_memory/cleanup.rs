@@ -101,7 +101,7 @@ pub(super) fn start_scheduled_cleanup_task(
     if matches!(session_source, SessionSource::SubAgent(_)) {
         return;
     }
-    if !config.orchestrator_memory.enabled || !config.orchestrator_memory.cleanup.enabled {
+    if !config.user_preferences_memory.enabled || !config.user_preferences_memory.cleanup.enabled {
         return;
     }
 
@@ -118,8 +118,8 @@ async fn run_scheduled_cleanup_for_session_if_due(
     session: &Arc<Session>,
     config: &Arc<Config>,
 ) -> std::io::Result<()> {
-    let Some(due_at_utc) = due_cleanup_at(&config.codex_home, &config.orchestrator_memory).await?
-    else {
+    let memory_config = config.user_preferences_memory.memory_config();
+    let Some(due_at_utc) = due_cleanup_at(&config.codex_home, &memory_config).await? else {
         return Ok(());
     };
 
@@ -139,7 +139,7 @@ pub(super) async fn run_cleanup_now_for_session(
     session: &Arc<Session>,
     config: &Arc<Config>,
 ) -> std::io::Result<CleanupResult> {
-    if !config.orchestrator_memory.enabled || !config.orchestrator_memory.cleanup.enabled {
+    if !config.user_preferences_memory.enabled || !config.user_preferences_memory.cleanup.enabled {
         return Ok(CleanupResult {
             raw_events_before: 0,
             raw_events_after: 0,
@@ -200,14 +200,15 @@ async fn run_cleanup_now_with_optional_model(
     session: &Arc<Session>,
     config: &Arc<Config>,
 ) -> std::io::Result<CleanupResult> {
+    let memory_config = config.user_preferences_memory.memory_config();
     migration::migrate_if_needed(&config.codex_home).await?;
     ensure_layout(&config.codex_home).await?;
     let preferences = preferences_path(&config.codex_home);
     let raw = match fs::read_to_string(&preferences).await {
         Ok(raw) => raw,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            if config.orchestrator_memory.cleanup.deep_consolidation {
-                consolidate_preferences(&config.codex_home, &config.orchestrator_memory).await?;
+            if memory_config.cleanup.deep_consolidation {
+                consolidate_preferences(&config.codex_home, &memory_config).await?;
             }
             return Ok(CleanupResult {
                 raw_events_before: 0,
@@ -219,13 +220,13 @@ async fn run_cleanup_now_with_optional_model(
     };
 
     let raw_events_before = raw.lines().filter(|line| !line.trim().is_empty()).count();
-    let mechanical = if config.orchestrator_memory.cleanup.dedupe_raw_events {
-        compact_events(&raw, &config.orchestrator_memory)
+    let mechanical = if memory_config.cleanup.dedupe_raw_events {
+        compact_events(&raw, &memory_config)
     } else {
         parse_valid_events(&raw)
     };
 
-    let events = if config.orchestrator_memory.cleanup.model_consolidation {
+    let events = if memory_config.cleanup.model_consolidation {
         let raw_for_model = events_to_jsonl(&mechanical)?;
         match model::cleanup_events_with_model(session, config, raw_for_model).await {
             Ok(model_events) if !model_events.is_empty() => model_events,
@@ -245,8 +246,8 @@ async fn run_cleanup_now_with_optional_model(
     let compacted_raw = fs::read_to_string(&preferences).await.unwrap_or_default();
     migration::sync_bucket_files_from_raw(&config.codex_home, &compacted_raw).await?;
 
-    if config.orchestrator_memory.cleanup.deep_consolidation {
-        consolidate_preferences(&config.codex_home, &config.orchestrator_memory).await?;
+    if memory_config.cleanup.deep_consolidation {
+        consolidate_preferences(&config.codex_home, &memory_config).await?;
     }
 
     let raw_events_after = events.len();

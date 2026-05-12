@@ -498,6 +498,11 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadScratchpadContinuousPolicySetResponse,
     },
+    ThreadUserPreferencesMemoryPolicySet => "thread/userPreferencesMemoryPolicy/set" {
+        params: v2::ThreadUserPreferencesMemoryPolicySetParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadUserPreferencesMemoryPolicySetResponse,
+    },
     #[experimental("thread/goal/set")]
     ThreadGoalSet => "thread/goal/set" {
         params: v2::ThreadGoalSetParams,
@@ -1614,6 +1619,20 @@ mod tests {
         };
         assert_eq!(
             thread_fork.serialization_scope(),
+            Some(ClientRequestSerializationScope::Thread {
+                thread_id: thread_id.clone()
+            })
+        );
+
+        let memory_policy_set = ClientRequest::ThreadUserPreferencesMemoryPolicySet {
+            request_id: request_id(),
+            params: v2::ThreadUserPreferencesMemoryPolicySetParams {
+                thread_id: thread_id.clone(),
+                policy: codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
+            },
+        };
+        assert_eq!(
+            memory_policy_set.serialization_scope(),
             Some(ClientRequestSerializationScope::Thread { thread_id })
         );
 
@@ -2261,6 +2280,8 @@ mod tests {
                 permission_profile: None,
                 active_permission_profile: None,
                 reasoning_effort: None,
+                user_preferences_memory_policy:
+                    codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
             },
         };
 
@@ -2306,7 +2327,25 @@ mod tests {
                     },
                     "permissionProfile": null,
                     "activePermissionProfile": null,
-                    "reasoningEffort": null
+                    "reasoningEffort": null,
+                    "userPreferencesMemoryPolicy": {
+                        "readBuckets": [
+                            "durable_preference",
+                            "personal_context",
+                            "relational_attunement",
+                            "operator_playbook",
+                            "ongoing_threads",
+                            "followup_state"
+                        ],
+                        "writeBuckets": [
+                            "durable_preference",
+                            "personal_context",
+                            "relational_attunement",
+                            "operator_playbook",
+                            "ongoing_threads",
+                            "followup_state"
+                        ]
+                    }
                 }
             }),
             serde_json::to_value(&response)?,

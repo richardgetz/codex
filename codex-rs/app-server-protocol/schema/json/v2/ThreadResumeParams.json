@@ -1010,6 +1010,38 @@
         "danger-full-access"
       ],
       "type": "string"
+    },
+    "UserPreferencesMemoryBucket": {
+      "enum": [
+        "durable_preference",
+        "personal_context",
+        "relational_attunement",
+        "operator_playbook",
+        "ongoing_threads",
+        "followup_state"
+      ],
+      "type": "string"
+    },
+    "UserPreferencesMemoryBucketPolicy": {
+      "properties": {
+        "readBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        },
+        "writeBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "readBuckets",
+        "writeBuckets"
+      ],
+      "type": "object"
     }
   },
   "description": "There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.\n\nThe precedence is: history > path > thread_id. If using history or path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
@@ -1101,6 +1133,17 @@
     },
     "threadId": {
       "type": "string"
+    },
+    "userPreferencesMemoryPolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Session-local memory bucket policy for this thread. Omitted uses the server's `[user_preferences_memory]` config defaults."
     }
   },
   "required": [

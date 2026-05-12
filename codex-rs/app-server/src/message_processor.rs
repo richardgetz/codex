@@ -980,6 +980,11 @@ impl MessageProcessor {
                     .thread_scratchpad_continuous_policy_set(&request_id, params)
                     .await
             }
+            ClientRequest::ThreadUserPreferencesMemoryPolicySet { params, .. } => {
+                self.thread_processor
+                    .thread_user_preferences_memory_policy_set(&request_id, params)
+                    .await
+            }
             ClientRequest::ThreadControlRead { params, .. } => {
                 self.thread_processor.thread_control_read(params).await
             }

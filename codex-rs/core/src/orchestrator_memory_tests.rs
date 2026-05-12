@@ -1,65 +1,11 @@
 use super::*;
 use codex_config::types::OrchestratorMemoryConfig;
+use codex_config::types::UserPreferencesMemoryBucket;
+use codex_config::types::UserPreferencesMemoryBucketPolicy;
+use codex_config::types::UserPreferencesMemoryConfig;
 use core_test_support::PathExt;
 use tempfile::tempdir;
 use tokio::fs as tokio_fs;
-
-#[tokio::test]
-async fn build_developer_instructions_renders_summary_template() {
-    let temp = tempdir().unwrap();
-    let codex_home = temp.path().abs();
-    let orchestrator_memory_dir = codex_home.join("orchestrator_memory");
-    tokio_fs::create_dir_all(&orchestrator_memory_dir)
-        .await
-        .unwrap();
-    tokio_fs::write(
-        orchestrator_memory_dir.join("summary.md"),
-        "Prefer clarification before delegation.",
-    )
-    .await
-    .unwrap();
-
-    let instructions =
-        build_developer_instructions(&codex_home, &OrchestratorMemoryConfig::default())
-            .await
-            .unwrap();
-
-    assert!(instructions.contains("Orchestrator Memory"));
-    assert!(instructions.contains("Default to checking the memory"));
-    assert!(instructions.contains("Do not spawn a subagent or search the workspace before this"));
-    assert!(instructions.contains(&format!(
-        "- {} (already provided below; do NOT open again)",
-        orchestrator_memory_dir.join("summary.md").display()
-    )));
-    assert!(instructions.contains("Prefer clarification before delegation."));
-}
-
-#[tokio::test]
-async fn build_developer_instructions_falls_back_to_profile() {
-    let temp = tempdir().unwrap();
-    let codex_home = temp.path().abs();
-    let orchestrator_memory_dir = codex_home.join("orchestrator_memory");
-    tokio_fs::create_dir_all(&orchestrator_memory_dir)
-        .await
-        .unwrap();
-    tokio_fs::write(
-        orchestrator_memory_dir.join("profile.md"),
-        "Act as the user's orchestration layer.",
-    )
-    .await
-    .unwrap();
-
-    let instructions =
-        build_developer_instructions(&codex_home, &OrchestratorMemoryConfig::default())
-            .await
-            .unwrap();
-
-    assert!(instructions.contains(&format!(
-        "- {} (already provided below; do NOT open again)",
-        orchestrator_memory_dir.join("profile.md").display()
-    )));
-    assert!(instructions.contains("Act as the user's orchestration layer."));
-}
 
 #[tokio::test]
 async fn build_user_preferences_instructions_reads_user_preferences_root() {
@@ -78,20 +24,89 @@ async fn build_user_preferences_instructions_reads_user_preferences_root() {
 
     let instructions = build_user_preferences_developer_instructions(
         &codex_home,
-        &OrchestratorMemoryConfig {
+        &UserPreferencesMemoryConfig {
             scope: codex_config::types::MemoriesScope::All,
-            ..OrchestratorMemoryConfig::default()
+            ..UserPreferencesMemoryConfig::default()
         },
     )
     .await
     .unwrap();
 
     assert!(instructions.contains("User Preferences Memory"));
+    assert!(instructions.contains("User Preferences Memory layout"));
+    assert!(!instructions.contains("## Orchestrator Memory"));
+    assert!(!instructions.contains("ORCHESTRATOR_MEMORY_SUMMARY"));
+    assert!(instructions.contains("Default to checking the memory"));
+    assert!(instructions.contains("Do not spawn a subagent or search the workspace before this"));
     assert!(instructions.contains(&format!(
         "- {} (already provided below; do NOT open again)",
         user_preferences_dir.join("summary.md").display()
     )));
     assert!(instructions.contains("Prefer concise implementation updates."));
+}
+
+#[tokio::test]
+async fn build_user_preferences_instructions_falls_back_to_profile() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path().abs();
+    let user_preferences_dir = codex_home.join("user_preferences_memory");
+    tokio_fs::create_dir_all(&user_preferences_dir)
+        .await
+        .unwrap();
+    tokio_fs::write(
+        user_preferences_dir.join("profile.md"),
+        "Act as the user's durable context layer.",
+    )
+    .await
+    .unwrap();
+
+    let instructions = build_user_preferences_developer_instructions(
+        &codex_home,
+        &UserPreferencesMemoryConfig::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(instructions.contains(&format!(
+        "- {} (already provided below; do NOT open again)",
+        user_preferences_dir.join("profile.md").display()
+    )));
+    assert!(instructions.contains("Act as the user's durable context layer."));
+}
+
+#[tokio::test]
+async fn build_user_preferences_instructions_filters_raw_events_by_read_policy() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path().abs();
+    let user_preferences_dir = codex_home.join("user_preferences_memory");
+    tokio_fs::create_dir_all(&user_preferences_dir)
+        .await
+        .unwrap();
+    tokio_fs::write(
+        user_preferences_dir.join("preferences.jsonl"),
+        concat!(
+            "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"durable_preference\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"direct updates\",\"candidate\":\"Prefer concise implementation updates\",\"source_excerpt\":\"be concise\",\"confidence\":0.8}\n",
+            "{\"observed_at\":\"2026-04-25T00:00:01Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-2\",\"bucket\":\"personal_context\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"private detail\",\"candidate\":\"Private personal context item\",\"source_excerpt\":\"private\",\"confidence\":0.8}\n",
+        ),
+    )
+    .await
+    .unwrap();
+
+    let instructions = build_user_preferences_developer_instructions(
+        &codex_home,
+        &UserPreferencesMemoryConfig {
+            bucket_policy: UserPreferencesMemoryBucketPolicy {
+                read_buckets: vec![UserPreferencesMemoryBucket::DurablePreference],
+                write_buckets: UserPreferencesMemoryBucket::all().to_vec(),
+            },
+            ..UserPreferencesMemoryConfig::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(instructions.contains("Prefer concise implementation updates"));
+    assert!(!instructions.contains("Private personal context item"));
 }
 
 #[test]
@@ -125,12 +140,12 @@ fn migrate_orchestrator_memory_to_user_preferences_copies_missing_files() {
 async fn prune_entries_matching_needle_rewrites_preferences_and_generated_artifacts() {
     let temp = tempdir().unwrap();
     let codex_home = temp.path().abs();
-    let orchestrator_memory_dir = codex_home.join("orchestrator_memory");
-    tokio_fs::create_dir_all(&orchestrator_memory_dir)
+    let user_preferences_dir = codex_home.join("user_preferences_memory");
+    tokio_fs::create_dir_all(&user_preferences_dir)
         .await
         .unwrap();
     tokio_fs::write(
-        orchestrator_memory_dir.join("preferences.jsonl"),
+        user_preferences_dir.join("preferences.jsonl"),
         concat!(
             "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"followup_state\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"alpha needle\",\"candidate\":\"keep alpha\",\"source_excerpt\":\"alpha needle\",\"confidence\":0.8}\n",
             "{\"observed_at\":\"2026-04-25T00:00:01Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-2\",\"bucket\":\"followup_state\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"beta\",\"candidate\":\"keep beta\",\"source_excerpt\":\"beta\",\"confidence\":0.8}\n",
@@ -139,13 +154,13 @@ async fn prune_entries_matching_needle_rewrites_preferences_and_generated_artifa
     .await
     .unwrap();
     tokio_fs::write(
-        orchestrator_memory_dir.join("summary.md"),
+        user_preferences_dir.join("summary.md"),
         "alpha needle\nkeep beta\n",
     )
     .await
     .unwrap();
     tokio_fs::write(
-        orchestrator_memory_dir.join("profile.md"),
+        user_preferences_dir.join("profile.md"),
         "alpha needle profile\nkeep beta profile\n",
     )
     .await
@@ -170,12 +185,12 @@ async fn prune_entries_matching_needle_rewrites_preferences_and_generated_artifa
             removed_profile_lines: 1,
         }
     );
-    let preferences = tokio_fs::read_to_string(orchestrator_memory_dir.join("preferences.jsonl"))
+    let preferences = tokio_fs::read_to_string(user_preferences_dir.join("preferences.jsonl"))
         .await
         .unwrap();
     assert!(!preferences.contains("alpha needle"));
     let followup_bucket =
-        tokio_fs::read_to_string(orchestrator_memory_dir.join("buckets/followup_state.jsonl"))
+        tokio_fs::read_to_string(user_preferences_dir.join("buckets/followup_state.jsonl"))
             .await
             .unwrap();
     assert!(!followup_bucket.contains("alpha needle"));
@@ -183,106 +198,71 @@ async fn prune_entries_matching_needle_rewrites_preferences_and_generated_artifa
 }
 
 #[tokio::test]
-async fn build_developer_instructions_appends_recent_direct_items_missing_from_summary() {
+async fn build_user_preferences_instructions_rebuilds_restricted_summary_from_allowed_raw_items() {
     let temp = tempdir().unwrap();
     let codex_home = temp.path().abs();
-    let orchestrator_memory_dir = codex_home.join("orchestrator_memory");
-    tokio_fs::create_dir_all(&orchestrator_memory_dir)
+    let user_preferences_dir = codex_home.join("user_preferences_memory");
+    tokio_fs::create_dir_all(&user_preferences_dir)
         .await
         .unwrap();
     tokio_fs::write(
-        orchestrator_memory_dir.join("summary.md"),
-        "# Orchestrator Memory Summary\n\n## Follow-Up State\n- Older orchestration note.\n",
+        user_preferences_dir.join("summary.md"),
+        "# User Preferences Memory Summary\n\n## Working Preferences\n- Prefer direct answers.\n",
     )
     .await
     .unwrap();
     tokio_fs::write(
-        orchestrator_memory_dir.join("preferences.jsonl"),
-        "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"personal_context\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"calendar\",\"candidate\":\"User's meeting scheduling link: https://calendar.app.google/example-booking-link\",\"source_excerpt\":\"remember this link\",\"confidence\":0.8}\n",
-    )
-    .await
-    .unwrap();
-
-    let instructions = build_developer_instructions(
-        &codex_home,
-        &OrchestratorMemoryConfig {
-            enabled: true,
-            ..OrchestratorMemoryConfig::default()
-        },
-    )
-    .await
-    .unwrap();
-
-    assert!(instructions.contains("## Recent Continuity Items"));
-    assert!(instructions.contains("https://calendar.app.google/example-booking-link"));
-}
-
-#[tokio::test]
-async fn build_developer_instructions_appends_relational_and_thread_items_missing_from_summary() {
-    let temp = tempdir().unwrap();
-    let codex_home = temp.path().abs();
-    let orchestrator_memory_dir = codex_home.join("orchestrator_memory");
-    tokio_fs::create_dir_all(&orchestrator_memory_dir)
-        .await
-        .unwrap();
-    tokio_fs::write(
-        orchestrator_memory_dir.join("summary.md"),
-        "# Orchestrator Memory Summary\n\n## Working Preferences\n- Prefer direct answers.\n",
-    )
-    .await
-    .unwrap();
-    tokio_fs::write(
-        orchestrator_memory_dir.join("preferences.jsonl"),
+        user_preferences_dir.join("preferences.jsonl"),
         concat!(
-            "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"relational_attunement\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"clarify under ambiguity\",\"candidate\":\"Clarify when ambiguity could trigger the wrong thing\",\"source_excerpt\":\"clarify first\",\"confidence\":0.8}\n",
-            "{\"observed_at\":\"2026-04-25T00:00:01Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-2\",\"bucket\":\"ongoing_threads\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"memory attunement redesign\",\"candidate\":\"The user is actively shaping orchestrator memory around emotional continuity\",\"source_excerpt\":\"memory and tone matter\",\"confidence\":0.8}\n",
+            "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"operator_playbook\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"warming endpoint unblock\",\"candidate\":\"When aws-auth-guard authentication stalls, try the warming endpoint to unblock it\",\"source_excerpt\":\"warming endpoint worked\",\"confidence\":0.8}\n",
+            "{\"observed_at\":\"2026-04-25T00:00:01Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-2\",\"bucket\":\"personal_context\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"private detail\",\"candidate\":\"Private personal context item\",\"source_excerpt\":\"private\",\"confidence\":0.8}\n",
         ),
     )
     .await
     .unwrap();
 
-    let instructions = build_developer_instructions(
+    let instructions = build_user_preferences_developer_instructions(
         &codex_home,
-        &OrchestratorMemoryConfig {
-            enabled: true,
-            ..OrchestratorMemoryConfig::default()
+        &UserPreferencesMemoryConfig {
+            bucket_policy: UserPreferencesMemoryBucketPolicy {
+                read_buckets: vec![UserPreferencesMemoryBucket::OperatorPlaybook],
+                write_buckets: UserPreferencesMemoryBucket::all().to_vec(),
+            },
+            ..UserPreferencesMemoryConfig::default()
         },
     )
     .await
     .unwrap();
 
-    assert!(instructions.contains("## Recent Continuity Items"));
-    assert!(instructions.contains("Clarify when ambiguity could trigger the wrong thing"));
-    assert!(instructions.contains("orchestrator memory around emotional continuity"));
+    assert!(instructions.contains("## Operator Playbook"));
+    assert!(instructions.contains("warming endpoint to unblock it"));
+    assert!(!instructions.contains("Private personal context item"));
 }
 
 #[tokio::test]
-async fn build_developer_instructions_appends_operator_playbook_items_missing_from_summary() {
+async fn build_user_preferences_instructions_appends_recent_items_missing_from_summary() {
     let temp = tempdir().unwrap();
     let codex_home = temp.path().abs();
-    let orchestrator_memory_dir = codex_home.join("orchestrator_memory");
-    tokio_fs::create_dir_all(&orchestrator_memory_dir)
+    let user_preferences_dir = codex_home.join("user_preferences_memory");
+    tokio_fs::create_dir_all(&user_preferences_dir)
         .await
         .unwrap();
     tokio_fs::write(
-        orchestrator_memory_dir.join("summary.md"),
-        "# Orchestrator Memory Summary\n\n## Working Preferences\n- Prefer direct answers.\n",
+        user_preferences_dir.join("summary.md"),
+        "# User Preferences Memory Summary\n\n## Working Preferences\n- Prefer direct answers.\n",
     )
     .await
     .unwrap();
     tokio_fs::write(
-        orchestrator_memory_dir.join("preferences.jsonl"),
+        user_preferences_dir.join("preferences.jsonl"),
         "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"operator_playbook\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"warming endpoint unblock\",\"candidate\":\"When aws-auth-guard authentication stalls, try the warming endpoint to unblock it\",\"source_excerpt\":\"warming endpoint worked\",\"confidence\":0.8}\n",
     )
     .await
     .unwrap();
 
-    let instructions = build_developer_instructions(
+    let instructions = build_user_preferences_developer_instructions(
         &codex_home,
-        &OrchestratorMemoryConfig {
-            enabled: true,
-            ..OrchestratorMemoryConfig::default()
-        },
+        &UserPreferencesMemoryConfig::default(),
     )
     .await
     .unwrap();

@@ -99,6 +99,8 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::ThreadUserPreferencesMemoryPolicySetParams;
+use codex_app_server_protocol::ThreadUserPreferencesMemoryPolicySetResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -110,6 +112,7 @@ use codex_app_server_protocol::UserInput;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
+use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
@@ -681,6 +684,26 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/memoryMode/set failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_user_preferences_memory_policy_set(
+        &mut self,
+        thread_id: ThreadId,
+        policy: UserPreferencesMemoryBucketPolicy,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadUserPreferencesMemoryPolicySetResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadUserPreferencesMemoryPolicySet {
+                request_id,
+                params: ThreadUserPreferencesMemoryPolicySetParams {
+                    thread_id: thread_id.to_string(),
+                    policy,
+                },
+            })
+            .await
+            .wrap_err("thread/userPreferencesMemoryPolicy/set failed in TUI")?;
         Ok(())
     }
 
@@ -1293,6 +1316,7 @@ fn thread_start_params_from_config(
         ephemeral: Some(config.ephemeral),
         session_start_source,
         thread_source: Some(ThreadSource::User),
+        user_preferences_memory_policy: Some(config.user_preferences_memory.bucket_policy.clone()),
         persist_extended_history: false,
         ..ThreadStartParams::default()
     }
@@ -1324,6 +1348,7 @@ fn thread_resume_params_from_config(
         sandbox,
         permissions,
         config: config_request_overrides_from_config(&config),
+        user_preferences_memory_policy: Some(config.user_preferences_memory.bucket_policy.clone()),
         persist_extended_history: false,
         ..ThreadResumeParams::default()
     }
@@ -1359,6 +1384,7 @@ fn thread_fork_params_from_config(
         developer_instructions: config.developer_instructions.clone(),
         ephemeral: config.ephemeral,
         thread_source: Some(ThreadSource::User),
+        user_preferences_memory_policy: Some(config.user_preferences_memory.bucket_policy.clone()),
         persist_extended_history: false,
         ..ThreadForkParams::default()
     }
@@ -1678,6 +1704,46 @@ mod tests {
         assert_eq!(params.session_start_source, Some(ThreadStartSource::Clear));
     }
 
+    #[tokio::test]
+    async fn thread_lifecycle_params_forward_user_preferences_memory_policy() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        let policy = codex_protocol::config_types::UserPreferencesMemoryBucketPolicy {
+            read_buckets: vec![
+                codex_protocol::config_types::UserPreferencesMemoryBucket::DurablePreference,
+                codex_protocol::config_types::UserPreferencesMemoryBucket::OperatorPlaybook,
+            ],
+            write_buckets: vec![
+                codex_protocol::config_types::UserPreferencesMemoryBucket::OperatorPlaybook,
+            ],
+        };
+        config.user_preferences_memory.bucket_policy = policy.clone();
+        let thread_id = ThreadId::new();
+
+        let start = thread_start_params_from_config(
+            &config,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
+        );
+        let resume = thread_resume_params_from_config(
+            config.clone(),
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+        let fork = thread_fork_params_from_config(
+            config,
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+
+        assert_eq!(start.user_preferences_memory_policy, Some(policy.clone()));
+        assert_eq!(resume.user_preferences_memory_policy, Some(policy.clone()));
+        assert_eq!(fork.user_preferences_memory_policy, Some(policy));
+    }
+
     #[test]
     fn account_switch_needs_auth_selection_for_openai_provider_with_blank_alias_store() {
         assert!(account_switch_needs_auth_selection(&GetAccountResponse {
@@ -1994,6 +2060,8 @@ mod tests {
             permission_profile: Some(read_only_profile.clone().into()),
             active_permission_profile: None,
             reasoning_effort: None,
+            user_preferences_memory_policy:
+                codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
         };
 
         let started = started_thread_from_resume_response(

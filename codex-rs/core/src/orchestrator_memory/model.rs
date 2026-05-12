@@ -153,9 +153,10 @@ pub(super) async fn consolidate_with_model(
     match final_status {
         AgentStatus::Completed(message) => {
             let payload = parse_consolidation_payload(message.as_deref())?;
+            let memory_config = config.user_preferences_memory.memory_config();
             let payload = apply_heuristic_guarantees(
                 payload,
-                &aggregate_memory_items(&raw_events, &config.orchestrator_memory),
+                &aggregate_memory_items(&raw_events, &memory_config),
             );
             write_consolidation_payload(codex_home, payload).await?;
             Ok(())
@@ -175,7 +176,8 @@ pub(super) async fn consolidate_with_fallback(
         warn!(
             "model-assisted orchestrator memory consolidation failed; falling back to heuristic consolidation: {err:?}"
         );
-        consolidate_preferences(&config.codex_home, &config.orchestrator_memory).await?;
+        let memory_config = config.user_preferences_memory.memory_config();
+        consolidate_preferences(&config.codex_home, &memory_config).await?;
     }
     Ok(())
 }
@@ -273,6 +275,7 @@ pub(super) fn build_consolidation_agent_config(
     agent_config.memories.generate_memories = false;
     agent_config.memories.use_memories = false;
     agent_config.orchestrator_memory.enabled = false;
+    agent_config.user_preferences_memory.enabled = false;
     agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     let _ = agent_config.features.disable(Feature::SpawnCsv);
     let _ = agent_config.features.disable(Feature::Collab);
@@ -333,7 +336,7 @@ fn build_consolidation_prompt(
         .unwrap_or_else(|err| {
             warn!("failed to render orchestrator memory consolidation prompt template: {err}");
             format!(
-                "Consolidate orchestrator memory in {root}\n\nExisting summary:\n{existing_summary}\n\nExisting profile:\n{existing_profile}\n\nRecent preference events:\n{selected_events}"
+                "Consolidate user preferences memory in {root}\n\nExisting summary:\n{existing_summary}\n\nExisting profile:\n{existing_profile}\n\nRecent preference events:\n{selected_events}"
             )
         })
 }
@@ -345,9 +348,9 @@ fn build_cleanup_prompt(root: &Path, raw_events: &str) -> String {
         TruncationPolicy::Tokens(CLEANUP_EVENTS_TOKEN_LIMIT),
     );
     format!(
-        r#"## Orchestrator Memory Semantic Cleanup
+        r#"## User Preferences Memory Semantic Cleanup
 
-You are cleaning user-level Orchestrator continuity memory in `{root}`.
+You are cleaning user-level User Preferences Memory in `{root}`.
 
 Return a compact canonical event set that preserves durable user value while removing semantic near-duplicates.
 
@@ -485,10 +488,10 @@ fn apply_heuristic_guarantees(
     }
 
     if payload.summary_markdown.trim().is_empty() {
-        payload.summary_markdown = "# Orchestrator Memory Summary\n".to_string();
+        payload.summary_markdown = "# User Preferences Memory Summary\n".to_string();
     }
     if payload.profile_markdown.trim().is_empty() {
-        payload.profile_markdown = "# Orchestrator Memory Profile\n".to_string();
+        payload.profile_markdown = "# User Preferences Memory Profile\n".to_string();
     }
 
     append_missing_summary_items(

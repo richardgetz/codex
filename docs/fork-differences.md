@@ -168,16 +168,47 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
 ### Orchestrator memory
 
-- Orchestrator memory defaults to enabled for this fork:
+- The legacy `[orchestrator_memory]` config remains for migration and
+  compatibility, but live memory reads, writes, cleanup, and consolidation now
+  use `<codex_home>/user_preferences_memory`. New behavior should be configured
+  through `[user_preferences_memory]`.
+- Existing orchestrator-memory migration helpers can copy files from the legacy
+  root into the canonical user-preferences root. After that, the legacy root is
+  not injected into model context.
+
+### User preferences memory
+
+- User preferences memory is the canonical live memory store for durable
+  preferences, personal context, relational attunement, operator playbooks,
+  ongoing threads, and follow-up state. It defaults to enabled and scoped to all
+  collaboration modes.
 
   ```toml
-  [orchestrator_memory]
+  [user_preferences_memory]
   enabled = true
-  scope = "orchestrator"
+  scope = "all"
+  read_buckets = [
+    "durable_preference",
+    "personal_context",
+    "relational_attunement",
+    "operator_playbook",
+    "ongoing_threads",
+    "followup_state",
+  ]
+  write_buckets = [
+    "durable_preference",
+    "personal_context",
+    "relational_attunement",
+    "operator_playbook",
+    "ongoing_threads",
+    "followup_state",
+  ]
   model_on_heuristic_miss = false
   model_consolidation = false
+  migrate_from_orchestrator_memory = false
+  disable_orchestrator_memory_after_migration = false
 
-  [orchestrator_memory.cleanup]
+  [user_preferences_memory.cleanup]
   enabled = true
   schedule = "03:30"
   run_missed_on_startup = true
@@ -191,10 +222,12 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   user preferences, working style, follow-up intent, operator playbooks, and
   other continuity notes when the user signals they matter later.
 - `/orchestrator-memory-forget <needle>` removes matching orchestrator-memory
-  entries without touching mainline memory stores.
+  entries from the canonical user-preferences memory store without touching
+  mainline memory stores.
 - `/orchestrator-memory-consolidate` triggers the configured orchestrator-memory
-  cleanup/consolidation path immediately, which is useful for testing cleanup
-  behavior without changing the configured schedule.
+  cleanup/consolidation path against the canonical user-preferences memory store
+  immediately, which is useful for testing cleanup behavior without changing the
+  configured schedule.
 - Explicit forget requests such as `forget this: ...` are treated as memory
   removal requests.
 - To avoid silent background model spend, heuristic misses do not invoke a
@@ -202,8 +235,14 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   mechanical renderer by default. Set `model_on_heuristic_miss = true` or
   `model_consolidation = true` to restore those model-assisted paths.
 - Memory events are mirrored into bucket-specific files under
-  `<codex_home>/orchestrator_memory/buckets/` for easier inspection while
+  `<codex_home>/user_preferences_memory/buckets/` for easier inspection while
   preserving `preferences.jsonl` as the canonical event log.
+- `read_buckets` controls which bucket sections a new session may inject into
+  model context. `write_buckets` controls which buckets the session may update.
+  Both can be narrowed per live app-server thread with
+  `thread/userPreferencesMemoryPolicy/set`, and `thread/start`, `thread/resume`,
+  and `thread/fork` accept `userPreferencesMemoryPolicy` to set the initial
+  per-session policy.
 - Scheduled cleanup runs at most once per day by local time, executes on the next
   startup if the scheduled time was missed, compacts duplicate raw events,
   retains recent forget tombstones, and resyncs bucket mirrors. By default it
@@ -211,28 +250,8 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   near-duplicates before regenerating summary/profile artifacts; set
   `cleanup.model_consolidation = false` for mechanical-only cleanup.
 - Legacy memory events that predate bucketed schemas are migrated on the next
-  read or consolidation, with a `preferences.jsonl.pre-bucket-migration` backup.
-
-### User preferences memory
-
-- User preferences memory is the everywhere-available successor/parallel path
-  for the fork's orchestrator-memory data. It defaults to enabled and scoped to
-  all collaboration modes, but only injects context when
-  `<codex_home>/user_preferences_memory/summary.md` or `profile.md` has
-  content.
-
-  ```toml
-  [user_preferences_memory]
-  enabled = true
-  scope = "all"
-  migrate_from_orchestrator_memory = false
-  disable_orchestrator_memory_after_migration = false
-
-  [user_preferences_memory.cleanup]
-  enabled = true
-  schedule = "03:30"
-  ```
-
+  write or consolidation, with a `preferences.jsonl.pre-bucket-migration`
+  backup in `<codex_home>/user_preferences_memory`.
 - Startup migration can copy missing files from
   `<codex_home>/orchestrator_memory` into
   `<codex_home>/user_preferences_memory`. Set
@@ -243,7 +262,7 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   current Codex home. It does not edit config; use the TOML option above when
   you want orchestrator memory disabled after migration.
 - `<codex_home>/user_preferences_memory` is created on startup and added to
-  workspace-write writable roots alongside `orchestrator_memory`.
+  workspace-write writable roots automatically.
 
 ### Built-in scratchpad
 

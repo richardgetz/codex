@@ -3373,6 +3373,41 @@ fn thread_start_params_preserve_explicit_null_service_tier() {
 }
 
 #[test]
+fn thread_start_params_round_trip_user_preferences_memory_policy() {
+    let params: ThreadStartParams = serde_json::from_value(json!({
+        "userPreferencesMemoryPolicy": {
+            "readBuckets": ["durable_preference", "operator_playbook"],
+            "writeBuckets": ["operator_playbook"]
+        }
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(
+        params.user_preferences_memory_policy,
+        Some(
+            codex_protocol::config_types::UserPreferencesMemoryBucketPolicy {
+                read_buckets: vec![
+                    codex_protocol::config_types::UserPreferencesMemoryBucket::DurablePreference,
+                    codex_protocol::config_types::UserPreferencesMemoryBucket::OperatorPlaybook,
+                ],
+                write_buckets: vec![
+                    codex_protocol::config_types::UserPreferencesMemoryBucket::OperatorPlaybook,
+                ],
+            }
+        )
+    );
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(
+        serialized.get("userPreferencesMemoryPolicy"),
+        Some(&json!({
+            "readBuckets": ["durable_preference", "operator_playbook"],
+            "writeBuckets": ["operator_playbook"]
+        }))
+    );
+}
+
+#[test]
 fn thread_lifecycle_responses_default_missing_optional_fields() {
     let response = json!({
         "thread": {

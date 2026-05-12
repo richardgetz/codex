@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "UserPreferencesMemoryBucket": {
+      "enum": [
+        "durable_preference",
+        "personal_context",
+        "relational_attunement",
+        "operator_playbook",
+        "ongoing_threads",
+        "followup_state"
+      ],
+      "type": "string"
+    },
+    "UserPreferencesMemoryBucketPolicy": {
+      "properties": {
+        "readBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        },
+        "writeBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "readBuckets",
+        "writeBuckets"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "policy": {
+      "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "policy",
+    "threadId"
+  ],
+  "title": "ThreadUserPreferencesMemoryPolicySetParams",
+  "type": "object"
+}

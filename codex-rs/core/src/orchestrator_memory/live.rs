@@ -16,6 +16,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use chrono::Utc;
 use codex_config::types::OrchestratorMemoryConfig;
+use codex_config::types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::protocol::SessionSource;
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -81,9 +82,11 @@ async fn process_completed_turn(
         return Ok(());
     }
 
+    let user_preferences_memory = &turn_context.config.user_preferences_memory;
+    let memory_config = user_preferences_memory.memory_config();
     let recent_user_turns = heuristics::collect_recent_user_turns(
         history.raw_items(),
-        turn_context.config.orchestrator_memory.recent_turn_window,
+        user_preferences_memory.recent_turn_window,
     );
     let forced_trigger = heuristics::detect_forced_memory_trigger(&current_turn_user_texts);
     if let Some(trigger) = forced_trigger {
@@ -113,7 +116,7 @@ async fn process_completed_turn(
             &current_turn_user_texts,
             &recent_user_turns,
             last_agent_message,
-            turn_context.config.orchestrator_memory.min_observations,
+            memory_config.min_observations,
         )
     };
 
@@ -126,7 +129,7 @@ async fn process_completed_turn(
         if forced_trigger.is_none()
             && !turn_context
                 .config
-                .orchestrator_memory
+                .user_preferences_memory
                 .model_on_heuristic_miss
         {
             append_diagnostic_event(
@@ -173,12 +176,21 @@ async fn process_completed_turn(
         }
     }
 
+    let unfiltered_candidate_count = candidates.len();
+    retain_write_allowed_candidates(&mut candidates, &user_preferences_memory.bucket_policy);
     if candidates.is_empty() {
+        let details = if unfiltered_candidate_count == 0 {
+            "no continuity signal or follow-up state detected".to_string()
+        } else {
+            format!(
+                "all {unfiltered_candidate_count} candidate(s) were blocked by this session's user-preferences memory write bucket policy"
+            )
+        };
         append_diagnostic_event(
             &turn_context.config.codex_home,
             "skipped_no_signal",
             &turn_context.sub_id,
-            Some("no continuity signal or follow-up state detected"),
+            Some(&details),
         )
         .await?;
         return Ok(());
@@ -211,7 +223,7 @@ async fn process_completed_turn(
         .orchestrator_memory_generation
         .fetch_add(1, Ordering::SeqCst)
         + 1;
-    let debounce = turn_context.config.orchestrator_memory.debounce_seconds;
+    let debounce = user_preferences_memory.debounce_seconds;
     let config = Arc::clone(&turn_context.config);
     let weak_session = Arc::downgrade(session);
     append_diagnostic_event(
@@ -234,10 +246,11 @@ async fn process_completed_turn(
         {
             return;
         }
-        let consolidation_result = if config.orchestrator_memory.model_consolidation {
+        let consolidation_result = if config.user_preferences_memory.model_consolidation {
             super::model::consolidate_with_fallback(&session, &config, generation).await
         } else {
-            consolidate_preferences(&config.codex_home, &config.orchestrator_memory).await
+            let memory_config = config.user_preferences_memory.memory_config();
+            consolidate_preferences(&config.codex_home, &memory_config).await
         };
         if let Err(err) = consolidation_result {
             warn!("failed consolidating orchestrator memory: {err}");
@@ -260,6 +273,13 @@ async fn process_completed_turn(
     });
 
     Ok(())
+}
+
+fn retain_write_allowed_candidates(
+    candidates: &mut Vec<CandidateMemoryItem>,
+    policy: &UserPreferencesMemoryBucketPolicy,
+) {
+    candidates.retain(|candidate| policy.can_write(candidate.bucket.into()));
 }
 
 pub(super) async fn append_preference_events(
@@ -349,6 +369,39 @@ pub(crate) async fn consolidate_preferences(
     fs::write(summary_path(codex_home), summary).await?;
     fs::write(profile_path(codex_home), profile).await?;
     Ok(())
+}
+
+pub(super) fn filter_raw_events_for_read_policy(
+    raw: &str,
+    policy: &UserPreferencesMemoryBucketPolicy,
+) -> String {
+    let mut filtered = String::new();
+    for line in raw.lines().filter(|line| !line.trim().is_empty()) {
+        let event = match serde_json::from_str::<MemoryEvent>(line) {
+            Ok(event) => event,
+            Err(err) => {
+                warn!("skipping invalid user preferences memory event during policy filter: {err}");
+                continue;
+            }
+        };
+        if policy.can_read(event.bucket.into()) {
+            filtered.push_str(line);
+            filtered.push('\n');
+        }
+    }
+    filtered
+}
+
+pub(super) fn render_summary_for_raw(raw: &str, config: &OrchestratorMemoryConfig) -> String {
+    let snapshot = aggregate_memory_items(raw, config);
+    render_summary(
+        &snapshot.preferences,
+        &snapshot.personal_context,
+        &snapshot.relational_attunement,
+        &snapshot.operator_playbook,
+        &snapshot.ongoing_threads,
+        &snapshot.followups,
+    )
 }
 
 pub(super) fn aggregate_memory_items(
@@ -484,7 +537,7 @@ fn render_summary(
     ongoing_threads: &[AggregatedMemoryItem],
     followups: &[AggregatedMemoryItem],
 ) -> String {
-    let mut body = String::from("# Orchestrator Memory Summary\n\n");
+    let mut body = String::from("# User Preferences Memory Summary\n\n");
     append_summary_section(&mut body, "Working Preferences", preferences);
     append_summary_section(&mut body, "Personal Context", personal_context);
     append_summary_section(&mut body, "Relational Attunement", relational_attunement);
@@ -517,7 +570,7 @@ fn render_profile(
     ongoing_threads: &[AggregatedMemoryItem],
     followups: &[AggregatedMemoryItem],
 ) -> String {
-    let mut body = String::from("# Orchestrator Memory Profile\n\n");
+    let mut body = String::from("# User Preferences Memory Profile\n\n");
     append_profile_section(&mut body, "Working Preferences", preferences);
     append_profile_section(&mut body, "Personal Context", personal_context);
     append_profile_section(&mut body, "Relational Attunement", relational_attunement);

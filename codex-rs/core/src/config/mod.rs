@@ -69,6 +69,7 @@ use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
+use codex_config::types::UserPreferencesMemoryBucketPolicy;
 use codex_config::types::UserPreferencesMemoryConfig;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_core_plugins::PluginsConfigInput;
@@ -2217,6 +2218,7 @@ pub struct ConfigOverrides {
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub ephemeral: Option<bool>,
+    pub user_preferences_memory_policy: Option<UserPreferencesMemoryBucketPolicy>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -2492,6 +2494,7 @@ impl Config {
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
+            user_preferences_memory_policy,
             additional_writable_roots,
         } = overrides;
 
@@ -3377,10 +3380,13 @@ impl Config {
         }
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
             .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
-        let user_preferences_memory: UserPreferencesMemoryConfig = cfg
+        let mut user_preferences_memory: UserPreferencesMemoryConfig = cfg
             .user_preferences_memory
             .unwrap_or_default()
             .into();
+        if let Some(policy) = user_preferences_memory_policy {
+            user_preferences_memory.bucket_policy = policy;
+        }
         let mut orchestrator_memory: OrchestratorMemoryConfig =
             cfg.orchestrator_memory.unwrap_or_default().into();
         let mut user_preferences_memory_migrated = false;

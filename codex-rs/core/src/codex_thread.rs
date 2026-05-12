@@ -13,6 +13,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -66,6 +67,7 @@ pub struct ThreadConfigSnapshot {
     pub personality: Option<Personality>,
     pub session_source: SessionSource,
     pub thread_source: Option<ThreadSource>,
+    pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
 }
 
 impl ThreadConfigSnapshot {

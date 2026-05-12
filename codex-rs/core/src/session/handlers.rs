@@ -54,6 +54,7 @@ use crate::context_manager::is_user_turn_boundary;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
@@ -160,6 +161,7 @@ pub(super) async fn user_input_or_turn_inner(
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
+                    user_preferences_memory_policy: None,
                 },
                 None,
             )
@@ -212,6 +214,7 @@ pub(super) async fn user_input_or_turn_inner(
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
+                    user_preferences_memory_policy: None,
                 },
                 responsesapi_client_metadata,
             )
@@ -850,6 +853,34 @@ pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: T
     }
 }
 
+/// Applies the session-local user preferences memory bucket policy.
+///
+/// This affects subsequent turns in the current live session only; persistent
+/// defaults still come from `[user_preferences_memory]` in config.
+pub async fn set_user_preferences_memory_policy(
+    sess: &Arc<Session>,
+    sub_id: String,
+    policy: UserPreferencesMemoryBucketPolicy,
+) {
+    if let Err(err) = sess
+        .update_settings(SessionSettingsUpdate {
+            user_preferences_memory_policy: Some(policy),
+            ..Default::default()
+        })
+        .await
+    {
+        warn!("Failed to update user preferences memory policy: {err}");
+        let event = Event {
+            id: sub_id,
+            msg: EventMsg::Error(ErrorEvent {
+                message: err.to_string(),
+                codex_error_info: Some(CodexErrorInfo::Other),
+            }),
+        };
+        sess.send_event_raw(event).await;
+    }
+}
+
 async fn clear_memory_root_contents(memory_root: &std::path::Path) -> std::io::Result<()> {
     match tokio::fs::symlink_metadata(memory_root).await {
         Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -1141,6 +1172,10 @@ pub(super) async fn submission_loop(
                 }
                 Op::SetThreadMemoryMode { mode } => {
                     set_thread_memory_mode(&sess, sub.id.clone(), mode).await;
+                    false
+                }
+                Op::SetUserPreferencesMemoryPolicy { policy } => {
+                    set_user_preferences_memory_policy(&sess, sub.id.clone(), policy).await;
                     false
                 }
                 Op::RunUserShellCommand { command } => {

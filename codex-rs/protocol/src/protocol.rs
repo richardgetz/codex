@@ -22,6 +22,7 @@ use crate::config_types::CollaborationMode;
 use crate::config_types::ModeKind;
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use crate::config_types::UserPreferencesMemoryBucketPolicy;
 use crate::config_types::WindowsSandboxLevel;
 use crate::dynamic_tools::DynamicToolCallOutputContentItem;
 use crate::dynamic_tools::DynamicToolCallRequest;
@@ -764,6 +765,15 @@ pub enum Op {
     /// model.
     SetThreadMemoryMode { mode: ThreadMemoryMode },
 
+    /// Set which user-preferences memory buckets this thread can read and
+    /// write for future turns.
+    ///
+    /// This is a local-only operation handled by codex-core; it does not
+    /// involve the model.
+    SetUserPreferencesMemoryPolicy {
+        policy: UserPreferencesMemoryBucketPolicy,
+    },
+
     /// Request Codex to drop the last N user turns from in-memory context.
     ///
     /// This does not attempt to revert local filesystem changes. Clients are
@@ -890,6 +900,7 @@ impl Op {
             Self::SetThreadName { .. } => "set_thread_name",
             Self::SetScratchpadContinuousPolicy { .. } => "set_scratchpad_continuous_policy",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
+            Self::SetUserPreferencesMemoryPolicy { .. } => "set_user_preferences_memory_policy",
             Self::ThreadRollback { .. } => "thread_rollback",
             Self::Review { .. } => "review",
             Self::ApproveGuardianDeniedAction { .. } => "approve_guardian_denied_action",

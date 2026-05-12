@@ -384,6 +384,30 @@
             },
             "method": {
               "enum": [
+                "thread/userPreferencesMemoryPolicy/set"
+              ],
+              "title": "Thread/userPreferencesMemoryPolicy/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadUserPreferencesMemoryPolicySetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/userPreferencesMemoryPolicy/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/metadata/update"
               ],
               "title": "Thread/metadata/updateRequestMethod",
@@ -15715,6 +15739,17 @@
               }
             ],
             "description": "Optional client-supplied analytics source classification for this forked thread."
+          },
+          "userPreferencesMemoryPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/UserPreferencesMemoryBucketPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Session-local memory bucket policy for this thread. Omitted inherits the server's `[user_preferences_memory]` config defaults."
           }
         },
         "required": [
@@ -15780,6 +15815,31 @@
           },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
+          },
+          "userPreferencesMemoryPolicy": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/UserPreferencesMemoryBucketPolicy"
+              }
+            ],
+            "default": {
+              "readBuckets": [
+                "durable_preference",
+                "personal_context",
+                "relational_attunement",
+                "operator_playbook",
+                "ongoing_threads",
+                "followup_state"
+              ],
+              "writeBuckets": [
+                "durable_preference",
+                "personal_context",
+                "relational_attunement",
+                "operator_playbook",
+                "ongoing_threads",
+                "followup_state"
+              ]
+            }
           }
         },
         "required": [
@@ -17207,6 +17267,17 @@
           },
           "threadId": {
             "type": "string"
+          },
+          "userPreferencesMemoryPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/UserPreferencesMemoryBucketPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Session-local memory bucket policy for this thread. Omitted uses the server's `[user_preferences_memory]` config defaults."
           }
         },
         "required": [
@@ -17272,6 +17343,31 @@
           },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
+          },
+          "userPreferencesMemoryPolicy": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/UserPreferencesMemoryBucketPolicy"
+              }
+            ],
+            "default": {
+              "readBuckets": [
+                "durable_preference",
+                "personal_context",
+                "relational_attunement",
+                "operator_playbook",
+                "ongoing_threads",
+                "followup_state"
+              ],
+              "writeBuckets": [
+                "durable_preference",
+                "personal_context",
+                "relational_attunement",
+                "operator_playbook",
+                "ongoing_threads",
+                "followup_state"
+              ]
+            }
           }
         },
         "required": [
@@ -17540,6 +17636,17 @@
               }
             ],
             "description": "Optional client-supplied analytics source classification for this thread."
+          },
+          "userPreferencesMemoryPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/UserPreferencesMemoryBucketPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Session-local memory bucket policy for this thread. Omitted uses the server's `[user_preferences_memory]` config defaults."
           }
         },
         "title": "ThreadStartParams",
@@ -17602,6 +17709,31 @@
           },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
+          },
+          "userPreferencesMemoryPolicy": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/UserPreferencesMemoryBucketPolicy"
+              }
+            ],
+            "default": {
+              "readBuckets": [
+                "durable_preference",
+                "personal_context",
+                "relational_attunement",
+                "operator_playbook",
+                "ongoing_threads",
+                "followup_state"
+              ],
+              "writeBuckets": [
+                "durable_preference",
+                "personal_context",
+                "relational_attunement",
+                "operator_playbook",
+                "ongoing_threads",
+                "followup_state"
+              ]
+            }
           }
         },
         "required": [
@@ -17843,6 +17975,28 @@
           "unsubscribed"
         ],
         "type": "string"
+      },
+      "ThreadUserPreferencesMemoryPolicySetParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "policy": {
+            "$ref": "#/definitions/v2/UserPreferencesMemoryBucketPolicy"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy",
+          "threadId"
+        ],
+        "title": "ThreadUserPreferencesMemoryPolicySetParams",
+        "type": "object"
+      },
+      "ThreadUserPreferencesMemoryPolicySetResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadUserPreferencesMemoryPolicySetResponse",
+        "type": "object"
       },
       "TokenUsageBreakdown": {
         "properties": {
@@ -18559,6 +18713,38 @@
             "type": "object"
           }
         ]
+      },
+      "UserPreferencesMemoryBucket": {
+        "enum": [
+          "durable_preference",
+          "personal_context",
+          "relational_attunement",
+          "operator_playbook",
+          "ongoing_threads",
+          "followup_state"
+        ],
+        "type": "string"
+      },
+      "UserPreferencesMemoryBucketPolicy": {
+        "properties": {
+          "readBuckets": {
+            "items": {
+              "$ref": "#/definitions/v2/UserPreferencesMemoryBucket"
+            },
+            "type": "array"
+          },
+          "writeBuckets": {
+            "items": {
+              "$ref": "#/definitions/v2/UserPreferencesMemoryBucket"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "readBuckets",
+          "writeBuckets"
+        ],
+        "type": "object"
       },
       "Verbosity": {
         "description": "Controls output length/detail on GPT-5 models via the Responses API. Serialized with lowercase values to match the OpenAI API.",

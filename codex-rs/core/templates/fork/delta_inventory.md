@@ -48,15 +48,16 @@ stable/mainline is pulled in.
     clear implementation and straightforward fixes, `high` for complex or
     unclear work, and `xhigh` only for extreme or explicitly requested cases
     after checking with the user unless already instructed.
-- Orchestrator memory defaults:
+- Orchestrator memory compatibility:
   - `[orchestrator_memory]`
-  - `enabled = true`
-  - `scope = "orchestrator"`
-- Orchestrator memory maintenance:
+  - The legacy config and migration helpers remain, but live read/write,
+    cleanup, consolidation, and context injection use
+    `<codex_home>/user_preferences_memory`.
+- User preferences memory maintenance:
   - Slash command: `/orchestrator-memory-forget <needle>`
   - Slash command: `/orchestrator-memory-consolidate`
   - Bucket-specific mirror files live under
-    `<codex_home>/orchestrator_memory/buckets/`.
+    `<codex_home>/user_preferences_memory/buckets/`.
   - Scheduled cleanup runs daily by local `HH:MM` schedule, defaults to `03:30`,
     compacts duplicate raw events in `preferences.jsonl`, keeps recent forget
     tombstones, resyncs bucket files, and defaults to a `Memory [memory builder]`
@@ -68,6 +69,12 @@ stable/mainline is pulled in.
   - Defaults: `enabled = true`, `scope = "all"`.
   - Stores under `<codex_home>/user_preferences_memory`, which is created and
     added to workspace-write writable roots automatically.
+  - `read_buckets` and `write_buckets` default to all bucket types:
+    `durable_preference`, `personal_context`, `relational_attunement`,
+    `operator_playbook`, `ongoing_threads`, and `followup_state`.
+  - App-server: `thread/start`, `thread/resume`, and `thread/fork` accept
+    `userPreferencesMemoryPolicy`; loaded threads can be changed live with
+    `thread/userPreferencesMemoryPolicy/set`.
   - Startup copy migration is available with
     `migrate_from_orchestrator_memory = true`.
   - `disable_orchestrator_memory_after_migration = true` disables the effective

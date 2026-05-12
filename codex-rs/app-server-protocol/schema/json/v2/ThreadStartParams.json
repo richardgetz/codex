@@ -194,6 +194,38 @@
         "environmentId"
       ],
       "type": "object"
+    },
+    "UserPreferencesMemoryBucket": {
+      "enum": [
+        "durable_preference",
+        "personal_context",
+        "relational_attunement",
+        "operator_playbook",
+        "ongoing_threads",
+        "followup_state"
+      ],
+      "type": "string"
+    },
+    "UserPreferencesMemoryBucketPolicy": {
+      "properties": {
+        "readBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        },
+        "writeBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "readBuckets",
+        "writeBuckets"
+      ],
+      "type": "object"
     }
   },
   "properties": {
@@ -313,6 +345,17 @@
         }
       ],
       "description": "Optional client-supplied analytics source classification for this thread."
+    },
+    "userPreferencesMemoryPolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Session-local memory bucket policy for this thread. Omitted uses the server's `[user_preferences_memory]` config defaults."
     }
   },
   "title": "ThreadStartParams",

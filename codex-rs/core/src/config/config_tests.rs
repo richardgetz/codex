@@ -96,6 +96,8 @@ use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
+use codex_config::types::UserPreferencesMemoryBucket;
+use codex_config::types::UserPreferencesMemoryBucketPolicy;
 use codex_config::types::UserPreferencesMemoryConfig;
 use codex_config::types::UserPreferencesMemoryToml;
 use codex_config::types::WindowsSandboxModeToml;
@@ -460,6 +462,8 @@ debounce_seconds = 20
 min_observations = 4
 recent_turn_window = 12
 max_summary_items = 40
+read_buckets = ["durable_preference", "operator_playbook"]
+write_buckets = ["operator_playbook"]
 migrate_from_orchestrator_memory = true
 disable_orchestrator_memory_after_migration = true
 
@@ -477,6 +481,11 @@ schedule = "05:45"
             min_observations: Some(4),
             recent_turn_window: Some(12),
             max_summary_items: Some(40),
+            read_buckets: Some(vec![
+                UserPreferencesMemoryBucket::DurablePreference,
+                UserPreferencesMemoryBucket::OperatorPlaybook,
+            ]),
+            write_buckets: Some(vec![UserPreferencesMemoryBucket::OperatorPlaybook]),
             model_on_heuristic_miss: None,
             model_consolidation: None,
             migrate_from_orchestrator_memory: Some(true),
@@ -511,6 +520,13 @@ schedule = "05:45"
             max_summary_items: 40,
             model_on_heuristic_miss: false,
             model_consolidation: false,
+            bucket_policy: UserPreferencesMemoryBucketPolicy {
+                read_buckets: vec![
+                    UserPreferencesMemoryBucket::DurablePreference,
+                    UserPreferencesMemoryBucket::OperatorPlaybook,
+                ],
+                write_buckets: vec![UserPreferencesMemoryBucket::OperatorPlaybook],
+            },
             migrate_from_orchestrator_memory: true,
             disable_orchestrator_memory_after_migration: true,
             cleanup: OrchestratorMemoryCleanupConfig {

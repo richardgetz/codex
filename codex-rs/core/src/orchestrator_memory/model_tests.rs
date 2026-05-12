@@ -72,16 +72,16 @@ async fn resolve_orchestrator_memory_model_falls_back_for_chatgpt_accounts() {
 #[test]
 fn parse_consolidation_payload_extracts_embedded_json() {
     let payload = parse_consolidation_payload(Some(
-        "preface {\"summary_markdown\":\"# Orchestrator Memory Summary\\n\\n- Prefer clarification first\",\"profile_markdown\":\"# Orchestrator Memory Profile\\n\\n## Prefer clarification first\",\"should_clear\":false}",
+        "preface {\"summary_markdown\":\"# User Preferences Memory Summary\\n\\n- Prefer clarification first\",\"profile_markdown\":\"# User Preferences Memory Profile\\n\\n## Prefer clarification first\",\"should_clear\":false}",
     ))
     .expect("payload");
 
     assert_eq!(
         payload,
         ConsolidationPayload {
-            summary_markdown: "# Orchestrator Memory Summary\n\n- Prefer clarification first"
+            summary_markdown: "# User Preferences Memory Summary\n\n- Prefer clarification first"
                 .to_string(),
-            profile_markdown: "# Orchestrator Memory Profile\n\n## Prefer clarification first"
+            profile_markdown: "# User Preferences Memory Profile\n\n## Prefer clarification first"
                 .to_string(),
             should_clear: false,
         }
@@ -150,10 +150,10 @@ fn apply_heuristic_guarantees_preserves_direct_items_missing_from_model_payload(
     let payload = apply_heuristic_guarantees(
         ConsolidationPayload {
             summary_markdown:
-                "# Orchestrator Memory Summary\n\n## Follow-Up State\n- Older orchestration note"
+                "# User Preferences Memory Summary\n\n## Follow-Up State\n- Older orchestration note"
                     .to_string(),
             profile_markdown:
-                "# Orchestrator Memory Profile\n\n## Follow-Up State\n- Older orchestration note"
+                "# User Preferences Memory Profile\n\n## Follow-Up State\n- Older orchestration note"
                     .to_string(),
             should_clear: false,
         },

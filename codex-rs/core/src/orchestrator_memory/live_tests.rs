@@ -7,6 +7,8 @@ use super::super::types::MemoryEvent;
 use super::super::types::MemoryOperation;
 use super::super::types::MemorySignal;
 use super::*;
+use codex_config::types::UserPreferencesMemoryBucket;
+use codex_config::types::UserPreferencesMemoryBucketPolicy;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
@@ -96,6 +98,49 @@ fn extracts_acknowledged_preferences_from_assistant_summary() {
     assert_eq!(
         candidates[0].candidate,
         "Always branch off the branch you are merging into"
+    );
+}
+
+#[test]
+fn write_policy_removes_candidates_for_disallowed_buckets() {
+    let mut candidates = vec![
+        CandidateMemoryItem {
+            bucket: MemoryBucket::DurablePreference,
+            operation: MemoryOperation::Upsert,
+            signal: MemorySignal::Explicit,
+            key: "direct updates".to_string(),
+            candidate: "Prefer direct implementation updates".to_string(),
+            source_excerpt: "remember direct updates".to_string(),
+            confidence: EXPLICIT_CONFIDENCE,
+        },
+        CandidateMemoryItem {
+            bucket: MemoryBucket::PersonalContext,
+            operation: MemoryOperation::Upsert,
+            signal: MemorySignal::ModelClassified,
+            key: "private context".to_string(),
+            candidate: "Private personal context item".to_string(),
+            source_excerpt: "private".to_string(),
+            confidence: 0.8,
+        },
+    ];
+    let policy = UserPreferencesMemoryBucketPolicy {
+        read_buckets: UserPreferencesMemoryBucket::all().to_vec(),
+        write_buckets: vec![UserPreferencesMemoryBucket::DurablePreference],
+    };
+
+    retain_write_allowed_candidates(&mut candidates, &policy);
+
+    assert_eq!(
+        candidates,
+        vec![CandidateMemoryItem {
+            bucket: MemoryBucket::DurablePreference,
+            operation: MemoryOperation::Upsert,
+            signal: MemorySignal::Explicit,
+            key: "direct updates".to_string(),
+            candidate: "Prefer direct implementation updates".to_string(),
+            source_excerpt: "remember direct updates".to_string(),
+            confidence: EXPLICIT_CONFIDENCE,
+        }]
     );
 }
 
@@ -234,7 +279,7 @@ async fn consolidation_migrates_legacy_events_into_buckets() {
     assert!(summary.contains("warming endpoint to unblock it"));
     assert!(
         codex_home
-            .join("orchestrator_memory")
+            .join("user_preferences_memory")
             .join("preferences.jsonl.pre-bucket-migration")
             .exists()
     );

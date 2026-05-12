@@ -137,11 +137,19 @@ fn user_preferences_memory_defaults_to_enabled_all_scope() {
             max_summary_items: 24,
             model_on_heuristic_miss: false,
             model_consolidation: false,
+            bucket_policy: UserPreferencesMemoryBucketPolicy::default(),
             migrate_from_orchestrator_memory: false,
             disable_orchestrator_memory_after_migration: false,
             cleanup: OrchestratorMemoryCleanupConfig::default(),
         }
     );
+}
+
+#[test]
+fn user_preferences_memory_policy_defaults_to_all_buckets() {
+    let policy = UserPreferencesMemoryBucketPolicy::default();
+    assert_eq!(policy.read_buckets, UserPreferencesMemoryBucket::all());
+    assert_eq!(policy.write_buckets, UserPreferencesMemoryBucket::all());
 }
 
 #[test]

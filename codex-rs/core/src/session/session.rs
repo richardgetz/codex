@@ -2,6 +2,7 @@ use super::*;
 use crate::goals::GoalRuntimeState;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::ThreadSource;
@@ -82,6 +83,7 @@ pub(crate) struct SessionConfiguration {
     pub(super) thread_name: Option<String>,
     /// Sticky environments for turns that do not provide a turn-local override.
     pub(super) environments: Vec<TurnEnvironmentSelection>,
+    pub(super) user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
 
     // TODO(pakrym): Remove config from here
     pub(super) original_config_do_not_use: Arc<Config>,
@@ -149,6 +151,7 @@ impl SessionConfiguration {
             personality: self.personality,
             session_source: self.session_source.clone(),
             thread_source: self.thread_source,
+            user_preferences_memory_policy: self.user_preferences_memory_policy.clone(),
         }
     }
 
@@ -196,6 +199,9 @@ impl SessionConfiguration {
         }
         if let Some(personality) = updates.personality {
             next_configuration.personality = Some(personality);
+        }
+        if let Some(policy) = updates.user_preferences_memory_policy.clone() {
+            next_configuration.user_preferences_memory_policy = policy;
         }
         if let Some(approval_policy) = updates.approval_policy {
             next_configuration.approval_policy.set(approval_policy)?;
@@ -327,6 +333,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
+    pub(crate) user_preferences_memory_policy: Option<UserPreferencesMemoryBucketPolicy>,
 }
 
 pub(crate) struct AppServerClientMetadata {

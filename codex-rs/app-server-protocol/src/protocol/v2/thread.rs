@@ -14,6 +14,7 @@ use super::TurnItemsView;
 use super::shared::v2_enum_from_core;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
@@ -148,6 +149,10 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.environments")]
     #[ts(optional = nullable)]
     pub environments: Option<Vec<TurnEnvironmentParams>>,
+    /// Session-local memory bucket policy for this thread. Omitted uses the
+    /// server's `[user_preferences_memory]` config defaults.
+    #[ts(optional = nullable)]
+    pub user_preferences_memory_policy: Option<UserPreferencesMemoryBucketPolicy>,
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
@@ -217,6 +222,8 @@ pub struct ThreadStartResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(default)]
+    pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
 }
 
 #[derive(
@@ -287,6 +294,10 @@ pub struct ThreadResumeParams {
     pub developer_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
+    /// Session-local memory bucket policy for this thread. Omitted uses the
+    /// server's `[user_preferences_memory]` config defaults.
+    #[ts(optional = nullable)]
+    pub user_preferences_memory_policy: Option<UserPreferencesMemoryBucketPolicy>,
     /// When true, return only thread metadata and live-resume state without
     /// populating `thread.turns`. This is useful when the client plans to call
     /// `thread/turns/list` immediately after resuming.
@@ -332,6 +343,8 @@ pub struct ThreadResumeResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(default)]
+    pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
 }
 
 #[derive(
@@ -396,6 +409,10 @@ pub struct ThreadForkParams {
     /// Optional client-supplied analytics source classification for this forked thread.
     #[ts(optional = nullable)]
     pub thread_source: Option<ThreadSource>,
+    /// Session-local memory bucket policy for this thread. Omitted inherits the
+    /// server's `[user_preferences_memory]` config defaults.
+    #[ts(optional = nullable)]
+    pub user_preferences_memory_policy: Option<UserPreferencesMemoryBucketPolicy>,
     /// When true, return only thread metadata and live fork state without
     /// populating `thread.turns`. This is useful when the client plans to call
     /// `thread/turns/list` immediately after forking.
@@ -441,6 +458,8 @@ pub struct ThreadForkResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(default)]
+    pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1101,6 +1120,19 @@ pub struct ThreadScratchpadContinuousPolicySetParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadScratchpadContinuousPolicySetResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUserPreferencesMemoryPolicySetParams {
+    pub thread_id: String,
+    pub policy: UserPreferencesMemoryBucketPolicy,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUserPreferencesMemoryPolicySetResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

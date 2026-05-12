@@ -2662,6 +2662,7 @@ async fn set_rate_limits_retains_previous_credits() {
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
@@ -2766,6 +2767,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
@@ -3663,6 +3665,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
     }
@@ -4189,6 +4192,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
@@ -4297,6 +4301,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
@@ -4529,6 +4534,7 @@ async fn make_session_with_config_and_rx(
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
@@ -4631,6 +4637,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
@@ -6017,6 +6024,7 @@ where
         thread_source: None,
         dynamic_tools,
         persist_extended_history: false,
+        user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
@@ -7623,53 +7631,7 @@ async fn build_initial_context_restates_realtime_start_when_reference_context_is
 }
 
 #[tokio::test]
-async fn build_initial_context_injects_orchestrator_memory_only_in_orchestrator_mode() {
-    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
-        CodexAuth::from_api_key("Test API Key"),
-        Vec::new(),
-        |config| {
-            config.orchestrator_memory.enabled = true;
-        },
-    )
-    .await;
-    let mut turn_context = Arc::try_unwrap(turn_context)
-        .expect("turn context should not have additional strong references");
-    let orchestrator_memory_dir = turn_context.config.codex_home.join("orchestrator_memory");
-    std::fs::create_dir_all(&orchestrator_memory_dir).expect("create orchestrator memory dir");
-    std::fs::write(
-        orchestrator_memory_dir.join("summary.md"),
-        "Remember the user's delegation preferences.",
-    )
-    .expect("write orchestrator memory summary");
-
-    let default_context = session.build_initial_context(&turn_context).await;
-    let default_developer_texts = developer_input_texts(&default_context);
-    assert!(
-        !default_developer_texts
-            .iter()
-            .any(|text| text.contains("ORCHESTRATOR_MEMORY_SUMMARY")),
-        "did not expect orchestrator memory outside orchestrator mode, got {default_developer_texts:?}"
-    );
-
-    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
-    let orchestrator_context = session.build_initial_context(&turn_context).await;
-    let orchestrator_developer_texts = developer_input_texts(&orchestrator_context);
-    assert!(
-        orchestrator_developer_texts
-            .iter()
-            .any(|text| text.contains("ORCHESTRATOR_MEMORY_SUMMARY")),
-        "expected orchestrator memory in orchestrator mode, got {orchestrator_developer_texts:?}"
-    );
-    assert!(
-        orchestrator_developer_texts
-            .iter()
-            .any(|text| text.contains("Remember the user's delegation preferences.")),
-        "expected orchestrator memory summary in developer instructions, got {orchestrator_developer_texts:?}"
-    );
-}
-
-#[tokio::test]
-async fn build_initial_context_injects_orchestrator_memory_in_default_mode_when_scoped_to_all() {
+async fn build_initial_context_ignores_legacy_orchestrator_memory_root() {
     let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -7690,10 +7652,10 @@ async fn build_initial_context_injects_orchestrator_memory_in_default_mode_when_
     let initial_context = session.build_initial_context(turn_context.as_ref()).await;
     let developer_texts = developer_input_texts(&initial_context);
     assert!(
-        developer_texts
+        !developer_texts
             .iter()
-            .any(|text| text.contains("ORCHESTRATOR_MEMORY_SUMMARY")),
-        "expected orchestrator memory in default mode when scoped to all, got {developer_texts:?}"
+            .any(|text| text.contains("Act as the user's orchestration layer.")),
+        "legacy orchestrator memory root should not be injected, got {developer_texts:?}"
     );
 }
 
@@ -7736,38 +7698,39 @@ async fn build_initial_context_injects_user_preferences_memory_in_default_mode()
 }
 
 #[tokio::test]
-async fn build_initial_context_surfaces_recent_orchestrator_memory_when_summary_is_stale() {
+async fn build_initial_context_surfaces_recent_user_preferences_memory_when_summary_is_stale() {
     let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
-            config.orchestrator_memory.enabled = true;
+            config.user_preferences_memory.enabled = true;
+            config.user_preferences_memory.scope = codex_config::types::MemoriesScope::All;
         },
     )
     .await;
-    let mut turn_context = Arc::try_unwrap(turn_context)
-        .expect("turn context should not have additional strong references");
-    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
-    let orchestrator_memory_dir = turn_context.config.codex_home.join("orchestrator_memory");
-    std::fs::create_dir_all(&orchestrator_memory_dir).expect("create orchestrator memory dir");
+    let user_preferences_dir = turn_context
+        .config
+        .codex_home
+        .join("user_preferences_memory");
+    std::fs::create_dir_all(&user_preferences_dir).expect("create user preferences memory dir");
     std::fs::write(
-        orchestrator_memory_dir.join("summary.md"),
-        "# Orchestrator Memory Summary\n\n## Follow-Up State\n- Older orchestration note.\n",
+        user_preferences_dir.join("summary.md"),
+        "# User Preferences Memory Summary\n\n## Follow-Up State\n- Older continuity note.\n",
     )
-    .expect("write orchestrator memory summary");
+    .expect("write user preferences memory summary");
     std::fs::write(
-        orchestrator_memory_dir.join("preferences.jsonl"),
+        user_preferences_dir.join("preferences.jsonl"),
         "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"personal_context\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"calendar\",\"candidate\":\"User's meeting scheduling link: https://calendar.app.google/example-booking-link\",\"source_excerpt\":\"remember this link\",\"confidence\":0.8}\n",
     )
-    .expect("write orchestrator memory events");
+    .expect("write user preferences memory events");
 
-    let orchestrator_context = session.build_initial_context(&turn_context).await;
-    let orchestrator_developer_texts = developer_input_texts(&orchestrator_context);
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+    let developer_texts = developer_input_texts(&initial_context);
     assert!(
-        orchestrator_developer_texts
+        developer_texts
             .iter()
             .any(|text| text.contains("https://calendar.app.google/example-booking-link")),
-        "expected recent raw orchestrator memory item in developer instructions, got {orchestrator_developer_texts:?}"
+        "expected recent raw user preferences memory item in developer instructions, got {developer_texts:?}"
     );
 }
 

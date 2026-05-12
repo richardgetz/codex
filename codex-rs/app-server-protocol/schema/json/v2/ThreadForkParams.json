@@ -138,6 +138,38 @@
         "memory_consolidation"
       ],
       "type": "string"
+    },
+    "UserPreferencesMemoryBucket": {
+      "enum": [
+        "durable_preference",
+        "personal_context",
+        "relational_attunement",
+        "operator_playbook",
+        "ongoing_threads",
+        "followup_state"
+      ],
+      "type": "string"
+    },
+    "UserPreferencesMemoryBucketPolicy": {
+      "properties": {
+        "readBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        },
+        "writeBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "readBuckets",
+        "writeBuckets"
+      ],
+      "type": "object"
     }
   },
   "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
@@ -233,6 +265,17 @@
         }
       ],
       "description": "Optional client-supplied analytics source classification for this forked thread."
+    },
+    "userPreferencesMemoryPolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Session-local memory bucket policy for this thread. Omitted inherits the server's `[user_preferences_memory]` config defaults."
     }
   },
   "required": [

@@ -15,6 +15,7 @@ use codex_protocol::approvals::GuardianAssessmentEvent;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -101,6 +102,9 @@ pub(crate) enum AppCommand {
     PruneIdleAgents,
     SetScratchpadContinuousPolicy {
         enabled: bool,
+    },
+    SetUserPreferencesMemoryPolicy {
+        policy: UserPreferencesMemoryBucketPolicy,
     },
     Shutdown,
     ThreadRollback {
@@ -305,6 +309,9 @@ impl From<Op> for AppCommand {
             Op::PruneIdleAgents => AppCommand::PruneIdleAgents,
             Op::SetScratchpadContinuousPolicy { enabled } => {
                 AppCommand::SetScratchpadContinuousPolicy { enabled }
+            }
+            Op::SetUserPreferencesMemoryPolicy { policy } => {
+                AppCommand::SetUserPreferencesMemoryPolicy { policy }
             }
             other => panic!("unsupported direct TUI app command conversion for {other:?}"),
         }
