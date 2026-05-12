@@ -85,6 +85,9 @@ stable/mainline is pulled in.
   - Default child mode allow-list is `["default"]`
 - Session-scoped agent pruning:
   - Slash command: `/agents-prune`
+  - CLI: `codex agents-prune <thread-id> --remote <ws://host:port>`
+    sends the same prune request to a long-lived remote app-server without
+    opening a TUI.
   - Closes idle spawned agents from the current session's shared agent control
     registry and live thread-spawn tree only.
   - Preserves running and initializing agents, the current thread, and any
