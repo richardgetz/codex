@@ -1,0 +1,30 @@
+intent:
+  id: "intent/2026-05-13/preferences-memory-extension#fbd409df8465"
+  change_type: "feat"
+  scope: "memory"
+  summary: "Move fork user-preferences memory into the main memories extension layer with live session policy controls."
+  decision: "Store fork user preference buckets under <codex_home>/memories/extensions/user_preferences, keep legacy roots as migration and read-only compatibility inputs, preserve real-time extraction and consolidation, and expose outer memory plus per-bucket read/write controls through config, TUI, and app-server v2."
+  constraints:
+    - "Must keep mainline memory storage separate while using the memories/extensions surface for fork buckets."
+    - "Must allow per-session outer memory read/write control and per-bucket read/write control without editing config.toml."
+    - "Must gate all live and maintenance writes through live session policy and memory write permits."
+    - "Must make global maintenance endpoints require all bucket write access and return app-server JSON-RPC errors on policy denial."
+    - "Must keep config and app-server schemas generated from Rust API."
+  intent_priority: "must"
+  supersedes:
+    - "intent/2026-05-12/user-preferences-memory-canonical#5b162518a6ca"
+  code_locations:
+    - "codex-rs/protocol/src/config_types.rs"
+    - "codex-rs/config/src/types.rs"
+    - "codex-rs/core/src/orchestrator_memory.rs"
+    - "codex-rs/core/src/orchestrator_memory/live.rs"
+    - "codex-rs/core/src/orchestrator_memory/cleanup.rs"
+    - "codex-rs/core/src/session"
+    - "codex-rs/app-server-protocol/src/protocol/v2/thread.rs"
+    - "codex-rs/app-server/src/request_processors/thread_processor.rs"
+    - "codex-rs/tui/src/app_server_session.rs"
+    - "docs/fork-differences.md"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
