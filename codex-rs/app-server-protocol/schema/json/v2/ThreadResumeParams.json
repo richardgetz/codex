@@ -279,6 +279,21 @@
       ],
       "type": "string"
     },
+    "MemoryAccessPolicy": {
+      "properties": {
+        "read": {
+          "type": "boolean"
+        },
+        "write": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read",
+        "write"
+      ],
+      "type": "object"
+    },
     "MessagePhase": {
       "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
       "oneOf": [
@@ -1010,6 +1025,38 @@
         "danger-full-access"
       ],
       "type": "string"
+    },
+    "UserPreferencesMemoryBucket": {
+      "enum": [
+        "durable_preference",
+        "personal_context",
+        "relational_attunement",
+        "operator_playbook",
+        "ongoing_threads",
+        "followup_state"
+      ],
+      "type": "string"
+    },
+    "UserPreferencesMemoryBucketPolicy": {
+      "properties": {
+        "readBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        },
+        "writeBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "readBuckets",
+        "writeBuckets"
+      ],
+      "type": "object"
     }
   },
   "description": "There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.\n\nThe precedence is: history > path > thread_id. If using history or path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
@@ -1060,6 +1107,17 @@
         "null"
       ]
     },
+    "memoryPolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MemoryAccessPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Session-local read/write access for the outer memories layer. Omitted uses the server's `[memories]` config defaults."
+    },
     "model": {
       "description": "Configuration overrides for the resumed thread, if any.",
       "type": [
@@ -1101,6 +1159,17 @@
     },
     "threadId": {
       "type": "string"
+    },
+    "userPreferencesMemoryPolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Session-local memory bucket policy for this thread. Omitted uses the server's `[user_preferences_memory]` config defaults."
     }
   },
   "required": [

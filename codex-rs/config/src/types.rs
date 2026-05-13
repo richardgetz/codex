@@ -13,11 +13,14 @@ pub use crate::mcp_types::RawMcpServerConfig;
 pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::EnvironmentVariablePattern;
+pub use codex_protocol::config_types::MemoryAccessPolicy;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+pub use codex_protocol::config_types::UserPreferencesMemoryBucket;
+pub use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 pub use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -432,8 +435,12 @@ pub struct MemoriesToml {
     pub min_rate_limit_remaining_percent: Option<i64>,
     /// Model used for thread summarisation.
     pub extract_model: Option<String>,
+    /// Reasoning effort used for thread summarisation.
+    pub extract_reasoning_effort: Option<ReasoningEffort>,
     /// Model used for memory consolidation.
     pub consolidation_model: Option<String>,
+    /// Reasoning effort used for memory consolidation.
+    pub consolidation_reasoning_effort: Option<ReasoningEffort>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
@@ -458,7 +465,9 @@ pub struct MemoriesConfig {
     pub min_rollout_idle_hours: i64,
     pub min_rate_limit_remaining_percent: i64,
     pub extract_model: Option<String>,
+    pub extract_reasoning_effort: Option<ReasoningEffort>,
     pub consolidation_model: Option<String>,
+    pub consolidation_reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl Default for MemoriesConfig {
@@ -475,7 +484,9 @@ impl Default for MemoriesConfig {
             min_rollout_idle_hours: DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS,
             min_rate_limit_remaining_percent: DEFAULT_MEMORIES_MIN_RATE_LIMIT_REMAINING_PERCENT,
             extract_model: None,
+            extract_reasoning_effort: None,
             consolidation_model: None,
+            consolidation_reasoning_effort: None,
         }
     }
 }
@@ -521,7 +532,9 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .unwrap_or(defaults.min_rate_limit_remaining_percent)
                 .clamp(0, 100),
             extract_model: toml.extract_model,
+            extract_reasoning_effort: toml.extract_reasoning_effort,
             consolidation_model: toml.consolidation_model,
+            consolidation_reasoning_effort: toml.consolidation_reasoning_effort,
         }
     }
 }
@@ -576,8 +589,14 @@ pub struct UserPreferencesMemoryToml {
     pub model_on_heuristic_miss: Option<bool>,
     /// When true, use a model agent to rewrite summary/profile artifacts after memory writes.
     pub model_consolidation: Option<bool>,
+    /// Buckets this session may read from user-preferences memory. Omit for all;
+    /// set an empty list to read none.
+    pub read_buckets: Option<Vec<UserPreferencesMemoryBucket>>,
+    /// Buckets this session may write to user-preferences memory. Omit for all;
+    /// set an empty list to write none.
+    pub write_buckets: Option<Vec<UserPreferencesMemoryBucket>>,
     /// When true, copy existing `<codex_home>/orchestrator_memory` files into
-    /// `<codex_home>/user_preferences_memory` on startup when needed.
+    /// `<codex_home>/memories/extensions/user_preferences` on startup when needed.
     pub migrate_from_orchestrator_memory: Option<bool>,
     /// When true and migration is enabled, the effective orchestrator-memory
     /// config is disabled after the startup migration pass succeeds.
@@ -1208,6 +1227,7 @@ pub struct UserPreferencesMemoryConfig {
     pub max_summary_items: usize,
     pub model_on_heuristic_miss: bool,
     pub model_consolidation: bool,
+    pub bucket_policy: UserPreferencesMemoryBucketPolicy,
     pub migrate_from_orchestrator_memory: bool,
     pub disable_orchestrator_memory_after_migration: bool,
     pub cleanup: OrchestratorMemoryCleanupConfig,
@@ -1225,6 +1245,7 @@ impl Default for UserPreferencesMemoryConfig {
             max_summary_items: orchestrator_defaults.max_summary_items,
             model_on_heuristic_miss: orchestrator_defaults.model_on_heuristic_miss,
             model_consolidation: orchestrator_defaults.model_consolidation,
+            bucket_policy: UserPreferencesMemoryBucketPolicy::default(),
             migrate_from_orchestrator_memory: false,
             disable_orchestrator_memory_after_migration: false,
             cleanup: OrchestratorMemoryCleanupConfig::default(),
@@ -1276,6 +1297,14 @@ impl From<UserPreferencesMemoryToml> for UserPreferencesMemoryConfig {
             model_consolidation: toml
                 .model_consolidation
                 .unwrap_or(defaults.model_consolidation),
+            bucket_policy: UserPreferencesMemoryBucketPolicy {
+                read_buckets: toml
+                    .read_buckets
+                    .unwrap_or(defaults.bucket_policy.read_buckets),
+                write_buckets: toml
+                    .write_buckets
+                    .unwrap_or(defaults.bucket_policy.write_buckets),
+            },
             migrate_from_orchestrator_memory: toml
                 .migrate_from_orchestrator_memory
                 .unwrap_or(defaults.migrate_from_orchestrator_memory),

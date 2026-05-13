@@ -92,6 +92,7 @@ use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::MemoryAccessPolicy;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
@@ -162,7 +163,6 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -642,6 +642,11 @@ impl Codex {
             codex_home: config.codex_home.clone(),
             thread_name: None,
             environments: environment_selections.to_selections(),
+            memory_policy: MemoryAccessPolicy::new(
+                config.memories.use_memories,
+                config.memories.generate_memories,
+            ),
+            user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
             app_server_client_name: None,
@@ -732,6 +737,26 @@ impl Codex {
     pub async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
         if sub.trace.is_none() {
             sub.trace = current_span_w3c_trace_context();
+        }
+        if let Op::SetMemoryAccessPolicy { policy } = &sub.op {
+            self.session
+                .update_settings(SessionSettingsUpdate {
+                    memory_policy: Some(*policy),
+                    ..Default::default()
+                })
+                .await
+                .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+            return Ok(());
+        }
+        if let Op::SetUserPreferencesMemoryPolicy { policy } = &sub.op {
+            self.session
+                .update_settings(SessionSettingsUpdate {
+                    user_preferences_memory_policy: Some(policy.clone()),
+                    ..Default::default()
+                })
+                .await
+                .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+            return Ok(());
         }
         if let Op::SetScratchpadContinuousPolicy { enabled } = sub.op {
             let codex_home = self.session.get_config().await.codex_home.clone();
@@ -1787,6 +1812,20 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
+        let _memory_write_gate = if updates.user_preferences_memory_policy.is_some()
+            || updates
+                .memory_policy
+                .is_some_and(|policy| !policy.normalized().write)
+        {
+            let permit = self
+                .memory_write_gate
+                .acquire_many(session::MEMORY_WRITE_GATE_PERMITS)
+                .await
+                .map_err(|_| ConstraintError::operation_failed("memory write gate was closed"))?;
+            Some(permit)
+        } else {
+            None
+        };
         let (previous_collaboration_mode, updated) = {
             let state = self.state.lock().await;
             let previous_collaboration_mode =
@@ -3174,25 +3213,14 @@ impl Session {
         {
             developer_sections.push(memory_prompt);
         }
-        if turn_context.config.orchestrator_memory.enabled
-            && (turn_context.config.orchestrator_memory.scope == MemoriesScope::All
-                || turn_context.collaboration_mode.mode == ModeKind::Orchestrator)
-            && let Some(orchestrator_memory_prompt) =
-                build_orchestrator_memory_developer_instructions(
-                    &turn_context.config.codex_home,
-                    &turn_context.config.orchestrator_memory,
-                )
-                .await
-        {
-            developer_sections.push(orchestrator_memory_prompt);
-        }
-        if turn_context.config.user_preferences_memory.enabled
+        if turn_context.config.memories.use_memories
+            && turn_context.config.user_preferences_memory.enabled
             && (turn_context.config.user_preferences_memory.scope == MemoriesScope::All
                 || turn_context.collaboration_mode.mode == ModeKind::Orchestrator)
             && let Some(user_preferences_memory_prompt) =
                 build_user_preferences_memory_developer_instructions(
                     &turn_context.config.codex_home,
-                    &turn_context.config.user_preferences_memory.memory_config(),
+                    &turn_context.config.user_preferences_memory,
                 )
                 .await
         {
@@ -4101,7 +4129,6 @@ pub(crate) fn active_thread_scratchpad(codex_home: &Path, thread_id: ThreadId) -
     scratchpad_matches_thread(&value, &scratchpad_id).then_some(value)
 }
 
-use crate::orchestrator_memory::build_developer_instructions as build_orchestrator_memory_developer_instructions;
 use crate::orchestrator_memory::build_user_preferences_developer_instructions as build_user_preferences_memory_developer_instructions;
 use codex_memories_read::build_memory_tool_developer_instructions;
 

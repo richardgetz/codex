@@ -18,6 +18,102 @@ use wildmatch::WildMatchPattern;
 
 use crate::openai_models::ReasoningEffort;
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum UserPreferencesMemoryBucket {
+    DurablePreference,
+    PersonalContext,
+    RelationalAttunement,
+    OperatorPlaybook,
+    OngoingThreads,
+    FollowupState,
+}
+
+impl UserPreferencesMemoryBucket {
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::DurablePreference,
+            Self::PersonalContext,
+            Self::RelationalAttunement,
+            Self::OperatorPlaybook,
+            Self::OngoingThreads,
+            Self::FollowupState,
+        ]
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct UserPreferencesMemoryBucketPolicy {
+    pub read_buckets: Vec<UserPreferencesMemoryBucket>,
+    pub write_buckets: Vec<UserPreferencesMemoryBucket>,
+}
+
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct MemoryAccessPolicy {
+    pub read: bool,
+    pub write: bool,
+}
+
+impl<'de> Deserialize<'de> for MemoryAccessPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RawMemoryAccessPolicy {
+            read: bool,
+            write: bool,
+        }
+
+        let raw = RawMemoryAccessPolicy::deserialize(deserializer)?;
+        Ok(Self::new(raw.read, raw.write))
+    }
+}
+
+impl Default for UserPreferencesMemoryBucketPolicy {
+    fn default() -> Self {
+        Self {
+            read_buckets: UserPreferencesMemoryBucket::all().to_vec(),
+            write_buckets: UserPreferencesMemoryBucket::all().to_vec(),
+        }
+    }
+}
+
+impl Default for MemoryAccessPolicy {
+    fn default() -> Self {
+        Self::new(/*read*/ true, /*write*/ true)
+    }
+}
+
+impl MemoryAccessPolicy {
+    pub fn new(read: bool, write: bool) -> Self {
+        Self {
+            read: read || write,
+            write,
+        }
+    }
+
+    pub fn normalized(self) -> Self {
+        Self::new(self.read, self.write)
+    }
+}
+
+impl UserPreferencesMemoryBucketPolicy {
+    pub fn can_read(&self, bucket: UserPreferencesMemoryBucket) -> bool {
+        self.read_buckets.contains(&bucket)
+    }
+
+    pub fn can_write(&self, bucket: UserPreferencesMemoryBucket) -> bool {
+        self.write_buckets.contains(&bucket)
+    }
+}
+
 /// A summary of the reasoning performed by the model. This can be useful for
 /// debugging and understanding the model's reasoning process.
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries

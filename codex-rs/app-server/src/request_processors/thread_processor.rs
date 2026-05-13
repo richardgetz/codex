@@ -112,6 +112,22 @@ fn collect_resume_override_mismatches(
             config_snapshot.personality
         ));
     }
+    if let Some(requested_policy) = request.user_preferences_memory_policy.as_ref()
+        && requested_policy != &config_snapshot.user_preferences_memory_policy
+    {
+        mismatch_details.push(format!(
+            "user_preferences_memory_policy requested={requested_policy:?} active={:?}",
+            config_snapshot.user_preferences_memory_policy
+        ));
+    }
+    if let Some(requested_policy) = request.memory_policy.as_ref()
+        && requested_policy != &config_snapshot.memory_policy
+    {
+        mismatch_details.push(format!(
+            "memory_policy requested={requested_policy:?} active={:?}",
+            config_snapshot.memory_policy
+        ));
+    }
 
     if request.config.is_some() {
         mismatch_details
@@ -127,6 +143,30 @@ fn collect_resume_override_mismatches(
         );
     }
     mismatch_details
+}
+
+fn validate_global_memory_maintenance_policy(
+    config_snapshot: &ThreadConfigSnapshot,
+) -> Result<(), JSONRPCErrorError> {
+    if !config_snapshot.memory_policy.normalized().write {
+        return Err(invalid_request(
+            "memory writes are disabled for this thread; enable memoryPolicy.write before running this memory maintenance command",
+        ));
+    }
+    if !UserPreferencesMemoryBucket::all()
+        .iter()
+        .copied()
+        .all(|bucket| {
+            config_snapshot
+                .user_preferences_memory_policy
+                .can_write(bucket)
+        })
+    {
+        return Err(invalid_request(
+            "global memory maintenance requires write access to all user-preferences memory buckets",
+        ));
+    }
+    Ok(())
 }
 
 fn merge_persisted_resume_metadata(
@@ -520,6 +560,44 @@ impl ThreadRequestProcessor {
         Ok(Some(ThreadScratchpadContinuousPolicySetResponse {}.into()))
     }
 
+    pub(crate) async fn thread_user_preferences_memory_policy_set(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadUserPreferencesMemoryPolicySetParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let ThreadUserPreferencesMemoryPolicySetParams { thread_id, policy } = params;
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        self.submit_core_op(
+            request_id,
+            thread.as_ref(),
+            Op::SetUserPreferencesMemoryPolicy { policy },
+        )
+        .await
+        .map_err(|err| {
+            internal_error(format!(
+                "failed to update user preferences memory policy: {err}"
+            ))
+        })?;
+        Ok(Some(ThreadUserPreferencesMemoryPolicySetResponse {}.into()))
+    }
+
+    pub(crate) async fn thread_memory_policy_set(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadMemoryPolicySetParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let ThreadMemoryPolicySetParams { thread_id, policy } = params;
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        self.submit_core_op(
+            request_id,
+            thread.as_ref(),
+            Op::SetMemoryAccessPolicy { policy },
+        )
+        .await
+        .map_err(|err| internal_error(format!("failed to update memory access policy: {err}")))?;
+        Ok(Some(ThreadMemoryPolicySetResponse {}.into()))
+    }
+
     pub(crate) async fn memory_reset(
         &self,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
@@ -573,6 +651,36 @@ impl ThreadRequestProcessor {
         params: ThreadAgentsPruneParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_agents_prune_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_orchestrator_memory_consolidate(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadOrchestratorMemoryConsolidateParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_orchestrator_memory_consolidate_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_orchestrator_memory_forget(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadOrchestratorMemoryForgetParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_orchestrator_memory_forget_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_user_preferences_memory_migrate(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadUserPreferencesMemoryMigrateParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_user_preferences_memory_migrate_inner(request_id, params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -845,6 +953,8 @@ impl ThreadRequestProcessor {
             session_start_source,
             thread_source,
             environments,
+            user_preferences_memory_policy,
+            memory_policy,
             persist_extended_history,
         } = params;
         if sandbox.is_some() && permissions.is_some() {
@@ -869,6 +979,8 @@ impl ThreadRequestProcessor {
             base_instructions,
             developer_instructions,
             personality,
+            user_preferences_memory_policy,
+            memory_policy,
         );
         typesafe_overrides.ephemeral = ephemeral;
         let listener_task_context = ListenerTaskContext {
@@ -1197,6 +1309,8 @@ impl ThreadRequestProcessor {
             permission_profile: Some(config_snapshot.permission_profile.into()),
             active_permission_profile,
             reasoning_effort: config_snapshot.reasoning_effort,
+            memory_policy: config_snapshot.memory_policy,
+            user_preferences_memory_policy: config_snapshot.user_preferences_memory_policy,
         };
         let notif = thread_started_notification(thread);
         listener_task_context
@@ -1233,6 +1347,10 @@ impl ThreadRequestProcessor {
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
         personality: Option<Personality>,
+        user_preferences_memory_policy: Option<
+            codex_protocol::config_types::UserPreferencesMemoryBucketPolicy,
+        >,
+        memory_policy: Option<codex_protocol::config_types::MemoryAccessPolicy>,
     ) -> ConfigOverrides {
         let mut overrides = ConfigOverrides {
             model,
@@ -1249,6 +1367,8 @@ impl ThreadRequestProcessor {
             base_instructions,
             developer_instructions,
             personality,
+            memory_policy,
+            user_preferences_memory_policy,
             ..Default::default()
         };
         apply_permission_profile_selection_to_config_overrides(&mut overrides, permissions);
@@ -1762,6 +1882,66 @@ impl ThreadRequestProcessor {
             .await
             .map_err(|err| internal_error(format!("failed to prune idle agents: {err}")))?;
         Ok(ThreadAgentsPruneResponse {})
+    }
+
+    async fn thread_orchestrator_memory_consolidate_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadOrchestratorMemoryConsolidateParams,
+    ) -> Result<ThreadOrchestratorMemoryConsolidateResponse, JSONRPCErrorError> {
+        let ThreadOrchestratorMemoryConsolidateParams { thread_id } = params;
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        validate_global_memory_maintenance_policy(&thread.config_snapshot().await)?;
+        self.submit_core_op(
+            request_id,
+            thread.as_ref(),
+            Op::ConsolidateOrchestratorMemory,
+        )
+        .await
+        .map_err(|err| {
+            internal_error(format!("failed to consolidate orchestrator memory: {err}"))
+        })?;
+        Ok(ThreadOrchestratorMemoryConsolidateResponse {})
+    }
+
+    async fn thread_orchestrator_memory_forget_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadOrchestratorMemoryForgetParams,
+    ) -> Result<ThreadOrchestratorMemoryForgetResponse, JSONRPCErrorError> {
+        let ThreadOrchestratorMemoryForgetParams { thread_id, needle } = params;
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        validate_global_memory_maintenance_policy(&thread.config_snapshot().await)?;
+        self.submit_core_op(
+            request_id,
+            thread.as_ref(),
+            Op::OrchestratorMemoryForget { needle },
+        )
+        .await
+        .map_err(|err| internal_error(format!("failed to forget orchestrator memory: {err}")))?;
+        Ok(ThreadOrchestratorMemoryForgetResponse {})
+    }
+
+    async fn thread_user_preferences_memory_migrate_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadUserPreferencesMemoryMigrateParams,
+    ) -> Result<ThreadUserPreferencesMemoryMigrateResponse, JSONRPCErrorError> {
+        let ThreadUserPreferencesMemoryMigrateParams { thread_id } = params;
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        self.submit_core_op(
+            request_id,
+            thread.as_ref(),
+            Op::UserPreferencesMemoryMigrate,
+        )
+        .await
+        .map_err(|err| {
+            internal_error(format!("failed to migrate user preferences memory: {err}"))
+        })?;
+        Ok(ThreadUserPreferencesMemoryMigrateResponse {})
     }
 
     async fn thread_shell_command_inner(
@@ -2411,6 +2591,8 @@ impl ThreadRequestProcessor {
             base_instructions,
             developer_instructions,
             personality,
+            user_preferences_memory_policy,
+            memory_policy,
             exclude_turns,
             persist_extended_history: _persist_extended_history,
         } = params;
@@ -2445,6 +2627,8 @@ impl ThreadRequestProcessor {
             base_instructions,
             developer_instructions,
             personality,
+            user_preferences_memory_policy,
+            memory_policy,
         );
         self.load_and_apply_persisted_resume_metadata(
             &thread_history,
@@ -2578,6 +2762,8 @@ impl ThreadRequestProcessor {
                     permission_profile: Some(config_snapshot.permission_profile.into()),
                     active_permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
+                    memory_policy: config_snapshot.memory_policy,
+                    user_preferences_memory_policy: config_snapshot.user_preferences_memory_policy,
                 };
 
                 let connection_id = request_id.connection_id;
@@ -2728,6 +2914,32 @@ impl ThreadRequestProcessor {
             )
             .await?;
 
+            if let Some(policy) = params.memory_policy {
+                self.submit_core_op(
+                    request_id,
+                    existing_thread.as_ref(),
+                    Op::SetMemoryAccessPolicy { policy },
+                )
+                .await
+                .map_err(|err| {
+                    internal_error(format!(
+                        "failed to update running thread memory access policy during resume: {err}"
+                    ))
+                })?;
+            }
+            if let Some(policy) = params.user_preferences_memory_policy.clone() {
+                self.submit_core_op(
+                    request_id,
+                    existing_thread.as_ref(),
+                    Op::SetUserPreferencesMemoryPolicy { policy },
+                )
+                .await
+                .map_err(|err| {
+                    internal_error(format!(
+                        "failed to update running thread user preferences memory policy during resume: {err}"
+                    ))
+                })?;
+            }
             let config_snapshot = existing_thread.config_snapshot().await;
             let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
             if !mismatch_details.is_empty() {
@@ -3042,6 +3254,8 @@ impl ThreadRequestProcessor {
             developer_instructions,
             ephemeral,
             thread_source,
+            user_preferences_memory_policy,
+            memory_policy,
             exclude_turns,
             persist_extended_history,
         } = params;
@@ -3105,6 +3319,8 @@ impl ThreadRequestProcessor {
             base_instructions,
             developer_instructions,
             /*personality*/ None,
+            user_preferences_memory_policy,
+            memory_policy,
         );
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
@@ -3234,6 +3450,8 @@ impl ThreadRequestProcessor {
             permission_profile: Some(config_snapshot.permission_profile.into()),
             active_permission_profile,
             reasoning_effort: session_configured.reasoning_effort,
+            memory_policy: config_snapshot.memory_policy,
+            user_preferences_memory_policy: config_snapshot.user_preferences_memory_policy,
         };
 
         let notif = thread_started_notification(thread);

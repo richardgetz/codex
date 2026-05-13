@@ -1,6 +1,6 @@
-## Orchestrator Continuity Memory Consolidation
+## User Preferences Memory Consolidation
 
-You are maintaining user-level Orchestrator continuity memory in `{{ memory_root }}`.
+You are maintaining user-level User Preferences Memory in `{{ memory_root }}`.
 
 This memory is not project memory. It exists to help the user feel understood,
 remembered, adapted to, and carried forward across sessions.
@@ -56,8 +56,8 @@ Return strict JSON only, with this exact shape:
 }
 
 Rules:
-- `summary_markdown` should be concise markdown beginning with `# Orchestrator Memory Summary`
-- `profile_markdown` should be fuller markdown beginning with `# Orchestrator Memory Profile`
+- `summary_markdown` should be concise markdown beginning with `# User Preferences Memory Summary`
+- `profile_markdown` should be fuller markdown beginning with `# User Preferences Memory Profile`
 - Use sections when helpful, especially:
   - `## Working Preferences`
   - `## Personal Context`

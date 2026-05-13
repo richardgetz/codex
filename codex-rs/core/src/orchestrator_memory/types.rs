@@ -1,5 +1,6 @@
 use chrono::DateTime;
 use chrono::Utc;
+use codex_protocol::config_types::UserPreferencesMemoryBucket;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -112,5 +113,18 @@ impl MemoryBucket {
             MemoryBucket::OngoingThreads,
             MemoryBucket::FollowupState,
         ]
+    }
+}
+
+impl From<MemoryBucket> for UserPreferencesMemoryBucket {
+    fn from(value: MemoryBucket) -> Self {
+        match value {
+            MemoryBucket::DurablePreference => Self::DurablePreference,
+            MemoryBucket::PersonalContext => Self::PersonalContext,
+            MemoryBucket::RelationalAttunement => Self::RelationalAttunement,
+            MemoryBucket::OperatorPlaybook => Self::OperatorPlaybook,
+            MemoryBucket::OngoingThreads => Self::OngoingThreads,
+            MemoryBucket::FollowupState => Self::FollowupState,
+        }
     }
 }

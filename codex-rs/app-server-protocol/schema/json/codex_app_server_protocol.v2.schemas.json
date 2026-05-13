@@ -1153,6 +1153,54 @@
             },
             "method": {
               "enum": [
+                "thread/memoryPolicy/set"
+              ],
+              "title": "Thread/memoryPolicy/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadMemoryPolicySetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/memoryPolicy/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/userPreferencesMemoryPolicy/set"
+              ],
+              "title": "Thread/userPreferencesMemoryPolicy/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadUserPreferencesMemoryPolicySetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/userPreferencesMemoryPolicy/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/metadata/update"
               ],
               "title": "Thread/metadata/updateRequestMethod",
@@ -1336,6 +1384,78 @@
             "params"
           ],
           "title": "Thread/approveGuardianDeniedActionRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/orchestratorMemory/consolidate"
+              ],
+              "title": "Thread/orchestratorMemory/consolidateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadOrchestratorMemoryConsolidateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/orchestratorMemory/consolidateRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/orchestratorMemory/forget"
+              ],
+              "title": "Thread/orchestratorMemory/forgetRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadOrchestratorMemoryForgetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/orchestratorMemory/forgetRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/userPreferencesMemory/migrate"
+              ],
+              "title": "Thread/userPreferencesMemory/migrateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadUserPreferencesMemoryMigrateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/userPreferencesMemory/migrateRequest",
           "type": "object"
         },
         {
@@ -7612,6 +7732,21 @@
       ],
       "type": "string"
     },
+    "MemoryAccessPolicy": {
+      "properties": {
+        "read": {
+          "type": "boolean"
+        },
+        "write": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read",
+        "write"
+      ],
+      "type": "object"
+    },
     "MemoryCitation": {
       "properties": {
         "entries": {
@@ -13541,6 +13676,17 @@
         "ephemeral": {
           "type": "boolean"
         },
+        "memoryPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MemoryAccessPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Session-local read/write access for the outer memories layer. Omitted inherits the server's `[memories]` config defaults."
+        },
         "model": {
           "description": "Configuration overrides for the forked thread, if any.",
           "type": [
@@ -13583,6 +13729,17 @@
             }
           ],
           "description": "Optional client-supplied analytics source classification for this forked thread."
+        },
+        "userPreferencesMemoryPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Session-local memory bucket policy for this thread. Omitted inherits the server's `[user_preferences_memory]` config defaults."
         }
       },
       "required": [
@@ -13616,6 +13773,17 @@
           },
           "type": "array"
         },
+        "memoryPolicy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MemoryAccessPolicy"
+            }
+          ],
+          "default": {
+            "read": true,
+            "write": true
+          }
+        },
         "model": {
           "type": "string"
         },
@@ -13648,6 +13816,31 @@
         },
         "thread": {
           "$ref": "#/definitions/Thread"
+        },
+        "userPreferencesMemoryPolicy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+            }
+          ],
+          "default": {
+            "readBuckets": [
+              "durable_preference",
+              "personal_context",
+              "relational_attunement",
+              "operator_playbook",
+              "ongoing_threads",
+              "followup_state"
+            ],
+            "writeBuckets": [
+              "durable_preference",
+              "personal_context",
+              "relational_attunement",
+              "operator_playbook",
+              "ongoing_threads",
+              "followup_state"
+            ]
+          }
         }
       },
       "required": [
@@ -14631,6 +14824,28 @@
       ],
       "type": "string"
     },
+    "ThreadMemoryPolicySetParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "policy": {
+          "$ref": "#/definitions/MemoryAccessPolicy"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy",
+        "threadId"
+      ],
+      "title": "ThreadMemoryPolicySetParams",
+      "type": "object"
+    },
+    "ThreadMemoryPolicySetResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadMemoryPolicySetResponse",
+      "type": "object"
+    },
     "ThreadMetadataGitInfoUpdateParams": {
       "properties": {
         "branch": {
@@ -14711,6 +14926,46 @@
         "threadId"
       ],
       "title": "ThreadNameUpdatedNotification",
+      "type": "object"
+    },
+    "ThreadOrchestratorMemoryConsolidateParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadOrchestratorMemoryConsolidateParams",
+      "type": "object"
+    },
+    "ThreadOrchestratorMemoryConsolidateResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadOrchestratorMemoryConsolidateResponse",
+      "type": "object"
+    },
+    "ThreadOrchestratorMemoryForgetParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "needle": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "needle",
+        "threadId"
+      ],
+      "title": "ThreadOrchestratorMemoryForgetParams",
+      "type": "object"
+    },
+    "ThreadOrchestratorMemoryForgetResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadOrchestratorMemoryForgetResponse",
       "type": "object"
     },
     "ThreadReadParams": {
@@ -15034,6 +15289,17 @@
             "null"
           ]
         },
+        "memoryPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MemoryAccessPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Session-local read/write access for the outer memories layer. Omitted uses the server's `[memories]` config defaults."
+        },
         "model": {
           "description": "Configuration overrides for the resumed thread, if any.",
           "type": [
@@ -15075,6 +15341,17 @@
         },
         "threadId": {
           "type": "string"
+        },
+        "userPreferencesMemoryPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Session-local memory bucket policy for this thread. Omitted uses the server's `[user_preferences_memory]` config defaults."
         }
       },
       "required": [
@@ -15108,6 +15385,17 @@
           },
           "type": "array"
         },
+        "memoryPolicy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MemoryAccessPolicy"
+            }
+          ],
+          "default": {
+            "read": true,
+            "write": true
+          }
+        },
         "model": {
           "type": "string"
         },
@@ -15140,6 +15428,31 @@
         },
         "thread": {
           "$ref": "#/definitions/Thread"
+        },
+        "userPreferencesMemoryPolicy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+            }
+          ],
+          "default": {
+            "readBuckets": [
+              "durable_preference",
+              "personal_context",
+              "relational_attunement",
+              "operator_playbook",
+              "ongoing_threads",
+              "followup_state"
+            ],
+            "writeBuckets": [
+              "durable_preference",
+              "personal_context",
+              "relational_attunement",
+              "operator_playbook",
+              "ongoing_threads",
+              "followup_state"
+            ]
+          }
         }
       },
       "required": [
@@ -15344,6 +15657,17 @@
             "null"
           ]
         },
+        "memoryPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MemoryAccessPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Session-local read/write access for the outer memories layer. Omitted uses the server's `[memories]` config defaults."
+        },
         "model": {
           "type": [
             "string",
@@ -15408,6 +15732,17 @@
             }
           ],
           "description": "Optional client-supplied analytics source classification for this thread."
+        },
+        "userPreferencesMemoryPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Session-local memory bucket policy for this thread. Omitted uses the server's `[user_preferences_memory]` config defaults."
         }
       },
       "title": "ThreadStartParams",
@@ -15437,6 +15772,17 @@
             "$ref": "#/definitions/AbsolutePathBuf"
           },
           "type": "array"
+        },
+        "memoryPolicy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MemoryAccessPolicy"
+            }
+          ],
+          "default": {
+            "read": true,
+            "write": true
+          }
         },
         "model": {
           "type": "string"
@@ -15470,6 +15816,31 @@
         },
         "thread": {
           "$ref": "#/definitions/Thread"
+        },
+        "userPreferencesMemoryPolicy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+            }
+          ],
+          "default": {
+            "readBuckets": [
+              "durable_preference",
+              "personal_context",
+              "relational_attunement",
+              "operator_playbook",
+              "ongoing_threads",
+              "followup_state"
+            ],
+            "writeBuckets": [
+              "durable_preference",
+              "personal_context",
+              "relational_attunement",
+              "operator_playbook",
+              "ongoing_threads",
+              "followup_state"
+            ]
+          }
         }
       },
       "required": [
@@ -15711,6 +16082,46 @@
         "unsubscribed"
       ],
       "type": "string"
+    },
+    "ThreadUserPreferencesMemoryMigrateParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadUserPreferencesMemoryMigrateParams",
+      "type": "object"
+    },
+    "ThreadUserPreferencesMemoryMigrateResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadUserPreferencesMemoryMigrateResponse",
+      "type": "object"
+    },
+    "ThreadUserPreferencesMemoryPolicySetParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "policy": {
+          "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy",
+        "threadId"
+      ],
+      "title": "ThreadUserPreferencesMemoryPolicySetParams",
+      "type": "object"
+    },
+    "ThreadUserPreferencesMemoryPolicySetResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadUserPreferencesMemoryPolicySetResponse",
+      "type": "object"
     },
     "TokenUsageBreakdown": {
       "properties": {
@@ -16427,6 +16838,38 @@
           "type": "object"
         }
       ]
+    },
+    "UserPreferencesMemoryBucket": {
+      "enum": [
+        "durable_preference",
+        "personal_context",
+        "relational_attunement",
+        "operator_playbook",
+        "ongoing_threads",
+        "followup_state"
+      ],
+      "type": "string"
+    },
+    "UserPreferencesMemoryBucketPolicy": {
+      "properties": {
+        "readBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        },
+        "writeBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "readBuckets",
+        "writeBuckets"
+      ],
+      "type": "object"
     },
     "Verbosity": {
       "description": "Controls output length/detail on GPT-5 models via the Responses API. Serialized with lowercase values to match the OpenAI API.",

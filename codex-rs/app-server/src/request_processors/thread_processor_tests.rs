@@ -62,6 +62,9 @@ mod thread_processor_behavior_tests {
     use codex_model_provider_info::ModelProviderInfo;
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
+    use codex_protocol::config_types::MemoryAccessPolicy;
+    use codex_protocol::config_types::UserPreferencesMemoryBucket;
+    use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
@@ -638,6 +641,8 @@ mod thread_processor_behavior_tests {
             base_instructions: None,
             developer_instructions: None,
             personality: None,
+            memory_policy: None,
+            user_preferences_memory_policy: None,
             exclude_turns: false,
             persist_extended_history: false,
         };
@@ -655,11 +660,88 @@ mod thread_processor_behavior_tests {
             personality: None,
             session_source: SessionSource::Cli,
             thread_source: None,
+            memory_policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
+            user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
         };
 
         assert_eq!(
             collect_resume_override_mismatches(&request, &config_snapshot),
             vec!["service_tier requested=Some(\"priority\") active=Some(\"flex\")".to_string()]
+        );
+    }
+
+    #[test]
+    fn collect_resume_override_mismatches_includes_user_preferences_memory_policy() {
+        let cwd = test_path_buf("/tmp").abs();
+        let requested_policy = UserPreferencesMemoryBucketPolicy {
+            read_buckets: vec![UserPreferencesMemoryBucket::OperatorPlaybook],
+            write_buckets: vec![UserPreferencesMemoryBucket::OperatorPlaybook],
+        };
+        let request = ThreadResumeParams {
+            thread_id: "thread-1".to_string(),
+            user_preferences_memory_policy: Some(requested_policy),
+            ..ThreadResumeParams::default()
+        };
+        let config_snapshot = ThreadConfigSnapshot {
+            model: "gpt-5".to_string(),
+            model_provider_id: "openai".to_string(),
+            service_tier: None,
+            approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
+            permission_profile: codex_protocol::models::PermissionProfile::Disabled,
+            active_permission_profile: None,
+            cwd,
+            ephemeral: false,
+            reasoning_effort: None,
+            personality: None,
+            session_source: SessionSource::Cli,
+            thread_source: None,
+            memory_policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
+            user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
+        };
+
+        assert_eq!(
+            collect_resume_override_mismatches(&request, &config_snapshot),
+            vec![
+                "user_preferences_memory_policy requested=UserPreferencesMemoryBucketPolicy { read_buckets: [OperatorPlaybook], write_buckets: [OperatorPlaybook] } active=UserPreferencesMemoryBucketPolicy { read_buckets: [DurablePreference, PersonalContext, RelationalAttunement, OperatorPlaybook, OngoingThreads, FollowupState], write_buckets: [DurablePreference, PersonalContext, RelationalAttunement, OperatorPlaybook, OngoingThreads, FollowupState] }"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn collect_resume_override_mismatches_includes_memory_policy() {
+        let cwd = test_path_buf("/tmp").abs();
+        let requested_policy = MemoryAccessPolicy::new(/*read*/ false, /*write*/ false);
+        let request = ThreadResumeParams {
+            thread_id: "thread-1".to_string(),
+            memory_policy: Some(requested_policy),
+            ..ThreadResumeParams::default()
+        };
+        let config_snapshot = ThreadConfigSnapshot {
+            model: "gpt-5".to_string(),
+            model_provider_id: "openai".to_string(),
+            service_tier: None,
+            approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
+            permission_profile: codex_protocol::models::PermissionProfile::Disabled,
+            active_permission_profile: None,
+            cwd,
+            ephemeral: false,
+            reasoning_effort: None,
+            personality: None,
+            session_source: SessionSource::Cli,
+            thread_source: None,
+            memory_policy: MemoryAccessPolicy::default(),
+            user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
+        };
+
+        assert_eq!(
+            collect_resume_override_mismatches(&request, &config_snapshot),
+            vec![
+                "memory_policy requested=MemoryAccessPolicy { read: false, write: false } active=MemoryAccessPolicy { read: true, write: true }"
+                    .to_string()
+            ]
         );
     }
 

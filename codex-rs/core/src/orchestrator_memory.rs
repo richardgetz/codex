@@ -3,6 +3,8 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use codex_config::types::MemoriesScope;
 use codex_config::types::OrchestratorMemoryConfig;
+use codex_config::types::UserPreferencesMemoryConfig;
+use codex_memories_read::memory_root;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::protocol::SessionSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -42,6 +44,14 @@ static ORCHESTRATOR_MEMORY_DEVELOPER_INSTRUCTIONS_TEMPLATE: LazyLock<Template> =
     });
 
 const ORCHESTRATOR_MEMORY_SUMMARY_TOKEN_LIMIT: usize = 3_000;
+const USER_PREFERENCES_EXTENSION_NAME: &str = "user_preferences";
+const USER_PREFERENCES_EXTENSION_INSTRUCTIONS: &str = r#"# User Preferences Memory
+
+This extension stores fork-specific user preference buckets. Treat summary.md,
+profile.md, preferences.jsonl, and buckets/*.jsonl as durable continuity inputs.
+Honor the session's memoryPolicy and userPreferencesMemoryPolicy before reading
+or writing bucket content.
+"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrchestratorMemoryPruneResult {
@@ -51,11 +61,21 @@ pub struct OrchestratorMemoryPruneResult {
 }
 
 pub(crate) fn root(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+    user_preferences_root(codex_home)
+}
+
+pub(crate) fn legacy_orchestrator_root(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
     codex_home.join("orchestrator_memory")
 }
 
-pub(crate) fn user_preferences_root(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+pub(crate) fn legacy_user_preferences_root(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
     codex_home.join("user_preferences_memory")
+}
+
+pub(crate) fn user_preferences_root(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+    memory_root(codex_home)
+        .join("extensions")
+        .join(USER_PREFERENCES_EXTENSION_NAME)
 }
 
 fn user_preferences_summary_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
@@ -68,6 +88,18 @@ fn user_preferences_profile_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBu
 
 fn user_preferences_preferences_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
     user_preferences_root(codex_home).join("preferences.jsonl")
+}
+
+fn legacy_user_preferences_summary_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+    legacy_user_preferences_root(codex_home).join("summary.md")
+}
+
+fn legacy_user_preferences_profile_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+    legacy_user_preferences_root(codex_home).join("profile.md")
+}
+
+fn legacy_user_preferences_preferences_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+    legacy_user_preferences_root(codex_home).join("preferences.jsonl")
 }
 
 pub(crate) fn summary_path(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
@@ -107,50 +139,41 @@ pub(crate) async fn ensure_layout(
     let root = root(codex_home);
     fs::create_dir_all(&root).await?;
     fs::create_dir_all(bucket_dir_path(codex_home)).await?;
+    let instructions_path = root.join("instructions.md");
+    if fs::metadata(&instructions_path).await.is_err() {
+        fs::write(instructions_path, USER_PREFERENCES_EXTENSION_INSTRUCTIONS).await?;
+    }
     Ok(root)
 }
 
 pub(crate) fn should_use(config: &Config, mode: ModeKind) -> bool {
-    config.orchestrator_memory.enabled
-        && (config.orchestrator_memory.scope == MemoriesScope::All
+    config.user_preferences_memory.enabled
+        && config.memories.generate_memories
+        && (config.user_preferences_memory.scope == MemoriesScope::All
             || mode == ModeKind::Orchestrator)
-}
-
-pub(crate) async fn build_developer_instructions(
-    codex_home: &AbsolutePathBuf,
-    config: &OrchestratorMemoryConfig,
-) -> Option<String> {
-    if let Err(err) = migration::migrate_if_needed(codex_home).await {
-        warn!("failed migrating orchestrator memory before read: {err}");
-    }
-    let base_path = root(codex_home);
-    let (summary_source, summary) = read_summary_source(codex_home).await?;
-    let summary = with_recent_memory_supplement(codex_home, config, &summary).await;
-    let summary = truncate_text(
-        &summary,
-        TruncationPolicy::Tokens(ORCHESTRATOR_MEMORY_SUMMARY_TOKEN_LIMIT),
-    );
-    if summary.is_empty() {
-        return None;
-    }
-
-    let base_path = base_path.display().to_string();
-    let summary_source = summary_source.display().to_string();
-    ORCHESTRATOR_MEMORY_DEVELOPER_INSTRUCTIONS_TEMPLATE
-        .render([
-            ("base_path", base_path.as_str()),
-            ("summary_source", summary_source.as_str()),
-            ("summary", summary.as_str()),
-        ])
-        .ok()
 }
 
 pub(crate) async fn build_user_preferences_developer_instructions(
     codex_home: &AbsolutePathBuf,
-    config: &OrchestratorMemoryConfig,
+    config: &UserPreferencesMemoryConfig,
 ) -> Option<String> {
     let base_path = user_preferences_root(codex_home);
-    let (summary_source, summary) = read_user_preferences_summary_source(codex_home).await?;
+    let memory_config = config.memory_config();
+    let read_all_buckets = config.bucket_policy.read_buckets
+        == codex_config::types::UserPreferencesMemoryBucket::all();
+    let (summary_source, summary) = if read_all_buckets {
+        read_user_preferences_summary_source(codex_home).await?
+    } else {
+        let (summary_source, raw) = read_first_existing_source(&[
+            user_preferences_preferences_path(codex_home),
+            legacy_user_preferences_preferences_path(codex_home),
+        ])
+        .await
+        .ok()?;
+        let filtered = live::filter_raw_events_for_read_policy(&raw, &config.bucket_policy);
+        let summary = live::render_summary_for_raw(&filtered, &memory_config);
+        (summary_source, summary)
+    };
     let summary = with_recent_user_preferences_supplement(codex_home, config, &summary).await;
     let summary = truncate_text(
         &summary,
@@ -161,7 +184,7 @@ pub(crate) async fn build_user_preferences_developer_instructions(
     }
 
     let summary = format!(
-        "## User Preferences Memory\n\n{summary}\n\nUse this as durable user preference and working-context memory across modes. It is the successor/parallel path to orchestrator memory; do not edit files directly unless the user asks."
+        "## User Preferences Memory\n\n{summary}\n\nUse this as durable user preference and working-context memory across modes. Only use memory sections allowed by this session's user-preferences memory bucket policy; do not edit files directly unless the user asks."
     );
     let base_path = base_path.display().to_string();
     let summary_source = summary_source.display().to_string();
@@ -183,17 +206,6 @@ pub(crate) fn maybe_learn_from_completed_turn(
         turn_context.config.as_ref(),
         turn_context.collaboration_mode.mode,
     ) {
-        let codex_home = turn_context.config.codex_home.clone();
-        let turn_id = turn_context.sub_id.clone();
-        tokio::spawn(async move {
-            let _ = append_diagnostic_event(
-                &codex_home,
-                "skipped_gate",
-                &turn_id,
-                Some("orchestrator memory disabled for current mode/config"),
-            )
-            .await;
-        });
         return;
     }
 
@@ -215,25 +227,14 @@ pub(crate) async fn run_cleanup_now_for_session(
     cleanup::run_cleanup_now_for_session(session, config).await
 }
 
-async fn read_summary_source(codex_home: &AbsolutePathBuf) -> Option<(AbsolutePathBuf, String)> {
-    for candidate in [summary_path(codex_home), profile_path(codex_home)] {
-        if let Ok(summary) = fs::read_to_string(&candidate).await {
-            let summary = summary.trim().to_string();
-            if !summary.is_empty() {
-                return Some((candidate, summary));
-            }
-        }
-    }
-
-    None
-}
-
 async fn read_user_preferences_summary_source(
     codex_home: &AbsolutePathBuf,
 ) -> Option<(AbsolutePathBuf, String)> {
     for candidate in [
         user_preferences_summary_path(codex_home),
         user_preferences_profile_path(codex_home),
+        legacy_user_preferences_summary_path(codex_home),
+        legacy_user_preferences_profile_path(codex_home),
     ] {
         if let Ok(summary) = fs::read_to_string(&candidate).await {
             let summary = summary.trim().to_string();
@@ -246,59 +247,17 @@ async fn read_user_preferences_summary_source(
     None
 }
 
-async fn with_recent_memory_supplement(
-    codex_home: &AbsolutePathBuf,
-    config: &OrchestratorMemoryConfig,
-    existing_summary: &str,
-) -> String {
-    let raw = match fs::read_to_string(preferences_path(codex_home)).await {
-        Ok(raw) => raw,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return existing_summary.to_string();
-        }
-        Err(err) => {
-            warn!("failed reading orchestrator memory events for developer instructions: {err}");
-            return existing_summary.to_string();
-        }
-    };
-
-    let snapshot = live::aggregate_memory_items(&raw, config);
-    let missing_recent_items = snapshot
-        .preferences
-        .iter()
-        .chain(snapshot.personal_context.iter())
-        .chain(snapshot.relational_attunement.iter())
-        .chain(snapshot.operator_playbook.iter())
-        .chain(snapshot.ongoing_threads.iter())
-        .chain(snapshot.followups.iter())
-        .filter(|item| item.direct_observations > 0)
-        .filter(|item| !existing_summary.contains(&item.candidate))
-        .map(|item| item.candidate.as_str())
-        .collect::<Vec<_>>();
-
-    if missing_recent_items.is_empty() {
-        return existing_summary.to_string();
-    }
-
-    let mut supplemented = existing_summary.trim().to_string();
-    if !supplemented.is_empty() {
-        supplemented.push_str("\n\n");
-    }
-    supplemented.push_str("## Recent Continuity Items\n");
-    for candidate in missing_recent_items {
-        supplemented.push_str("- ");
-        supplemented.push_str(candidate);
-        supplemented.push('\n');
-    }
-    supplemented
-}
-
 async fn with_recent_user_preferences_supplement(
     codex_home: &AbsolutePathBuf,
-    config: &OrchestratorMemoryConfig,
+    config: &UserPreferencesMemoryConfig,
     existing_summary: &str,
 ) -> String {
-    let raw = match fs::read_to_string(user_preferences_preferences_path(codex_home)).await {
+    let raw = match read_first_existing(&[
+        user_preferences_preferences_path(codex_home),
+        legacy_user_preferences_preferences_path(codex_home),
+    ])
+    .await
+    {
         Ok(raw) => raw,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return existing_summary.to_string();
@@ -311,7 +270,9 @@ async fn with_recent_user_preferences_supplement(
         }
     };
 
-    let snapshot = live::aggregate_memory_items(&raw, config);
+    let filtered = live::filter_raw_events_for_read_policy(&raw, &config.bucket_policy);
+    let memory_config = config.memory_config();
+    let snapshot = live::aggregate_memory_items(&filtered, &memory_config);
     let missing_recent_items = snapshot
         .preferences
         .iter()
@@ -342,17 +303,53 @@ async fn with_recent_user_preferences_supplement(
     supplemented
 }
 
+async fn read_first_existing(paths: &[AbsolutePathBuf]) -> std::io::Result<String> {
+    read_first_existing_source(paths)
+        .await
+        .map(|(_path, raw)| raw)
+}
+
+async fn read_first_existing_source(
+    paths: &[AbsolutePathBuf],
+) -> std::io::Result<(AbsolutePathBuf, String)> {
+    let mut last_not_found = None;
+    for path in paths {
+        match fs::read_to_string(path).await {
+            Ok(raw) => return Ok((path.clone(), raw)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                last_not_found = Some(err);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(last_not_found
+        .unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no paths provided")))
+}
+
+pub fn migrate_legacy_user_preferences_memory_to_extension(
+    codex_home: &AbsolutePathBuf,
+) -> std::io::Result<bool> {
+    let destination = user_preferences_root(codex_home);
+    std::fs::create_dir_all(&destination)?;
+    let source = legacy_user_preferences_root(codex_home);
+    if source.as_path().is_dir() {
+        copy_dir_if_missing(source.as_path(), destination.as_path())
+    } else {
+        Ok(false)
+    }
+}
+
 pub fn migrate_orchestrator_memory_to_user_preferences(
     codex_home: &AbsolutePathBuf,
 ) -> std::io::Result<bool> {
-    let source = root(codex_home);
     let destination = user_preferences_root(codex_home);
-    if !source.as_path().is_dir() {
-        std::fs::create_dir_all(&destination)?;
-        return Ok(false);
-    }
     std::fs::create_dir_all(&destination)?;
-    copy_dir_if_missing(source.as_path(), destination.as_path())
+    let source = legacy_orchestrator_root(codex_home);
+    if source.as_path().is_dir() {
+        copy_dir_if_missing(source.as_path(), destination.as_path())
+    } else {
+        Ok(false)
+    }
 }
 
 fn copy_dir_if_missing(

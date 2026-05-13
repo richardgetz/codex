@@ -22,6 +22,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
+use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
@@ -115,6 +116,8 @@ fn sample_thread_start_response() -> ClientResponsePayload {
         permission_profile: Some(sample_permission_profile()),
         active_permission_profile: None,
         reasoning_effort: None,
+        memory_policy: Default::default(),
+        user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
     })
 }
 
@@ -132,6 +135,8 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
         permission_profile: Some(sample_permission_profile()),
         active_permission_profile: None,
         reasoning_effort: None,
+        memory_policy: Default::default(),
+        user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
     })
 }
 
@@ -149,6 +154,8 @@ fn sample_thread_fork_response() -> ClientResponsePayload {
         permission_profile: Some(sample_permission_profile()),
         active_permission_profile: None,
         reasoning_effort: None,
+        memory_policy: Default::default(),
+        user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
     })
 }
 

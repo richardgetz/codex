@@ -850,6 +850,107 @@ fn thread_agents_prune_response_round_trip() {
 }
 
 #[test]
+fn thread_orchestrator_memory_consolidate_params_round_trip() {
+    let params = ThreadOrchestratorMemoryConsolidateParams {
+        thread_id: "thr_123".to_string(),
+    };
+
+    let value = serde_json::to_value(&params)
+        .expect("serialize thread/orchestratorMemory/consolidate params");
+    assert_eq!(
+        value,
+        json!({
+            "threadId": "thr_123",
+        })
+    );
+
+    let decoded = serde_json::from_value::<ThreadOrchestratorMemoryConsolidateParams>(value)
+        .expect("deserialize thread/orchestratorMemory/consolidate params");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn thread_orchestrator_memory_consolidate_response_round_trip() {
+    let response = ThreadOrchestratorMemoryConsolidateResponse {};
+
+    let value = serde_json::to_value(&response)
+        .expect("serialize thread/orchestratorMemory/consolidate response");
+    assert_eq!(value, json!({}));
+
+    let decoded = serde_json::from_value::<ThreadOrchestratorMemoryConsolidateResponse>(value)
+        .expect("deserialize thread/orchestratorMemory/consolidate response");
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn thread_orchestrator_memory_forget_params_round_trip() {
+    let params = ThreadOrchestratorMemoryForgetParams {
+        thread_id: "thr_123".to_string(),
+        needle: "stale preference".to_string(),
+    };
+
+    let value =
+        serde_json::to_value(&params).expect("serialize thread/orchestratorMemory/forget params");
+    assert_eq!(
+        value,
+        json!({
+            "threadId": "thr_123",
+            "needle": "stale preference",
+        })
+    );
+
+    let decoded = serde_json::from_value::<ThreadOrchestratorMemoryForgetParams>(value)
+        .expect("deserialize thread/orchestratorMemory/forget params");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn thread_orchestrator_memory_forget_response_round_trip() {
+    let response = ThreadOrchestratorMemoryForgetResponse {};
+
+    let value = serde_json::to_value(&response)
+        .expect("serialize thread/orchestratorMemory/forget response");
+    assert_eq!(value, json!({}));
+
+    let decoded = serde_json::from_value::<ThreadOrchestratorMemoryForgetResponse>(value)
+        .expect("deserialize thread/orchestratorMemory/forget response");
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn thread_user_preferences_memory_migrate_params_round_trip() {
+    let params = ThreadUserPreferencesMemoryMigrateParams {
+        thread_id: "thr_123".to_string(),
+    };
+
+    let value = serde_json::to_value(&params)
+        .expect("serialize thread/userPreferencesMemory/migrate params");
+    assert_eq!(
+        value,
+        json!({
+            "threadId": "thr_123",
+        })
+    );
+
+    let decoded = serde_json::from_value::<ThreadUserPreferencesMemoryMigrateParams>(value)
+        .expect("deserialize thread/userPreferencesMemory/migrate params");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn thread_user_preferences_memory_migrate_response_round_trip() {
+    let response = ThreadUserPreferencesMemoryMigrateResponse {};
+
+    let value = serde_json::to_value(&response)
+        .expect("serialize thread/userPreferencesMemory/migrate response");
+    assert_eq!(value, json!({}));
+
+    let decoded = serde_json::from_value::<ThreadUserPreferencesMemoryMigrateResponse>(value)
+        .expect("deserialize thread/userPreferencesMemory/migrate response");
+    assert_eq!(decoded, response);
+}
+
+#[test]
 fn fs_changed_notification_round_trips() {
     let notification = FsChangedNotification {
         watch_id: "0195ec6b-1d6f-7c2e-8c7a-56f2c4a8b9d1".to_string(),
@@ -3370,6 +3471,70 @@ fn thread_start_params_preserve_explicit_null_service_tier() {
     let serialized_without_override =
         serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
     assert_eq!(serialized_without_override.get("serviceTier"), None);
+}
+
+#[test]
+fn thread_start_params_round_trip_user_preferences_memory_policy() {
+    let params: ThreadStartParams = serde_json::from_value(json!({
+        "memoryPolicy": {
+            "read": true,
+            "write": false
+        },
+        "userPreferencesMemoryPolicy": {
+            "readBuckets": ["durable_preference", "operator_playbook"],
+            "writeBuckets": ["operator_playbook"]
+        }
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(
+        params.memory_policy,
+        Some(codex_protocol::config_types::MemoryAccessPolicy {
+            read: true,
+            write: false,
+        })
+    );
+    assert_eq!(
+        params.user_preferences_memory_policy,
+        Some(
+            codex_protocol::config_types::UserPreferencesMemoryBucketPolicy {
+                read_buckets: vec![
+                    codex_protocol::config_types::UserPreferencesMemoryBucket::DurablePreference,
+                    codex_protocol::config_types::UserPreferencesMemoryBucket::OperatorPlaybook,
+                ],
+                write_buckets: vec![
+                    codex_protocol::config_types::UserPreferencesMemoryBucket::OperatorPlaybook,
+                ],
+            }
+        )
+    );
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(
+        serialized.get("userPreferencesMemoryPolicy"),
+        Some(&json!({
+            "readBuckets": ["durable_preference", "operator_playbook"],
+            "writeBuckets": ["operator_playbook"]
+        }))
+    );
+}
+
+#[test]
+fn memory_policy_write_implies_read_on_deserialize() {
+    let params: ThreadStartParams = serde_json::from_value(json!({
+        "memoryPolicy": {
+            "read": false,
+            "write": true
+        }
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(
+        params.memory_policy,
+        Some(codex_protocol::config_types::MemoryAccessPolicy::new(
+            /*read*/ false, /*write*/ true
+        ))
+    );
 }
 
 #[test]

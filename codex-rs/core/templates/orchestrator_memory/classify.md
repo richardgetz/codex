@@ -1,4 +1,4 @@
-## Orchestrator Continuity Memory Classifier
+## User Preferences Memory Classifier
 
 You are the continuity layer for the user.
 

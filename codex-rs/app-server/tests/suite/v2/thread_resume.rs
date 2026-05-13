@@ -50,7 +50,10 @@ use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::MemoryAccessPolicy;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::UserPreferencesMemoryBucket;
+use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
@@ -1902,11 +1905,19 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
     )
     .await??;
 
+    let requested_memory_policy =
+        MemoryAccessPolicy::new(/*read*/ false, /*write*/ false);
+    let requested_user_preferences_policy = UserPreferencesMemoryBucketPolicy {
+        read_buckets: vec![UserPreferencesMemoryBucket::DurablePreference],
+        write_buckets: vec![UserPreferencesMemoryBucket::OperatorPlaybook],
+    };
     let resume_id = primary
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id.clone(),
             model: Some("not-the-running-model".to_string()),
             cwd: Some("/tmp".to_string()),
+            memory_policy: Some(requested_memory_policy),
+            user_preferences_memory_policy: Some(requested_user_preferences_policy.clone()),
             ..Default::default()
         })
         .await?;
@@ -1915,9 +1926,19 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
         primary.read_stream_until_response_message(RequestId::Integer(resume_id)),
     )
     .await??;
-    let ThreadResumeResponse { thread, model, .. } =
-        to_response::<ThreadResumeResponse>(resume_resp)?;
+    let ThreadResumeResponse {
+        thread,
+        model,
+        memory_policy,
+        user_preferences_memory_policy,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(model, "gpt-5.4");
+    assert_eq!(memory_policy, requested_memory_policy);
+    assert_eq!(
+        user_preferences_memory_policy,
+        requested_user_preferences_policy
+    );
     // The running-thread resume response is queued onto the thread listener task.
     // If the in-flight turn completes before that queued command runs, the response
     // can legitimately observe the thread as idle.

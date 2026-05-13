@@ -569,6 +569,8 @@ fn sample_thread_start_response() -> ThreadStartResponse {
         },
         permission_profile: None,
         active_permission_profile: None,
+        memory_policy: Default::default(),
+        user_preferences_memory_policy: Default::default(),
         reasoning_effort: None,
     }
 }

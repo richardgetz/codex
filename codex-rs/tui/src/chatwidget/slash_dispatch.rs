@@ -975,20 +975,11 @@ impl ChatWidget {
                 self.add_info_message(
                     "User preferences memory migration started.".to_string(),
                     Some(
-                        "This copies missing files from orchestrator_memory into user_preferences_memory."
+                        "This copies missing files from orchestrator_memory into memories/extensions/user_preferences."
                             .to_string(),
                     ),
                 );
-                let tx = self.app_event_tx.clone();
-                let codex_home = self.config.codex_home.clone();
-                tokio::spawn(async move {
-                    let result =
-                        crate::legacy_core::migrate_orchestrator_memory_to_user_preferences(
-                            &codex_home,
-                        )
-                        .map_err(|err| err.to_string());
-                    tx.send(AppEvent::UserPreferencesMemoryMigrateResult { result });
-                });
+                self.submit_op(AppCommand::UserPreferencesMemoryMigrate);
             }
             SlashCommand::Scratchpad => {
                 self.add_current_scratchpad_output();
@@ -1224,21 +1215,7 @@ impl ChatWidget {
                 self.dispatch_scratchpad_absorb_command(trimmed);
             }
             SlashCommand::OrchestratorMemoryForget if !trimmed.is_empty() => {
-                let tx = self.app_event_tx.clone();
-                let needle = args.clone();
-                let codex_home = self.config.codex_home.clone();
-                let memory_config = self.config.orchestrator_memory.clone();
-                tokio::spawn(async move {
-                    let result =
-                        crate::legacy_core::prune_orchestrator_memory_entries_matching_needle(
-                            &codex_home,
-                            &memory_config,
-                            &needle,
-                        )
-                        .await
-                        .map_err(|err| err.to_string());
-                    tx.send(AppEvent::OrchestratorMemoryForgetResult { needle, result });
-                });
+                self.submit_op(AppCommand::OrchestratorMemoryForget { needle: args });
             }
             SlashCommand::Account if !trimmed.is_empty() => {
                 let alias = if trimmed.eq_ignore_ascii_case("default") {

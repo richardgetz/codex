@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "MemoryAccessPolicy": {
+      "properties": {
+        "read": {
+          "type": "boolean"
+        },
+        "write": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read",
+        "write"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "policy": {
+      "$ref": "#/definitions/MemoryAccessPolicy"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "policy",
+    "threadId"
+  ],
+  "title": "ThreadMemoryPolicySetParams",
+  "type": "object"
+}

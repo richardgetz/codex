@@ -388,6 +388,9 @@ Check supervised sessions directly for new progress, blockers, or operator instr
             personality: Some(Personality::Friendly),
             session_source: SessionSource::default(),
             thread_source: None,
+            memory_policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
+            user_preferences_memory_policy:
+                codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
         };
         let collaboration_mode = CollaborationMode {
             mode: ModeKind::Plan,

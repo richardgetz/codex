@@ -20,12 +20,17 @@ use chrono::NaiveTime;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_config::types::OrchestratorMemoryConfig;
+use codex_protocol::config_types::UserPreferencesMemoryBucket;
 use codex_protocol::protocol::SessionSource;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::fs;
+#[cfg(test)]
+use tokio::time::Duration;
+#[cfg(test)]
+use tokio::time::timeout;
 use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -98,10 +103,19 @@ pub(super) fn start_scheduled_cleanup_task(
     config: &Arc<Config>,
     session_source: &SessionSource,
 ) {
-    if matches!(session_source, SessionSource::SubAgent(_)) {
+    if matches!(
+        session_source,
+        SessionSource::SubAgent(_)
+            | SessionSource::Internal(
+                codex_protocol::protocol::InternalSessionSource::MemoryConsolidation
+            )
+    ) {
         return;
     }
-    if !config.orchestrator_memory.enabled || !config.orchestrator_memory.cleanup.enabled {
+    if !config.user_preferences_memory.enabled
+        || !config.user_preferences_memory.cleanup.enabled
+        || !config.memories.generate_memories
+    {
         return;
     }
 
@@ -118,8 +132,15 @@ async fn run_scheduled_cleanup_for_session_if_due(
     session: &Arc<Session>,
     config: &Arc<Config>,
 ) -> std::io::Result<()> {
-    let Some(due_at_utc) = due_cleanup_at(&config.codex_home, &config.orchestrator_memory).await?
-    else {
+    let Some(_permit) = session.memory_write_permit().await else {
+        return Ok(());
+    };
+    if !session_allows_global_memory_maintenance(session).await {
+        return Ok(());
+    }
+
+    let memory_config = config.user_preferences_memory.memory_config();
+    let Some(due_at_utc) = due_cleanup_at(&config.codex_home, &memory_config).await? else {
         return Ok(());
     };
 
@@ -139,15 +160,144 @@ pub(super) async fn run_cleanup_now_for_session(
     session: &Arc<Session>,
     config: &Arc<Config>,
 ) -> std::io::Result<CleanupResult> {
-    if !config.orchestrator_memory.enabled || !config.orchestrator_memory.cleanup.enabled {
-        return Ok(CleanupResult {
-            raw_events_before: 0,
-            raw_events_after: 0,
-            removed_raw_events: 0,
-        });
+    if !config.user_preferences_memory.enabled {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "user preferences memory is disabled for this session",
+        ));
+    }
+    if !config.user_preferences_memory.cleanup.enabled {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "user preferences memory cleanup is disabled for this session",
+        ));
+    }
+
+    let Some(_permit) = session.memory_write_permit().await else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "memory writes are disabled for this session",
+        ));
+    };
+    if !session_allows_global_memory_maintenance(session).await {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "global memory consolidation requires write access to all user-preferences memory buckets",
+        ));
     }
 
     run_cleanup_now_with_optional_model(session, config).await
+}
+
+async fn session_allows_global_memory_maintenance(session: &Arc<Session>) -> bool {
+    let bucket_policy = session.user_preferences_memory_policy().await;
+    UserPreferencesMemoryBucket::all()
+        .iter()
+        .copied()
+        .all(|bucket| bucket_policy.can_write(bucket))
+}
+
+#[cfg(test)]
+pub(super) async fn cleanup_waits_for_active_memory_write_permit() {
+    let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+    let session = Arc::new(session);
+    let mut config = turn_context.config.as_ref().clone();
+    config.memories.generate_memories = true;
+    config.user_preferences_memory.enabled = true;
+    config.user_preferences_memory.cleanup.enabled = true;
+    let config = Arc::new(config);
+    let mut permits = Vec::new();
+    for _ in 0..crate::session::session::MEMORY_WRITE_GATE_PERMITS {
+        permits.push(
+            session
+                .memory_write_permit()
+                .await
+                .expect("memory writes should be enabled initially"),
+        );
+    }
+    let session_for_cleanup = Arc::clone(&session);
+    let config_for_cleanup = Arc::clone(&config);
+    let mut cleanup = Box::pin(tokio::spawn(async move {
+        run_cleanup_now_for_session(&session_for_cleanup, &config_for_cleanup)
+            .await
+            .expect("cleanup should complete");
+    }));
+
+    assert!(
+        timeout(Duration::from_millis(25), &mut cleanup)
+            .await
+            .is_err(),
+        "cleanup should wait for an available memory write permit"
+    );
+    drop(permits);
+
+    cleanup.await.expect("cleanup task should join");
+}
+
+#[cfg(test)]
+pub(super) async fn manual_cleanup_uses_live_memory_write_policy() {
+    let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+    let session = Arc::new(session);
+    let mut config = turn_context.config.as_ref().clone();
+    config.memories.generate_memories = false;
+    config.user_preferences_memory.enabled = true;
+    config.user_preferences_memory.cleanup.enabled = true;
+    let config = Arc::new(config);
+    session
+        .update_settings(crate::session::session::SessionSettingsUpdate {
+            memory_policy: Some(codex_protocol::config_types::MemoryAccessPolicy::new(
+                /*read*/ false, /*write*/ false,
+            )),
+            ..Default::default()
+        })
+        .await
+        .expect("memory policy update should apply");
+
+    let denied = run_cleanup_now_for_session(&session, &config)
+        .await
+        .expect_err("cleanup should reject disabled live memory writes");
+    assert_eq!(denied.kind(), std::io::ErrorKind::PermissionDenied);
+
+    session
+        .update_settings(crate::session::session::SessionSettingsUpdate {
+            memory_policy: Some(codex_protocol::config_types::MemoryAccessPolicy::new(
+                /*read*/ true, /*write*/ true,
+            )),
+            ..Default::default()
+        })
+        .await
+        .expect("memory policy update should apply");
+
+    session
+        .update_settings(crate::session::session::SessionSettingsUpdate {
+            user_preferences_memory_policy: Some(
+                codex_protocol::config_types::UserPreferencesMemoryBucketPolicy {
+                    read_buckets: UserPreferencesMemoryBucket::all().to_vec(),
+                    write_buckets: vec![UserPreferencesMemoryBucket::DurablePreference],
+                },
+            ),
+            ..Default::default()
+        })
+        .await
+        .expect("user preferences memory policy update should apply");
+    let denied = run_cleanup_now_for_session(&session, &config)
+        .await
+        .expect_err("cleanup should reject restricted write buckets");
+    assert_eq!(denied.kind(), std::io::ErrorKind::PermissionDenied);
+
+    session
+        .update_settings(crate::session::session::SessionSettingsUpdate {
+            user_preferences_memory_policy: Some(
+                codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
+            ),
+            ..Default::default()
+        })
+        .await
+        .expect("user preferences memory policy update should apply");
+
+    run_cleanup_now_for_session(&session, &config)
+        .await
+        .expect("cleanup should use live memory write policy");
 }
 
 #[cfg(test)]
@@ -200,14 +350,15 @@ async fn run_cleanup_now_with_optional_model(
     session: &Arc<Session>,
     config: &Arc<Config>,
 ) -> std::io::Result<CleanupResult> {
+    let memory_config = config.user_preferences_memory.memory_config();
     migration::migrate_if_needed(&config.codex_home).await?;
     ensure_layout(&config.codex_home).await?;
     let preferences = preferences_path(&config.codex_home);
     let raw = match fs::read_to_string(&preferences).await {
         Ok(raw) => raw,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            if config.orchestrator_memory.cleanup.deep_consolidation {
-                consolidate_preferences(&config.codex_home, &config.orchestrator_memory).await?;
+            if memory_config.cleanup.deep_consolidation {
+                consolidate_preferences(&config.codex_home, &memory_config).await?;
             }
             return Ok(CleanupResult {
                 raw_events_before: 0,
@@ -219,13 +370,13 @@ async fn run_cleanup_now_with_optional_model(
     };
 
     let raw_events_before = raw.lines().filter(|line| !line.trim().is_empty()).count();
-    let mechanical = if config.orchestrator_memory.cleanup.dedupe_raw_events {
-        compact_events(&raw, &config.orchestrator_memory)
+    let mechanical = if memory_config.cleanup.dedupe_raw_events {
+        compact_events(&raw, &memory_config)
     } else {
         parse_valid_events(&raw)
     };
 
-    let events = if config.orchestrator_memory.cleanup.model_consolidation {
+    let events = if memory_config.cleanup.model_consolidation {
         let raw_for_model = events_to_jsonl(&mechanical)?;
         match model::cleanup_events_with_model(session, config, raw_for_model).await {
             Ok(model_events) if !model_events.is_empty() => model_events,
@@ -245,8 +396,8 @@ async fn run_cleanup_now_with_optional_model(
     let compacted_raw = fs::read_to_string(&preferences).await.unwrap_or_default();
     migration::sync_bucket_files_from_raw(&config.codex_home, &compacted_raw).await?;
 
-    if config.orchestrator_memory.cleanup.deep_consolidation {
-        consolidate_preferences(&config.codex_home, &config.orchestrator_memory).await?;
+    if memory_config.cleanup.deep_consolidation {
+        consolidate_preferences(&config.codex_home, &memory_config).await?;
     }
 
     let raw_events_after = events.len();

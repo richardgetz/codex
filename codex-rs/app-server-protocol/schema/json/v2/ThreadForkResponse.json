@@ -789,6 +789,21 @@
       ],
       "type": "string"
     },
+    "MemoryAccessPolicy": {
+      "properties": {
+        "read": {
+          "type": "boolean"
+        },
+        "write": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read",
+        "write"
+      ],
+      "type": "object"
+    },
     "MemoryCitation": {
       "properties": {
         "entries": {
@@ -2459,6 +2474,38 @@
         }
       ]
     },
+    "UserPreferencesMemoryBucket": {
+      "enum": [
+        "durable_preference",
+        "personal_context",
+        "relational_attunement",
+        "operator_playbook",
+        "ongoing_threads",
+        "followup_state"
+      ],
+      "type": "string"
+    },
+    "UserPreferencesMemoryBucketPolicy": {
+      "properties": {
+        "readBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        },
+        "writeBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "readBuckets",
+        "writeBuckets"
+      ],
+      "type": "object"
+    },
     "WebSearchAction": {
       "oneOf": [
         {
@@ -2584,6 +2631,17 @@
       },
       "type": "array"
     },
+    "memoryPolicy": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/MemoryAccessPolicy"
+        }
+      ],
+      "default": {
+        "read": true,
+        "write": true
+      }
+    },
     "model": {
       "type": "string"
     },
@@ -2616,6 +2674,31 @@
     },
     "thread": {
       "$ref": "#/definitions/Thread"
+    },
+    "userPreferencesMemoryPolicy": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+        }
+      ],
+      "default": {
+        "readBuckets": [
+          "durable_preference",
+          "personal_context",
+          "relational_attunement",
+          "operator_playbook",
+          "ongoing_threads",
+          "followup_state"
+        ],
+        "writeBuckets": [
+          "durable_preference",
+          "personal_context",
+          "relational_attunement",
+          "operator_playbook",
+          "ongoing_threads",
+          "followup_state"
+        ]
+      }
     }
   },
   "required": [

@@ -52,8 +52,11 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 
 use crate::context_manager::is_user_turn_boundary;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::MemoryAccessPolicy;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::config_types::UserPreferencesMemoryBucket;
+use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
@@ -160,6 +163,8 @@ pub(super) async fn user_input_or_turn_inner(
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
+                    memory_policy: None,
+                    user_preferences_memory_policy: None,
                 },
                 None,
             )
@@ -212,6 +217,8 @@ pub(super) async fn user_input_or_turn_inner(
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
+                    memory_policy: None,
+                    user_preferences_memory_policy: None,
                 },
                 responsesapi_client_metadata,
             )
@@ -579,6 +586,131 @@ pub fn consolidate_orchestrator_memory(sess: &Arc<Session>, config: &Arc<Config>
     });
 }
 
+pub fn forget_orchestrator_memory(
+    sess: &Arc<Session>,
+    config: &Arc<Config>,
+    sub_id: String,
+    needle: String,
+) {
+    let sess = Arc::clone(sess);
+    let config = Arc::clone(config);
+    tokio::spawn(async move {
+        let Some(_permit) = sess.memory_write_permit().await else {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Memory writes are disabled for this session; enable memory generation before editing user preferences memory.".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            })
+            .await;
+            return;
+        };
+
+        let bucket_policy = sess.user_preferences_memory_policy().await;
+        if !UserPreferencesMemoryBucket::all()
+            .iter()
+            .copied()
+            .all(|bucket| bucket_policy.can_write(bucket))
+        {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Orchestrator memory forget requires write access to all user-preferences memory buckets; widen this session's userPreferencesMemoryPolicy.writeBuckets before running this global maintenance command.".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            })
+            .await;
+            return;
+        }
+
+        match crate::orchestrator_memory::prune_entries_matching_needle(
+            &config.codex_home,
+            &config.orchestrator_memory,
+            &needle,
+        )
+        .await
+        {
+            Ok(result) => {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Warning(WarningEvent {
+                        message: format!(
+                            "Orchestrator memory forget completed for `{needle}`. Removed preference events: {}; summary lines: {}; profile lines: {}.",
+                            result.removed_preference_events,
+                            result.removed_summary_lines,
+                            result.removed_profile_lines
+                        ),
+                    }),
+                })
+                .await;
+            }
+            Err(err) => {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("Orchestrator memory forget failed: {err}"),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                })
+                .await;
+            }
+        }
+    });
+}
+
+pub fn migrate_user_preferences_memory(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
+    let sess = Arc::clone(sess);
+    let config = Arc::clone(config);
+    tokio::spawn(async move {
+        let Some(_permit) = sess.memory_write_permit().await else {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Memory writes are disabled for this session; enable memory generation before migrating user preferences memory.".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            })
+            .await;
+            return;
+        };
+
+        match crate::orchestrator_memory::migrate_orchestrator_memory_to_user_preferences(
+            &config.codex_home,
+        ) {
+            Ok(true) => {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Warning(WarningEvent {
+                        message: "User preferences memory migration completed.".to_string(),
+                    }),
+                })
+                .await;
+            }
+            Ok(false) => {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Warning(WarningEvent {
+                        message: "No legacy orchestrator memory files were found to migrate."
+                            .to_string(),
+                    }),
+                })
+                .await;
+            }
+            Err(err) => {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("User preferences memory migration failed: {err}"),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                })
+                .await;
+            }
+        }
+    });
+}
+
 pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
     if num_turns == 0 {
         sess.send_event_raw(Event {
@@ -839,6 +971,62 @@ pub async fn prune_idle_agents(sess: &Arc<Session>, sub_id: String) {
 pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: ThreadMemoryMode) {
     if let Err(err) = persist_thread_memory_mode_update(sess, mode).await {
         warn!("Failed to persist thread memory mode update to rollout: {err}");
+        let event = Event {
+            id: sub_id,
+            msg: EventMsg::Error(ErrorEvent {
+                message: err.to_string(),
+                codex_error_info: Some(CodexErrorInfo::Other),
+            }),
+        };
+        sess.send_event_raw(event).await;
+    }
+}
+
+/// Applies the session-local outer memories read/write policy.
+///
+/// This affects subsequent turns in the current live session only; persistent
+/// defaults still come from `[memories]` in config.
+pub async fn set_memory_access_policy(
+    sess: &Arc<Session>,
+    sub_id: String,
+    policy: MemoryAccessPolicy,
+) {
+    if let Err(err) = sess
+        .update_settings(SessionSettingsUpdate {
+            memory_policy: Some(policy),
+            ..Default::default()
+        })
+        .await
+    {
+        warn!("Failed to update memory access policy: {err}");
+        let event = Event {
+            id: sub_id,
+            msg: EventMsg::Error(ErrorEvent {
+                message: err.to_string(),
+                codex_error_info: Some(CodexErrorInfo::Other),
+            }),
+        };
+        sess.send_event_raw(event).await;
+    }
+}
+
+/// Applies the session-local user preferences memory bucket policy.
+///
+/// This affects subsequent turns in the current live session only; persistent
+/// defaults still come from `[user_preferences_memory]` in config.
+pub async fn set_user_preferences_memory_policy(
+    sess: &Arc<Session>,
+    sub_id: String,
+    policy: UserPreferencesMemoryBucketPolicy,
+) {
+    if let Err(err) = sess
+        .update_settings(SessionSettingsUpdate {
+            user_preferences_memory_policy: Some(policy),
+            ..Default::default()
+        })
+        .await
+    {
+        warn!("Failed to update user preferences memory policy: {err}");
         let event = Event {
             id: sub_id,
             msg: EventMsg::Error(ErrorEvent {
@@ -1123,6 +1311,14 @@ pub(super) async fn submission_loop(
                     consolidate_orchestrator_memory(&sess, &config, sub.id.clone());
                     false
                 }
+                Op::OrchestratorMemoryForget { needle } => {
+                    forget_orchestrator_memory(&sess, &config, sub.id.clone(), needle);
+                    false
+                }
+                Op::UserPreferencesMemoryMigrate => {
+                    migrate_user_preferences_memory(&sess, &config, sub.id.clone());
+                    false
+                }
                 Op::ThreadRollback { num_turns } => {
                     thread_rollback(&sess, sub.id.clone(), num_turns).await;
                     false
@@ -1141,6 +1337,14 @@ pub(super) async fn submission_loop(
                 }
                 Op::SetThreadMemoryMode { mode } => {
                     set_thread_memory_mode(&sess, sub.id.clone(), mode).await;
+                    false
+                }
+                Op::SetMemoryAccessPolicy { policy } => {
+                    set_memory_access_policy(&sess, sub.id.clone(), policy).await;
+                    false
+                }
+                Op::SetUserPreferencesMemoryPolicy { policy } => {
+                    set_user_preferences_memory_policy(&sess, sub.id.clone(), policy).await;
                     false
                 }
                 Op::RunUserShellCommand { command } => {

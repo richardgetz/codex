@@ -90,6 +90,21 @@
       ],
       "type": "object"
     },
+    "MemoryAccessPolicy": {
+      "properties": {
+        "read": {
+          "type": "boolean"
+        },
+        "write": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read",
+        "write"
+      ],
+      "type": "object"
+    },
     "PermissionProfileModificationParams": {
       "oneOf": [
         {
@@ -194,6 +209,38 @@
         "environmentId"
       ],
       "type": "object"
+    },
+    "UserPreferencesMemoryBucket": {
+      "enum": [
+        "durable_preference",
+        "personal_context",
+        "relational_attunement",
+        "operator_playbook",
+        "ongoing_threads",
+        "followup_state"
+      ],
+      "type": "string"
+    },
+    "UserPreferencesMemoryBucketPolicy": {
+      "properties": {
+        "readBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        },
+        "writeBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "readBuckets",
+        "writeBuckets"
+      ],
+      "type": "object"
     }
   },
   "properties": {
@@ -248,6 +295,17 @@
         "boolean",
         "null"
       ]
+    },
+    "memoryPolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MemoryAccessPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Session-local read/write access for the outer memories layer. Omitted uses the server's `[memories]` config defaults."
     },
     "model": {
       "type": [
@@ -313,6 +371,17 @@
         }
       ],
       "description": "Optional client-supplied analytics source classification for this thread."
+    },
+    "userPreferencesMemoryPolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Session-local memory bucket policy for this thread. Omitted uses the server's `[user_preferences_memory]` config defaults."
     }
   },
   "title": "ThreadStartParams",

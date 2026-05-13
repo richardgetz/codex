@@ -1,13 +1,20 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
+use codex_memories_read::memory_root;
 use codex_protocol::SessionId;
+use codex_protocol::config_types::MemoryAccessPolicy;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use std::sync::atomic::AtomicU64;
+use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
+use tokio::sync::SemaphorePermit;
+
+pub(crate) const MEMORY_WRITE_GATE_PERMITS: u32 = 1024;
 
 /// Context for an initialized model agent
 ///
@@ -19,6 +26,7 @@ pub(crate) struct Session {
     pub(super) agent_status: watch::Sender<AgentStatus>,
     pub(super) out_of_band_elicitation_paused: watch::Sender<bool>,
     pub(super) state: Mutex<SessionState>,
+    pub(super) memory_write_gate: Semaphore,
     /// Serializes rebuild/apply cycles for the running proxy; each cycle
     /// rebuilds from the current SessionState while holding this lock.
     pub(super) managed_network_proxy_refresh_lock: Semaphore,
@@ -82,6 +90,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) thread_name: Option<String>,
     /// Sticky environments for turns that do not provide a turn-local override.
     pub(super) environments: Vec<TurnEnvironmentSelection>,
+    pub(super) memory_policy: MemoryAccessPolicy,
+    pub(super) user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
 
     // TODO(pakrym): Remove config from here
     pub(super) original_config_do_not_use: Arc<Config>,
@@ -149,6 +159,8 @@ impl SessionConfiguration {
             personality: self.personality,
             session_source: self.session_source.clone(),
             thread_source: self.thread_source,
+            memory_policy: self.memory_policy,
+            user_preferences_memory_policy: self.user_preferences_memory_policy.clone(),
         }
     }
 
@@ -196,6 +208,13 @@ impl SessionConfiguration {
         }
         if let Some(personality) = updates.personality {
             next_configuration.personality = Some(personality);
+        }
+        let memory_policy_changed = updates.memory_policy.is_some();
+        if let Some(policy) = updates.memory_policy {
+            next_configuration.memory_policy = policy.normalized();
+        }
+        if let Some(policy) = updates.user_preferences_memory_policy.clone() {
+            next_configuration.user_preferences_memory_policy = policy;
         }
         if let Some(approval_policy) = updates.approval_policy {
             next_configuration.approval_policy.set(approval_policy)?;
@@ -275,6 +294,9 @@ impl SessionConfiguration {
                 ),
             )?;
         }
+        if memory_policy_changed {
+            next_configuration.apply_memory_policy_to_permission_profile()?;
+        }
         if let Some(app_server_client_name) = updates.app_server_client_name.clone() {
             next_configuration.app_server_client_name = Some(app_server_client_name);
         }
@@ -305,6 +327,72 @@ impl SessionConfiguration {
         self.permission_profile.set(effective_permission_profile)?;
         Ok(())
     }
+
+    fn apply_memory_policy_to_permission_profile(&mut self) -> ConstraintResult<()> {
+        let memory_root = memory_root(&self.codex_home);
+        let legacy_user_preferences_root = self.codex_home.join("user_preferences_memory");
+        let user_preferences_extension_root =
+            memory_root.join("extensions").join("user_preferences");
+        let managed_memory_roots = [
+            memory_root.clone(),
+            legacy_user_preferences_root.clone(),
+            user_preferences_extension_root,
+        ];
+        let mut file_system_sandbox_policy = self.file_system_sandbox_policy();
+        file_system_sandbox_policy.entries.retain(|entry| {
+            !matches!(
+                &entry.path,
+                FileSystemPath::Path { path }
+                    if managed_memory_roots.iter().any(|managed| managed == path)
+            )
+        });
+
+        let memory_policy = self.memory_policy.normalized();
+        if memory_policy.write {
+            file_system_sandbox_policy = file_system_sandbox_policy
+                .with_additional_writable_roots(&self.cwd, std::slice::from_ref(&memory_root));
+        } else if memory_policy.read {
+            file_system_sandbox_policy = file_system_sandbox_policy.with_additional_readable_roots(
+                &self.cwd,
+                &[memory_root, legacy_user_preferences_root],
+            );
+        }
+
+        self.permission_profile.set(
+            PermissionProfile::from_runtime_permissions_with_enforcement(
+                self.permission_profile.get().enforcement(),
+                &file_system_sandbox_policy,
+                self.network_sandbox_policy(),
+            ),
+        )?;
+        Ok(())
+    }
+}
+
+impl Session {
+    pub(crate) async fn memory_write_enabled(&self) -> bool {
+        let state = self.state.lock().await;
+        state.session_configuration.memory_policy.normalized().write
+    }
+
+    pub(crate) async fn memory_write_permit(&self) -> Option<SemaphorePermit<'_>> {
+        let Ok(permit) = self.memory_write_gate.acquire().await else {
+            return None;
+        };
+        if self.memory_write_enabled().await {
+            Some(permit)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) async fn user_preferences_memory_policy(&self) -> UserPreferencesMemoryBucketPolicy {
+        let state = self.state.lock().await;
+        state
+            .session_configuration
+            .user_preferences_memory_policy
+            .clone()
+    }
 }
 
 #[derive(Default, Clone)]
@@ -327,6 +415,8 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
+    pub(crate) memory_policy: Option<MemoryAccessPolicy>,
+    pub(crate) user_preferences_memory_policy: Option<UserPreferencesMemoryBucketPolicy>,
 }
 
 pub(crate) struct AppServerClientMetadata {
@@ -893,6 +983,7 @@ impl Session {
                 agent_status,
                 out_of_band_elicitation_paused,
                 state: Mutex::new(state),
+                memory_write_gate: Semaphore::new(MEMORY_WRITE_GATE_PERMITS as usize),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),
                 pending_mcp_server_refresh_config: Mutex::new(None),

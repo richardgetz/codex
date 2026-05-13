@@ -145,6 +145,7 @@ Example with notification opt-out:
 - `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread. When the request includes a `cwd` and the resolved sandbox is `workspace-write` or full access, app-server also marks that project as trusted in the user `config.toml`. Pass `sessionStartSource: "clear"` when starting a replacement thread after clearing the current session so `SessionStart` hooks receive `source: "clear"` instead of the default `"startup"`. For permissions, prefer experimental `permissions` profile selection; the legacy `sandbox` shorthand is still accepted but cannot be combined with `permissions`. Experimental `environments` selects the sticky execution environments for turns on the thread; omit it to use the server default, pass `[]` to disable environments, or pass explicit environment ids with per-environment `cwd`.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it. Accepts the same permission override rules as `thread/start`.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; if the source thread is currently mid-turn, the fork records the same interruption marker as `turn/interrupt` instead of inheriting an unmarked partial turn suffix. The returned `thread.forkedFromId` points at the source thread when known. Accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread. Experimental clients can pass `excludeTurns: true` when they plan to page fork history via `thread/turns/list` instead of receiving the full turn array immediately. Accepts the same permission override rules as `thread/start`.
+- `thread/start`, `thread/resume`, and `thread/fork` accept `memoryPolicy` to gate the outer memories layer and `userPreferencesMemoryPolicy` to set the session-local read/write bucket policy for canonical `memories/extensions/user_preferences`. Responses echo both active policies.
 - `thread/start`, `thread/resume`, and `thread/fork` responses include the legacy `sandbox` compatibility projection. Experimental clients can read response `permissionProfile` for the exact active runtime permissions and `activePermissionProfile` for the named or implicit built-in profile identity/provenance when known.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
@@ -153,6 +154,11 @@ Example with notification opt-out:
 - `thread/turns/items/list` — experimental; reserved for paging full items for one turn. The API shape is present, but app-server currently returns an unsupported-method JSON-RPC error.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
+- `thread/memoryPolicy/set` — set a loaded thread’s session-local outer memory read/write access; returns `{}` on success. This affects later turns in that live session, updates automatic memory sandbox roots, and does not edit `config.toml`.
+- `thread/userPreferencesMemoryPolicy/set` — set a loaded thread’s session-local user-preferences extension read/write bucket policy; returns `{}` on success. This affects later turns in that live session and does not edit `config.toml`.
+- `thread/orchestratorMemory/consolidate` — start a loaded thread's user-preferences memory cleanup/consolidation pass through the session memory write gate; returns `{}` once queued. Because consolidation rewrites the global event log and bucket mirrors, the loaded thread must have write access to all user-preferences buckets.
+- `thread/orchestratorMemory/forget` — prune loaded thread user-preferences memory entries matching a `needle` through the session memory write gate; returns `{}` once queued. Because this is a global maintenance prune, the loaded thread must have write access to all user-preferences buckets.
+- `thread/userPreferencesMemory/migrate` — copy legacy orchestrator-memory files into the canonical user-preferences extension through the session memory write gate; returns `{}` once queued.
 - `thread/scratchpad/continuousPolicy/set` — set the loaded thread’s scratchpad-backed continuous run policy to enabled or disabled; returns `{}` after the scratchpad policy is persisted and emits `turn/scratchpad/updated`. When enabled and the scratchpad still has unfinished `next_steps` or `pending_waits`, Codex loops back to continue instead of finalizing.
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
 - `thread/goal/set` — create, replace, or update the single persisted goal for a materialized thread; returns the current goal and emits `thread/goal/updated`. Supplying a new `objective` replaces the goal and resets usage accounting. Supplying the current non-terminal objective or omitting `objective` updates the existing goal’s status and/or token budget while preserving usage.
@@ -494,11 +500,57 @@ Experimental: use `thread/memoryMode/set` to change whether a thread remains eli
 { "id": 26, "result": {} }
 ```
 
+Use `thread/userPreferencesMemoryPolicy/set` to change which canonical
+`memories/extensions/user_preferences` buckets a loaded thread may read from or
+write to. Use `thread/memoryPolicy/set` when you need to gate the whole memory
+layer for that loaded session. `memoryPolicy.write: true` implies
+`memoryPolicy.read: true` because writable memory roots are readable filesystem
+roots. The bucket names are `durable_preference`,
+`personal_context`, `relational_attunement`, `operator_playbook`,
+`ongoing_threads`, and `followup_state`.
+
+```json
+{ "method": "thread/memoryPolicy/set", "id": 27, "params": {
+    "threadId": "thr_123",
+    "policy": { "read": true, "write": false }
+} }
+{ "id": 27, "result": {} }
+```
+
+```json
+{ "method": "thread/userPreferencesMemoryPolicy/set", "id": 28, "params": {
+    "threadId": "thr_123",
+    "policy": {
+        "readBuckets": ["durable_preference", "operator_playbook"],
+        "writeBuckets": ["operator_playbook"]
+    }
+} }
+{ "id": 28, "result": {} }
+```
+
+The maintenance endpoints below route through the same loaded thread and session
+memory write policy as slash commands in the TUI:
+
+```json
+{ "method": "thread/orchestratorMemory/forget", "id": 29, "params": {
+    "threadId": "thr_123",
+    "needle": "stale preference"
+} }
+{ "id": 29, "result": {} }
+```
+
+```json
+{ "method": "thread/userPreferencesMemory/migrate", "id": 30, "params": {
+    "threadId": "thr_123"
+} }
+{ "id": 30, "result": {} }
+```
+
 Experimental: use `memory/reset` to clear local memory artifacts and sqlite-backed memory stage data for the current Codex home. This preserves existing thread memory modes; use `thread/memoryMode/set` separately when a thread's future memory eligibility should change.
 
 ```json
-{ "method": "memory/reset", "id": 27 }
-{ "id": 27, "result": {} }
+{ "method": "memory/reset", "id": 28 }
+{ "id": 28, "result": {} }
 ```
 
 ### Example: Set and update a thread goal
@@ -506,12 +558,12 @@ Experimental: use `memory/reset` to clear local memory artifacts and sqlite-back
 Use `thread/goal/set` with an `objective` to create or replace the current goal for a materialized thread. Supplying a new objective resets `tokensUsed`, `timeUsedSeconds`, and `createdAt`. Supplying the current non-terminal objective, or omitting `objective`, updates the existing goal’s status or token budget while preserving usage history. Clients can set `budgetLimited` when they stop because a token budget is exhausted or nearly exhausted; the system also sets it when accounting crosses a configured token budget.
 
 ```json
-{ "method": "thread/goal/set", "id": 27, "params": {
+{ "method": "thread/goal/set", "id": 29, "params": {
     "threadId": "thr_123",
     "objective": "Keep improving the benchmark until p95 latency is under 120ms",
     "tokenBudget": 200000
 } }
-{ "id": 27, "result": { "goal": {
+{ "id": 29, "result": { "goal": {
     "threadId": "thr_123",
     "objective": "Keep improving the benchmark until p95 latency is under 120ms",
     "status": "active",

@@ -148,6 +148,16 @@ async fn scheduled_cleanup_does_not_rerun_after_current_due_window_completed() {
     assert_eq!(raw.lines().count(), 2);
 }
 
+#[tokio::test]
+async fn session_cleanup_waits_for_active_memory_write_permit() {
+    cleanup_waits_for_active_memory_write_permit().await;
+}
+
+#[tokio::test]
+async fn session_cleanup_uses_live_memory_write_policy() {
+    manual_cleanup_uses_live_memory_write_policy().await;
+}
+
 #[test]
 fn compact_events_keeps_recent_forget_tombstones_but_drops_old_ones() {
     let now = Utc::now();

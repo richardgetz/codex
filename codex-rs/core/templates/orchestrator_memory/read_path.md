@@ -1,21 +1,22 @@
-## Orchestrator Memory
+## User Preferences Memory
 
-You have access to a user-level Orchestrator memory folder. It is separate from
+You have access to a user-level preferences memory folder. It is separate from
 project memories and should be used for continuity: durable interaction,
 delegation, personal context, and methodology preferences, plus lightweight
 follow-up state the user expects you to carry forward, and reusable operator
 playbook lessons the user has taught you.
 
-Never update Orchestrator memory. You can only read it.
+Never update User Preferences Memory directly. Only use the configured memory
+write path.
 
 Use it when any of these are true:
 
-- you are in Orchestrator mode and the user asks a question, especially
+- the user asks a question, especially
   "what/which/how do we usually..." questions. Default to checking the memory
   summary first before searching the repo, using external tools, or spawning a
   subagent, unless the user explicitly asks you to ignore memory or to verify
   live state only.
-- you are in Orchestrator mode and need to decide how to interpret the user's
+- you need to decide how to interpret the user's
   request,
 - you are choosing how to delegate to subagents,
 - you need stable preferences or personal context about clarification,
@@ -26,7 +27,7 @@ Use it when any of these are true:
   saved link or fact, to get a remembered item, or to remember/forget
   something.
 
-Orchestrator memory layout:
+User Preferences Memory layout:
 
 - {{ summary_source }} (already provided below; do NOT open again)
 - {{ base_path }}/profile.md (full preference profile; open only if needed)
@@ -47,8 +48,8 @@ Quick pass:
    relevant fact. Do not spawn a subagent or search the workspace before this
    pass unless the user explicitly requested live verification.
 6. Ignore repo implementation details here; those belong in project memories or
-   rollout history, not Orchestrator memory.
+   rollout history, not User Preferences Memory.
 
-========= ORCHESTRATOR_MEMORY_SUMMARY BEGINS =========
+========= USER_PREFERENCES_MEMORY_SUMMARY BEGINS =========
 {{ summary }}
-========= ORCHESTRATOR_MEMORY_SUMMARY ENDS =========
+========= USER_PREFERENCES_MEMORY_SUMMARY ENDS =========

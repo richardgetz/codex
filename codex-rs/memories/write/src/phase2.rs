@@ -189,7 +189,8 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
         root,
         agent,
         phase_two_e2e_timer,
-    );
+    )
+    .await;
 
     // 10. Emit dispatch metrics.
     let counters = Counters {
@@ -336,7 +337,12 @@ mod agent {
                 .clone()
                 .unwrap_or(crate::stage_two::MODEL.to_string()),
         );
-        agent_config.model_reasoning_effort = Some(crate::stage_two::REASONING_EFFORT);
+        agent_config.model_reasoning_effort = Some(
+            config
+                .memories
+                .consolidation_reasoning_effort
+                .unwrap_or(crate::stage_two::REASONING_EFFORT),
+        );
 
         Some(agent_config)
     }
@@ -351,7 +357,7 @@ mod agent {
 
     /// Handle the agent while it is running.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn handle(
+    pub(super) async fn handle(
         context: Arc<MemoryStartupContext>,
         claim: Claim,
         new_watermark: i64,
@@ -364,81 +370,72 @@ mod agent {
             return;
         };
 
-        tokio::spawn(async move {
-            let _phase_two_e2e_timer = phase_two_e2e_timer;
-            let SpawnedConsolidationAgent { thread_id, thread } = agent;
+        let _phase_two_e2e_timer = phase_two_e2e_timer;
+        let SpawnedConsolidationAgent { thread_id, thread } = agent;
 
-            // Loop the agent until we have the final status.
-            let final_status =
-                loop_agent(db.clone(), claim.token.clone(), thread_id, &thread).await;
+        // Loop the agent until we have the final status.
+        let final_status = loop_agent(db.clone(), claim.token.clone(), thread_id, &thread).await;
 
-            if matches!(final_status, AgentStatus::Completed(_)) {
-                if let Some(token_usage) = thread
-                    .token_usage_info()
-                    .await
-                    .map(|info| info.total_token_usage)
-                {
-                    emit_token_usage_metrics(context.as_ref(), &token_usage);
-                }
-                // Do not reset the workspace baseline if we lost the lock.
-                let still_owns_lock = match db
-                    .heartbeat_global_phase2_job(
-                        &claim.token,
-                        crate::stage_two::JOB_LEASE_SECONDS,
-                    )
-                    .await
-                    .inspect_err(|err| {
-                        tracing::error!(
-                            "failed confirming global memory consolidation ownership before resetting workspace baseline: {err}"
-                        );
-                    }) {
-                    Ok(true) => true,
-                    Ok(false) => {
-                        tracing::error!(
-                            "lost global memory consolidation ownership before resetting workspace baseline"
-                        );
-                        false
-                    }
-                    Err(_) => {
-                        job::failed(context.as_ref(), &db, &claim, "failed_confirm_ownership")
-                            .await;
-                        false
-                    }
-                };
-                if still_owns_lock {
-                    if let Err(err) = reset_memory_workspace_baseline(&memory_root).await {
-                        tracing::error!("failed resetting memory workspace baseline: {err}");
-                        job::failed(context.as_ref(), &db, &claim, "failed_workspace_commit").await;
-                    } else if !job::succeed(
-                        context.as_ref(),
-                        &db,
-                        &claim,
-                        new_watermark,
-                        &selected_outputs,
-                        "succeeded",
-                    )
-                    .await
-                    {
-                        tracing::error!(
-                            "failed marking global memory consolidation job succeeded after resetting workspace baseline"
-                        );
-                    }
-                }
-            } else {
-                job::failed(context.as_ref(), &db, &claim, "failed_agent").await;
+        if matches!(final_status, AgentStatus::Completed(_)) {
+            if let Some(token_usage) = thread
+                .token_usage_info()
+                .await
+                .map(|info| info.total_token_usage)
+            {
+                emit_token_usage_metrics(context.as_ref(), &token_usage);
             }
-
-            let cleanup_context = Arc::clone(&context);
-            tokio::spawn(async move {
-                if let Err(err) = cleanup_context
-                    .shutdown_consolidation_agent(SpawnedConsolidationAgent { thread_id, thread })
-                    .await
+            // Do not reset the workspace baseline if we lost the lock.
+            let still_owns_lock = match db
+                .heartbeat_global_phase2_job(&claim.token, crate::stage_two::JOB_LEASE_SECONDS)
+                .await
+                .inspect_err(|err| {
+                    tracing::error!(
+                        "failed confirming global memory consolidation ownership before resetting workspace baseline: {err}"
+                    );
+                }) {
+                Ok(true) => true,
+                Ok(false) => {
+                    tracing::error!(
+                        "lost global memory consolidation ownership before resetting workspace baseline"
+                    );
+                    false
+                }
+                Err(_) => {
+                    job::failed(context.as_ref(), &db, &claim, "failed_confirm_ownership").await;
+                    false
+                }
+            };
+            if still_owns_lock {
+                if let Err(err) = reset_memory_workspace_baseline(&memory_root).await {
+                    tracing::error!("failed resetting memory workspace baseline: {err}");
+                    job::failed(context.as_ref(), &db, &claim, "failed_workspace_commit").await;
+                } else if !job::succeed(
+                    context.as_ref(),
+                    &db,
+                    &claim,
+                    new_watermark,
+                    &selected_outputs,
+                    "succeeded",
+                )
+                .await
                 {
-                    warn!(
-                        "failed to auto-close global memory consolidation agent {thread_id}: {err}"
+                    tracing::error!(
+                        "failed marking global memory consolidation job succeeded after resetting workspace baseline"
                     );
                 }
-            });
+            }
+        } else {
+            job::failed(context.as_ref(), &db, &claim, "failed_agent").await;
+        }
+
+        let cleanup_context = Arc::clone(&context);
+        tokio::spawn(async move {
+            if let Err(err) = cleanup_context
+                .shutdown_consolidation_agent(SpawnedConsolidationAgent { thread_id, thread })
+                .await
+            {
+                warn!("failed to auto-close global memory consolidation agent {thread_id}: {err}");
+            }
         });
     }
 
