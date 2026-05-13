@@ -1806,38 +1806,22 @@ async fn slash_orchestrator_memory_forget_requires_argument() {
 }
 
 #[tokio::test]
-async fn slash_orchestrator_memory_forget_prunes_matching_entries() {
+async fn slash_orchestrator_memory_forget_submits_core_op() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let memory_dir = chat.config.codex_home.join("orchestrator_memory");
-    tokio::fs::create_dir_all(&memory_dir)
-        .await
-        .expect("create orchestrator memory dir");
-    tokio::fs::write(
-        memory_dir.join("preferences.jsonl"),
-        concat!(
-            "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"followup_state\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"calendar needle\",\"candidate\":\"keep alpha\",\"source_excerpt\":\"calendar needle\",\"confidence\":0.8}\n",
-            "{\"observed_at\":\"2026-04-25T00:00:01Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-2\",\"bucket\":\"followup_state\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"beta\",\"candidate\":\"keep beta\",\"source_excerpt\":\"beta\",\"confidence\":0.8}\n",
-        ),
-    )
-    .await
-    .expect("write preferences");
 
     submit_composer_text(&mut chat, "/orchestrator-memory-forget calendar needle");
 
-    let event = rx.recv().await.expect("expected prune result event");
-    match event {
-        AppEvent::OrchestratorMemoryForgetResult { needle, result } => {
-            assert_eq!(needle, "calendar needle");
-            let result = result.expect("expected successful prune");
-            assert_eq!(result.removed_preference_events, 1);
-        }
-        other => panic!("expected OrchestratorMemoryForgetResult, got {other:?}"),
-    }
     assert_eq!(
         recall_latest_after_clearing(&mut chat),
         "/orchestrator-memory-forget calendar needle"
     );
-    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+    match op_rx.try_recv() {
+        Ok(Op::OrchestratorMemoryForget { needle }) => {
+            assert_eq!(needle, "calendar needle");
+        }
+        other => panic!("expected OrchestratorMemoryForget op, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err(), "expected no local result event");
 }
 
 #[tokio::test]
@@ -1860,18 +1844,8 @@ async fn slash_orchestrator_memory_consolidate_submits_core_op() {
 }
 
 #[tokio::test]
-async fn slash_user_preferences_memory_migrate_copies_orchestrator_files() {
+async fn slash_user_preferences_memory_migrate_submits_core_op() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let orchestrator_dir = chat.config.codex_home.join("orchestrator_memory");
-    tokio::fs::create_dir_all(&orchestrator_dir)
-        .await
-        .expect("create orchestrator memory dir");
-    tokio::fs::write(
-        orchestrator_dir.join("summary.md"),
-        "prefer focused updates",
-    )
-    .await
-    .expect("write orchestrator summary");
 
     chat.dispatch_command(SlashCommand::UserPreferencesMemoryMigrate);
 
@@ -1882,22 +1856,11 @@ async fn slash_user_preferences_memory_migrate_copies_orchestrator_files() {
         }
         other => panic!("expected InsertHistoryCell info, got {other:?}"),
     }
-    let event = rx.recv().await.expect("expected migration result event");
-    match event {
-        AppEvent::UserPreferencesMemoryMigrateResult { result } => {
-            assert!(result.expect("expected successful migration"));
-        }
-        other => panic!("expected UserPreferencesMemoryMigrateResult, got {other:?}"),
+    match op_rx.try_recv() {
+        Ok(Op::UserPreferencesMemoryMigrate) => {}
+        other => panic!("expected UserPreferencesMemoryMigrate op, got {other:?}"),
     }
-    let migrated = tokio::fs::read_to_string(
-        chat.config
-            .codex_home
-            .join("user_preferences_memory/summary.md"),
-    )
-    .await
-    .expect("read migrated summary");
-    assert_eq!(migrated, "prefer focused updates");
-    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+    assert!(rx.try_recv().is_err(), "expected no local result event");
 }
 
 #[tokio::test]

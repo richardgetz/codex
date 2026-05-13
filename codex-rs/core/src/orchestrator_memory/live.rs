@@ -61,18 +61,27 @@ async fn process_completed_turn(
     turn_context: &TurnContext,
     last_agent_message: Option<&str>,
 ) -> std::io::Result<()> {
+    if !session.memory_write_enabled().await {
+        return Ok(());
+    }
+
     let history = session.clone_history().await;
-    append_diagnostic_event(
+    if !append_diagnostic_event_if_writes_enabled(
+        session,
         &turn_context.config.codex_home,
         "turn_hook_fired",
         &turn_context.sub_id,
         Some("processing completed turn"),
     )
-    .await?;
+    .await?
+    {
+        return Ok(());
+    }
 
     let current_turn_user_texts = heuristics::collect_current_turn_user_texts(history.raw_items());
     if current_turn_user_texts.is_empty() {
-        append_diagnostic_event(
+        append_diagnostic_event_if_writes_enabled(
+            session,
             &turn_context.config.codex_home,
             "skipped_no_user_text",
             &turn_context.sub_id,
@@ -100,13 +109,17 @@ async fn process_completed_turn(
                 "explicit forget/remove wording detected",
             ),
         };
-        append_diagnostic_event(
+        if !append_diagnostic_event_if_writes_enabled(
+            session,
             &turn_context.config.codex_home,
             stage,
             &turn_context.sub_id,
             Some(details),
         )
-        .await?;
+        .await?
+        {
+            return Ok(());
+        }
     }
 
     let mut candidates = if forced_trigger.is_some() {
@@ -120,6 +133,7 @@ async fn process_completed_turn(
         )
     };
 
+    let mut active_write_permit = None;
     if candidates.is_empty() {
         let classifier_reason = if forced_trigger.is_some() {
             "forced by explicit remember/forget trigger"
@@ -132,14 +146,19 @@ async fn process_completed_turn(
                 .user_preferences_memory
                 .model_on_heuristic_miss
         {
-            append_diagnostic_event(
+            if !append_diagnostic_event_if_writes_enabled(
+                session,
                 &turn_context.config.codex_home,
                 "skipped_model_classifier_heuristic_miss",
                 &turn_context.sub_id,
                 Some(classifier_reason),
             )
-            .await?;
-            append_diagnostic_event(
+            .await?
+            {
+                return Ok(());
+            }
+            append_diagnostic_event_if_writes_enabled(
+                session,
                 &turn_context.config.codex_home,
                 "skipped_no_signal",
                 &turn_context.sub_id,
@@ -148,13 +167,20 @@ async fn process_completed_turn(
             .await?;
             return Ok(());
         }
-        append_diagnostic_event(
+        if !append_diagnostic_event_if_writes_enabled(
+            session,
             &turn_context.config.codex_home,
             "running_model_classifier",
             &turn_context.sub_id,
             Some(classifier_reason),
         )
-        .await?;
+        .await?
+        {
+            return Ok(());
+        }
+        let Some(permit) = session.memory_write_permit().await else {
+            return Ok(());
+        };
         match classifier::classify_with_model(
             session,
             &turn_context.config,
@@ -174,10 +200,20 @@ async fn process_completed_turn(
                 .await?;
             }
         }
+        active_write_permit = Some(permit);
     }
 
     let unfiltered_candidate_count = candidates.len();
-    retain_write_allowed_candidates(&mut candidates, &user_preferences_memory.bucket_policy);
+    let _permit = if let Some(permit) = active_write_permit {
+        permit
+    } else {
+        let Some(permit) = session.memory_write_permit().await else {
+            return Ok(());
+        };
+        permit
+    };
+    let live_bucket_policy = session.user_preferences_memory_policy().await;
+    retain_write_allowed_candidates(&mut candidates, &live_bucket_policy);
     if candidates.is_empty() {
         let details = if unfiltered_candidate_count == 0 {
             "no continuity signal or follow-up state detected".to_string()
@@ -233,19 +269,20 @@ async fn process_completed_turn(
         Some(&format!("debounce_seconds={debounce}")),
     )
     .await?;
+    drop(_permit);
     tokio::spawn(async move {
         sleep(Duration::from_secs(debounce)).await;
         let Some(session) = weak_session.upgrade() else {
             return;
         };
-        if session
-            .services
-            .orchestrator_memory_generation
-            .load(Ordering::SeqCst)
-            != generation
-        {
-            return;
+        match scheduled_consolidation_skip_reason(&session, generation).await {
+            Some(ScheduledConsolidationSkipReason::StaleGeneration) => return,
+            Some(ScheduledConsolidationSkipReason::WriteDisabled) => return,
+            None => {}
         }
+        let Some(_permit) = session.memory_write_permit().await else {
+            return;
+        };
         let consolidation_result = if config.user_preferences_memory.model_consolidation {
             super::model::consolidate_with_fallback(&session, &config, generation).await
         } else {
@@ -273,6 +310,44 @@ async fn process_completed_turn(
     });
 
     Ok(())
+}
+
+async fn append_diagnostic_event_if_writes_enabled(
+    session: &Session,
+    codex_home: &codex_utils_absolute_path::AbsolutePathBuf,
+    stage: &str,
+    turn_id: &str,
+    details: Option<&str>,
+) -> std::io::Result<bool> {
+    let Some(_permit) = session.memory_write_permit().await else {
+        return Ok(false);
+    };
+    append_diagnostic_event(codex_home, stage, turn_id, details).await?;
+    Ok(true)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScheduledConsolidationSkipReason {
+    StaleGeneration,
+    WriteDisabled,
+}
+
+async fn scheduled_consolidation_skip_reason(
+    session: &Session,
+    generation: u64,
+) -> Option<ScheduledConsolidationSkipReason> {
+    if session
+        .services
+        .orchestrator_memory_generation
+        .load(Ordering::SeqCst)
+        != generation
+    {
+        return Some(ScheduledConsolidationSkipReason::StaleGeneration);
+    }
+    if !session.memory_write_enabled().await {
+        return Some(ScheduledConsolidationSkipReason::WriteDisabled);
+    }
+    None
 }
 
 fn retain_write_allowed_candidates(

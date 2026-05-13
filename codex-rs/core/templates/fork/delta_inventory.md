@@ -52,12 +52,12 @@ stable/mainline is pulled in.
   - `[orchestrator_memory]`
   - The legacy config and migration helpers remain, but live read/write,
     cleanup, consolidation, and context injection use
-    `<codex_home>/user_preferences_memory`.
+    `<codex_home>/memories/extensions/user_preferences`.
 - User preferences memory maintenance:
   - Slash command: `/orchestrator-memory-forget <needle>`
   - Slash command: `/orchestrator-memory-consolidate`
   - Bucket-specific mirror files live under
-    `<codex_home>/user_preferences_memory/buckets/`.
+    `<codex_home>/memories/extensions/user_preferences/buckets/`.
   - Scheduled cleanup runs daily by local `HH:MM` schedule, defaults to `03:30`,
     compacts duplicate raw events in `preferences.jsonl`, keeps recent forget
     tombstones, resyncs bucket files, and defaults to a `Memory [memory builder]`
@@ -67,8 +67,19 @@ stable/mainline is pulled in.
 - User preferences memory:
   - Config: `[user_preferences_memory]`
   - Defaults: `enabled = true`, `scope = "all"`.
-  - Stores under `<codex_home>/user_preferences_memory`, which is created and
-    added to workspace-write writable roots automatically.
+  - Stores under `<codex_home>/memories/extensions/user_preferences`; the outer
+    `[memories]` policy controls automatic memory sandbox roots.
+  - Startup automatically copies missing files from the pre-extension
+    `<codex_home>/user_preferences_memory` root into the extension root when
+    memory writes are enabled; read-only sessions can still read the legacy root
+    without mutating it.
+  - Config: `[memories]` supports `extract_model`,
+    `extract_reasoning_effort`, `consolidation_model`, and
+    `consolidation_reasoning_effort` for the main memory agents.
+  - App-server outer memory access control: `thread/start`, `thread/resume`,
+    and `thread/fork` accept `memoryPolicy`; loaded threads can be changed live
+    with `thread/memoryPolicy/set`. Write access implies read access because
+    writable memory roots are readable filesystem roots.
   - `read_buckets` and `write_buckets` default to all bucket types:
     `durable_preference`, `personal_context`, `relational_attunement`,
     `operator_playbook`, `ongoing_threads`, and `followup_state`.
@@ -81,7 +92,7 @@ stable/mainline is pulled in.
     orchestrator-memory config after that copy pass succeeds.
   - Slash command: `/user-preferences-memory-migrate` copies missing files from
     `<codex_home>/orchestrator_memory` into
-    `<codex_home>/user_preferences_memory` without editing config.
+    `<codex_home>/memories/extensions/user_preferences` without editing config.
 - Mode-scoped enablement filters:
   - `[enablement.modes.<mode>]`
   - Supports `skills`, `mcps`, and `plugins`

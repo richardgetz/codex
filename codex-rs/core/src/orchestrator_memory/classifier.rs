@@ -199,11 +199,14 @@ fn build_classification_agent_config(
         .set_legacy_sandbox_policy(sandbox_policy, agent_config.cwd.as_path())
         .context("set orchestrator memory classifier sandbox policy")?;
 
-    agent_config.model = Some(super::model::resolve_orchestrator_memory_model(
+    agent_config.model = Some(super::model::resolve_memory_extract_model(
         base,
         is_chatgpt_auth,
     ));
-    agent_config.model_reasoning_effort = base.effective_orchestrator_reasoning_effort();
+    agent_config.model_reasoning_effort = base
+        .memories
+        .extract_reasoning_effort
+        .or_else(|| base.effective_orchestrator_reasoning_effort());
 
     Ok(agent_config)
 }
@@ -301,4 +304,36 @@ fn extract_json_candidates(text: &str) -> Vec<String> {
     }
     candidates.reverse();
     candidates
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::openai_models::ReasoningEffort;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn build_classification_agent_config_prefers_memories_extract_settings() {
+        let temp = tempdir().expect("tempdir");
+        let mut config = crate::config::ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(temp.path().to_path_buf())
+            .build()
+            .await
+            .expect("test config");
+        config.thread_control.orchestrator.model = Some("gpt-5.3-codex-spark".to_string());
+        config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffort::Low);
+        config.memories.extract_model = Some("gpt-5.5".to_string());
+        config.memories.extract_reasoning_effort = Some(ReasoningEffort::Medium);
+
+        let config = Arc::new(config);
+        let built = build_classification_agent_config(&config, /*is_chatgpt_auth*/ false)
+            .expect("build classifier config");
+
+        assert_eq!(built.model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(built.model_reasoning_effort, Some(ReasoningEffort::Medium));
+        assert!(!built.orchestrator_memory.enabled);
+        assert!(!built.memories.generate_memories);
+        assert!(!built.memories.use_memories);
+    }
 }

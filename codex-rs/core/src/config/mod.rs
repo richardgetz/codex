@@ -1,8 +1,6 @@
 use crate::agents_md::AgentsMdManager;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::orchestrator_memory::root as orchestrator_memory_root;
-use crate::orchestrator_memory::user_preferences_root;
 use crate::orchestrator_supervision::root as orchestrator_supervision_root;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::tools::handlers::builtin_scratchpad::run_lifecycle_cleanup as run_scratchpad_lifecycle_cleanup;
@@ -49,6 +47,7 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
+use codex_config::types::MemoryAccessPolicy;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -2218,6 +2217,7 @@ pub struct ConfigOverrides {
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub ephemeral: Option<bool>,
+    pub memory_policy: Option<MemoryAccessPolicy>,
     pub user_preferences_memory_policy: Option<UserPreferencesMemoryBucketPolicy>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
@@ -2494,6 +2494,7 @@ impl Config {
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
+            memory_policy,
             user_preferences_memory_policy,
             additional_writable_roots,
         } = overrides;
@@ -2631,29 +2632,28 @@ impl Config {
             Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
             None => WindowsSandboxLevel::from_features(&features),
         };
+        let mut memories: MemoriesConfig = cfg.memories.clone().unwrap_or_default().into();
+        if let Some(policy) = memory_policy {
+            let policy = policy.normalized();
+            memories.use_memories = policy.read;
+            memories.generate_memories = policy.write;
+        }
+        memories.use_memories |= memories.generate_memories;
+        let mut additional_readable_roots: Vec<AbsolutePathBuf> = Vec::new();
         let memories_root = memory_root(&codex_home);
-        std::fs::create_dir_all(&memories_root)?;
-        if !additional_writable_roots
-            .iter()
-            .any(|existing| existing == &memories_root)
-        {
-            additional_writable_roots.push(memories_root);
-        }
-        let orchestrator_memory_root = orchestrator_memory_root(&codex_home);
-        std::fs::create_dir_all(&orchestrator_memory_root)?;
-        if !additional_writable_roots
-            .iter()
-            .any(|existing| existing == &orchestrator_memory_root)
-        {
-            additional_writable_roots.push(orchestrator_memory_root);
-        }
-        let user_preferences_memory_root = user_preferences_root(&codex_home);
-        std::fs::create_dir_all(&user_preferences_memory_root)?;
-        if !additional_writable_roots
-            .iter()
-            .any(|existing| existing == &user_preferences_memory_root)
-        {
-            additional_writable_roots.push(user_preferences_memory_root);
+        if memories.generate_memories {
+            std::fs::create_dir_all(&memories_root)?;
+            if !additional_writable_roots
+                .iter()
+                .any(|existing| existing == &memories_root)
+            {
+                additional_writable_roots.push(memories_root.clone());
+            }
+        } else if memories.use_memories {
+            additional_readable_roots.push(memories_root.clone());
+            additional_readable_roots.push(crate::orchestrator_memory::legacy_user_preferences_root(
+                &codex_home,
+            ));
         }
         let orchestrator_supervision_root = orchestrator_supervision_root(&codex_home);
         std::fs::create_dir_all(&orchestrator_supervision_root)?;
@@ -3356,11 +3356,12 @@ impl Config {
         } else {
             network.enabled().then_some(network)
         };
-        let helper_readable_roots = get_readable_roots_required_for_codex_runtime(
+        let mut helper_readable_roots = get_readable_roots_required_for_codex_runtime(
             &codex_home,
             zsh_path.as_ref(),
             main_execve_wrapper_exe.as_ref(),
         );
+        helper_readable_roots.extend(additional_readable_roots);
         let effective_permission_profile = constrained_permission_profile.value.get().clone();
         let (mut effective_file_system_sandbox_policy, effective_network_sandbox_policy) =
             effective_permission_profile.to_runtime_permissions();
@@ -3389,25 +3390,47 @@ impl Config {
         }
         let mut orchestrator_memory: OrchestratorMemoryConfig =
             cfg.orchestrator_memory.unwrap_or_default().into();
-        let mut user_preferences_memory_migrated = false;
+        let mut orchestrator_memory_migration_succeeded = false;
+        if user_preferences_memory.enabled && memories.generate_memories {
+            match crate::orchestrator_memory::migrate_legacy_user_preferences_memory_to_extension(
+                &codex_home,
+            ) {
+                Ok(copied_any) => {
+                    if copied_any {
+                        tracing::debug!(
+                            "migrated legacy user_preferences_memory into memories extension"
+                        );
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to migrate legacy user preferences memory to memories extension");
+                }
+            }
+        }
         if user_preferences_memory.enabled
+            && memories.generate_memories
             && user_preferences_memory.migrate_from_orchestrator_memory
         {
             match crate::orchestrator_memory::migrate_orchestrator_memory_to_user_preferences(
                 &codex_home,
             ) {
-                Ok(_) => {
-                    user_preferences_memory_migrated = true;
+                Ok(copied_any) => {
+                    orchestrator_memory_migration_succeeded = true;
+                    if copied_any {
+                        tracing::debug!(
+                            "migrated legacy orchestrator_memory into user preferences memory extension"
+                        );
+                    }
                 }
                 Err(err) => {
-                    tracing::warn!(error = %err, "failed to migrate orchestrator memory to user preferences memory");
+                    tracing::warn!(error = %err, "failed to migrate legacy orchestrator memory to user preferences memory extension");
                 }
             }
         }
         if user_preferences_memory.enabled
             && user_preferences_memory.migrate_from_orchestrator_memory
             && user_preferences_memory.disable_orchestrator_memory_after_migration
-            && user_preferences_memory_migrated
+            && orchestrator_memory_migration_succeeded
         {
             orchestrator_memory.enabled = false;
         }
@@ -3507,7 +3530,7 @@ impl Config {
             agent_max_threads,
             agent_max_depth,
             agent_roles,
-            memories: cfg.memories.unwrap_or_default().into(),
+            memories,
             orchestrator_memory,
             user_preferences_memory,
             scratchpad,

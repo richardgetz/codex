@@ -29,6 +29,7 @@ pub fn start_memories_startup_task(
 ) {
     if config.ephemeral
         || !config.features.enabled(Feature::MemoryTool)
+        || !config.memories.generate_memories
         || source.is_non_root_agent()
     {
         return;
@@ -38,7 +39,7 @@ pub fn start_memories_startup_task(
         thread_manager,
         Arc::clone(&auth_manager),
         thread_id,
-        thread,
+        Arc::clone(&thread),
         config.as_ref(),
         source.clone(),
     ));
@@ -49,6 +50,9 @@ pub fn start_memories_startup_task(
     }
 
     tokio::spawn(async move {
+        let Some(_permit) = thread.memory_write_permit().await else {
+            return;
+        };
         let root = memory_root(&config.codex_home);
         if let Err(err) = seed_extension_instructions(&root).await {
             warn!("failed seeding memory extension instructions: {err}");

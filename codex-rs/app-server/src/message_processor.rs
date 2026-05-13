@@ -980,6 +980,11 @@ impl MessageProcessor {
                     .thread_scratchpad_continuous_policy_set(&request_id, params)
                     .await
             }
+            ClientRequest::ThreadMemoryPolicySet { params, .. } => {
+                self.thread_processor
+                    .thread_memory_policy_set(&request_id, params)
+                    .await
+            }
             ClientRequest::ThreadUserPreferencesMemoryPolicySet { params, .. } => {
                 self.thread_processor
                     .thread_user_preferences_memory_policy_set(&request_id, params)
@@ -1013,6 +1018,21 @@ impl MessageProcessor {
             ClientRequest::ThreadAgentsPrune { params, .. } => {
                 self.thread_processor
                     .thread_agents_prune(&request_id, params)
+                    .await
+            }
+            ClientRequest::ThreadOrchestratorMemoryConsolidate { params, .. } => {
+                self.thread_processor
+                    .thread_orchestrator_memory_consolidate(&request_id, params)
+                    .await
+            }
+            ClientRequest::ThreadOrchestratorMemoryForget { params, .. } => {
+                self.thread_processor
+                    .thread_orchestrator_memory_forget(&request_id, params)
+                    .await
+            }
+            ClientRequest::ThreadUserPreferencesMemoryMigrate { params, .. } => {
+                self.thread_processor
+                    .thread_user_preferences_memory_migrate(&request_id, params)
                     .await
             }
             ClientRequest::ThreadRollback { params, .. } => {

@@ -73,6 +73,12 @@ use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadMemoryMode;
 use codex_app_server_protocol::ThreadMemoryModeSetParams;
 use codex_app_server_protocol::ThreadMemoryModeSetResponse;
+use codex_app_server_protocol::ThreadMemoryPolicySetParams;
+use codex_app_server_protocol::ThreadMemoryPolicySetResponse;
+use codex_app_server_protocol::ThreadOrchestratorMemoryConsolidateParams;
+use codex_app_server_protocol::ThreadOrchestratorMemoryConsolidateResponse;
+use codex_app_server_protocol::ThreadOrchestratorMemoryForgetParams;
+use codex_app_server_protocol::ThreadOrchestratorMemoryForgetResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -99,6 +105,8 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::ThreadUserPreferencesMemoryMigrateParams;
+use codex_app_server_protocol::ThreadUserPreferencesMemoryMigrateResponse;
 use codex_app_server_protocol::ThreadUserPreferencesMemoryPolicySetParams;
 use codex_app_server_protocol::ThreadUserPreferencesMemoryPolicySetResponse;
 use codex_app_server_protocol::Turn;
@@ -112,6 +120,7 @@ use codex_app_server_protocol::UserInput;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
+use codex_protocol::config_types::MemoryAccessPolicy;
 use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ActivePermissionProfileModification;
@@ -707,6 +716,26 @@ impl AppServerSession {
         Ok(())
     }
 
+    pub(crate) async fn thread_memory_policy_set(
+        &mut self,
+        thread_id: ThreadId,
+        policy: MemoryAccessPolicy,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadMemoryPolicySetResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadMemoryPolicySet {
+                request_id,
+                params: ThreadMemoryPolicySetParams {
+                    thread_id: thread_id.to_string(),
+                    policy,
+                },
+            })
+            .await
+            .wrap_err("thread/memoryPolicy/set failed in TUI")?;
+        Ok(())
+    }
+
     pub(crate) async fn memory_reset(&mut self) -> Result<()> {
         let request_id = self.next_request_id();
         let _: MemoryResetResponse = self
@@ -916,6 +945,62 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/agents/prune failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_orchestrator_memory_consolidate(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadOrchestratorMemoryConsolidateResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadOrchestratorMemoryConsolidate {
+                request_id,
+                params: ThreadOrchestratorMemoryConsolidateParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/orchestratorMemory/consolidate failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_orchestrator_memory_forget(
+        &mut self,
+        thread_id: ThreadId,
+        needle: String,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadOrchestratorMemoryForgetResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadOrchestratorMemoryForget {
+                request_id,
+                params: ThreadOrchestratorMemoryForgetParams {
+                    thread_id: thread_id.to_string(),
+                    needle,
+                },
+            })
+            .await
+            .wrap_err("thread/orchestratorMemory/forget failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_user_preferences_memory_migrate(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadUserPreferencesMemoryMigrateResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadUserPreferencesMemoryMigrate {
+                request_id,
+                params: ThreadUserPreferencesMemoryMigrateParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/userPreferencesMemory/migrate failed in TUI")?;
         Ok(())
     }
 
@@ -1317,6 +1402,10 @@ fn thread_start_params_from_config(
         session_start_source,
         thread_source: Some(ThreadSource::User),
         user_preferences_memory_policy: Some(config.user_preferences_memory.bucket_policy.clone()),
+        memory_policy: Some(MemoryAccessPolicy::new(
+            config.memories.use_memories,
+            config.memories.generate_memories,
+        )),
         persist_extended_history: false,
         ..ThreadStartParams::default()
     }
@@ -1349,6 +1438,10 @@ fn thread_resume_params_from_config(
         permissions,
         config: config_request_overrides_from_config(&config),
         user_preferences_memory_policy: Some(config.user_preferences_memory.bucket_policy.clone()),
+        memory_policy: Some(MemoryAccessPolicy::new(
+            config.memories.use_memories,
+            config.memories.generate_memories,
+        )),
         persist_extended_history: false,
         ..ThreadResumeParams::default()
     }
@@ -1385,6 +1478,10 @@ fn thread_fork_params_from_config(
         ephemeral: config.ephemeral,
         thread_source: Some(ThreadSource::User),
         user_preferences_memory_policy: Some(config.user_preferences_memory.bucket_policy.clone()),
+        memory_policy: Some(MemoryAccessPolicy::new(
+            config.memories.use_memories,
+            config.memories.generate_memories,
+        )),
         persist_extended_history: false,
         ..ThreadForkParams::default()
     }
@@ -1718,6 +1815,9 @@ mod tests {
             ],
         };
         config.user_preferences_memory.bucket_policy = policy.clone();
+        config.memories.use_memories = false;
+        config.memories.generate_memories = true;
+        let memory_policy = MemoryAccessPolicy::new(/*read*/ false, /*write*/ true);
         let thread_id = ThreadId::new();
 
         let start = thread_start_params_from_config(
@@ -1742,6 +1842,9 @@ mod tests {
         assert_eq!(start.user_preferences_memory_policy, Some(policy.clone()));
         assert_eq!(resume.user_preferences_memory_policy, Some(policy.clone()));
         assert_eq!(fork.user_preferences_memory_policy, Some(policy));
+        assert_eq!(start.memory_policy, Some(memory_policy));
+        assert_eq!(resume.memory_policy, Some(memory_policy));
+        assert_eq!(fork.memory_policy, Some(memory_policy));
     }
 
     #[test]
@@ -2060,6 +2163,7 @@ mod tests {
             permission_profile: Some(read_only_profile.clone().into()),
             active_permission_profile: None,
             reasoning_effort: None,
+            memory_policy: Default::default(),
             user_preferences_memory_policy:
                 codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
         };

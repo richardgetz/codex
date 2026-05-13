@@ -431,6 +431,7 @@ impl App {
         use_memories: bool,
         generate_memories: bool,
     ) {
+        let previous_use_memories = self.config.memories.use_memories;
         let previous_generate_memories = self.config.memories.generate_memories;
         if !self
             .update_memory_settings(use_memories, generate_memories)
@@ -439,13 +440,27 @@ impl App {
             return;
         }
 
-        if previous_generate_memories == generate_memories {
-            return;
-        }
-
         let Some(thread_id) = self.current_displayed_thread_id() else {
             return;
         };
+
+        if previous_use_memories != use_memories || previous_generate_memories != generate_memories
+        {
+            let policy = codex_protocol::config_types::MemoryAccessPolicy::new(
+                use_memories,
+                generate_memories,
+            );
+            if let Err(err) = app_server.thread_memory_policy_set(thread_id, policy).await {
+                tracing::error!(error = ?err, "failed to update current thread memory policy");
+                self.chat_widget.add_error_message(format!(
+                    "Failed to update current thread memory policy: {err}"
+                ));
+            }
+        }
+
+        if previous_generate_memories == generate_memories {
+            return;
+        }
 
         let mode = if generate_memories {
             ThreadMemoryMode::Enabled

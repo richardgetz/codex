@@ -170,10 +170,12 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
 - The legacy `[orchestrator_memory]` config remains for migration and
   compatibility, but live memory reads, writes, cleanup, and consolidation now
-  use `<codex_home>/user_preferences_memory`. New behavior should be configured
-  through `[user_preferences_memory]`.
+  use the `user_preferences` extension under
+  `<codex_home>/memories/extensions/user_preferences`. New behavior should be
+  configured through `[user_preferences_memory]`.
 - Existing orchestrator-memory migration helpers can copy files from the legacy
-  root into the canonical user-preferences root. After that, the legacy root is
+  root, and from the pre-extension `<codex_home>/user_preferences_memory` root,
+  into the canonical user-preferences extension. After that, legacy roots are
   not injected into model context.
 
 ### User preferences memory
@@ -216,6 +218,14 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   deep_consolidation = true
   model_consolidation = true
   retain_forget_events_days = 30
+
+  [memories]
+  use_memories = true
+  generate_memories = true
+  extract_model = "gpt-5.4-mini"
+  extract_reasoning_effort = "low"
+  consolidation_model = "gpt-5.4"
+  consolidation_reasoning_effort = "medium"
   ```
 
 - The memory classifier is broader than task reminders: it should retain durable
@@ -223,11 +233,16 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   other continuity notes when the user signals they matter later.
 - `/orchestrator-memory-forget <needle>` removes matching orchestrator-memory
   entries from the canonical user-preferences memory store without touching
-  mainline memory stores.
+  mainline memory stores. Because this is a global text-prune maintenance
+  command, the active session must have write access to all user-preferences
+  buckets; narrower sessions should use normal in-turn forget requests for
+  bucket-scoped behavior.
 - `/orchestrator-memory-consolidate` triggers the configured orchestrator-memory
   cleanup/consolidation path against the canonical user-preferences memory store
   immediately, which is useful for testing cleanup behavior without changing the
-  configured schedule.
+  configured schedule. Like `/orchestrator-memory-forget`, the active session
+  must have write access to all user-preferences buckets because consolidation
+  rewrites the global event log and bucket mirrors.
 - Explicit forget requests such as `forget this: ...` are treated as memory
   removal requests.
 - To avoid silent background model spend, heuristic misses do not invoke a
@@ -235,8 +250,17 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   mechanical renderer by default. Set `model_on_heuristic_miss = true` or
   `model_consolidation = true` to restore those model-assisted paths.
 - Memory events are mirrored into bucket-specific files under
-  `<codex_home>/user_preferences_memory/buckets/` for easier inspection while
-  preserving `preferences.jsonl` as the canonical event log.
+  `<codex_home>/memories/extensions/user_preferences/buckets/` for easier
+  inspection while preserving `preferences.jsonl` as the canonical event log.
+- The outer `[memories]` read/write policy gates the whole memory layer:
+  `use_memories = false` suppresses memory prompts, and
+  `generate_memories = false` suppresses memory writes for the session. The
+  app-server exposes the same session-local control through
+  `thread/memoryPolicy/set`, and `thread/start`, `thread/resume`, and
+  `thread/fork` accept `memoryPolicy`. A read-only policy adds memory roots as
+  read-only sandbox roots; write access implies read access because writable
+  filesystem roots are readable; a disabled policy does not add automatic
+  memory sandbox roots.
 - `read_buckets` controls which bucket sections a new session may inject into
   model context. `write_buckets` controls which buckets the session may update.
   Both can be narrowed per live app-server thread with
@@ -251,18 +275,21 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   `cleanup.model_consolidation = false` for mechanical-only cleanup.
 - Legacy memory events that predate bucketed schemas are migrated on the next
   write or consolidation, with a `preferences.jsonl.pre-bucket-migration`
-  backup in `<codex_home>/user_preferences_memory`.
-- Startup migration can copy missing files from
-  `<codex_home>/orchestrator_memory` into
-  `<codex_home>/user_preferences_memory`. Set
-  `migrate_from_orchestrator_memory = true` to run the copy pass. Set
+  backup in `<codex_home>/memories/extensions/user_preferences`.
+- Startup automatically copies missing files from the pre-extension
+  `<codex_home>/user_preferences_memory` root into
+  `<codex_home>/memories/extensions/user_preferences` when memory writes are
+  enabled. Read-only sessions fall back to the legacy root without mutating it.
+  Startup can also copy missing files from `<codex_home>/orchestrator_memory`; set
+  `migrate_from_orchestrator_memory = true` to treat that pass as an
+  orchestrator-memory migration. Set
   `disable_orchestrator_memory_after_migration = true` when you want the
   effective `orchestrator_memory` config disabled after that pass succeeds.
 - `/user-preferences-memory-migrate` runs the same copy pass on demand for the
   current Codex home. It does not edit config; use the TOML option above when
   you want orchestrator memory disabled after migration.
-- `<codex_home>/user_preferences_memory` is created on startup and added to
-  workspace-write writable roots automatically.
+- `<codex_home>/memories` is created and added as an automatic workspace-write
+  root only when the outer memory write policy is enabled.
 
 ### Built-in scratchpad
 

@@ -117,6 +117,7 @@ use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -332,7 +333,9 @@ max_rollouts_per_startup = 9
 min_rollout_idle_hours = 24
 min_rate_limit_remaining_percent = 12
 extract_model = "gpt-5-mini"
+extract_reasoning_effort = "low"
 consolidation_model = "gpt-5.2"
+consolidation_reasoning_effort = "high"
 "#;
     let memories_cfg =
         toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
@@ -349,7 +352,9 @@ consolidation_model = "gpt-5.2"
             min_rollout_idle_hours: Some(24),
             min_rate_limit_remaining_percent: Some(12),
             extract_model: Some("gpt-5-mini".to_string()),
+            extract_reasoning_effort: Some(ReasoningEffort::Low),
             consolidation_model: Some("gpt-5.2".to_string()),
+            consolidation_reasoning_effort: Some(ReasoningEffort::High),
         }),
         memories_cfg.memories
     );
@@ -375,9 +380,28 @@ consolidation_model = "gpt-5.2"
             min_rollout_idle_hours: 24,
             min_rate_limit_remaining_percent: 12,
             extract_model: Some("gpt-5-mini".to_string()),
+            extract_reasoning_effort: Some(ReasoningEffort::Low),
             consolidation_model: Some("gpt-5.2".to_string()),
+            consolidation_reasoning_effort: Some(ReasoningEffort::High),
         }
     );
+
+    let write_enabled_memories = r#"
+[memories]
+generate_memories = true
+use_memories = false
+"#;
+    let write_enabled_memories_cfg = toml::from_str::<ConfigToml>(write_enabled_memories)
+        .expect("TOML deserialization should succeed");
+    let config = Config::load_from_base_config_with_overrides(
+        write_enabled_memories_cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config from write-enabled memories settings");
+    assert!(config.memories.generate_memories);
+    assert!(config.memories.use_memories);
 
     let orchestrator_memory = r#"
 [orchestrator_memory]
@@ -576,9 +600,53 @@ disable_orchestrator_memory_after_migration = true
     .expect("load config with user preferences migration");
     assert!(!migrated_config.orchestrator_memory.enabled);
     assert_eq!(
-        std::fs::read_to_string(migration_home.join("user_preferences_memory/summary.md"))
-            .expect("read migrated summary"),
+        std::fs::read_to_string(
+            migration_home.join("memories/extensions/user_preferences/summary.md")
+        )
+        .expect("read migrated summary"),
         "legacy orchestration preference"
+    );
+
+    let migration_home = tempdir().expect("tempdir").abs();
+    std::fs::create_dir_all(migration_home.join("user_preferences_memory"))
+        .expect("create legacy user preferences memory root");
+    std::fs::write(
+        migration_home.join("user_preferences_memory/summary.md"),
+        "legacy user preference",
+    )
+    .expect("write legacy user preferences summary");
+    std::fs::create_dir_all(migration_home.join("orchestrator_memory"))
+        .expect("create orchestrator memory root");
+    std::fs::write(
+        migration_home.join("orchestrator_memory/profile.md"),
+        "legacy orchestrator profile",
+    )
+    .expect("write orchestrator memory profile");
+    Config::load_from_base_config_with_overrides(
+        toml::from_str::<ConfigToml>(
+            r#"
+[user_preferences_memory]
+migrate_from_orchestrator_memory = false
+"#,
+        )
+        .expect("TOML deserialization should succeed"),
+        ConfigOverrides::default(),
+        migration_home.clone(),
+    )
+    .await
+    .expect("load config with user preferences extension migration");
+    assert_eq!(
+        std::fs::read_to_string(
+            migration_home.join("memories/extensions/user_preferences/summary.md")
+        )
+        .expect("read migrated legacy user preferences summary"),
+        "legacy user preference"
+    );
+    assert!(
+        !migration_home
+            .join("memories/extensions/user_preferences/profile.md")
+            .exists(),
+        "orchestrator memory should not migrate when migrate_from_orchestrator_memory is false"
     );
 
     let thread_control = r#"
@@ -1776,8 +1844,6 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
     .await?;
 
     let memories_root = codex_home.path().join("memories").abs();
-    let orchestrator_memory_root = codex_home.path().join("orchestrator_memory").abs();
-    let user_preferences_memory_root = codex_home.path().join("user_preferences_memory").abs();
     let orchestrator_supervision_root = codex_home.path().join("orchestrator_supervision").abs();
     let scratchpad_root = codex_home.path().join("scratchpad").abs();
     let schedule_root = codex_home.path().join("schedule").abs();
@@ -1810,18 +1876,6 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
-                    path: orchestrator_memory_root.clone(),
-                },
-                access: FileSystemAccessMode::Write,
-            },
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: user_preferences_memory_root.clone(),
-                },
-                access: FileSystemAccessMode::Write,
-            },
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
                     path: orchestrator_supervision_root.clone(),
                 },
                 access: FileSystemAccessMode::Write,
@@ -1845,8 +1899,6 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![
                 memories_root,
-                orchestrator_memory_root,
-                user_preferences_memory_root,
                 orchestrator_supervision_root,
                 scratchpad_root,
                 schedule_root
@@ -2018,8 +2070,6 @@ async fn permission_profile_override_applies_runtime_roots_to_legacy_projection(
     .await?;
 
     let memories_root = codex_home.path().join("memories").abs();
-    let orchestrator_memory_root = codex_home.path().join("orchestrator_memory").abs();
-    let user_preferences_memory_root = codex_home.path().join("user_preferences_memory").abs();
     let orchestrator_supervision_root = codex_home.path().join("orchestrator_supervision").abs();
     let scratchpad_root = codex_home.path().join("scratchpad").abs();
     let schedule_root = codex_home.path().join("schedule").abs();
@@ -2034,8 +2084,6 @@ async fn permission_profile_override_applies_runtime_roots_to_legacy_projection(
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![
                 memories_root,
-                orchestrator_memory_root,
-                user_preferences_memory_root,
                 orchestrator_supervision_root,
                 scratchpad_root,
                 schedule_root,
@@ -2676,11 +2724,10 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     let memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
         codex_home.path().join("memories"),
     )?)?;
-    let orchestrator_memory_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
-        codex_home.path().join("orchestrator_memory"),
-    )?)?;
     let user_preferences_memory_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
-        codex_home.path().join("user_preferences_memory"),
+        codex_home
+            .path()
+            .join("memories/extensions/user_preferences"),
     )?)?;
     let orchestrator_supervision_root = AbsolutePathBuf::from_absolute_path(
         std::fs::canonicalize(codex_home.path().join("orchestrator_supervision"))?,
@@ -2703,7 +2750,6 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
             writable_roots: vec![
                 external_write_path,
                 memories_root,
-                orchestrator_memory_root,
                 user_preferences_memory_root,
                 orchestrator_supervision_root,
                 scratchpad_root,
@@ -4323,8 +4369,6 @@ async fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Re
 async fn workspace_write_always_includes_runtime_roots_once() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let memories_root = codex_home.path().join("memories");
-    let orchestrator_memory_root = codex_home.path().join("orchestrator_memory");
-    let user_preferences_memory_root = codex_home.path().join("user_preferences_memory");
     let scratchpad_root = codex_home.path().join("scratchpad");
     let schedule_root = codex_home.path().join("schedule");
     let config = Config::load_from_base_config_with_overrides(
@@ -4355,16 +4399,6 @@ async fn workspace_write_always_includes_runtime_roots_once() -> std::io::Result
             memories_root.display()
         );
         assert!(
-            orchestrator_memory_root.is_dir(),
-            "expected orchestrator memory root directory to exist at {}",
-            orchestrator_memory_root.display()
-        );
-        assert!(
-            user_preferences_memory_root.is_dir(),
-            "expected user preferences memory root directory to exist at {}",
-            user_preferences_memory_root.display()
-        );
-        assert!(
             scratchpad_root.is_dir(),
             "expected scratchpad root directory to exist at {}",
             scratchpad_root.display()
@@ -4375,8 +4409,6 @@ async fn workspace_write_always_includes_runtime_roots_once() -> std::io::Result
             schedule_root.display()
         );
         let expected_memories_root = memories_root.abs();
-        let expected_orchestrator_memory_root = orchestrator_memory_root.abs();
-        let expected_user_preferences_memory_root = user_preferences_memory_root.abs();
         let expected_scratchpad_root = scratchpad_root.abs();
         let expected_schedule_root = schedule_root.abs();
         match config.legacy_sandbox_policy() {
@@ -4389,24 +4421,6 @@ async fn workspace_write_always_includes_runtime_roots_once() -> std::io::Result
                     1,
                     "expected single writable root entry for {}",
                     expected_memories_root.display()
-                );
-                assert_eq!(
-                    writable_roots
-                        .iter()
-                        .filter(|root| **root == expected_orchestrator_memory_root)
-                        .count(),
-                    1,
-                    "expected single writable root entry for {}",
-                    expected_orchestrator_memory_root.display()
-                );
-                assert_eq!(
-                    writable_roots
-                        .iter()
-                        .filter(|root| **root == expected_user_preferences_memory_root)
-                        .count(),
-                    1,
-                    "expected single writable root entry for {}",
-                    expected_user_preferences_memory_root.display()
                 );
                 assert_eq!(
                     writable_roots
@@ -4450,6 +4464,86 @@ async fn config_defaults_to_file_cli_auth_store_mode() -> std::io::Result<()> {
         config.cli_auth_credentials_store_mode,
         AuthCredentialsStoreMode::File,
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn memory_policy_controls_automatic_memory_sandbox_roots() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let memories_root = codex_home.path().join("memories").abs();
+    let legacy_user_preferences_root = codex_home.path().join("user_preferences_memory").abs();
+
+    let read_only = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            memory_policy: Some(codex_protocol::config_types::MemoryAccessPolicy {
+                read: true,
+                write: false,
+            }),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    assert!(read_only.memories.use_memories);
+    assert!(!read_only.memories.generate_memories);
+    let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = read_only.legacy_sandbox_policy()
+    else {
+        panic!("expected workspace-write sandbox policy");
+    };
+    assert!(!writable_roots.contains(&memories_root));
+    assert!(!writable_roots.contains(&legacy_user_preferences_root));
+    assert!(!memories_root.exists());
+
+    let disabled = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            memory_policy: Some(codex_protocol::config_types::MemoryAccessPolicy {
+                read: false,
+                write: false,
+            }),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    assert!(!disabled.memories.use_memories);
+    assert!(!disabled.memories.generate_memories);
+    let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = disabled.legacy_sandbox_policy()
+    else {
+        panic!("expected workspace-write sandbox policy");
+    };
+    assert!(!writable_roots.contains(&memories_root));
+    assert!(!writable_roots.contains(&legacy_user_preferences_root));
+
+    let write_only_normalized = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            memory_policy: Some(codex_protocol::config_types::MemoryAccessPolicy {
+                read: false,
+                write: true,
+            }),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    assert!(write_only_normalized.memories.use_memories);
+    assert!(write_only_normalized.memories.generate_memories);
+    let SandboxPolicy::WorkspaceWrite { writable_roots, .. } =
+        write_only_normalized.legacy_sandbox_policy()
+    else {
+        panic!("expected workspace-write sandbox policy");
+    };
+    assert!(writable_roots.contains(&memories_root));
 
     Ok(())
 }

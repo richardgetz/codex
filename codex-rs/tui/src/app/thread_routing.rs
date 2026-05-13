@@ -650,6 +650,12 @@ impl App {
                     .await?;
                 Ok(true)
             }
+            AppCommand::SetMemoryAccessPolicy { policy } => {
+                app_server
+                    .thread_memory_policy_set(thread_id, *policy)
+                    .await?;
+                Ok(true)
+            }
             AppCommand::SetUserPreferencesMemoryPolicy { policy } => {
                 app_server
                     .thread_user_preferences_memory_policy_set(thread_id, policy.clone())
@@ -710,9 +716,22 @@ impl App {
                 Ok(true)
             }
             AppCommand::ConsolidateOrchestratorMemory => {
-                // The app-server does not expose a dedicated endpoint for this
-                // fork-only local operation yet.
-                Ok(false)
+                app_server
+                    .thread_orchestrator_memory_consolidate(thread_id)
+                    .await?;
+                Ok(true)
+            }
+            AppCommand::OrchestratorMemoryForget { needle } => {
+                app_server
+                    .thread_orchestrator_memory_forget(thread_id, needle.clone())
+                    .await?;
+                Ok(true)
+            }
+            AppCommand::UserPreferencesMemoryMigrate => {
+                app_server
+                    .thread_user_preferences_memory_migrate(thread_id)
+                    .await?;
+                Ok(true)
             }
             AppCommand::OverrideTurnContext { .. } => Ok(true),
             AppCommand::ApproveGuardianDeniedAction { event } => {

@@ -13,6 +13,7 @@ pub use crate::mcp_types::RawMcpServerConfig;
 pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::EnvironmentVariablePattern;
+pub use codex_protocol::config_types::MemoryAccessPolicy;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::ServiceTier;
@@ -434,8 +435,12 @@ pub struct MemoriesToml {
     pub min_rate_limit_remaining_percent: Option<i64>,
     /// Model used for thread summarisation.
     pub extract_model: Option<String>,
+    /// Reasoning effort used for thread summarisation.
+    pub extract_reasoning_effort: Option<ReasoningEffort>,
     /// Model used for memory consolidation.
     pub consolidation_model: Option<String>,
+    /// Reasoning effort used for memory consolidation.
+    pub consolidation_reasoning_effort: Option<ReasoningEffort>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
@@ -460,7 +465,9 @@ pub struct MemoriesConfig {
     pub min_rollout_idle_hours: i64,
     pub min_rate_limit_remaining_percent: i64,
     pub extract_model: Option<String>,
+    pub extract_reasoning_effort: Option<ReasoningEffort>,
     pub consolidation_model: Option<String>,
+    pub consolidation_reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl Default for MemoriesConfig {
@@ -477,7 +484,9 @@ impl Default for MemoriesConfig {
             min_rollout_idle_hours: DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS,
             min_rate_limit_remaining_percent: DEFAULT_MEMORIES_MIN_RATE_LIMIT_REMAINING_PERCENT,
             extract_model: None,
+            extract_reasoning_effort: None,
             consolidation_model: None,
+            consolidation_reasoning_effort: None,
         }
     }
 }
@@ -523,7 +532,9 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .unwrap_or(defaults.min_rate_limit_remaining_percent)
                 .clamp(0, 100),
             extract_model: toml.extract_model,
+            extract_reasoning_effort: toml.extract_reasoning_effort,
             consolidation_model: toml.consolidation_model,
+            consolidation_reasoning_effort: toml.consolidation_reasoning_effort,
         }
     }
 }
@@ -585,7 +596,7 @@ pub struct UserPreferencesMemoryToml {
     /// set an empty list to write none.
     pub write_buckets: Option<Vec<UserPreferencesMemoryBucket>>,
     /// When true, copy existing `<codex_home>/orchestrator_memory` files into
-    /// `<codex_home>/user_preferences_memory` on startup when needed.
+    /// `<codex_home>/memories/extensions/user_preferences` on startup when needed.
     pub migrate_from_orchestrator_memory: Option<bool>,
     /// When true and migration is enabled, the effective orchestrator-memory
     /// config is disabled after the startup migration pass succeeds.

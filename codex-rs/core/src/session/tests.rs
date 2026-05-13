@@ -7,6 +7,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
+use crate::orchestrator_memory::user_preferences_root;
 use crate::session::turn::build_prompt;
 use crate::session::turn::built_tools;
 use crate::shell::default_user_shell;
@@ -103,6 +104,8 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::config_types::UserPreferencesMemoryBucket;
+use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -171,6 +174,7 @@ use rmcp::model::Tool;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
+use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio::time::timeout;
@@ -2662,6 +2666,10 @@ async fn set_rate_limits_retains_previous_credits() {
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        memory_policy: codex_protocol::config_types::MemoryAccessPolicy {
+            read: config.memories.use_memories,
+            write: config.memories.generate_memories,
+        },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
@@ -2767,6 +2775,10 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        memory_policy: codex_protocol::config_types::MemoryAccessPolicy {
+            read: config.memories.use_memories,
+            write: config.memories.generate_memories,
+        },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
@@ -3618,6 +3630,247 @@ async fn session_settings_legacy_fast_service_tier_update_uses_priority_request_
     );
 }
 
+#[tokio::test]
+async fn session_settings_memory_policy_update_restricts_memory_roots() {
+    let session_configuration = make_session_configuration_for_tests().await;
+    let memory_root = codex_memories_read::memory_root(&session_configuration.codex_home);
+    let legacy_user_preferences_root = session_configuration
+        .codex_home
+        .join("user_preferences_memory");
+    let initial_file_system_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: memory_root.clone(),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: legacy_user_preferences_root.clone(),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+    ]);
+    let mut session_configuration = session_configuration;
+    session_configuration.permission_profile = codex_config::Constrained::allow_any(
+        PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::Managed,
+            &initial_file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+        ),
+    );
+
+    let read_only = session_configuration
+        .apply(&SessionSettingsUpdate {
+            memory_policy: Some(codex_protocol::config_types::MemoryAccessPolicy {
+                read: true,
+                write: false,
+            }),
+            ..Default::default()
+        })
+        .expect("memory read-only policy should apply");
+    let read_only_policy = read_only.file_system_sandbox_policy();
+
+    assert!(read_only_policy.entries.iter().any(|entry| {
+        matches!(&entry.path, FileSystemPath::Path { path } if path == &memory_root)
+            && entry.access == FileSystemAccessMode::Read
+    }));
+    assert!(read_only_policy.entries.iter().any(|entry| {
+        matches!(&entry.path, FileSystemPath::Path { path } if path == &legacy_user_preferences_root)
+            && entry.access == FileSystemAccessMode::Read
+    }));
+    assert!(!read_only_policy.entries.iter().any(|entry| {
+        matches!(&entry.path, FileSystemPath::Path { path } if path == &memory_root)
+            && entry.access == FileSystemAccessMode::Write
+    }));
+
+    let disabled = read_only
+        .apply(&SessionSettingsUpdate {
+            memory_policy: Some(codex_protocol::config_types::MemoryAccessPolicy {
+                read: false,
+                write: false,
+            }),
+            ..Default::default()
+        })
+        .expect("memory disabled policy should apply");
+    let disabled_policy = disabled.file_system_sandbox_policy();
+
+    assert!(!disabled_policy.entries.iter().any(|entry| {
+        matches!(
+            &entry.path,
+            FileSystemPath::Path { path }
+                if path == &memory_root || path == &legacy_user_preferences_root
+        )
+    }));
+}
+
+#[tokio::test]
+async fn submit_memory_policy_update_applies_before_returning() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let thread = test_codex_thread(session);
+
+    thread
+        .submit(Op::SetMemoryAccessPolicy {
+            policy: codex_protocol::config_types::MemoryAccessPolicy::new(
+                /*read*/ false, /*write*/ false,
+            ),
+        })
+        .await
+        .expect("memory policy update should apply synchronously");
+
+    assert_eq!(
+        thread.config_snapshot().await.memory_policy,
+        codex_protocol::config_types::MemoryAccessPolicy::new(
+            /*read*/ false, /*write*/ false
+        )
+    );
+}
+
+#[tokio::test]
+async fn submit_user_preferences_memory_policy_update_applies_before_returning() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let thread = test_codex_thread(session);
+    let policy = UserPreferencesMemoryBucketPolicy {
+        read_buckets: vec![UserPreferencesMemoryBucket::DurablePreference],
+        write_buckets: vec![UserPreferencesMemoryBucket::OperatorPlaybook],
+    };
+
+    thread
+        .submit(Op::SetUserPreferencesMemoryPolicy {
+            policy: policy.clone(),
+        })
+        .await
+        .expect("user preferences memory policy update should apply synchronously");
+
+    assert_eq!(
+        thread
+            .config_snapshot()
+            .await
+            .user_preferences_memory_policy,
+        policy
+    );
+}
+
+#[tokio::test]
+async fn orchestrator_memory_forget_rejects_restricted_write_buckets() {
+    let (session, turn_context, rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |_| {},
+    )
+    .await;
+    session
+        .update_settings(SessionSettingsUpdate {
+            user_preferences_memory_policy: Some(UserPreferencesMemoryBucketPolicy {
+                read_buckets: UserPreferencesMemoryBucket::all().to_vec(),
+                write_buckets: vec![UserPreferencesMemoryBucket::DurablePreference],
+            }),
+            ..Default::default()
+        })
+        .await
+        .expect("user preferences memory policy update should apply");
+
+    crate::session::handlers::forget_orchestrator_memory(
+        &session,
+        &turn_context.config,
+        "forget-1".to_string(),
+        "stale preference".to_string(),
+    );
+
+    let event = tokio::time::timeout(StdDuration::from_secs(2), rx_event.recv())
+        .await
+        .expect("timeout waiting for forget denial")
+        .expect("event");
+    let EventMsg::Error(error) = event.msg else {
+        panic!("expected forget denial error event");
+    };
+    assert!(error.message.contains("requires write access to all"));
+}
+
+#[tokio::test]
+async fn disabling_memory_writes_waits_for_active_memory_write_permit() {
+    let (session, _turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |_| {},
+    )
+    .await;
+    let permit = session
+        .memory_write_permit()
+        .await
+        .expect("memory writes should be enabled initially");
+    let session_for_update = Arc::clone(&session);
+    let mut disable_writes = Box::pin(tokio::spawn(async move {
+        session_for_update
+            .update_settings(SessionSettingsUpdate {
+                memory_policy: Some(codex_protocol::config_types::MemoryAccessPolicy::new(
+                    /*read*/ false, /*write*/ false,
+                )),
+                ..Default::default()
+            })
+            .await
+            .expect("memory policy update should apply");
+    }));
+
+    assert!(
+        timeout(Duration::from_millis(25), &mut disable_writes)
+            .await
+            .is_err(),
+        "memory policy update should wait for the active memory write permit"
+    );
+    drop(permit);
+
+    disable_writes
+        .await
+        .expect("memory policy update should join");
+    assert!(!session.memory_write_enabled().await);
+}
+
+#[tokio::test]
+async fn updating_user_preferences_memory_policy_waits_for_active_memory_write_permit() {
+    let (session, _turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |_| {},
+    )
+    .await;
+    let permit = session
+        .memory_write_permit()
+        .await
+        .expect("memory writes should be enabled initially");
+    let updated_policy = UserPreferencesMemoryBucketPolicy {
+        read_buckets: vec![UserPreferencesMemoryBucket::DurablePreference],
+        write_buckets: vec![UserPreferencesMemoryBucket::OperatorPlaybook],
+    };
+    let session_for_update = Arc::clone(&session);
+    let mut update_policy = Box::pin(tokio::spawn(async move {
+        session_for_update
+            .update_settings(SessionSettingsUpdate {
+                user_preferences_memory_policy: Some(updated_policy.clone()),
+                ..Default::default()
+            })
+            .await
+            .expect("user preferences memory policy update should apply");
+        updated_policy
+    }));
+
+    assert!(
+        timeout(Duration::from_millis(25), &mut update_policy)
+            .await
+            .is_err(),
+        "user preferences memory policy update should wait for the active memory write permit"
+    );
+    drop(permit);
+
+    let updated_policy = update_policy
+        .await
+        .expect("user preferences memory policy update should join");
+    assert_eq!(
+        session.user_preferences_memory_policy().await,
+        updated_policy
+    );
+}
+
 pub(crate) async fn make_session_configuration_for_tests() -> SessionConfiguration {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let config = build_test_config(codex_home.path()).await;
@@ -3665,6 +3918,10 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        memory_policy: codex_protocol::config_types::MemoryAccessPolicy {
+            read: config.memories.use_memories,
+            write: config.memories.generate_memories,
+        },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
@@ -4192,6 +4449,10 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        memory_policy: codex_protocol::config_types::MemoryAccessPolicy {
+            read: config.memories.use_memories,
+            write: config.memories.generate_memories,
+        },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
@@ -4301,6 +4562,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        memory_policy: codex_protocol::config_types::MemoryAccessPolicy {
+            read: config.memories.use_memories,
+            write: config.memories.generate_memories,
+        },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
@@ -4442,6 +4707,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
+        memory_write_gate: Semaphore::new(
+            crate::session::session::MEMORY_WRITE_GATE_PERMITS as usize,
+        ),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
@@ -4534,6 +4802,10 @@ async fn make_session_with_config_and_rx(
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        memory_policy: codex_protocol::config_types::MemoryAccessPolicy {
+            read: config.memories.use_memories,
+            write: config.memories.generate_memories,
+        },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
@@ -4637,6 +4909,10 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        memory_policy: codex_protocol::config_types::MemoryAccessPolicy {
+            read: config.memories.use_memories,
+            write: config.memories.generate_memories,
+        },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
@@ -6024,6 +6300,10 @@ where
         thread_source: None,
         dynamic_tools,
         persist_extended_history: false,
+        memory_policy: codex_protocol::config_types::MemoryAccessPolicy {
+            read: config.memories.use_memories,
+            write: config.memories.generate_memories,
+        },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
@@ -6165,6 +6445,9 @@ where
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
+        memory_write_gate: Semaphore::new(
+            crate::session::session::MEMORY_WRITE_GATE_PERMITS as usize,
+        ),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
@@ -7670,10 +7953,7 @@ async fn build_initial_context_injects_user_preferences_memory_in_default_mode()
         },
     )
     .await;
-    let user_preferences_dir = turn_context
-        .config
-        .codex_home
-        .join("user_preferences_memory");
+    let user_preferences_dir = user_preferences_root(&turn_context.config.codex_home);
     std::fs::create_dir_all(&user_preferences_dir).expect("create user preferences memory dir");
     std::fs::write(
         user_preferences_dir.join("summary.md"),
@@ -7698,6 +7978,37 @@ async fn build_initial_context_injects_user_preferences_memory_in_default_mode()
 }
 
 #[tokio::test]
+async fn build_initial_context_respects_outer_memory_read_policy_for_user_preferences() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.memories.use_memories = false;
+            config.memories.generate_memories = false;
+            config.user_preferences_memory.enabled = true;
+            config.user_preferences_memory.scope = codex_config::types::MemoriesScope::All;
+        },
+    )
+    .await;
+    let user_preferences_dir = user_preferences_root(&turn_context.config.codex_home);
+    std::fs::create_dir_all(&user_preferences_dir).expect("create user preferences memory dir");
+    std::fs::write(
+        user_preferences_dir.join("summary.md"),
+        "Prefer direct implementation status updates.",
+    )
+    .expect("write user preferences memory summary");
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+    let developer_texts = developer_input_texts(&initial_context);
+    assert!(
+        !developer_texts
+            .iter()
+            .any(|text| text.contains("User Preferences Memory")),
+        "expected memory read policy to suppress user preferences memory, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
 async fn build_initial_context_surfaces_recent_user_preferences_memory_when_summary_is_stale() {
     let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
@@ -7708,10 +8019,7 @@ async fn build_initial_context_surfaces_recent_user_preferences_memory_when_summ
         },
     )
     .await;
-    let user_preferences_dir = turn_context
-        .config
-        .codex_home
-        .join("user_preferences_memory");
+    let user_preferences_dir = user_preferences_root(&turn_context.config.codex_home);
     std::fs::create_dir_all(&user_preferences_dir).expect("create user preferences memory dir");
     std::fs::write(
         user_preferences_dir.join("summary.md"),

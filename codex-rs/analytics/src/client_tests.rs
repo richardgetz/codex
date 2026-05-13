@@ -116,6 +116,7 @@ fn sample_thread_start_response() -> ClientResponsePayload {
         permission_profile: Some(sample_permission_profile()),
         active_permission_profile: None,
         reasoning_effort: None,
+        memory_policy: Default::default(),
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
     })
 }
@@ -134,6 +135,7 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
         permission_profile: Some(sample_permission_profile()),
         active_permission_profile: None,
         reasoning_effort: None,
+        memory_policy: Default::default(),
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
     })
 }
@@ -152,6 +154,7 @@ fn sample_thread_fork_response() -> ClientResponsePayload {
         permission_profile: Some(sample_permission_profile()),
         active_permission_profile: None,
         reasoning_effort: None,
+        memory_policy: Default::default(),
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
     })
 }

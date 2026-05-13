@@ -13,6 +13,7 @@ use codex_app_server_protocol::UserInput;
 use codex_config::types::ApprovalsReviewer;
 use codex_protocol::approvals::GuardianAssessmentEvent;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::MemoryAccessPolicy;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
@@ -99,9 +100,16 @@ pub(crate) enum AppCommand {
         name: String,
     },
     ConsolidateOrchestratorMemory,
+    OrchestratorMemoryForget {
+        needle: String,
+    },
+    UserPreferencesMemoryMigrate,
     PruneIdleAgents,
     SetScratchpadContinuousPolicy {
         enabled: bool,
+    },
+    SetMemoryAccessPolicy {
+        policy: MemoryAccessPolicy,
     },
     SetUserPreferencesMemoryPolicy {
         policy: UserPreferencesMemoryBucketPolicy,
@@ -306,10 +314,15 @@ impl From<Op> for AppCommand {
         match value {
             Op::ReloadUserConfig => AppCommand::ReloadUserConfig,
             Op::ConsolidateOrchestratorMemory => AppCommand::ConsolidateOrchestratorMemory,
+            Op::OrchestratorMemoryForget { needle } => {
+                AppCommand::OrchestratorMemoryForget { needle }
+            }
+            Op::UserPreferencesMemoryMigrate => AppCommand::UserPreferencesMemoryMigrate,
             Op::PruneIdleAgents => AppCommand::PruneIdleAgents,
             Op::SetScratchpadContinuousPolicy { enabled } => {
                 AppCommand::SetScratchpadContinuousPolicy { enabled }
             }
+            Op::SetMemoryAccessPolicy { policy } => AppCommand::SetMemoryAccessPolicy { policy },
             Op::SetUserPreferencesMemoryPolicy { policy } => {
                 AppCommand::SetUserPreferencesMemoryPolicy { policy }
             }

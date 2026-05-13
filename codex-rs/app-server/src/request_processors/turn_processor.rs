@@ -487,14 +487,20 @@ impl TurnRequestProcessor {
 
         if turn_has_input {
             let config_snapshot = thread.config_snapshot().await;
-            codex_memories_write::start_memories_startup_task(
-                Arc::clone(&self.thread_manager),
-                Arc::clone(&self.auth_manager),
-                thread_id,
-                Arc::clone(&thread),
-                thread.config().await,
-                &config_snapshot.session_source,
-            );
+            let memory_policy = config_snapshot.memory_policy.normalized();
+            if memory_policy.write {
+                let mut startup_config = thread.config().await.as_ref().clone();
+                startup_config.memories.use_memories = memory_policy.read;
+                startup_config.memories.generate_memories = memory_policy.write;
+                codex_memories_write::start_memories_startup_task(
+                    Arc::clone(&self.thread_manager),
+                    Arc::clone(&self.auth_manager),
+                    thread_id,
+                    Arc::clone(&thread),
+                    Arc::new(startup_config),
+                    &config_snapshot.session_source,
+                );
+            }
         }
 
         self.outgoing

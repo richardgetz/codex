@@ -11,6 +11,7 @@ use crate::session::turn_context::compatible_reasoning_effort_for_model;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::MemoryAccessPolicy;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
@@ -67,6 +68,7 @@ pub struct ThreadConfigSnapshot {
     pub personality: Option<Personality>,
     pub session_source: SessionSource,
     pub thread_source: Option<ThreadSource>,
+    pub memory_policy: MemoryAccessPolicy,
     pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
 }
 
@@ -486,6 +488,10 @@ impl CodexThread {
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
+    }
+
+    pub async fn memory_write_permit(&self) -> Option<tokio::sync::SemaphorePermit<'_>> {
+        self.codex.session.memory_write_permit().await
     }
 
     pub async fn collaboration_mode(&self) -> CollaborationMode {

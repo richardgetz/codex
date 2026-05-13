@@ -599,6 +599,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         active_permission_profile,
         cwd,
         reasoning_effort,
+        memory_policy,
         user_preferences_memory_policy,
         ..
     } = pending.config_snapshot;
@@ -622,6 +623,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         permission_profile: Some(permission_profile.into()),
         active_permission_profile,
         reasoning_effort,
+        memory_policy,
         user_preferences_memory_policy,
     };
     let token_usage_thread = pending.include_turns.then(|| response.thread.clone());

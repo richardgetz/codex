@@ -7,10 +7,14 @@ use super::super::types::MemoryEvent;
 use super::super::types::MemoryOperation;
 use super::super::types::MemorySignal;
 use super::*;
+use crate::session::SessionSettingsUpdate;
 use codex_config::types::UserPreferencesMemoryBucket;
 use codex_config::types::UserPreferencesMemoryBucketPolicy;
+use codex_protocol::config_types::MemoryAccessPolicy;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tempfile::tempdir;
 
 #[test]
@@ -142,6 +146,61 @@ fn write_policy_removes_candidates_for_disallowed_buckets() {
             confidence: EXPLICIT_CONFIDENCE,
         }]
     );
+}
+
+#[tokio::test]
+async fn scheduled_consolidation_skips_when_memory_writes_are_disabled() {
+    let (session, _turn_context) = crate::session::tests::make_session_and_context().await;
+    session
+        .services
+        .orchestrator_memory_generation
+        .store(1, Ordering::SeqCst);
+
+    assert_eq!(
+        scheduled_consolidation_skip_reason(&session, /*generation*/ 1).await,
+        None
+    );
+    assert_eq!(
+        scheduled_consolidation_skip_reason(&session, /*generation*/ 2).await,
+        Some(ScheduledConsolidationSkipReason::StaleGeneration)
+    );
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            memory_policy: Some(MemoryAccessPolicy::new(
+                /*read*/ false, /*write*/ false,
+            )),
+            ..Default::default()
+        })
+        .await
+        .expect("memory policy update should apply");
+
+    assert_eq!(
+        scheduled_consolidation_skip_reason(&session, /*generation*/ 1).await,
+        Some(ScheduledConsolidationSkipReason::WriteDisabled)
+    );
+}
+
+#[tokio::test]
+async fn completed_turn_processing_does_not_create_memory_files_when_writes_disabled() {
+    let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+    session
+        .update_settings(SessionSettingsUpdate {
+            memory_policy: Some(MemoryAccessPolicy::new(
+                /*read*/ false, /*write*/ false,
+            )),
+            ..Default::default()
+        })
+        .await
+        .expect("memory policy update should apply");
+    let codex_home = turn_context.config.codex_home.clone();
+    let session = Arc::new(session);
+
+    process_completed_turn(&session, &turn_context, /*last_agent_message*/ None)
+        .await
+        .expect("completed turn processing should no-op");
+
+    assert!(!super::super::root(&codex_home).exists());
 }
 
 #[tokio::test]
@@ -278,9 +337,8 @@ async fn consolidation_migrates_legacy_events_into_buckets() {
     assert!(summary.contains("## Operator Playbook"));
     assert!(summary.contains("warming endpoint to unblock it"));
     assert!(
-        codex_home
-            .join("user_preferences_memory")
-            .join("preferences.jsonl.pre-bucket-migration")
+        preferences_path(&codex_home)
+            .with_file_name("preferences.jsonl.pre-bucket-migration")
             .exists()
     );
 }

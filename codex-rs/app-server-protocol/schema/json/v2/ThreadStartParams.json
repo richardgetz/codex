@@ -90,6 +90,21 @@
       ],
       "type": "object"
     },
+    "MemoryAccessPolicy": {
+      "properties": {
+        "read": {
+          "type": "boolean"
+        },
+        "write": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read",
+        "write"
+      ],
+      "type": "object"
+    },
     "PermissionProfileModificationParams": {
       "oneOf": [
         {
@@ -280,6 +295,17 @@
         "boolean",
         "null"
       ]
+    },
+    "memoryPolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MemoryAccessPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Session-local read/write access for the outer memories layer. Omitted uses the server's `[memories]` config defaults."
     },
     "model": {
       "type": [

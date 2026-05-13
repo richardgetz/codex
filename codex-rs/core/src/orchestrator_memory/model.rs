@@ -292,8 +292,11 @@ pub(super) fn build_consolidation_agent_config(
         .set_legacy_sandbox_policy(sandbox_policy, agent_config.cwd.as_path())
         .context("set orchestrator memory consolidation sandbox policy")?;
 
-    agent_config.model = Some(resolve_orchestrator_memory_model(base, is_chatgpt_auth));
-    agent_config.model_reasoning_effort = base.effective_orchestrator_reasoning_effort();
+    agent_config.model = Some(resolve_memory_consolidation_model(base, is_chatgpt_auth));
+    agent_config.model_reasoning_effort = base
+        .memories
+        .consolidation_reasoning_effort
+        .or_else(|| base.effective_orchestrator_reasoning_effort());
 
     Ok(agent_config)
 }
@@ -305,6 +308,20 @@ pub(super) fn resolve_orchestrator_memory_model(base: &Config, is_chatgpt_auth: 
     } else {
         model.to_string()
     }
+}
+
+pub(super) fn resolve_memory_extract_model(base: &Config, is_chatgpt_auth: bool) -> String {
+    base.memories
+        .extract_model
+        .clone()
+        .unwrap_or_else(|| resolve_orchestrator_memory_model(base, is_chatgpt_auth))
+}
+
+pub(super) fn resolve_memory_consolidation_model(base: &Config, is_chatgpt_auth: bool) -> String {
+    base.memories
+        .consolidation_model
+        .clone()
+        .unwrap_or_else(|| resolve_orchestrator_memory_model(base, is_chatgpt_auth))
 }
 
 fn build_consolidation_prompt(

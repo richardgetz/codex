@@ -498,6 +498,11 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadScratchpadContinuousPolicySetResponse,
     },
+    ThreadMemoryPolicySet => "thread/memoryPolicy/set" {
+        params: v2::ThreadMemoryPolicySetParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadMemoryPolicySetResponse,
+    },
     ThreadUserPreferencesMemoryPolicySet => "thread/userPreferencesMemoryPolicy/set" {
         params: v2::ThreadUserPreferencesMemoryPolicySetParams,
         serialization: thread_id(params.thread_id),
@@ -584,6 +589,21 @@ client_request_definitions! {
         params: v2::ThreadAgentsPruneParams,
         serialization: thread_id(params.thread_id),
         response: v2::ThreadAgentsPruneResponse,
+    },
+    ThreadOrchestratorMemoryConsolidate => "thread/orchestratorMemory/consolidate" {
+        params: v2::ThreadOrchestratorMemoryConsolidateParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadOrchestratorMemoryConsolidateResponse,
+    },
+    ThreadOrchestratorMemoryForget => "thread/orchestratorMemory/forget" {
+        params: v2::ThreadOrchestratorMemoryForgetParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadOrchestratorMemoryForgetResponse,
+    },
+    ThreadUserPreferencesMemoryMigrate => "thread/userPreferencesMemory/migrate" {
+        params: v2::ThreadUserPreferencesMemoryMigrateParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadUserPreferencesMemoryMigrateResponse,
     },
     ThreadRollback => "thread/rollback" {
         params: v2::ThreadRollbackParams,
@@ -1624,15 +1644,31 @@ mod tests {
             })
         );
 
-        let memory_policy_set = ClientRequest::ThreadUserPreferencesMemoryPolicySet {
+        let memory_policy_set = ClientRequest::ThreadMemoryPolicySet {
             request_id: request_id(),
-            params: v2::ThreadUserPreferencesMemoryPolicySetParams {
+            params: v2::ThreadMemoryPolicySetParams {
                 thread_id: thread_id.clone(),
-                policy: codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
+                policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
             },
         };
         assert_eq!(
             memory_policy_set.serialization_scope(),
+            Some(ClientRequestSerializationScope::Thread {
+                thread_id: thread_id.clone()
+            })
+        );
+
+        let user_preferences_memory_policy_set =
+            ClientRequest::ThreadUserPreferencesMemoryPolicySet {
+                request_id: request_id(),
+                params: v2::ThreadUserPreferencesMemoryPolicySetParams {
+                    thread_id: thread_id.clone(),
+                    policy:
+                        codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
+                },
+            };
+        assert_eq!(
+            user_preferences_memory_policy_set.serialization_scope(),
             Some(ClientRequestSerializationScope::Thread { thread_id })
         );
 
@@ -2280,6 +2316,7 @@ mod tests {
                 permission_profile: None,
                 active_permission_profile: None,
                 reasoning_effort: None,
+                memory_policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
                 user_preferences_memory_policy:
                     codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
             },
@@ -2328,6 +2365,10 @@ mod tests {
                     "permissionProfile": null,
                     "activePermissionProfile": null,
                     "reasoningEffort": null,
+                    "memoryPolicy": {
+                        "read": true,
+                        "write": true
+                    },
                     "userPreferencesMemoryPolicy": {
                         "readBuckets": [
                             "durable_preference",

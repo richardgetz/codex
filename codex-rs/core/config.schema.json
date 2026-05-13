@@ -1360,6 +1360,14 @@
           "description": "Model used for memory consolidation.",
           "type": "string"
         },
+        "consolidation_reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Reasoning effort used for memory consolidation."
+        },
         "disable_on_external_context": {
           "description": "When `true`, external context sources mark the thread `memory_mode` as `\"polluted\"`.",
           "type": "boolean"
@@ -1367,6 +1375,14 @@
         "extract_model": {
           "description": "Model used for thread summarisation.",
           "type": "string"
+        },
+        "extract_reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Reasoning effort used for thread summarisation."
         },
         "generate_memories": {
           "description": "When `false`, newly created threads are stored with `memory_mode = \"disabled\"` in the state DB.",
@@ -4500,7 +4516,7 @@
           "type": "integer"
         },
         "migrate_from_orchestrator_memory": {
-          "description": "When true, copy existing `<codex_home>/orchestrator_memory` files into `<codex_home>/user_preferences_memory` on startup when needed.",
+          "description": "When true, copy existing `<codex_home>/orchestrator_memory` files into `<codex_home>/memories/extensions/user_preferences` on startup when needed.",
           "type": "boolean"
         },
         "min_observations": {

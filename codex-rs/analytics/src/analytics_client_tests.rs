@@ -178,6 +178,7 @@ fn sample_thread_start_response(
         permission_profile: None,
         active_permission_profile: None,
         reasoning_effort: None,
+        memory_policy: Default::default(),
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
     })
 }
@@ -235,6 +236,7 @@ fn sample_thread_resume_response_with_source(
         permission_profile: None,
         active_permission_profile: None,
         reasoning_effort: None,
+        memory_policy: Default::default(),
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
     })
 }

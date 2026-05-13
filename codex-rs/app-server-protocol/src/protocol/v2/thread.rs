@@ -13,6 +13,7 @@ use super::TurnEnvironmentParams;
 use super::TurnItemsView;
 use super::shared::v2_enum_from_core;
 use codex_experimental_api_macros::ExperimentalApi;
+use codex_protocol::config_types::MemoryAccessPolicy;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::models::ResponseItem;
@@ -153,6 +154,10 @@ pub struct ThreadStartParams {
     /// server's `[user_preferences_memory]` config defaults.
     #[ts(optional = nullable)]
     pub user_preferences_memory_policy: Option<UserPreferencesMemoryBucketPolicy>,
+    /// Session-local read/write access for the outer memories layer. Omitted
+    /// uses the server's `[memories]` config defaults.
+    #[ts(optional = nullable)]
+    pub memory_policy: Option<MemoryAccessPolicy>,
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
@@ -222,6 +227,8 @@ pub struct ThreadStartResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(default)]
+    pub memory_policy: MemoryAccessPolicy,
     #[serde(default)]
     pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
 }
@@ -298,6 +305,10 @@ pub struct ThreadResumeParams {
     /// server's `[user_preferences_memory]` config defaults.
     #[ts(optional = nullable)]
     pub user_preferences_memory_policy: Option<UserPreferencesMemoryBucketPolicy>,
+    /// Session-local read/write access for the outer memories layer. Omitted
+    /// uses the server's `[memories]` config defaults.
+    #[ts(optional = nullable)]
+    pub memory_policy: Option<MemoryAccessPolicy>,
     /// When true, return only thread metadata and live-resume state without
     /// populating `thread.turns`. This is useful when the client plans to call
     /// `thread/turns/list` immediately after resuming.
@@ -343,6 +354,8 @@ pub struct ThreadResumeResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(default)]
+    pub memory_policy: MemoryAccessPolicy,
     #[serde(default)]
     pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
 }
@@ -413,6 +426,10 @@ pub struct ThreadForkParams {
     /// server's `[user_preferences_memory]` config defaults.
     #[ts(optional = nullable)]
     pub user_preferences_memory_policy: Option<UserPreferencesMemoryBucketPolicy>,
+    /// Session-local read/write access for the outer memories layer. Omitted
+    /// inherits the server's `[memories]` config defaults.
+    #[ts(optional = nullable)]
+    pub memory_policy: Option<MemoryAccessPolicy>,
     /// When true, return only thread metadata and live fork state without
     /// populating `thread.turns`. This is useful when the client plans to call
     /// `thread/turns/list` immediately after forking.
@@ -458,6 +475,8 @@ pub struct ThreadForkResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(default)]
+    pub memory_policy: MemoryAccessPolicy,
     #[serde(default)]
     pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
 }
@@ -828,6 +847,43 @@ pub struct ThreadAgentsPruneResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadOrchestratorMemoryConsolidateParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadOrchestratorMemoryConsolidateResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadOrchestratorMemoryForgetParams {
+    pub thread_id: String,
+    pub needle: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadOrchestratorMemoryForgetResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUserPreferencesMemoryMigrateParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUserPreferencesMemoryMigrateResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadRollbackParams {
     pub thread_id: String,
     /// The number of turns to drop from the end of the thread. Must be >= 1.
@@ -1120,6 +1176,19 @@ pub struct ThreadScratchpadContinuousPolicySetParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadScratchpadContinuousPolicySetResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoryPolicySetParams {
+    pub thread_id: String,
+    pub policy: MemoryAccessPolicy,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoryPolicySetResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

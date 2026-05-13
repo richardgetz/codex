@@ -19,6 +19,7 @@ use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::ApprovalsReviewer;
 use crate::config_types::CollaborationMode;
+use crate::config_types::MemoryAccessPolicy;
 use crate::config_types::ModeKind;
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -743,6 +744,12 @@ pub enum Op {
     /// Trigger a single manual orchestrator-memory cleanup/consolidation pass.
     ConsolidateOrchestratorMemory,
 
+    /// Remove matching user-preferences memory entries through the active session.
+    OrchestratorMemoryForget { needle: String },
+
+    /// Copy legacy orchestrator memory into user-preferences memory through the active session.
+    UserPreferencesMemoryMigrate,
+
     /// Close idle spawned agents in the current session only.
     ///
     /// Agents that are running, still initializing, or in a subtree containing a
@@ -764,6 +771,13 @@ pub enum Op {
     /// This persists thread-level memory mode metadata without involving the
     /// model.
     SetThreadMemoryMode { mode: ThreadMemoryMode },
+
+    /// Set whether this live session can read and write the outer memories
+    /// layer for future turns.
+    ///
+    /// This is a local-only operation handled by codex-core; it does not
+    /// involve the model.
+    SetMemoryAccessPolicy { policy: MemoryAccessPolicy },
 
     /// Set which user-preferences memory buckets this thread can read and
     /// write for future turns.
@@ -896,10 +910,13 @@ impl Op {
             Self::DropMemories => "drop_memories",
             Self::UpdateMemories => "update_memories",
             Self::ConsolidateOrchestratorMemory => "consolidate_orchestrator_memory",
+            Self::OrchestratorMemoryForget { .. } => "orchestrator_memory_forget",
+            Self::UserPreferencesMemoryMigrate => "user_preferences_memory_migrate",
             Self::PruneIdleAgents => "prune_idle_agents",
             Self::SetThreadName { .. } => "set_thread_name",
             Self::SetScratchpadContinuousPolicy { .. } => "set_scratchpad_continuous_policy",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
+            Self::SetMemoryAccessPolicy { .. } => "set_memory_access_policy",
             Self::SetUserPreferencesMemoryPolicy { .. } => "set_user_preferences_memory_policy",
             Self::ThreadRollback { .. } => "thread_rollback",
             Self::Review { .. } => "review",

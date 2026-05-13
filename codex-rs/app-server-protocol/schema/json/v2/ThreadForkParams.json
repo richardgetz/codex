@@ -64,6 +64,21 @@
         }
       ]
     },
+    "MemoryAccessPolicy": {
+      "properties": {
+        "read": {
+          "type": "boolean"
+        },
+        "write": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read",
+        "write"
+      ],
+      "type": "object"
+    },
     "PermissionProfileModificationParams": {
       "oneOf": [
         {
@@ -222,6 +237,17 @@
     },
     "ephemeral": {
       "type": "boolean"
+    },
+    "memoryPolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MemoryAccessPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Session-local read/write access for the outer memories layer. Omitted inherits the server's `[memories]` config defaults."
     },
     "model": {
       "description": "Configuration overrides for the forked thread, if any.",

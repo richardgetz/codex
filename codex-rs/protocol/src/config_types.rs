@@ -51,12 +51,56 @@ pub struct UserPreferencesMemoryBucketPolicy {
     pub write_buckets: Vec<UserPreferencesMemoryBucket>,
 }
 
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct MemoryAccessPolicy {
+    pub read: bool,
+    pub write: bool,
+}
+
+impl<'de> Deserialize<'de> for MemoryAccessPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RawMemoryAccessPolicy {
+            read: bool,
+            write: bool,
+        }
+
+        let raw = RawMemoryAccessPolicy::deserialize(deserializer)?;
+        Ok(Self::new(raw.read, raw.write))
+    }
+}
+
 impl Default for UserPreferencesMemoryBucketPolicy {
     fn default() -> Self {
         Self {
             read_buckets: UserPreferencesMemoryBucket::all().to_vec(),
             write_buckets: UserPreferencesMemoryBucket::all().to_vec(),
         }
+    }
+}
+
+impl Default for MemoryAccessPolicy {
+    fn default() -> Self {
+        Self::new(/*read*/ true, /*write*/ true)
+    }
+}
+
+impl MemoryAccessPolicy {
+    pub fn new(read: bool, write: bool) -> Self {
+        Self {
+            read: read || write,
+            write,
+        }
+    }
+
+    pub fn normalized(self) -> Self {
+        Self::new(self.read, self.write)
     }
 }
 

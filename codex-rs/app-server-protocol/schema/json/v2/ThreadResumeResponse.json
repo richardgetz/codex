@@ -789,6 +789,21 @@
       ],
       "type": "string"
     },
+    "MemoryAccessPolicy": {
+      "properties": {
+        "read": {
+          "type": "boolean"
+        },
+        "write": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read",
+        "write"
+      ],
+      "type": "object"
+    },
     "MemoryCitation": {
       "properties": {
         "entries": {
@@ -2615,6 +2630,17 @@
         "$ref": "#/definitions/AbsolutePathBuf"
       },
       "type": "array"
+    },
+    "memoryPolicy": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/MemoryAccessPolicy"
+        }
+      ],
+      "default": {
+        "read": true,
+        "write": true
+      }
     },
     "model": {
       "type": "string"

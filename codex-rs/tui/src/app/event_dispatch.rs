@@ -469,60 +469,6 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::OrchestratorMemoryForgetResult { needle, result } => match result {
-                Ok(pruned) => {
-                    let total_removed = pruned.removed_preference_events
-                        + pruned.removed_summary_lines
-                        + pruned.removed_profile_lines;
-                    if total_removed == 0 {
-                        self.chat_widget.add_info_message(
-                            format!(
-                                "No orchestrator-memory entries matched \"{needle}\"."
-                            ),
-                            Some(
-                                "Try a broader phrase or an exact URL/token from the stored memory."
-                                    .to_string(),
-                            ),
-                        );
-                    } else {
-                        self.chat_widget.add_info_message(
-                            format!(
-                                "Pruned orchestrator memory for \"{needle}\"."
-                            ),
-                            Some(format!(
-                                "Removed {} preference events, {} summary lines, and {} profile lines.",
-                                pruned.removed_preference_events,
-                                pruned.removed_summary_lines,
-                                pruned.removed_profile_lines,
-                            )),
-                        );
-                    }
-                }
-                Err(err) => {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed pruning orchestrator memory for \"{needle}\": {err}"
-                    ));
-                }
-            },
-            AppEvent::UserPreferencesMemoryMigrateResult { result } => match result {
-                Ok(true) => self.chat_widget.add_info_message(
-                    "User preferences memory migration completed.".to_string(),
-                    Some(
-                        "Copied missing files from orchestrator_memory into user_preferences_memory."
-                            .to_string(),
-                    ),
-                ),
-                Ok(false) => self.chat_widget.add_info_message(
-                    "User preferences memory is already up to date.".to_string(),
-                    Some(
-                        "No missing orchestrator_memory files needed to be copied."
-                            .to_string(),
-                    ),
-                ),
-                Err(err) => self.chat_widget.add_error_message(format!(
-                    "Failed migrating orchestrator memory to user preferences memory: {err}"
-                )),
-            },
             AppEvent::OpenAppLink {
                 app_id,
                 title,

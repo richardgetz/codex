@@ -41,6 +41,7 @@ export type { InternalSessionSource } from "./InternalSessionSource";
 export type { LocalShellAction } from "./LocalShellAction";
 export type { LocalShellExecAction } from "./LocalShellExecAction";
 export type { LocalShellStatus } from "./LocalShellStatus";
+export type { MemoryAccessPolicy } from "./MemoryAccessPolicy";
 export type { MessagePhase } from "./MessagePhase";
 export type { ModeKind } from "./ModeKind";
 export type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment";

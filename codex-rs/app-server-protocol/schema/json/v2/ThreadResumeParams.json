@@ -279,6 +279,21 @@
       ],
       "type": "string"
     },
+    "MemoryAccessPolicy": {
+      "properties": {
+        "read": {
+          "type": "boolean"
+        },
+        "write": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read",
+        "write"
+      ],
+      "type": "object"
+    },
     "MessagePhase": {
       "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
       "oneOf": [
@@ -1091,6 +1106,17 @@
         "string",
         "null"
       ]
+    },
+    "memoryPolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MemoryAccessPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Session-local read/write access for the outer memories layer. Omitted uses the server's `[memories]` config defaults."
     },
     "model": {
       "description": "Configuration overrides for the resumed thread, if any.",

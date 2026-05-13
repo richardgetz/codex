@@ -3,6 +3,7 @@ use codex_features::Feature;
 use codex_git_utils::diff_since_latest_init;
 use codex_git_utils::reset_git_repository;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::MemoryAccessPolicy;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
@@ -284,6 +285,84 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
     assert_eq!(
         request_context.service_tier,
         Some(ServiceTier::Fast.request_value().to_string())
+    );
+
+    shutdown_test_codex(&test).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn memories_startup_skips_when_generation_disabled() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let memory_root = home.path().join("memories");
+    let test = build_test_codex(&server, Arc::clone(&home)).await?;
+    tokio::fs::remove_dir_all(&memory_root).await.ok();
+
+    let mut config = test.config.clone();
+    config
+        .features
+        .enable(Feature::MemoryTool)
+        .expect("test config should allow feature update");
+    config.memories.generate_memories = false;
+    start_memories_startup_task(
+        Arc::clone(&test.thread_manager),
+        test.thread_manager.auth_manager(),
+        test.session_configured.thread_id,
+        Arc::clone(&test.codex),
+        Arc::new(config),
+        &SessionSource::Cli,
+    );
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !memory_root
+            .join("extensions/ad_hoc/instructions.md")
+            .exists(),
+        "disabled memory generation should not seed extension instructions under {}",
+        memory_root.join("extensions/ad_hoc").display()
+    );
+
+    shutdown_test_codex(&test).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn memories_startup_respects_live_memory_write_policy() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let memory_root = home.path().join("memories");
+    let test = build_test_codex(&server, Arc::clone(&home)).await?;
+    tokio::fs::remove_dir_all(&memory_root).await.ok();
+
+    test.codex
+        .submit(Op::SetMemoryAccessPolicy {
+            policy: MemoryAccessPolicy::new(/*read*/ false, /*write*/ false),
+        })
+        .await?;
+    let mut config = test.config.clone();
+    config
+        .features
+        .enable(Feature::MemoryTool)
+        .expect("test config should allow feature update");
+    config.memories.use_memories = true;
+    config.memories.generate_memories = true;
+    start_memories_startup_task(
+        Arc::clone(&test.thread_manager),
+        test.thread_manager.auth_manager(),
+        test.session_configured.thread_id,
+        Arc::clone(&test.codex),
+        Arc::new(config),
+        &SessionSource::Cli,
+    );
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !memory_root
+            .join("extensions/ad_hoc/instructions.md")
+            .exists(),
+        "disabled live memory writes should not seed extension instructions under {}",
+        memory_root.join("extensions/ad_hoc").display()
     );
 
     shutdown_test_codex(&test).await?;
