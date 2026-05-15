@@ -825,6 +825,52 @@
       ],
       "type": "string"
     },
+    "ExecPolicyRulesetMode": {
+      "enum": [
+        "overlay",
+        "exclusive"
+      ],
+      "type": "string"
+    },
+    "ExecPolicyRulesetToml": {
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "description": "`.rules` files that make up this ruleset.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExecPolicyRulesetMode"
+            }
+          ],
+          "description": "Whether this ruleset overlays the normal policy or replaces it."
+        }
+      },
+      "required": [
+        "files",
+        "mode"
+      ],
+      "type": "object"
+    },
+    "ExecPolicyToml": {
+      "additionalProperties": false,
+      "properties": {
+        "rulesets": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ExecPolicyRulesetToml"
+          },
+          "default": {},
+          "description": "Named command-policy rulesets that can be selected for a session.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "ExternalConfigMigrationPrompts": {
       "additionalProperties": false,
       "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
@@ -4803,6 +4849,15 @@
         }
       ],
       "description": "Mode-scoped visibility rules for skills, MCPs/apps, and plugins."
+    },
+    "exec_policy": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ExecPolicyToml"
+        }
+      ],
+      "default": null,
+      "description": "Named exec-policy rulesets that can be selected per session."
     },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"

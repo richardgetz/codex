@@ -291,6 +291,32 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - `<codex_home>/memories` is created and added as an automatic workspace-write
   root only when the outer memory write policy is enabled.
 
+### Exec-policy rulesets
+
+- Named exec-policy rulesets can be configured in `config.toml`:
+
+  ```toml
+  [exec_policy.rulesets.implementation-agent]
+  mode = "exclusive"
+  files = ["./implementation-agent.rules"]
+  ```
+
+- App-server `thread/start`, `thread/resume`, and `thread/fork` accept
+  `execPolicy: { "rulesets": ["implementation-agent"] }` to select rulesets for
+  that thread without changing cwd or editing the normal `.codex/rules` stack.
+- Ruleset definitions must come from server config. When `execPolicy` selects a
+  ruleset, request-local `config` overrides cannot define or replace
+  `[exec_policy]`.
+- `mode = "overlay"` keeps the normal user/project/system `.rules` files and
+  applies selected rulesets on top. Unmatched commands use the existing
+  safe/dangerous command heuristics.
+- `mode = "exclusive"` loads only the selected ruleset files plus mandatory
+  managed policy from requirements. Unmatched commands are forbidden, so this is
+  the tight allowlist mode.
+- A thread cannot combine overlay and exclusive rulesets. When matching rules
+  conflict, the exec-policy engine keeps the existing strictest-decision
+  behavior: `forbidden`, then `prompt`, then `allow`.
+
 ### Built-in scratchpad
 
 - Default and Orchestrator modes treat scratchpad as a first-class

@@ -426,6 +426,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         additional_writable_roots: add_dir,
         memory_policy: None,
         user_preferences_memory_policy: None,
+        exec_policy_rulesets: None,
     };
 
     let config = ConfigBuilder::default()

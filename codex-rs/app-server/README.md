@@ -146,6 +146,7 @@ Example with notification opt-out:
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it. Accepts the same permission override rules as `thread/start`.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; if the source thread is currently mid-turn, the fork records the same interruption marker as `turn/interrupt` instead of inheriting an unmarked partial turn suffix. The returned `thread.forkedFromId` points at the source thread when known. Accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread. Experimental clients can pass `excludeTurns: true` when they plan to page fork history via `thread/turns/list` instead of receiving the full turn array immediately. Accepts the same permission override rules as `thread/start`.
 - `thread/start`, `thread/resume`, and `thread/fork` accept `memoryPolicy` to gate the outer memories layer and `userPreferencesMemoryPolicy` to set the session-local read/write bucket policy for canonical `memories/extensions/user_preferences`. Responses echo both active policies.
+- `thread/start`, `thread/resume`, and `thread/fork` accept experimental `execPolicy: { "rulesets": [...] }` to select named exec-policy rulesets for that thread. Rulesets are defined in `config.toml`; `overlay` rulesets add to the normal layered `.rules` files, while `exclusive` rulesets replace user/project `.rules` files and forbid unmatched commands.
 - `thread/start`, `thread/resume`, and `thread/fork` responses include the legacy `sandbox` compatibility projection. Experimental clients can read response `permissionProfile` for the exact active runtime permissions and `activePermissionProfile` for the named or implicit built-in profile identity/provenance when known.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
@@ -255,6 +256,8 @@ Start a fresh thread when you need a new Codex conversation.
     // Prefer experimental profile selection:
     // "permissions": { "type": "profile", "id": ":workspace" }
     // Do not send both "sandbox" and "permissions".
+    // Experimental: select named exec-policy rulesets configured in config.toml.
+    "execPolicy": { "rulesets": ["implementation-agent"] },
     "personality": "friendly",
     "serviceName": "my_app_server_client", // optional metrics tag (`service_name`)
     "sessionStartSource": "startup", // optional: "startup" (default) or "clear"
@@ -508,6 +511,43 @@ layer for that loaded session. `memoryPolicy.write: true` implies
 roots. The bucket names are `durable_preference`,
 `personal_context`, `relational_attunement`, `operator_playbook`,
 `ongoing_threads`, and `followup_state`.
+
+Use thread exec-policy rulesets when an app-server client needs a dynamic,
+session-specific command allowlist or overlay without changing the server cwd.
+Rulesets are registered in the server's config and selected per `thread/start`,
+`thread/resume`, or `thread/fork`.
+
+```toml
+[exec_policy.rulesets.implementation-agent]
+mode = "exclusive"
+files = ["./implementation-agent.rules"]
+```
+
+```starlark
+# implementation-agent.rules
+prefix_rule(pattern=["cargo", "test"], decision="allow")
+prefix_rule(pattern=["rg"], decision="allow")
+```
+
+Then launch the thread with:
+
+```json
+{ "method": "thread/start", "id": 28, "params": {
+    "cwd": "/Users/me/project",
+    "execPolicy": { "rulesets": ["implementation-agent"] }
+} }
+```
+
+`mode = "overlay"` keeps the normal user/project/system `.rules` files and
+applies the selected ruleset on top; unmatched commands still use the normal
+safe/dangerous heuristics. `mode = "exclusive"` loads only the selected ruleset
+files plus mandatory managed policy from `requirements.toml` or MDM; any command
+that does not match a ruleset rule is forbidden. When a command matches multiple
+rules, the strictest decision wins (`forbidden` before `prompt` before `allow`).
+Do not combine overlay and exclusive rulesets in one thread.
+When `execPolicy` selects rulesets, the request-local `config` map cannot define
+or override `[exec_policy]`; put ruleset definitions in the server config so
+clients can only select names the server operator registered.
 
 ```json
 { "method": "thread/memoryPolicy/set", "id": 27, "params": {

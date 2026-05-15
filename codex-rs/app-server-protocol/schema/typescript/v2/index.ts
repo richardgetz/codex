@@ -367,6 +367,7 @@ export type { ThreadControlReleaseParams } from "./ThreadControlReleaseParams";
 export type { ThreadControlReleaseResponse } from "./ThreadControlReleaseResponse";
 export type { ThreadControlSetParams } from "./ThreadControlSetParams";
 export type { ThreadControlSetResponse } from "./ThreadControlSetResponse";
+export type { ThreadExecPolicyParams } from "./ThreadExecPolicyParams";
 export type { ThreadForkParams } from "./ThreadForkParams";
 export type { ThreadForkResponse } from "./ThreadForkResponse";
 export type { ThreadGoal } from "./ThreadGoal";

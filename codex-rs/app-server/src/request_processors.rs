@@ -177,6 +177,7 @@ use codex_app_server_protocol::ThreadControlSetParams;
 use codex_app_server_protocol::ThreadControlSetResponse;
 use codex_app_server_protocol::ThreadDecrementElicitationParams;
 use codex_app_server_protocol::ThreadDecrementElicitationResponse;
+use codex_app_server_protocol::ThreadExecPolicyParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadGoal;

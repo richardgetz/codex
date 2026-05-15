@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
+use crate::config::ConfigOverrides;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
@@ -241,7 +242,7 @@ async fn returns_empty_policy_when_no_policy_files_exist() {
     let temp_dir = tempdir().expect("create temp dir");
     let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
 
-    let manager = ExecPolicyManager::load(&config_stack)
+    let manager = ExecPolicyManager::load_from_config_stack(&config_stack)
         .await
         .expect("manager result");
     let policy = manager.current();
@@ -485,6 +486,126 @@ async fn ignores_policy_files_when_config_stack_disables_exec_policy_rules() {
             .decision,
         Decision::Forbidden,
     );
+}
+
+#[tokio::test]
+async fn exclusive_ruleset_forbids_unmatched_commands_without_heuristic_fallback()
+-> anyhow::Result<()> {
+    let temp = tempdir()?;
+    let codex_home = temp.path().join("home");
+    fs::create_dir_all(&codex_home)?;
+    fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+[exec_policy.rulesets.implementation-agent]
+mode = "exclusive"
+files = ["./implementation-agent.rules"]
+"#,
+    )?;
+    fs::write(
+        codex_home.join("implementation-agent.rules"),
+        r#"prefix_rule(pattern=["cargo", "test"], decision="allow")"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(temp.path().to_path_buf()))
+        .harness_overrides(ConfigOverrides {
+            exec_policy_rulesets: Some(vec!["implementation-agent".to_string()]),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    let manager = ExecPolicyManager::load(&config).await?;
+    let file_system_sandbox_policy = workspace_write_file_system_sandbox_policy();
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &["ls".to_string()],
+            approval_policy: AskForApproval::OnRequest,
+            permission_profile: permission_profile_from_sandbox_policy(
+                &SandboxPolicy::new_workspace_write_policy(),
+            ),
+            file_system_sandbox_policy: &file_system_sandbox_policy,
+            sandbox_cwd: temp.path(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert!(matches!(
+        requirement,
+        ExecApprovalRequirement::Forbidden { .. }
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn overlay_ruleset_preserves_unmatched_heuristics_and_applies_rules() -> anyhow::Result<()> {
+    let temp = tempdir()?;
+    let codex_home = temp.path().join("home");
+    fs::create_dir_all(&codex_home)?;
+    fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+[exec_policy.rulesets.implementation-agent]
+mode = "overlay"
+files = ["./implementation-agent.rules"]
+"#,
+    )?;
+    fs::write(
+        codex_home.join("implementation-agent.rules"),
+        r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(temp.path().to_path_buf()))
+        .harness_overrides(ConfigOverrides {
+            exec_policy_rulesets: Some(vec!["implementation-agent".to_string()]),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    let manager = ExecPolicyManager::load(&config).await?;
+    let file_system_sandbox_policy = workspace_write_file_system_sandbox_policy();
+    let unmatched_requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &["ls".to_string()],
+            approval_policy: AskForApproval::OnRequest,
+            permission_profile: permission_profile_from_sandbox_policy(
+                &SandboxPolicy::new_workspace_write_policy(),
+            ),
+            file_system_sandbox_policy: &file_system_sandbox_policy,
+            sandbox_cwd: temp.path(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+    let denied_requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &["rm".to_string()],
+            approval_policy: AskForApproval::OnRequest,
+            permission_profile: permission_profile_from_sandbox_policy(
+                &SandboxPolicy::new_workspace_write_policy(),
+            ),
+            file_system_sandbox_policy: &file_system_sandbox_policy,
+            sandbox_cwd: temp.path(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert!(matches!(
+        unmatched_requirement,
+        ExecApprovalRequirement::Skip { .. }
+    ));
+    assert!(matches!(
+        denied_requirement,
+        ExecApprovalRequirement::Forbidden { .. }
+    ));
+    Ok(())
 }
 
 #[tokio::test]
