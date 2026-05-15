@@ -337,6 +337,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - Agents receive mode-scoped developer guidance explaining when and how to use
   the built-in scratchpad. If built-in scratchpad is disabled for a mode, the
   tool namespace and guidance are both omitted for that mode.
+- For action-oriented work, that guidance tells agents to treat `next_steps` as
+  short-term working memory: add the initial task plan early, append newly
+  discovered tasks/issues/tests/review follow-ups before they can be lost, and
+  move finished work into `completed` instead of dropping it from the ledger.
 - Built-in scratchpads are JSON-backed under `<codex_home>/scratchpad/entries`
   unless a tool call provides `state_home`.
 - A generated `<codex_home>/scratchpad/index.json` manifest lists scratchpads by
@@ -353,9 +357,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - Built-in scratchpad supports active and archived lookup, archive/unarchive,
   next-step, pending-wait, and blocked-item updates, action-policy checks, and
   wait check-ins. Continuous mode treats `next_steps` as the actionable queue;
-  `pending_waits` and `blocked` are recovery context and do not keep the loop
-  alive on their own. Use `wait_type = "user_confirmation"` for waits that need
-  the user to grant access, confirm a decision, or merge/unblock something.
+  `completed` is the done ledger, while `pending_waits` and `blocked` are
+  recovery context and do not keep the loop alive on their own. Use
+  `wait_type = "user_confirmation"` for waits that need the user to grant
+  access, confirm a decision, or merge/unblock something.
 - The current thread scratchpad objective can be renamed through
   `update_scratchpad.objective`. `open_scratchpad` still refuses to rebind an
   existing thread-owned scratchpad to a different objective.
@@ -398,8 +403,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - When a session resumes and the thread-id scratchpad already exists with
   uncompleted work (`next_steps` or `pending_waits`), Codex injects the
   scratchpad id and compact scratchpad state into hidden developer context so
-  the agent can continue the same recovery ledger without searching. Completed
-  and archived scratchpads are skipped.
+  the agent can continue the same recovery ledger without searching. The
+  injected state includes a bounded `recent_completed` list plus
+  `completed_count`; the full `completed` ledger remains in the scratchpad
+  file and `/scratchpad` output. Completed and archived scratchpads are skipped.
 - When continuous mode prevents a final answer, the recovery prompt includes
   the current next steps, waits, and blockers so the agent can see stale or
   incomplete scratchpad state immediately.

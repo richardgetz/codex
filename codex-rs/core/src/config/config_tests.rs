@@ -2724,11 +2724,6 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     let memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
         codex_home.path().join("memories"),
     )?)?;
-    let user_preferences_memory_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
-        codex_home
-            .path()
-            .join("memories/extensions/user_preferences"),
-    )?)?;
     let orchestrator_supervision_root = AbsolutePathBuf::from_absolute_path(
         std::fs::canonicalize(codex_home.path().join("orchestrator_supervision"))?,
     )?;
@@ -2750,7 +2745,6 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
             writable_roots: vec![
                 external_write_path,
                 memories_root,
-                user_preferences_memory_root,
                 orchestrator_supervision_root,
                 scratchpad_root,
                 schedule_root,

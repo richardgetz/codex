@@ -817,6 +817,30 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         .codex_home
         .join("rollouts/source.jsonl")
         .to_path_buf();
+    std::fs::create_dir_all(
+        rollout_path
+            .parent()
+            .expect("rollout path should have parent"),
+    )
+    .expect("create rollout parent");
+    std::fs::write(&rollout_path, "").expect("create rollout file");
+    codex_rollout::append_rollout_item_to_path(
+        &rollout_path,
+        &RolloutItem::SessionMeta(codex_protocol::protocol::SessionMetaLine {
+            meta: codex_protocol::protocol::SessionMeta {
+                id: source.thread_id,
+                timestamp: "2025-01-01T00:00:00Z".to_string(),
+                cwd: config.cwd.clone().into(),
+                originator: "codex-test".to_string(),
+                cli_version: "test".to_string(),
+                source: SessionSource::Exec,
+                ..Default::default()
+            },
+            git: None,
+        }),
+    )
+    .await
+    .expect("write rollout session meta");
     let resumed = manager
         .resume_thread_with_history(
             config.clone(),
@@ -863,7 +887,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
     assert_ne!(forked.thread_id, resumed.thread_id);
 
     let calls = in_memory_store.calls().await;
-    assert_eq!(calls.read_thread_by_rollout_path, 2);
+    assert_eq!(calls.read_thread_by_rollout_path, 1);
 
     resumed_from_path
         .thread

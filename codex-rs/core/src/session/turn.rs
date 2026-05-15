@@ -752,7 +752,7 @@ fn build_continuous_run_block_message(scratchpad: &serde_json::Value) -> String 
         "You are not allowed to stop, finalize, or hand off a completed answer yet.".to_string(),
     ];
     lines.push(
-        "Continue working from the scratchpad until every actionable next_steps item is complete. Move external waits to pending_waits and true blockers to blocked before ending the continuous session; pending_waits and blocked alone are not active work."
+        "Continue working from the scratchpad until every actionable next_steps item is complete. As items finish, record them in completed and keep next_steps for remaining active work. Move external waits to pending_waits and true blockers to blocked before ending the continuous session; pending_waits and blocked alone are not active work."
             .to_string(),
     );
     append_scratchpad_recovery_section(&mut lines, scratchpad, "next_steps", "Next up");
@@ -933,7 +933,7 @@ mod thread_control_tests {
             "Scratchpad continuous run policy is enabled for this thread.\n\
 Scratchpad: thread-123\n\
 You are not allowed to stop, finalize, or hand off a completed answer yet.\n\
-Continue working from the scratchpad until every actionable next_steps item is complete. Move external waits to pending_waits and true blockers to blocked before ending the continuous session; pending_waits and blocked alone are not active work.\n\
+Continue working from the scratchpad until every actionable next_steps item is complete. As items finish, record them in completed and keep next_steps for remaining active work. Move external waits to pending_waits and true blockers to blocked before ending the continuous session; pending_waits and blocked alone are not active work.\n\
 Next up:\n\
 - finish registry\n\
 Waiting:\n\
