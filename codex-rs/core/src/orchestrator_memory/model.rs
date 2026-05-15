@@ -1,5 +1,6 @@
 use super::ensure_layout;
 use super::live::aggregate_memory_items;
+use super::live::append_profile_item;
 use super::preferences_path;
 use super::profile_path;
 use super::remove_generated_memory_files;
@@ -9,6 +10,7 @@ use super::types::AggregatedMemorySnapshot;
 use super::types::MemoryBucket;
 use super::types::MemoryEvent;
 use super::types::MemoryOperation;
+use super::types::MemoryScope;
 use super::types::MemorySignal;
 use crate::agent::AgentStatus;
 use crate::config::Config;
@@ -65,6 +67,7 @@ struct CleanupPayload {
 #[derive(Debug, Deserialize, PartialEq)]
 struct CleanupPayloadEvent {
     bucket: MemoryBucket,
+    scope: MemoryScope,
     key: String,
     candidate: String,
     #[serde(default)]
@@ -243,6 +246,7 @@ pub(super) async fn cleanup_events_with_model(
                         thread_id: "orchestrator-memory-cleanup".to_string(),
                         turn_id: "scheduled-cleanup-model".to_string(),
                         bucket: event.bucket,
+                        scope: event.scope.normalized(),
                         operation: MemoryOperation::Upsert,
                         signal: MemorySignal::ModelClassified,
                         key: key.to_string(),
@@ -375,11 +379,13 @@ Rules:
 - Merge near-duplicates even when keys are not exact matches.
 - If two entries each contain useful detail, combine them into one clearer candidate.
 - Keep distinct memories separate when they would support different future behavior.
-- Drop stale, low-value, repo-specific, or purely temporary implementation details.
+- Drop stale, low-value, or purely temporary implementation details.
 - Preserve explicit user preferences, personal context, relational attunement, operator playbook lessons, ongoing threads, and follow-up state.
 - Do not invent facts not supported by the events.
 - Do not include forget/delete tombstones in the returned events; they have already been applied mechanically.
 - Use only these bucket values: durable_preference, personal_context, relational_attunement, operator_playbook, ongoing_threads, followup_state.
+- Preserve or add memory scope metadata. Use global only for truly user-wide memories. If a memory depends on a repo, project, task, person, process, skill, command, or tool, keep that scope linked instead of broadening it.
+- Use only these scope type values: global, repo, project, task, person, process, skill, command, tool.
 
 Input compacted JSONL events:
 {selected_events}
@@ -389,6 +395,12 @@ Return strict JSON only:
   "events": [
     {{
       "bucket": "durable_preference",
+      "scope": {{
+        "type": "process",
+        "id": "pull_request_monitoring",
+        "evidence": "short evidence phrase",
+        "confidence": 0.85
+      }},
       "key": "normalized stable key",
       "candidate": "single durable memory sentence",
       "source_excerpt": "short evidence or same as candidate"
@@ -581,7 +593,7 @@ fn append_missing_summary_items(body: &mut String, title: &str, items: &[Aggrega
     let missing = items
         .iter()
         .filter(|item| item.direct_observations > 0)
-        .filter(|item| !body.contains(&item.candidate))
+        .filter(|item| !body.contains(&super::live::summary_item_text(item)))
         .collect::<Vec<_>>();
     if missing.is_empty() {
         return;
@@ -592,7 +604,7 @@ fn append_missing_summary_items(body: &mut String, title: &str, items: &[Aggrega
     body.push('\n');
     for item in missing {
         body.push_str("- ");
-        body.push_str(&item.candidate);
+        body.push_str(&super::live::summary_item_text(item));
         body.push('\n');
     }
 }
@@ -601,7 +613,7 @@ fn append_missing_profile_items(body: &mut String, title: &str, items: &[Aggrega
     let missing = items
         .iter()
         .filter(|item| item.direct_observations > 0)
-        .filter(|item| !body.contains(&item.candidate))
+        .filter(|item| !body.contains(&super::live::summary_item_text(item)))
         .collect::<Vec<_>>();
     if missing.is_empty() {
         return;
@@ -611,15 +623,7 @@ fn append_missing_profile_items(body: &mut String, title: &str, items: &[Aggrega
     body.push_str(title);
     body.push_str("\n\n");
     for item in missing {
-        body.push_str("### ");
-        body.push_str(&item.candidate);
-        body.push_str("\n\n");
-        body.push_str(&format!(
-            "- observations: {}\n- direct_observations: {}\n- last_seen: {}\n\n",
-            item.observations,
-            item.direct_observations,
-            item.last_seen.to_rfc3339(),
-        ));
+        append_profile_item(body, item);
     }
 }
 

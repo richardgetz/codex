@@ -44,6 +44,10 @@ Quick pass:
 4. Treat this as continuity memory: preferences, personal context, relational
    attunement, operator playbook lessons, ongoing user threads, and
    lightweight follow-up state.
+   When an entry is prefixed with a scope such as `[repo:...]`,
+   `[project:...]`, `[task:...]`, `[person:...]`, `[process:...]`,
+   `[skill:...]`, `[command:...]`, or `[tool:...]`, apply it only within that
+   scope. Do not treat a scoped entry as a global user preference.
 5. For direct recall-style asks, answer from memory first when it contains a
    relevant fact. Do not spawn a subagent or search the workspace before this
    pass unless the user explicitly requested live verification.

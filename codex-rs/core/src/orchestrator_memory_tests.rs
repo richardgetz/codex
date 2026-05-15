@@ -35,6 +35,7 @@ async fn build_user_preferences_instructions_reads_user_preferences_root() {
             scope: codex_config::types::MemoriesScope::All,
             ..UserPreferencesMemoryConfig::default()
         },
+        &codex_home,
     )
     .await
     .unwrap();
@@ -70,6 +71,7 @@ async fn build_user_preferences_instructions_falls_back_to_profile() {
     let instructions = build_user_preferences_developer_instructions(
         &codex_home,
         &UserPreferencesMemoryConfig::default(),
+        &codex_home,
     )
     .await
     .unwrap();
@@ -108,6 +110,7 @@ async fn build_user_preferences_instructions_filters_raw_events_by_read_policy()
             },
             ..UserPreferencesMemoryConfig::default()
         },
+        &codex_home,
     )
     .await
     .unwrap();
@@ -140,6 +143,7 @@ async fn build_user_preferences_instructions_reports_legacy_raw_event_source() {
             },
             ..UserPreferencesMemoryConfig::default()
         },
+        &codex_home,
     )
     .await
     .unwrap();
@@ -169,6 +173,7 @@ async fn build_user_preferences_instructions_reads_legacy_root_without_migration
     let instructions = build_user_preferences_developer_instructions(
         &codex_home,
         &UserPreferencesMemoryConfig::default(),
+        &codex_home,
     )
     .await
     .unwrap();
@@ -329,6 +334,7 @@ async fn build_user_preferences_instructions_rebuilds_restricted_summary_from_al
             },
             ..UserPreferencesMemoryConfig::default()
         },
+        &codex_home,
     )
     .await
     .unwrap();
@@ -339,7 +345,7 @@ async fn build_user_preferences_instructions_rebuilds_restricted_summary_from_al
 }
 
 #[tokio::test]
-async fn build_user_preferences_instructions_appends_recent_items_missing_from_summary() {
+async fn build_user_preferences_instructions_prefers_scoped_raw_items_over_stale_summary() {
     let temp = tempdir().unwrap();
     let codex_home = temp.path().abs();
     let user_preferences_dir = user_preferences_dir(&codex_home);
@@ -354,7 +360,7 @@ async fn build_user_preferences_instructions_appends_recent_items_missing_from_s
     .unwrap();
     tokio_fs::write(
         user_preferences_dir.join("preferences.jsonl"),
-        "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"operator_playbook\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"warming endpoint unblock\",\"candidate\":\"When aws-auth-guard authentication stalls, try the warming endpoint to unblock it\",\"source_excerpt\":\"warming endpoint worked\",\"confidence\":0.8}\n",
+        "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"operator_playbook\",\"scope\":{\"type\":\"process\",\"id\":\"auth_guard_workflow\",\"evidence\":\"auth guard workflow\",\"confidence\":0.8},\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"warming endpoint unblock\",\"candidate\":\"When aws-auth-guard authentication stalls, try the warming endpoint to unblock it\",\"source_excerpt\":\"warming endpoint worked\",\"confidence\":0.8}\n",
     )
     .await
     .unwrap();
@@ -362,10 +368,112 @@ async fn build_user_preferences_instructions_appends_recent_items_missing_from_s
     let instructions = build_user_preferences_developer_instructions(
         &codex_home,
         &UserPreferencesMemoryConfig::default(),
+        &codex_home,
     )
     .await
     .unwrap();
 
-    assert!(instructions.contains("## Recent Continuity Items"));
-    assert!(instructions.contains("warming endpoint to unblock it"));
+    assert!(instructions.contains("## Operator Playbook"));
+    assert!(instructions.contains(
+        "[process:auth_guard_workflow] When aws-auth-guard authentication stalls, try the warming endpoint to unblock it"
+    ));
+}
+
+#[tokio::test]
+async fn build_user_preferences_instructions_filters_repo_scoped_items_by_cwd() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path().abs();
+    let cwd = codex_home.join("codex");
+    tokio_fs::create_dir_all(&cwd).await.unwrap();
+    let user_preferences_dir = user_preferences_dir(&codex_home);
+    tokio_fs::create_dir_all(&user_preferences_dir)
+        .await
+        .unwrap();
+    tokio_fs::write(
+        user_preferences_dir.join("preferences.jsonl"),
+        concat!(
+            "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"operator_playbook\",\"scope\":{\"type\":\"repo\",\"id\":\"codex\",\"evidence\":\"Codex repo\",\"confidence\":0.8},\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"codex memory\",\"candidate\":\"Codex repo memory applies here\",\"source_excerpt\":\"codex\",\"confidence\":0.8}\n",
+            "{\"observed_at\":\"2026-04-25T00:00:01Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-2\",\"bucket\":\"operator_playbook\",\"scope\":{\"type\":\"repo\",\"id\":\"mobius\",\"evidence\":\"Mobius repo\",\"confidence\":0.8},\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"mobius memory\",\"candidate\":\"Mobius repo memory should stay isolated\",\"source_excerpt\":\"mobius\",\"confidence\":0.8}\n",
+            "{\"observed_at\":\"2026-04-25T00:00:02Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-3\",\"bucket\":\"durable_preference\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"global memory\",\"candidate\":\"Global memory still applies\",\"source_excerpt\":\"global\",\"confidence\":0.8}\n",
+        ),
+    )
+    .await
+    .unwrap();
+
+    let instructions = build_user_preferences_developer_instructions(
+        &codex_home,
+        &UserPreferencesMemoryConfig::default(),
+        &cwd,
+    )
+    .await
+    .unwrap();
+
+    assert!(instructions.contains("[repo:codex] Codex repo memory applies here"));
+    assert!(instructions.contains("Global memory still applies"));
+    assert!(!instructions.contains("Mobius repo memory should stay isolated"));
+}
+
+#[tokio::test]
+async fn build_user_preferences_instructions_infers_scope_for_bucketed_events_missing_scope() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path().abs();
+    let cwd = codex_home.join("codex");
+    tokio_fs::create_dir_all(&cwd).await.unwrap();
+    let user_preferences_dir = user_preferences_dir(&codex_home);
+    tokio_fs::create_dir_all(&user_preferences_dir)
+        .await
+        .unwrap();
+    tokio_fs::write(
+        user_preferences_dir.join("preferences.jsonl"),
+        concat!(
+            "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"operator_playbook\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"codex pr workflow\",\"candidate\":\"When working in the Codex repo on PRs, keep it CLI-first\",\"source_excerpt\":\"When working in the Codex repo on PRs, keep it CLI-first\",\"confidence\":0.8}\n",
+            "{\"observed_at\":\"2026-04-25T00:00:01Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-2\",\"bucket\":\"operator_playbook\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"mobius pr workflow\",\"candidate\":\"When working in the Mobius repo on PRs, keep it CLI-first\",\"source_excerpt\":\"When working in the Mobius repo on PRs, keep it CLI-first\",\"confidence\":0.8}\n",
+        ),
+    )
+    .await
+    .unwrap();
+
+    let instructions = build_user_preferences_developer_instructions(
+        &codex_home,
+        &UserPreferencesMemoryConfig::default(),
+        &cwd,
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        instructions
+            .contains("[repo:codex] When working in the Codex repo on PRs, keep it CLI-first")
+    );
+    assert!(!instructions.contains("When working in the Mobius repo on PRs"));
+}
+
+#[tokio::test]
+async fn build_user_preferences_instructions_matches_hyphenated_repo_scopes() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path().abs();
+    let cwd = codex_home.join("video-brand-safety");
+    tokio_fs::create_dir_all(&cwd).await.unwrap();
+    let user_preferences_dir = user_preferences_dir(&codex_home);
+    tokio_fs::create_dir_all(&user_preferences_dir)
+        .await
+        .unwrap();
+    tokio_fs::write(
+        user_preferences_dir.join("preferences.jsonl"),
+        "{\"observed_at\":\"2026-04-25T00:00:00Z\",\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"bucket\":\"operator_playbook\",\"operation\":\"upsert\",\"signal\":\"model_classified\",\"key\":\"video brand safety pr workflow\",\"candidate\":\"When working in the video-brand-safety repo on PRs, keep it CLI-first\",\"source_excerpt\":\"When working in the video-brand-safety repo on PRs, keep it CLI-first\",\"confidence\":0.8}\n",
+    )
+    .await
+    .unwrap();
+
+    let instructions = build_user_preferences_developer_instructions(
+        &codex_home,
+        &UserPreferencesMemoryConfig::default(),
+        &cwd,
+    )
+    .await
+    .unwrap();
+
+    assert!(instructions.contains(
+        "[repo:video-brand-safety] When working in the video-brand-safety repo on PRs, keep it CLI-first"
+    ));
 }

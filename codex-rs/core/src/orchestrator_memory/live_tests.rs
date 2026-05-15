@@ -5,6 +5,7 @@ use super::super::types::EXPLICIT_CONFIDENCE;
 use super::super::types::MemoryBucket;
 use super::super::types::MemoryEvent;
 use super::super::types::MemoryOperation;
+use super::super::types::MemoryScope;
 use super::super::types::MemorySignal;
 use super::*;
 use crate::session::SessionSettingsUpdate;
@@ -106,10 +107,190 @@ fn extracts_acknowledged_preferences_from_assistant_summary() {
 }
 
 #[test]
+fn infers_process_scope_for_pull_request_guidance() {
+    let scope = heuristics::inferred_scope_for_text(
+        "When a PR is failing after Rick steps away, fix branch issues and merge only when authorized.",
+    );
+
+    assert_eq!(
+        scope,
+        MemoryScope::process("pull_request_workflow", "pull request or merge workflow")
+    );
+}
+
+#[test]
+fn infers_generic_review_scope_without_treating_review_as_pull_request() {
+    let scope = heuristics::inferred_scope_for_text(
+        "When I ask for a code review, prioritize behavioral bugs and missing tests.",
+    );
+
+    assert_eq!(
+        scope,
+        MemoryScope::process("review_workflow", "review workflow")
+    );
+}
+
+#[test]
+fn infers_repo_scope_for_repo_specific_heuristic_candidates() {
+    let mut candidates = vec![CandidateMemoryItem {
+        bucket: MemoryBucket::DurablePreference,
+        scope: MemoryScope::global(),
+        operation: MemoryOperation::Upsert,
+        signal: MemorySignal::Explicit,
+        key: "mobius repo cli first".to_string(),
+        candidate: "When working in the Mobius repo, keep it CLI-first".to_string(),
+        source_excerpt: "When working in the Mobius repo, keep it CLI-first".to_string(),
+        confidence: EXPLICIT_CONFIDENCE,
+    }];
+
+    apply_inferred_scopes(&mut candidates);
+
+    assert_eq!(
+        candidates[0].scope,
+        MemoryScope::new(
+            super::super::types::MemoryScopeKind::Repo,
+            "mobius",
+            "repo-specific wording",
+            /*confidence*/ 0.75,
+        )
+    );
+}
+
+#[test]
+fn leaves_global_check_preferences_global() {
+    let mut candidates = vec![CandidateMemoryItem {
+        bucket: MemoryBucket::DurablePreference,
+        scope: MemoryScope::global(),
+        operation: MemoryOperation::Upsert,
+        signal: MemorySignal::Explicit,
+        key: "check memory before answering".to_string(),
+        candidate: "Always check memory before answering".to_string(),
+        source_excerpt: "Always check memory before answering".to_string(),
+        confidence: EXPLICIT_CONFIDENCE,
+    }];
+
+    apply_inferred_scopes(&mut candidates);
+
+    assert_eq!(candidates[0].scope, MemoryScope::global());
+}
+
+#[test]
+fn leaves_global_words_containing_ci_global() {
+    let mut candidates = vec![CandidateMemoryItem {
+        bucket: MemoryBucket::DurablePreference,
+        scope: MemoryScope::global(),
+        operation: MemoryOperation::Upsert,
+        signal: MemorySignal::Explicit,
+        key: "prefer concise answers".to_string(),
+        candidate: "Prefer concise answers".to_string(),
+        source_excerpt: "Prefer concise answers".to_string(),
+        confidence: EXPLICIT_CONFIDENCE,
+    }];
+
+    apply_inferred_scopes(&mut candidates);
+
+    assert_eq!(candidates[0].scope, MemoryScope::global());
+}
+
+#[test]
+fn does_not_treat_preview_as_review_scope() {
+    let mut candidates = vec![CandidateMemoryItem {
+        bucket: MemoryBucket::DurablePreference,
+        scope: MemoryScope::global(),
+        operation: MemoryOperation::Upsert,
+        signal: MemorySignal::Explicit,
+        key: "prefer previewing docs".to_string(),
+        candidate: "Prefer previewing docs before finalizing".to_string(),
+        source_excerpt: "Prefer previewing docs before finalizing".to_string(),
+        confidence: EXPLICIT_CONFIDENCE,
+    }];
+
+    apply_inferred_scopes(&mut candidates);
+
+    assert_eq!(candidates[0].scope, MemoryScope::global());
+}
+
+#[test]
+fn repo_marker_takes_precedence_over_workflow_scope() {
+    let mut candidates = vec![CandidateMemoryItem {
+        bucket: MemoryBucket::OperatorPlaybook,
+        scope: MemoryScope::global(),
+        operation: MemoryOperation::Upsert,
+        signal: MemorySignal::Explicit,
+        key: "mobius pr workflow".to_string(),
+        candidate: "When working in the Mobius repo on PRs, keep it CLI-first".to_string(),
+        source_excerpt: "When working in the Mobius repo on PRs, keep it CLI-first".to_string(),
+        confidence: EXPLICIT_CONFIDENCE,
+    }];
+
+    apply_inferred_scopes(&mut candidates);
+
+    assert_eq!(
+        candidates[0].scope,
+        MemoryScope::new(
+            super::super::types::MemoryScopeKind::Repo,
+            "mobius",
+            "repo-specific wording",
+            /*confidence*/ 0.75,
+        )
+    );
+}
+
+#[test]
+fn preserves_hyphenated_repo_scope_ids() {
+    let mut candidates = vec![CandidateMemoryItem {
+        bucket: MemoryBucket::OperatorPlaybook,
+        scope: MemoryScope::global(),
+        operation: MemoryOperation::Upsert,
+        signal: MemorySignal::Explicit,
+        key: "video brand safety pr workflow".to_string(),
+        candidate: "When working in the video-brand-safety repo on PRs, keep it CLI-first"
+            .to_string(),
+        source_excerpt: "When working in the video-brand-safety repo on PRs, keep it CLI-first"
+            .to_string(),
+        confidence: EXPLICIT_CONFIDENCE,
+    }];
+
+    apply_inferred_scopes(&mut candidates);
+
+    assert_eq!(
+        candidates[0].scope,
+        MemoryScope::new(
+            super::super::types::MemoryScopeKind::Repo,
+            "video-brand-safety",
+            "repo-specific wording",
+            /*confidence*/ 0.75,
+        )
+    );
+}
+
+#[test]
+fn keeps_scope_sensitive_heuristic_candidates_when_scope_can_be_inferred() {
+    let mut candidates = vec![CandidateMemoryItem {
+        bucket: MemoryBucket::OperatorPlaybook,
+        scope: MemoryScope::global(),
+        operation: MemoryOperation::Upsert,
+        signal: MemorySignal::Explicit,
+        key: "pr merge authorization".to_string(),
+        candidate: "When babysitting PR checks, merge only when authorized".to_string(),
+        source_excerpt: "When babysitting PR checks, merge only when authorized".to_string(),
+        confidence: EXPLICIT_CONFIDENCE,
+    }];
+
+    apply_inferred_scopes(&mut candidates);
+
+    assert_eq!(
+        candidates[0].scope,
+        MemoryScope::process("pull_request_workflow", "pull request or merge workflow")
+    );
+}
+
+#[test]
 fn write_policy_removes_candidates_for_disallowed_buckets() {
     let mut candidates = vec![
         CandidateMemoryItem {
             bucket: MemoryBucket::DurablePreference,
+            scope: MemoryScope::global(),
             operation: MemoryOperation::Upsert,
             signal: MemorySignal::Explicit,
             key: "direct updates".to_string(),
@@ -119,6 +300,7 @@ fn write_policy_removes_candidates_for_disallowed_buckets() {
         },
         CandidateMemoryItem {
             bucket: MemoryBucket::PersonalContext,
+            scope: MemoryScope::global(),
             operation: MemoryOperation::Upsert,
             signal: MemorySignal::ModelClassified,
             key: "private context".to_string(),
@@ -138,6 +320,7 @@ fn write_policy_removes_candidates_for_disallowed_buckets() {
         candidates,
         vec![CandidateMemoryItem {
             bucket: MemoryBucket::DurablePreference,
+            scope: MemoryScope::global(),
             operation: MemoryOperation::Upsert,
             signal: MemorySignal::Explicit,
             key: "direct updates".to_string(),
@@ -213,6 +396,7 @@ async fn consolidates_events_into_summary_and_profile_files() {
         "turn-1".to_string(),
         &[CandidateMemoryItem {
             bucket: MemoryBucket::DurablePreference,
+            scope: MemoryScope::global(),
             operation: MemoryOperation::Upsert,
             signal: MemorySignal::Explicit,
             key: "clarify before delegation".to_string(),
@@ -247,6 +431,118 @@ async fn consolidates_events_into_summary_and_profile_files() {
 }
 
 #[tokio::test]
+async fn scoped_events_render_scope_and_do_not_merge_with_global_events() {
+    let temp = tempdir().expect("tempdir");
+    let codex_home = temp.path().abs();
+    append_preference_events(
+        &codex_home,
+        "thread-1".to_string(),
+        "turn-1".to_string(),
+        &[
+            CandidateMemoryItem {
+                bucket: MemoryBucket::OperatorPlaybook,
+                scope: MemoryScope::global(),
+                operation: MemoryOperation::Upsert,
+                signal: MemorySignal::ModelClassified,
+                key: "merge only when authorized".to_string(),
+                candidate: "Never merge without explicit authorization".to_string(),
+                source_excerpt: "never merge without explicit authorization".to_string(),
+                confidence: 0.8,
+            },
+            CandidateMemoryItem {
+                bucket: MemoryBucket::OperatorPlaybook,
+                scope: MemoryScope::process(
+                    "pull_request_workflow",
+                    "pull request monitoring workflow",
+                ),
+                operation: MemoryOperation::Upsert,
+                signal: MemorySignal::ModelClassified,
+                key: "merge only when authorized".to_string(),
+                candidate: "When babysitting pull requests, merge only when Rick has authorized merging".to_string(),
+                source_excerpt: "When a PR is failing after Rick steps away, handle fixes and merge only when authorized".to_string(),
+                confidence: 0.8,
+            },
+        ],
+    )
+    .await
+    .expect("append scoped events");
+
+    consolidate_preferences(&codex_home, &OrchestratorMemoryConfig::default())
+        .await
+        .expect("consolidate preferences");
+
+    let summary = fs::read_to_string(summary_path(&codex_home))
+        .await
+        .expect("read summary");
+    let profile = fs::read_to_string(profile_path(&codex_home))
+        .await
+        .expect("read profile");
+
+    assert!(summary.contains("Never merge without explicit authorization"));
+    assert!(
+        summary.contains(
+            "[process:pull_request_workflow] When babysitting pull requests, merge only when Rick has authorized merging"
+        )
+    );
+    assert!(profile.contains("- scope: process:pull_request_workflow"));
+    assert!(profile.contains("- scope_evidence: pull request monitoring workflow"));
+}
+
+#[tokio::test]
+async fn global_forget_removes_matching_global_and_scoped_entries() {
+    let temp = tempdir().expect("tempdir");
+    let codex_home = temp.path().abs();
+    append_preference_events(
+        &codex_home,
+        "thread-1".to_string(),
+        "turn-1".to_string(),
+        &[
+            CandidateMemoryItem {
+                bucket: MemoryBucket::OperatorPlaybook,
+                scope: MemoryScope::global(),
+                operation: MemoryOperation::Upsert,
+                signal: MemorySignal::ModelClassified,
+                key: "merge only when authorized".to_string(),
+                candidate: "Merge only when authorized".to_string(),
+                source_excerpt: "merge only when authorized".to_string(),
+                confidence: 0.8,
+            },
+            CandidateMemoryItem {
+                bucket: MemoryBucket::OperatorPlaybook,
+                scope: MemoryScope::process(
+                    "pull_request_workflow",
+                    "pull request monitoring workflow",
+                ),
+                operation: MemoryOperation::Upsert,
+                signal: MemorySignal::ModelClassified,
+                key: "merge only when authorized".to_string(),
+                candidate: "Merge only when authorized".to_string(),
+                source_excerpt: "merge only when authorized for PRs".to_string(),
+                confidence: 0.8,
+            },
+            CandidateMemoryItem {
+                bucket: MemoryBucket::OperatorPlaybook,
+                scope: MemoryScope::global(),
+                operation: MemoryOperation::Forget,
+                signal: MemorySignal::Explicit,
+                key: "merge only when authorized".to_string(),
+                candidate: "Merge only when authorized".to_string(),
+                source_excerpt: "forget merge only when authorized".to_string(),
+                confidence: EXPLICIT_CONFIDENCE,
+            },
+        ],
+    )
+    .await
+    .expect("append events");
+
+    consolidate_preferences(&codex_home, &OrchestratorMemoryConfig::default())
+        .await
+        .expect("consolidate preferences");
+
+    assert!(!summary_path(&codex_home).exists());
+}
+
+#[tokio::test]
 async fn append_writes_bucket_specific_event_mirrors() {
     let temp = tempdir().expect("tempdir");
     let codex_home = temp.path().abs();
@@ -256,6 +552,7 @@ async fn append_writes_bucket_specific_event_mirrors() {
         "turn-1".to_string(),
         &[CandidateMemoryItem {
             bucket: MemoryBucket::OperatorPlaybook,
+            scope: MemoryScope::global(),
             operation: MemoryOperation::Upsert,
             signal: MemorySignal::ModelClassified,
             key: "when auth guard stalls try warming endpoint".to_string(),
@@ -333,6 +630,7 @@ async fn consolidation_migrates_legacy_events_into_buckets() {
         .expect("read summary");
 
     assert_eq!(migrated.bucket, MemoryBucket::OperatorPlaybook);
+    assert_eq!(migrated.scope, MemoryScope::global());
     assert!(bucket_raw.contains("warming endpoint"));
     assert!(summary.contains("## Operator Playbook"));
     assert!(summary.contains("warming endpoint to unblock it"));
@@ -340,6 +638,59 @@ async fn consolidation_migrates_legacy_events_into_buckets() {
         preferences_path(&codex_home)
             .with_file_name("preferences.jsonl.pre-bucket-migration")
             .exists()
+    );
+}
+
+#[tokio::test]
+async fn migration_infers_scope_for_bucketed_events_missing_scope() {
+    let temp = tempdir().expect("tempdir");
+    let codex_home = temp.path().abs();
+    ensure_layout(&codex_home).await.expect("layout");
+    let legacy_bucketed = serde_json::json!({
+        "observed_at": "2026-04-26T12:00:00Z",
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "bucket": "operator_playbook",
+        "operation": "upsert",
+        "signal": "model_classified",
+        "key": "mobius pr workflow",
+        "candidate": "When working in the Mobius repo on PRs, keep it CLI-first",
+        "source_excerpt": "When working in the Mobius repo on PRs, keep it CLI-first",
+        "confidence": 0.8
+    });
+    fs::write(
+        preferences_path(&codex_home),
+        format!("{legacy_bucketed}\n"),
+    )
+    .await
+    .expect("write bucketed legacy event");
+
+    consolidate_preferences(
+        &codex_home,
+        &OrchestratorMemoryConfig {
+            enabled: true,
+            ..OrchestratorMemoryConfig::default()
+        },
+    )
+    .await
+    .expect("consolidate preferences");
+
+    let migrated_raw = fs::read_to_string(preferences_path(&codex_home))
+        .await
+        .expect("read migrated preferences");
+    let migrated =
+        serde_json::from_str::<MemoryEvent>(migrated_raw.lines().next().expect("migrated event"))
+            .expect("parse migrated event");
+
+    assert_eq!(migrated.bucket, MemoryBucket::OperatorPlaybook);
+    assert_eq!(
+        migrated.scope,
+        MemoryScope::new(
+            super::super::types::MemoryScopeKind::Repo,
+            "mobius",
+            "repo-specific wording",
+            /*confidence*/ 0.75,
+        )
     );
 }
 
@@ -353,6 +704,7 @@ async fn consolidates_followup_state_into_dedicated_section() {
         "turn-1".to_string(),
         &[CandidateMemoryItem {
             bucket: MemoryBucket::FollowupState,
+            scope: MemoryScope::global(),
             operation: MemoryOperation::Upsert,
             signal: MemorySignal::ModelClassified,
             key: "check staging tags when it is live".to_string(),
@@ -395,6 +747,7 @@ async fn consolidates_relational_attunement_into_dedicated_section() {
         "turn-1".to_string(),
         &[CandidateMemoryItem {
             bucket: MemoryBucket::RelationalAttunement,
+            scope: MemoryScope::global(),
             operation: MemoryOperation::Upsert,
             signal: MemorySignal::ModelClassified,
             key: "direct but clarify when ambiguity could trigger the wrong thing".to_string(),
@@ -438,6 +791,7 @@ async fn consolidates_ongoing_threads_into_dedicated_section() {
         "turn-1".to_string(),
         &[CandidateMemoryItem {
             bucket: MemoryBucket::OngoingThreads,
+            scope: MemoryScope::global(),
             operation: MemoryOperation::Upsert,
             signal: MemorySignal::ModelClassified,
             key: "designing orchestrator memory around emotional continuity".to_string(),
@@ -481,6 +835,7 @@ async fn consolidates_operator_playbook_into_dedicated_section() {
         "turn-1".to_string(),
         &[CandidateMemoryItem {
             bucket: MemoryBucket::OperatorPlaybook,
+            scope: MemoryScope::global(),
             operation: MemoryOperation::Upsert,
             signal: MemorySignal::ModelClassified,
             key: "when aws auth guard auth stalls try the warming endpoint".to_string(),
@@ -525,6 +880,7 @@ async fn forget_event_removes_existing_memory_item() {
         &[
             CandidateMemoryItem {
                 bucket: MemoryBucket::PersonalContext,
+                scope: MemoryScope::global(),
                 operation: MemoryOperation::Upsert,
                 signal: MemorySignal::ModelClassified,
                 key: "my moms name is alice".to_string(),
@@ -534,6 +890,7 @@ async fn forget_event_removes_existing_memory_item() {
             },
             CandidateMemoryItem {
                 bucket: MemoryBucket::PersonalContext,
+                scope: MemoryScope::global(),
                 operation: MemoryOperation::Forget,
                 signal: MemorySignal::ModelClassified,
                 key: "my moms name is alice".to_string(),
@@ -571,6 +928,7 @@ async fn forget_event_removes_semantically_matching_memory_with_different_key() 
         &[
             CandidateMemoryItem {
                 bucket: MemoryBucket::FollowupState,
+                scope: MemoryScope::global(),
                 operation: MemoryOperation::Upsert,
                 signal: MemorySignal::ModelClassified,
                 key: "user shared a google calendar invite link for future use https calendar app google example booking link keep this for later retrieval when calendar access or scheduling is needed".to_string(),
@@ -580,6 +938,7 @@ async fn forget_event_removes_semantically_matching_memory_with_different_key() 
             },
             CandidateMemoryItem {
                 bucket: MemoryBucket::FollowupState,
+                scope: MemoryScope::global(),
                 operation: MemoryOperation::Forget,
                 signal: MemorySignal::ModelClassified,
                 key: "user s google calendar invite link https calendar app google example booking link".to_string(),

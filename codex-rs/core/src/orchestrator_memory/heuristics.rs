@@ -3,6 +3,8 @@ use super::types::CandidateMemoryItem;
 use super::types::EXPLICIT_CONFIDENCE;
 use super::types::MemoryBucket;
 use super::types::MemoryOperation;
+use super::types::MemoryScope;
+use super::types::MemoryScopeKind;
 use super::types::MemorySignal;
 use super::types::REPEATED_STEERING_CONFIDENCE;
 use crate::content_items_to_text;
@@ -188,6 +190,7 @@ pub(super) fn extract_acknowledged_preferences(text: &str) -> Vec<CandidateMemor
             let key = normalized_key(&candidate);
             (!key.is_empty()).then_some(CandidateMemoryItem {
                 bucket: MemoryBucket::DurablePreference,
+                scope: MemoryScope::global(),
                 operation: MemoryOperation::Upsert,
                 signal: MemorySignal::AssistantAcknowledged,
                 key,
@@ -285,6 +288,191 @@ pub(super) fn detect_forced_memory_trigger(
     saw_remember.then_some(ForcedMemoryTrigger::Remember)
 }
 
+pub(super) fn should_classify_for_scope(current_turn_user_texts: &[String]) -> bool {
+    current_turn_user_texts
+        .iter()
+        .any(|text| requires_grounded_scope(text))
+}
+
+pub(super) fn requires_grounded_scope(text: &str) -> bool {
+    let lowered = normalized_key(text);
+    (contains_any(
+        &lowered,
+        &[
+            "agent",
+            "agents",
+            "branch",
+            "branches",
+            "check",
+            "checks",
+            "command",
+            "deployment",
+            "deployments",
+            "deploy",
+            "github",
+            "issue",
+            "merge",
+            "merged",
+            "merging",
+            "project",
+            "pull request",
+            "repo",
+            "repository",
+            "skill",
+            "task",
+            "tool",
+            "worktree",
+        ],
+    ) || contains_word(&lowered, "ci")
+        || contains_word(&lowered, "pr")
+        || contains_word(&lowered, "review")
+        || contains_word(&lowered, "reviews"))
+        && !has_global_scope_language(&lowered)
+}
+
+pub(super) fn inferred_scope_for_text(text: &str) -> MemoryScope {
+    let lowered = normalized_key(text);
+    let scope_source = text.to_ascii_lowercase();
+    if let Some(id) = named_scope_before_marker(&scope_source, &["repo", "repository"]) {
+        return MemoryScope::new(
+            MemoryScopeKind::Repo,
+            id,
+            "repo-specific wording",
+            /*confidence*/ 0.75,
+        );
+    }
+    if let Some(id) = named_scope_before_marker(&scope_source, &["project"]) {
+        return MemoryScope::new(
+            MemoryScopeKind::Project,
+            id,
+            "project-specific wording",
+            /*confidence*/ 0.75,
+        );
+    }
+    if let Some(id) = named_scope_before_marker(&scope_source, &["task"]) {
+        return MemoryScope::new(
+            MemoryScopeKind::Task,
+            id,
+            "task-specific wording",
+            /*confidence*/ 0.75,
+        );
+    }
+    if contains_any(&lowered, &["pull request", "merge"]) || contains_word(&lowered, "pr") {
+        return MemoryScope::process("pull_request_workflow", "pull request or merge workflow");
+    }
+    if contains_word(&lowered, "review") || contains_word(&lowered, "reviews") {
+        return MemoryScope::process("review_workflow", "review workflow");
+    }
+    if contains_word(&lowered, "ci")
+        || contains_any(
+            &lowered,
+            &["github checks", "pr checks", "pull request checks"],
+        )
+    {
+        return MemoryScope::process("ci_monitoring", "CI or checks workflow");
+    }
+    if contains_any(&lowered, &["deploy", "deployment", "deployments"]) {
+        return MemoryScope::process("deployment_monitoring", "deployment workflow");
+    }
+    if let Some(id) = named_scope_after_marker(&scope_source, &["skill"]) {
+        return MemoryScope::new(
+            MemoryScopeKind::Skill,
+            id,
+            "skill-specific wording",
+            /*confidence*/ 0.75,
+        );
+    }
+    if let Some(id) = named_scope_after_marker(&scope_source, &["command"]) {
+        return MemoryScope::new(
+            MemoryScopeKind::Command,
+            id,
+            "command-specific wording",
+            /*confidence*/ 0.75,
+        );
+    }
+    if let Some(id) = named_scope_after_marker(&scope_source, &["tool"]) {
+        return MemoryScope::new(
+            MemoryScopeKind::Tool,
+            id,
+            "tool-specific wording",
+            /*confidence*/ 0.75,
+        );
+    }
+    MemoryScope::global()
+}
+
+fn named_scope_before_marker(text: &str, markers: &[&str]) -> Option<String> {
+    let tokens = text.split_whitespace().collect::<Vec<_>>();
+    tokens
+        .iter()
+        .position(|token| markers.contains(&marker_token(token).as_str()))
+        .and_then(|index| {
+            tokens[..index]
+                .iter()
+                .rev()
+                .map(|token| scope_id_token(token))
+                .find(|token| !token.is_empty() && !is_scope_stopword(token))
+        })
+}
+
+fn named_scope_after_marker(text: &str, markers: &[&str]) -> Option<String> {
+    let tokens = text.split_whitespace().collect::<Vec<_>>();
+    tokens
+        .iter()
+        .position(|token| markers.contains(&marker_token(token).as_str()))
+        .and_then(|index| {
+            tokens[index + 1..]
+                .iter()
+                .map(|token| scope_id_token(token))
+                .find(|token| !token.is_empty() && !is_scope_stopword(token))
+        })
+}
+
+fn marker_token(token: &str) -> String {
+    token
+        .trim_matches(|ch: char| !ch.is_alphanumeric())
+        .to_string()
+}
+
+fn scope_id_token(token: &str) -> String {
+    token
+        .trim_matches(|ch: char| {
+            !(ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | '\\'))
+        })
+        .to_string()
+}
+
+fn is_scope_stopword(token: &str) -> bool {
+    let normalized = normalized_key(token);
+    STOPWORDS.contains(&normalized.as_str())
+}
+
+fn has_global_scope_language(text: &str) -> bool {
+    contains_any(
+        text,
+        &[
+            "across all",
+            "all repos",
+            "all repositories",
+            "always",
+            "every repo",
+            "every repository",
+            "for all",
+            "global",
+            "globally",
+            "never",
+        ],
+    )
+}
+
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
+fn contains_word(text: &str, needle: &str) -> bool {
+    text.split_whitespace().any(|word| word == needle)
+}
+
 pub(super) fn extract_explicit_preferences(text: &str) -> Vec<CandidateMemoryItem> {
     split_sentences(text)
         .into_iter()
@@ -318,6 +506,7 @@ fn extract_explicit_preference(sentence: &str) -> Option<CandidateMemoryItem> {
 
     Some(CandidateMemoryItem {
         bucket: MemoryBucket::DurablePreference,
+        scope: MemoryScope::global(),
         operation: MemoryOperation::Upsert,
         signal: MemorySignal::Explicit,
         key,
@@ -383,6 +572,7 @@ pub(super) fn extract_repeated_steering_preferences(
         if emitted.insert(key.clone()) {
             results.push(CandidateMemoryItem {
                 bucket: MemoryBucket::DurablePreference,
+                scope: MemoryScope::global(),
                 operation: MemoryOperation::Upsert,
                 signal: MemorySignal::RepeatedSteering,
                 key,

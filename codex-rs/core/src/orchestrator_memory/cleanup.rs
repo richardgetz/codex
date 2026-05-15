@@ -8,6 +8,8 @@ use super::preferences_path;
 use super::types::MemoryBucket;
 use super::types::MemoryEvent;
 use super::types::MemoryOperation;
+use super::types::MemoryScope;
+use super::types::MemoryScopeKind;
 use super::types::MemorySignal;
 use crate::config::Config;
 use crate::session::session::Session;
@@ -50,6 +52,7 @@ pub(crate) struct CleanupResult {
 #[derive(Debug, Clone)]
 struct CompactEntry {
     bucket: MemoryBucket,
+    scope: MemoryScope,
     key: String,
     candidate: String,
     observations: usize,
@@ -57,6 +60,8 @@ struct CompactEntry {
     last_seen: DateTime<Utc>,
     confidence_sum: f32,
 }
+
+type CompactKey = (MemoryBucket, String, MemoryScopeKind, String);
 
 #[cfg(test)]
 pub(super) async fn run_scheduled_cleanup_if_due(
@@ -412,7 +417,7 @@ fn compact_events(raw: &str, config: &OrchestratorMemoryConfig) -> Vec<MemoryEve
     let now = Utc::now();
     let retain_forget_after =
         now - ChronoDuration::days(config.cleanup.retain_forget_events_days as i64);
-    let mut active = HashMap::<(MemoryBucket, String), CompactEntry>::new();
+    let mut active = HashMap::<CompactKey, CompactEntry>::new();
     let mut forgets = Vec::new();
 
     for line in raw.lines().filter(|line| !line.trim().is_empty()) {
@@ -436,7 +441,15 @@ fn compact_events(raw: &str, config: &OrchestratorMemoryConfig) -> Vec<MemoryEve
 
     let mut output = forgets;
     let mut entries = active.into_values().collect::<Vec<_>>();
-    entries.sort_by_key(|entry| (entry.bucket.as_str(), entry.key.clone()));
+    entries.sort_by_key(|entry| {
+        let (scope_kind, scope_id) = entry.scope.identity();
+        (
+            entry.bucket.as_str(),
+            scope_kind.as_str(),
+            scope_id,
+            entry.key.clone(),
+        )
+    });
     for entry in entries {
         let event_count = if entry.direct_observations > 0 {
             1
@@ -449,6 +462,7 @@ fn compact_events(raw: &str, config: &OrchestratorMemoryConfig) -> Vec<MemoryEve
                 thread_id: "orchestrator-memory-cleanup".to_string(),
                 turn_id: "scheduled-cleanup".to_string(),
                 bucket: entry.bucket,
+                scope: entry.scope.clone(),
                 operation: MemoryOperation::Upsert,
                 signal: if entry.direct_observations > 0 {
                     MemorySignal::ModelClassified
@@ -489,13 +503,13 @@ fn events_to_jsonl(events: &[MemoryEvent]) -> std::io::Result<String> {
     Ok(body)
 }
 
-fn upsert_compact_entry(
-    active: &mut HashMap<(MemoryBucket, String), CompactEntry>,
-    event: MemoryEvent,
-) {
-    let key = (event.bucket, event.key.clone());
+fn upsert_compact_entry(active: &mut HashMap<CompactKey, CompactEntry>, event: MemoryEvent) {
+    let scope = event.scope.clone().normalized();
+    let (scope_kind, scope_id) = scope.identity();
+    let key = (event.bucket, event.key.clone(), scope_kind, scope_id);
     let entry = active.entry(key).or_insert_with(|| CompactEntry {
         bucket: event.bucket,
+        scope: scope.clone(),
         key: event.key.clone(),
         candidate: event.candidate.clone(),
         observations: 0,
@@ -514,21 +528,19 @@ fn upsert_compact_entry(
     entry.confidence_sum += event.confidence;
 }
 
-fn remove_matching_entries(
-    active: &mut HashMap<(MemoryBucket, String), CompactEntry>,
-    event: &MemoryEvent,
-) {
-    if active.remove(&(event.bucket, event.key.clone())).is_some() {
-        return;
-    }
+fn remove_matching_entries(active: &mut HashMap<CompactKey, CompactEntry>, event: &MemoryEvent) {
+    let scope = event.scope.clone().normalized();
+    let (scope_kind, scope_id) = scope.identity();
+    active.remove(&(event.bucket, event.key.clone(), scope_kind, scope_id));
 
     let forget_tokens = similarity_tokens(&event.key);
     let forget_candidate_key = heuristics::normalized_key(&event.candidate);
     let forget_candidate_tokens = similarity_tokens(&forget_candidate_key);
     let keys_to_remove = active
         .iter()
-        .filter(|((bucket, existing_key), entry)| {
+        .filter(|((bucket, existing_key, _, _), entry)| {
             *bucket == event.bucket
+                && scope_matches_for_forget(&scope, &entry.scope)
                 && keys_match_for_forget(
                     &event.key,
                     existing_key,
@@ -542,6 +554,11 @@ fn remove_matching_entries(
     for key in keys_to_remove {
         active.remove(&key);
     }
+}
+
+fn scope_matches_for_forget(forget_scope: &MemoryScope, existing_scope: &MemoryScope) -> bool {
+    forget_scope.kind == MemoryScopeKind::Global
+        || forget_scope.identity() == existing_scope.clone().normalized().identity()
 }
 
 fn keys_match_for_forget(

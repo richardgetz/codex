@@ -133,14 +133,25 @@ async fn process_completed_turn(
         )
     };
 
+    let scope_sensitive_heuristic_candidates =
+        !candidates.is_empty() && heuristics::should_classify_for_scope(&current_turn_user_texts);
+    let should_run_classifier = candidates.is_empty()
+        || (turn_context
+            .config
+            .user_preferences_memory
+            .model_on_heuristic_miss
+            && scope_sensitive_heuristic_candidates);
     let mut active_write_permit = None;
-    if candidates.is_empty() {
+    if should_run_classifier {
         let classifier_reason = if forced_trigger.is_some() {
             "forced by explicit remember/forget trigger"
+        } else if !candidates.is_empty() {
+            "heuristics produced scope-sensitive candidates"
         } else {
             "heuristics produced no continuity candidates"
         };
-        if forced_trigger.is_none()
+        if candidates.is_empty()
+            && forced_trigger.is_none()
             && !turn_context
                 .config
                 .user_preferences_memory
@@ -189,7 +200,15 @@ async fn process_completed_turn(
         )
         .await
         {
-            Ok(classified) => candidates = classified,
+            Ok(classified) if !classified.is_empty() => candidates = classified,
+            Ok(_) => {
+                if forced_trigger.is_some()
+                    || candidates.is_empty()
+                    || scope_sensitive_heuristic_candidates
+                {
+                    candidates.clear();
+                }
+            }
             Err(err) => {
                 append_diagnostic_event(
                     &turn_context.config.codex_home,
@@ -198,6 +217,9 @@ async fn process_completed_turn(
                     Some(&err.to_string()),
                 )
                 .await?;
+                if scope_sensitive_heuristic_candidates {
+                    candidates.clear();
+                }
             }
         }
         active_write_permit = Some(permit);
@@ -212,6 +234,7 @@ async fn process_completed_turn(
         };
         permit
     };
+    apply_inferred_scopes(&mut candidates);
     let live_bucket_policy = session.user_preferences_memory_policy().await;
     retain_write_allowed_candidates(&mut candidates, &live_bucket_policy);
     if candidates.is_empty() {
@@ -357,6 +380,24 @@ fn retain_write_allowed_candidates(
     candidates.retain(|candidate| policy.can_write(candidate.bucket.into()));
 }
 
+fn apply_inferred_scopes(candidates: &mut Vec<CandidateMemoryItem>) {
+    candidates.retain_mut(|candidate| {
+        if candidate.scope.kind != super::types::MemoryScopeKind::Global {
+            candidate.scope = candidate.scope.clone().normalized();
+            return true;
+        }
+        let text = format!("{} {}", candidate.candidate, candidate.source_excerpt);
+        let inferred_scope = heuristics::inferred_scope_for_text(&text);
+        if inferred_scope.kind == super::types::MemoryScopeKind::Global
+            && heuristics::requires_grounded_scope(&text)
+        {
+            return false;
+        }
+        candidate.scope = inferred_scope;
+        true
+    });
+}
+
 pub(super) async fn append_preference_events(
     codex_home: &codex_utils_absolute_path::AbsolutePathBuf,
     thread_id: String,
@@ -378,6 +419,7 @@ pub(super) async fn append_preference_events(
             thread_id: thread_id.clone(),
             turn_id: turn_id.clone(),
             bucket: candidate.bucket,
+            scope: candidate.scope.clone().normalized(),
             operation: candidate.operation,
             signal: candidate.signal,
             key: candidate.key.clone(),
@@ -479,11 +521,13 @@ pub(super) fn render_summary_for_raw(raw: &str, config: &OrchestratorMemoryConfi
     )
 }
 
+type AggregationKey = (MemoryBucket, String, super::types::MemoryScopeKind, String);
+
 pub(super) fn aggregate_memory_items(
     raw: &str,
     config: &OrchestratorMemoryConfig,
 ) -> AggregatedMemorySnapshot {
-    let mut aggregated = HashMap::<(MemoryBucket, String), AggregatedMemoryItem>::new();
+    let mut aggregated = HashMap::<AggregationKey, AggregatedMemoryItem>::new();
     for line in raw.lines().filter(|line| !line.trim().is_empty()) {
         let event: MemoryEvent = match serde_json::from_str(line) {
             Ok(event) => event,
@@ -492,13 +536,16 @@ pub(super) fn aggregate_memory_items(
                 continue;
             }
         };
-        let key = (event.bucket, event.key.clone());
+        let scope = event.scope.clone().normalized();
+        let (scope_kind, scope_id) = scope.identity();
+        let key = (event.bucket, event.key.clone(), scope_kind, scope_id);
         match event.operation {
             super::types::MemoryOperation::Upsert => {
                 let entry = aggregated
                     .entry(key)
                     .or_insert_with(|| AggregatedMemoryItem {
                         bucket: event.bucket,
+                        scope: scope.clone(),
                         candidate: event.candidate.clone(),
                         observations: 0,
                         direct_observations: 0,
@@ -622,6 +669,35 @@ fn render_summary(
     body
 }
 
+pub(super) fn summary_item_text(item: &AggregatedMemoryItem) -> String {
+    match item.scope.label() {
+        Some(scope) => format!("[{scope}] {}", item.candidate),
+        None => item.candidate.clone(),
+    }
+}
+
+pub(super) fn append_profile_item(body: &mut String, item: &AggregatedMemoryItem) {
+    body.push_str("### ");
+    body.push_str(&summary_item_text(item));
+    body.push_str("\n\n");
+    if let Some(scope) = item.scope.label() {
+        body.push_str("- scope: ");
+        body.push_str(&scope);
+        body.push('\n');
+        if !item.scope.evidence.is_empty() {
+            body.push_str("- scope_evidence: ");
+            body.push_str(&item.scope.evidence);
+            body.push('\n');
+        }
+    }
+    body.push_str(&format!(
+        "- observations: {}\n- direct_observations: {}\n- last_seen: {}\n\n",
+        item.observations,
+        item.direct_observations,
+        item.last_seen.to_rfc3339(),
+    ));
+}
+
 fn append_summary_section(body: &mut String, title: &str, items: &[AggregatedMemoryItem]) {
     if items.is_empty() {
         return;
@@ -631,7 +707,7 @@ fn append_summary_section(body: &mut String, title: &str, items: &[AggregatedMem
     body.push('\n');
     for item in items {
         body.push_str("- ");
-        body.push_str(&item.candidate);
+        body.push_str(&summary_item_text(item));
         body.push('\n');
     }
     body.push('\n');
@@ -663,34 +739,27 @@ fn append_profile_section(body: &mut String, title: &str, items: &[AggregatedMem
     body.push_str(title);
     body.push_str("\n\n");
     for item in items {
-        body.push_str("### ");
-        body.push_str(&item.candidate);
-        body.push_str("\n\n");
-        body.push_str(&format!(
-            "- observations: {}\n- direct_observations: {}\n- last_seen: {}\n\n",
-            item.observations,
-            item.direct_observations,
-            item.last_seen.to_rfc3339(),
-        ));
+        append_profile_item(body, item);
     }
 }
 
 fn remove_matching_memory_entries(
-    aggregated: &mut HashMap<(MemoryBucket, String), AggregatedMemoryItem>,
+    aggregated: &mut HashMap<AggregationKey, AggregatedMemoryItem>,
     event: &MemoryEvent,
 ) {
-    let forget_key = (event.bucket, event.key.clone());
-    if aggregated.remove(&forget_key).is_some() {
-        return;
-    }
+    let scope = event.scope.clone().normalized();
+    let (scope_kind, scope_id) = scope.identity();
+    let forget_key = (event.bucket, event.key.clone(), scope_kind, scope_id);
+    aggregated.remove(&forget_key);
 
     let forget_tokens = similarity_tokens(&event.key);
     let forget_candidate_key = heuristics::normalized_key(&event.candidate);
     let forget_candidate_tokens = similarity_tokens(&forget_candidate_key);
     let keys_to_remove = aggregated
         .iter()
-        .filter(|((bucket, existing_key), entry)| {
+        .filter(|((bucket, existing_key, _, _), entry)| {
             *bucket == event.bucket
+                && scope_matches_for_forget(&scope, &entry.scope)
                 && keys_match_for_forget(
                     &event.key,
                     &forget_key.1,
@@ -705,6 +774,14 @@ fn remove_matching_memory_entries(
     for key in keys_to_remove {
         aggregated.remove(&key);
     }
+}
+
+fn scope_matches_for_forget(
+    forget_scope: &super::types::MemoryScope,
+    existing_scope: &super::types::MemoryScope,
+) -> bool {
+    forget_scope.kind == super::types::MemoryScopeKind::Global
+        || forget_scope.identity() == existing_scope.clone().normalized().identity()
 }
 
 fn keys_match_for_forget(

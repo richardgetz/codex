@@ -231,6 +231,11 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - The memory classifier is broader than task reminders: it should retain durable
   user preferences, working style, follow-up intent, operator playbooks, and
   other continuity notes when the user signals they matter later.
+- Memory events carry applicability scope in addition to bucket. Non-global
+  scopes use `repo`, `project`, `task`, `person`, `process`, `skill`,
+  `command`, or `tool` identifiers so repo-, project-, task-, or
+  process-shaped guidance does not silently become user-wide guidance.
+  Summary/profile rendering prefixes scoped memories with `[type:id]`.
 - `/orchestrator-memory-forget <needle>` removes matching orchestrator-memory
   entries from the canonical user-preferences memory store without touching
   mainline memory stores. Because this is a global text-prune maintenance
@@ -248,7 +253,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - To avoid silent background model spend, heuristic misses do not invoke a
   classifier model by default, and summary/profile consolidation uses the
   mechanical renderer by default. Set `model_on_heuristic_miss = true` or
-  `model_consolidation = true` to restore those model-assisted paths.
+  `model_consolidation = true` to restore those model-assisted paths. When
+  `model_on_heuristic_miss = true`, scope-sensitive heuristic candidates are
+  also routed through the classifier so richer buckets and narrower
+  applicability scopes can be selected before writing.
 - Memory events are mirrored into bucket-specific files under
   `<codex_home>/memories/extensions/user_preferences/buckets/` for easier
   inspection while preserving `preferences.jsonl` as the canonical event log.
