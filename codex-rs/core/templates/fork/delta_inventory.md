@@ -58,6 +58,10 @@ stable/mainline is pulled in.
   - Slash command: `/orchestrator-memory-consolidate`
   - Bucket-specific mirror files live under
     `<codex_home>/memories/extensions/user_preferences/buckets/`.
+  - Memory events carry applicability scope separately from bucket:
+    `global`, `repo`, `project`, `task`, `person`, `process`, `skill`,
+    `command`, or `tool`; non-global entries render with `[type:id]` so
+    narrower guidance is not treated as user-wide by accident.
   - Scheduled cleanup runs daily by local `HH:MM` schedule, defaults to `03:30`,
     compacts duplicate raw events in `preferences.jsonl`, keeps recent forget
     tombstones, resyncs bucket files, and defaults to a `Memory [memory builder]`
@@ -83,6 +87,9 @@ stable/mainline is pulled in.
   - `read_buckets` and `write_buckets` default to all bucket types:
     `durable_preference`, `personal_context`, `relational_attunement`,
     `operator_playbook`, `ongoing_threads`, and `followup_state`.
+  - When `model_on_heuristic_miss = true`, scope-sensitive heuristic memory
+    candidates are routed through the model classifier so richer buckets and
+    repo/project/task/process/person/tool scope can be selected before writes.
   - App-server: `thread/start`, `thread/resume`, and `thread/fork` accept
     `userPreferencesMemoryPolicy`; loaded threads can be changed live with
     `thread/userPreferencesMemoryPolicy/set`.

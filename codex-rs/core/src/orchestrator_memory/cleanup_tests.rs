@@ -3,6 +3,7 @@ use super::super::preferences_path;
 use super::super::summary_path;
 use super::super::types::CandidateMemoryItem;
 use super::super::types::EXPLICIT_CONFIDENCE;
+use super::super::types::MemoryScope;
 use super::*;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
@@ -27,6 +28,7 @@ async fn scheduled_cleanup_compacts_duplicate_raw_events_and_rebuilds_artifacts(
         &[
             CandidateMemoryItem {
                 bucket: MemoryBucket::DurablePreference,
+                scope: MemoryScope::global(),
                 operation: MemoryOperation::Upsert,
                 signal: MemorySignal::Explicit,
                 key: "prefer direct concise answers".to_string(),
@@ -36,6 +38,7 @@ async fn scheduled_cleanup_compacts_duplicate_raw_events_and_rebuilds_artifacts(
             },
             CandidateMemoryItem {
                 bucket: MemoryBucket::DurablePreference,
+                scope: MemoryScope::global(),
                 operation: MemoryOperation::Upsert,
                 signal: MemorySignal::Explicit,
                 key: "prefer direct concise answers".to_string(),
@@ -45,6 +48,7 @@ async fn scheduled_cleanup_compacts_duplicate_raw_events_and_rebuilds_artifacts(
             },
             CandidateMemoryItem {
                 bucket: MemoryBucket::OperatorPlaybook,
+                scope: MemoryScope::global(),
                 operation: MemoryOperation::Upsert,
                 signal: MemorySignal::ModelClassified,
                 key: "when auth guard stalls try warming endpoint".to_string(),
@@ -107,6 +111,7 @@ async fn scheduled_cleanup_does_not_rerun_after_current_due_window_completed() {
         "turn-1".to_string(),
         &[CandidateMemoryItem {
             bucket: MemoryBucket::DurablePreference,
+            scope: MemoryScope::global(),
             operation: MemoryOperation::Upsert,
             signal: MemorySignal::Explicit,
             key: "prefer direct concise answers".to_string(),
@@ -127,6 +132,7 @@ async fn scheduled_cleanup_does_not_rerun_after_current_due_window_completed() {
         "turn-2".to_string(),
         &[CandidateMemoryItem {
             bucket: MemoryBucket::DurablePreference,
+            scope: MemoryScope::global(),
             operation: MemoryOperation::Upsert,
             signal: MemorySignal::Explicit,
             key: "prefer direct concise answers".to_string(),
@@ -166,6 +172,7 @@ fn compact_events_keeps_recent_forget_tombstones_but_drops_old_ones() {
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
         bucket: MemoryBucket::PersonalContext,
+        scope: MemoryScope::global(),
         operation: MemoryOperation::Forget,
         signal: MemorySignal::ModelClassified,
         key: "old phone number".to_string(),
@@ -191,4 +198,49 @@ fn compact_events_keeps_recent_forget_tombstones_but_drops_old_ones() {
     assert_eq!(compacted.len(), 1);
     assert_eq!(compacted[0].key, "old phone number");
     assert_eq!(compacted[0].operation, MemoryOperation::Forget);
+}
+
+#[test]
+fn compact_events_global_forget_removes_matching_global_and_scoped_entries() {
+    let now = Utc::now();
+    let global = MemoryEvent {
+        observed_at: now - ChronoDuration::minutes(/*minutes*/ 3),
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        bucket: MemoryBucket::OperatorPlaybook,
+        scope: MemoryScope::global(),
+        operation: MemoryOperation::Upsert,
+        signal: MemorySignal::ModelClassified,
+        key: "merge only when authorized".to_string(),
+        candidate: "Merge only when authorized".to_string(),
+        source_excerpt: "merge only when authorized".to_string(),
+        confidence: 0.8,
+    };
+    let scoped = MemoryEvent {
+        scope: MemoryScope::process("pull_request_workflow", "pull request workflow"),
+        ..global.clone()
+    };
+    let forget = MemoryEvent {
+        observed_at: now,
+        operation: MemoryOperation::Forget,
+        signal: MemorySignal::Explicit,
+        source_excerpt: "forget merge only when authorized".to_string(),
+        confidence: EXPLICIT_CONFIDENCE,
+        ..global.clone()
+    };
+    let raw = [global, scoped, forget]
+        .into_iter()
+        .map(|event| serde_json::to_string(&event).expect("serialize event"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let compacted = compact_events(&raw, &OrchestratorMemoryConfig::default());
+
+    assert_eq!(
+        compacted
+            .iter()
+            .filter(|event| event.operation == MemoryOperation::Upsert)
+            .count(),
+        0
+    );
 }

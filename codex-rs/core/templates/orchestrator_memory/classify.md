@@ -83,6 +83,35 @@ Do not store ordinary file names, branches, implementation details, transient
 debug state, ticket minutiae, or one-off code facts just because they appeared
 in a conversation.
 
+Every memory action must include an applicability scope. Scope is separate from
+bucket: the bucket says what kind of continuity item this is, while scope says
+where it is valid.
+
+Use `global` only when the memory is truly user-wide, such as a universal
+communication preference, a clear "always"/"never" instruction, or a command,
+skill, or process rule that should apply across contexts. If a memory depends
+on grounding knowledge about a repo, project, task, person, process, skill,
+command, or tool, link it to that scope instead of making it global.
+
+Allowed scope types:
+- `global`: user-wide memory that does not depend on a narrower context.
+- `repo`: a specific repository or local repo alias/path.
+- `project`: a user-owned project or initiative that may span repos.
+- `task`: a specific tracked task, ticket, PR, or requested objective.
+- `person`: the user or another named person the memory is about.
+- `process`: a reusable workflow such as pull request monitoring, deployment
+  monitoring, release management, or memory maintenance.
+- `skill`: a named Codex skill.
+- `command`: a named CLI command or command family.
+- `tool`: a named MCP, app, integration, or external tool.
+
+For non-global scopes, set `id` to a stable normalized identifier such as
+`/Users/rick/Github/codex`, `mobius`, `pull_request_monitoring`,
+`post-change-review`, `git`, or `aws-auth-guard`. Set `evidence` to the short
+phrase that made the scope clear. If an item needs a narrower scope but the
+scope is not clear, emit no action rather than storing an over-broad global
+memory.
+
 If the user explicitly says to forget something, remove it from the relevant
 memory or follow-up state.
 
@@ -161,8 +190,15 @@ Return strict JSON only:
   "actions": [
     {
       "bucket": "durable_preference" | "personal_context" | "relational_attunement" | "operator_playbook" | "ongoing_threads" | "followup_state",
+      "scope": {
+        "type": "global" | "repo" | "project" | "task" | "person" | "process" | "skill" | "command" | "tool",
+        "id": string,
+        "evidence": string,
+        "confidence": number
+      },
       "operation": "upsert" | "forget",
-      "text": string
+      "text": string,
+      "source_excerpt": "short original user wording that supports both memory and scope"
     }
   ],
   "rationale": string

@@ -5,6 +5,7 @@ use super::types::CandidateMemoryItem;
 use super::types::MODEL_CLASSIFIED_CONFIDENCE;
 use super::types::MemoryBucket;
 use super::types::MemoryOperation;
+use super::types::MemoryScope;
 use super::types::MemorySignal;
 use crate::agent::AgentStatus;
 use crate::config::Config;
@@ -50,8 +51,12 @@ struct ClassificationPayload {
 #[derive(Debug, Deserialize)]
 struct ClassificationAction {
     bucket: MemoryBucket,
+    #[serde(default)]
+    scope: MemoryScope,
     operation: MemoryOperation,
     text: String,
+    #[serde(default)]
+    source_excerpt: Option<String>,
 }
 
 pub(super) async fn classify_with_model(
@@ -110,28 +115,53 @@ pub(super) async fn classify_with_model(
     match final_status {
         AgentStatus::Completed(message) => {
             let payload = parse_classification_payload(message.as_deref())?;
-            Ok(payload
-                .actions
-                .into_iter()
-                .filter_map(|action| {
-                    let text = action.text.trim();
-                    if text.is_empty() {
-                        return None;
-                    }
-                    Some(CandidateMemoryItem {
-                        bucket: action.bucket,
-                        operation: action.operation,
-                        signal: MemorySignal::ModelClassified,
-                        key: super::heuristics::normalized_key(text),
-                        candidate: text.to_string(),
-                        source_excerpt: text.to_string(),
-                        confidence: MODEL_CLASSIFIED_CONFIDENCE,
-                    })
-                })
-                .collect())
+            Ok(classification_payload_to_candidates(
+                payload,
+                current_turn_user_texts,
+            ))
         }
         other => anyhow::bail!("orchestrator memory classifier did not complete: {other:?}"),
     }
+}
+
+fn classification_payload_to_candidates(
+    payload: ClassificationPayload,
+    current_turn_user_texts: &[String],
+) -> Vec<CandidateMemoryItem> {
+    let turn_source_excerpt = current_turn_user_texts.join("\n\n");
+    payload
+        .actions
+        .into_iter()
+        .filter_map(|action| {
+            let text = action.text.trim();
+            if text.is_empty() {
+                return None;
+            }
+            let source_excerpt = action
+                .source_excerpt
+                .as_deref()
+                .map(str::trim)
+                .filter(|excerpt| !excerpt.is_empty())
+                .unwrap_or(&turn_source_excerpt);
+            let scope_text = format!("{text}\n{source_excerpt}");
+            let scope = action.scope.normalized();
+            if scope.kind == super::types::MemoryScopeKind::Global
+                && super::heuristics::requires_grounded_scope(&scope_text)
+            {
+                return None;
+            }
+            Some(CandidateMemoryItem {
+                bucket: action.bucket,
+                scope,
+                operation: action.operation,
+                signal: MemorySignal::ModelClassified,
+                key: super::heuristics::normalized_key(text),
+                candidate: text.to_string(),
+                source_excerpt: source_excerpt.to_string(),
+                confidence: MODEL_CLASSIFIED_CONFIDENCE,
+            })
+        })
+        .collect()
 }
 
 fn build_classification_prompt(
@@ -335,5 +365,55 @@ mod tests {
         assert!(!built.orchestrator_memory.enabled);
         assert!(!built.memories.generate_memories);
         assert!(!built.memories.use_memories);
+    }
+
+    #[test]
+    fn classification_payload_rejects_global_scope_when_source_excerpt_is_scoped() {
+        let payload = ClassificationPayload {
+            actions: vec![ClassificationAction {
+                bucket: MemoryBucket::DurablePreference,
+                scope: MemoryScope::global(),
+                operation: MemoryOperation::Upsert,
+                text: "Keep it CLI-first".to_string(),
+                source_excerpt: Some(
+                    "When working in the Mobius repo, keep it CLI-first".to_string(),
+                ),
+            }],
+            rationale: None,
+        };
+
+        let candidates = classification_payload_to_candidates(payload, &[]);
+
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn classification_payload_preserves_model_source_excerpt() {
+        let payload = ClassificationPayload {
+            actions: vec![ClassificationAction {
+                bucket: MemoryBucket::DurablePreference,
+                scope: MemoryScope::new(
+                    super::super::types::MemoryScopeKind::Repo,
+                    "mobius",
+                    "Mobius repo",
+                    /*confidence*/ 0.8,
+                ),
+                operation: MemoryOperation::Upsert,
+                text: "Keep it CLI-first".to_string(),
+                source_excerpt: Some(
+                    "When working in the Mobius repo, keep it CLI-first".to_string(),
+                ),
+            }],
+            rationale: None,
+        };
+        let candidates = classification_payload_to_candidates(
+            payload,
+            &["When working in the Mobius repo, keep it CLI-first".to_string()],
+        );
+
+        assert_eq!(
+            candidates[0].source_excerpt,
+            "When working in the Mobius repo, keep it CLI-first"
+        );
     }
 }

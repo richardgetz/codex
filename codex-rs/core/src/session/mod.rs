@@ -3220,6 +3220,7 @@ impl Session {
                 build_user_preferences_memory_developer_instructions(
                     &turn_context.config.codex_home,
                     &turn_context.config.user_preferences_memory,
+                    &turn_context.config.cwd,
                 )
                 .await
         {

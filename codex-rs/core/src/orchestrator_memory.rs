@@ -4,6 +4,7 @@ use crate::session::turn_context::TurnContext;
 use codex_config::types::MemoriesScope;
 use codex_config::types::OrchestratorMemoryConfig;
 use codex_config::types::UserPreferencesMemoryConfig;
+use codex_git_utils::get_git_repo_root;
 use codex_memories_read::memory_root;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::protocol::SessionSource;
@@ -11,6 +12,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use codex_utils_template::Template;
+use std::collections::BTreeSet;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use tokio::fs;
@@ -156,25 +159,27 @@ pub(crate) fn should_use(config: &Config, mode: ModeKind) -> bool {
 pub(crate) async fn build_user_preferences_developer_instructions(
     codex_home: &AbsolutePathBuf,
     config: &UserPreferencesMemoryConfig,
+    cwd: &AbsolutePathBuf,
 ) -> Option<String> {
     let base_path = user_preferences_root(codex_home);
     let memory_config = config.memory_config();
-    let read_all_buckets = config.bucket_policy.read_buckets
-        == codex_config::types::UserPreferencesMemoryBucket::all();
-    let (summary_source, summary) = if read_all_buckets {
-        read_user_preferences_summary_source(codex_home).await?
-    } else {
-        let (summary_source, raw) = read_first_existing_source(&[
+    let scope_context = MemoryScopeReadContext::from_cwd(cwd);
+    let (summary_source, summary) = if let Ok((summary_source, raw)) =
+        read_first_existing_source(&[
             user_preferences_preferences_path(codex_home),
             legacy_user_preferences_preferences_path(codex_home),
         ])
         .await
-        .ok()?;
+    {
         let filtered = live::filter_raw_events_for_read_policy(&raw, &config.bucket_policy);
+        let filtered = filter_raw_events_for_scope_context(&filtered, &scope_context);
         let summary = live::render_summary_for_raw(&filtered, &memory_config);
         (summary_source, summary)
+    } else {
+        read_user_preferences_summary_source(codex_home).await?
     };
-    let summary = with_recent_user_preferences_supplement(codex_home, config, &summary).await;
+    let summary =
+        with_recent_user_preferences_supplement(codex_home, config, &scope_context, &summary).await;
     let summary = truncate_text(
         &summary,
         TruncationPolicy::Tokens(ORCHESTRATOR_MEMORY_SUMMARY_TOKEN_LIMIT),
@@ -250,6 +255,7 @@ async fn read_user_preferences_summary_source(
 async fn with_recent_user_preferences_supplement(
     codex_home: &AbsolutePathBuf,
     config: &UserPreferencesMemoryConfig,
+    scope_context: &MemoryScopeReadContext,
     existing_summary: &str,
 ) -> String {
     let raw = match read_first_existing(&[
@@ -271,6 +277,7 @@ async fn with_recent_user_preferences_supplement(
     };
 
     let filtered = live::filter_raw_events_for_read_policy(&raw, &config.bucket_policy);
+    let filtered = filter_raw_events_for_scope_context(&filtered, scope_context);
     let memory_config = config.memory_config();
     let snapshot = live::aggregate_memory_items(&filtered, &memory_config);
     let missing_recent_items = snapshot
@@ -282,8 +289,7 @@ async fn with_recent_user_preferences_supplement(
         .chain(snapshot.ongoing_threads.iter())
         .chain(snapshot.followups.iter())
         .filter(|item| item.direct_observations > 0)
-        .filter(|item| !existing_summary.contains(&item.candidate))
-        .map(|item| item.candidate.as_str())
+        .filter(|item| !existing_summary.contains(&live::summary_item_text(item)))
         .collect::<Vec<_>>();
 
     if missing_recent_items.is_empty() {
@@ -295,12 +301,103 @@ async fn with_recent_user_preferences_supplement(
         supplemented.push_str("\n\n");
     }
     supplemented.push_str("## Recent Continuity Items\n");
-    for candidate in missing_recent_items {
+    for item in missing_recent_items {
         supplemented.push_str("- ");
-        supplemented.push_str(candidate);
+        supplemented.push_str(&live::summary_item_text(item));
         supplemented.push('\n');
     }
     supplemented
+}
+
+struct MemoryScopeReadContext {
+    repo_aliases: BTreeSet<String>,
+    project_aliases: BTreeSet<String>,
+}
+
+impl MemoryScopeReadContext {
+    fn from_cwd(cwd: &AbsolutePathBuf) -> Self {
+        let mut repo_aliases = BTreeSet::new();
+        let mut project_aliases = BTreeSet::new();
+        insert_path_aliases(cwd.as_path(), &mut repo_aliases);
+        insert_path_aliases(cwd.as_path(), &mut project_aliases);
+        if let Some(git_root) = get_git_repo_root(cwd.as_path()) {
+            insert_path_aliases(&git_root, &mut repo_aliases);
+            insert_path_aliases(&git_root, &mut project_aliases);
+        }
+        Self {
+            repo_aliases,
+            project_aliases,
+        }
+    }
+
+    fn can_read_scope(&self, scope: &types::MemoryScope) -> bool {
+        let scope = scope.clone().normalized();
+        match scope.kind {
+            types::MemoryScopeKind::Global
+            | types::MemoryScopeKind::Person
+            | types::MemoryScopeKind::Process
+            | types::MemoryScopeKind::Skill
+            | types::MemoryScopeKind::Command
+            | types::MemoryScopeKind::Tool => true,
+            types::MemoryScopeKind::Repo => self.repo_aliases.contains(&scope.id),
+            types::MemoryScopeKind::Project => self.project_aliases.contains(&scope.id),
+            types::MemoryScopeKind::Task => false,
+        }
+    }
+}
+
+fn insert_path_aliases(path: &Path, aliases: &mut BTreeSet<String>) {
+    if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+        let alias = normalize_scope_id(name);
+        if !alias.is_empty() {
+            aliases.insert(alias);
+        }
+    }
+    let full_path = normalize_scope_id(&path.display().to_string());
+    if !full_path.is_empty() {
+        aliases.insert(full_path);
+    }
+}
+
+fn normalize_scope_id(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn filter_raw_events_for_scope_context(raw: &str, context: &MemoryScopeReadContext) -> String {
+    let mut filtered = String::new();
+    for line in raw.lines().filter(|line| !line.trim().is_empty()) {
+        let mut event = match serde_json::from_str::<types::MemoryEvent>(line) {
+            Ok(event) => event,
+            Err(err) => {
+                warn!("skipping invalid user preferences memory event during scope filter: {err}");
+                continue;
+            }
+        };
+        if raw_event_missing_scope(line) {
+            let text = format!("{} {}", event.candidate, event.source_excerpt);
+            event.scope = heuristics::inferred_scope_for_text(&text);
+        }
+        if context.can_read_scope(&event.scope) {
+            match serde_json::to_string(&event) {
+                Ok(serialized) => {
+                    filtered.push_str(&serialized);
+                    filtered.push('\n');
+                }
+                Err(err) => {
+                    warn!(
+                        "skipping unserializable user preferences memory event during scope filter: {err}"
+                    );
+                }
+            }
+        }
+    }
+    filtered
+}
+
+fn raw_event_missing_scope(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .is_some_and(|value| value.get("bucket").is_some() && value.get("scope").is_none())
 }
 
 async fn read_first_existing(paths: &[AbsolutePathBuf]) -> std::io::Result<String> {

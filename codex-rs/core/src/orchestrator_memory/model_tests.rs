@@ -2,6 +2,7 @@ use super::*;
 use crate::orchestrator_memory::types::AggregatedMemoryItem;
 use crate::orchestrator_memory::types::AggregatedMemorySnapshot;
 use crate::orchestrator_memory::types::MemoryBucket;
+use crate::orchestrator_memory::types::MemoryScope;
 use chrono::Utc;
 use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::PathExt;
@@ -118,6 +119,12 @@ fn parse_cleanup_payload_accepts_semantically_merged_memory_events() {
           "events": [
             {
               "bucket": "personal_context",
+              "scope": {
+                "type": "person",
+                "id": "rick",
+                "evidence": "user calendar link",
+                "confidence": 0.85
+              },
               "key": "user calendar meeting request link",
               "candidate": "User's Google Calendar meeting request link lets others schedule meetings with them: https://calendar.app.google/example-booking-link",
               "source_excerpt": "Merged duplicate calendar invite and meeting request link memories."
@@ -132,6 +139,12 @@ fn parse_cleanup_payload_accepts_semantically_merged_memory_events() {
         CleanupPayload {
             events: vec![CleanupPayloadEvent {
                 bucket: MemoryBucket::PersonalContext,
+                scope: MemoryScope::new(
+                    super::super::types::MemoryScopeKind::Person,
+                    "rick",
+                    "user calendar link",
+                    /*confidence*/ 0.85,
+                ),
                 key: "user calendar meeting request link".to_string(),
                 candidate: "User's Google Calendar meeting request link lets others schedule meetings with them: https://calendar.app.google/example-booking-link".to_string(),
                 source_excerpt: "Merged duplicate calendar invite and meeting request link memories."
@@ -139,6 +152,24 @@ fn parse_cleanup_payload_accepts_semantically_merged_memory_events() {
             }],
         }
     );
+}
+
+#[test]
+fn parse_cleanup_payload_rejects_memory_events_without_scope() {
+    let result = parse_cleanup_payload(Some(
+        r#"{
+          "events": [
+            {
+              "bucket": "personal_context",
+              "key": "user calendar meeting request link",
+              "candidate": "User's Google Calendar meeting request link lets others schedule meetings with them: https://calendar.app.google/example-booking-link",
+              "source_excerpt": "Merged duplicate calendar invite and meeting request link memories."
+            }
+          ]
+        }"#,
+    ));
+
+    assert!(result.is_err());
 }
 
 #[tokio::test]
@@ -173,10 +204,10 @@ fn apply_heuristic_guarantees_preserves_direct_items_missing_from_model_payload(
     let payload = apply_heuristic_guarantees(
         ConsolidationPayload {
             summary_markdown:
-                "# User Preferences Memory Summary\n\n## Follow-Up State\n- Older orchestration note"
+                "# User Preferences Memory Summary\n\n## Personal Context\n- User's meeting scheduling link: https://calendar.app.google/example-booking-link\n\n## Follow-Up State\n- Older orchestration note"
                     .to_string(),
             profile_markdown:
-                "# User Preferences Memory Profile\n\n## Follow-Up State\n- Older orchestration note"
+                "# User Preferences Memory Profile\n\n## Personal Context\n\n### User's meeting scheduling link: https://calendar.app.google/example-booking-link\n\n## Follow-Up State\n- Older orchestration note"
                     .to_string(),
             should_clear: false,
         },
@@ -184,6 +215,7 @@ fn apply_heuristic_guarantees_preserves_direct_items_missing_from_model_payload(
             preferences: Vec::new(),
             personal_context: vec![AggregatedMemoryItem {
                 bucket: MemoryBucket::PersonalContext,
+                scope: MemoryScope::process("scheduling_workflow", "scheduling workflow"),
                 candidate:
                     "User's meeting scheduling link: https://calendar.app.google/example-booking-link"
                         .to_string(),
@@ -205,8 +237,18 @@ fn apply_heuristic_guarantees_preserves_direct_items_missing_from_model_payload(
             .contains("https://calendar.app.google/example-booking-link")
     );
     assert!(
+        payload.summary_markdown.contains(
+            "[process:scheduling_workflow] User's meeting scheduling link: https://calendar.app.google/example-booking-link"
+        )
+    );
+    assert!(
         payload
             .profile_markdown
             .contains("https://calendar.app.google/example-booking-link")
+    );
+    assert!(
+        payload
+            .profile_markdown
+            .contains("- scope: process:scheduling_workflow")
     );
 }

@@ -6,11 +6,13 @@ use super::preferences_path;
 use super::types::MemoryBucket;
 use super::types::MemoryEvent;
 use super::types::MemoryOperation;
+use super::types::MemoryScope;
 use super::types::MemorySignal;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
+use serde_json::Value;
 use tokio::fs;
 use tracing::warn;
 
@@ -41,7 +43,11 @@ pub(super) async fn migrate_if_needed(codex_home: &AbsolutePathBuf) -> std::io::
     let mut migrated_count = 0usize;
     let mut events = Vec::new();
     for line in raw.lines().filter(|line| !line.trim().is_empty()) {
-        if let Ok(event) = serde_json::from_str::<MemoryEvent>(line) {
+        let raw_event = serde_json::from_str::<Value>(line).ok();
+        let needs_scope_migration = raw_event
+            .as_ref()
+            .is_some_and(|value| value.get("bucket").is_some() && value.get("scope").is_none());
+        if !needs_scope_migration && let Ok(event) = serde_json::from_str::<MemoryEvent>(line) {
             events.push(event);
             continue;
         }
@@ -54,11 +60,20 @@ pub(super) async fn migrate_if_needed(codex_home: &AbsolutePathBuf) -> std::io::
             }
         };
         migrated_count += 1;
+        let bucket = raw_event
+            .as_ref()
+            .and_then(|value| value.get("bucket"))
+            .cloned()
+            .and_then(|value| serde_json::from_value::<MemoryBucket>(value).ok())
+            .unwrap_or_else(|| {
+                infer_bucket(&legacy.key, &legacy.candidate, &legacy.source_excerpt)
+            });
         events.push(MemoryEvent {
             observed_at: legacy.observed_at,
             thread_id: legacy.thread_id,
             turn_id: legacy.turn_id,
-            bucket: infer_bucket(&legacy.key, &legacy.candidate, &legacy.source_excerpt),
+            bucket,
+            scope: infer_scope(&legacy.key, &legacy.candidate, &legacy.source_excerpt),
             operation: legacy.operation,
             signal: legacy.signal,
             key: legacy.key,
@@ -233,6 +248,11 @@ fn infer_bucket(key: &str, candidate: &str, source_excerpt: &str) -> MemoryBucke
     }
 
     MemoryBucket::DurablePreference
+}
+
+fn infer_scope(key: &str, candidate: &str, source_excerpt: &str) -> MemoryScope {
+    let text = format!("{key} {candidate} {source_excerpt}");
+    heuristics::inferred_scope_for_text(&text)
 }
 
 fn contains_any(text: &str, needles: &[&str]) -> bool {
