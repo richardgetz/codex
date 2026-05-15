@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::HooksToml;
+use crate::exec_policy_toml::ExecPolicyToml;
 use crate::permissions_toml::PermissionsToml;
 use crate::profile_toml::ConfigProfile;
 use crate::types::AccountsToml;
@@ -159,6 +160,10 @@ pub struct ConfigToml {
     /// Named permissions profiles.
     #[serde(default)]
     pub permissions: Option<PermissionsToml>,
+
+    /// Named exec-policy rulesets that can be selected per session.
+    #[serde(default)]
+    pub exec_policy: Option<ExecPolicyToml>,
 
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]

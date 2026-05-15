@@ -3520,6 +3520,31 @@ fn thread_start_params_round_trip_user_preferences_memory_policy() {
 }
 
 #[test]
+fn thread_start_params_round_trip_exec_policy_rulesets() {
+    let params: ThreadStartParams = serde_json::from_value(json!({
+        "execPolicy": {
+            "rulesets": ["implementation-agent"]
+        }
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(
+        params.exec_policy,
+        Some(ThreadExecPolicyParams {
+            rulesets: vec!["implementation-agent".to_string()],
+        })
+    );
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(
+        serialized.get("execPolicy"),
+        Some(&json!({
+            "rulesets": ["implementation-agent"]
+        }))
+    );
+}
+
+#[test]
 fn memory_policy_write_implies_read_on_deserialize() {
     let params: ThreadStartParams = serde_json::from_value(json!({
         "memoryPolicy": {

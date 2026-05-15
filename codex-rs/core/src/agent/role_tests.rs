@@ -215,6 +215,58 @@ async fn apply_role_preserves_unspecified_keys() {
 }
 
 #[tokio::test]
+async fn apply_role_preserves_active_exec_policy_rulesets() {
+    let home = TempDir::new().expect("create temp dir");
+    tokio::fs::write(
+        home.path().join(CONFIG_TOML_FILE),
+        r#"
+[exec_policy.rulesets.implementation-agent]
+mode = "exclusive"
+files = ["./implementation-agent.rules"]
+"#,
+    )
+    .await
+    .expect("write config.toml");
+    tokio::fs::write(
+        home.path().join("implementation-agent.rules"),
+        r#"prefix_rule(pattern=["cargo", "test"], decision="allow")"#,
+    )
+    .await
+    .expect("write rules file");
+    let mut config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            exec_policy_rulesets: Some(vec!["implementation-agent".to_string()]),
+            ..Default::default()
+        })
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load config");
+    let before_exec_policy = config.exec_policy.clone();
+    let role_path = write_role_config(
+        &home,
+        "developer-instructions-only.toml",
+        "developer_instructions = \"Stay focused\"",
+    )
+    .await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    apply_role_to_config(&mut config, Some("custom"))
+        .await
+        .expect("custom role should apply");
+
+    assert_eq!(config.exec_policy, before_exec_policy);
+}
+
+#[tokio::test]
 async fn apply_role_preserves_active_profile_and_model_provider() {
     let home = TempDir::new().expect("create temp dir");
     tokio::fs::write(

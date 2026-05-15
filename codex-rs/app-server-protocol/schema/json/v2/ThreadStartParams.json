@@ -180,6 +180,21 @@
       ],
       "type": "string"
     },
+    "ThreadExecPolicyParams": {
+      "properties": {
+        "rulesets": {
+          "description": "Named exec-policy rulesets to apply to this thread.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "rulesets"
+      ],
+      "type": "object"
+    },
     "ThreadSource": {
       "enum": [
         "user",

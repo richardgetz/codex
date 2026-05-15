@@ -16,6 +16,7 @@ use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ConstrainedWithSource;
+use codex_config::ExecPolicyRulesetToml;
 use codex_config::FeatureRequirementsToml;
 use codex_config::LoaderOverrides;
 use codex_config::McpServerIdentity;
@@ -689,6 +690,9 @@ pub struct Config {
 
     /// First-class git intent notes guidance and metadata access.
     pub git_intent_notes: GitIntentNotesConfig,
+
+    /// Named exec-policy rulesets and the session-selected rulesets, if any.
+    pub exec_policy: ExecPolicyConfig,
 
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
@@ -2219,8 +2223,16 @@ pub struct ConfigOverrides {
     pub ephemeral: Option<bool>,
     pub memory_policy: Option<MemoryAccessPolicy>,
     pub user_preferences_memory_policy: Option<UserPreferencesMemoryBucketPolicy>,
+    /// Named exec-policy rulesets to apply to this session.
+    pub exec_policy_rulesets: Option<Vec<String>>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ExecPolicyConfig {
+    pub rulesets: BTreeMap<String, ExecPolicyRulesetToml>,
+    pub active_rulesets: Vec<String>,
 }
 
 /// Resolves the OSS provider from CLI override, profile config, or global config.
@@ -2496,6 +2508,7 @@ impl Config {
             ephemeral,
             memory_policy,
             user_preferences_memory_policy,
+            exec_policy_rulesets,
             additional_writable_roots,
         } = overrides;
 
@@ -3243,6 +3256,14 @@ impl Config {
             .or(cfg.zsh_path.map(Into::into));
 
         let review_model = override_review_model.or(cfg.review_model);
+        let exec_policy = ExecPolicyConfig {
+            rulesets: cfg
+                .exec_policy
+                .as_ref()
+                .map(|exec_policy| exec_policy.rulesets.clone())
+                .unwrap_or_default(),
+            active_rulesets: exec_policy_rulesets.unwrap_or_default(),
+        };
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
         let model_catalog = load_model_catalog(
@@ -3495,6 +3516,7 @@ impl Config {
             commit_attribution,
             conventional_commits,
             git_intent_notes,
+            exec_policy,
             include_permissions_instructions,
             include_apps_instructions,
             include_skill_instructions,

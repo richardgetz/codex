@@ -87,6 +87,14 @@ impl<'de> Deserialize<'de> for DynamicToolSpec {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadExecPolicyParams {
+    /// Named exec-policy rulesets to apply to this thread.
+    pub rulesets: Vec<String>,
+}
+
 // === Threads, Turns, and Items ===
 // Thread APIs
 #[derive(
@@ -124,6 +132,11 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.permissions")]
     #[ts(optional = nullable)]
     pub permissions: Option<PermissionProfileSelectionParams>,
+    /// Session-local exec-policy rulesets for this thread. Omitted uses the
+    /// normal layered `.rules` behavior.
+    #[experimental("thread/start.execPolicy")]
+    #[ts(optional = nullable)]
+    pub exec_policy: Option<ThreadExecPolicyParams>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
@@ -293,6 +306,11 @@ pub struct ThreadResumeParams {
     #[experimental("thread/resume.permissions")]
     #[ts(optional = nullable)]
     pub permissions: Option<PermissionProfileSelectionParams>,
+    /// Session-local exec-policy rulesets for this resumed thread. Omitted
+    /// uses the normal layered `.rules` behavior.
+    #[experimental("thread/resume.execPolicy")]
+    #[ts(optional = nullable)]
+    pub exec_policy: Option<ThreadExecPolicyParams>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -411,6 +429,11 @@ pub struct ThreadForkParams {
     #[experimental("thread/fork.permissions")]
     #[ts(optional = nullable)]
     pub permissions: Option<PermissionProfileSelectionParams>,
+    /// Session-local exec-policy rulesets for this forked thread. Omitted uses
+    /// the normal layered `.rules` behavior.
+    #[experimental("thread/fork.execPolicy")]
+    #[ts(optional = nullable)]
+    pub exec_policy: Option<ThreadExecPolicyParams>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]

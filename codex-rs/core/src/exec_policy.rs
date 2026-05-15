@@ -8,6 +8,7 @@ use arc_swap::ArcSwap;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
+use codex_config::ExecPolicyRulesetMode;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
@@ -157,6 +158,7 @@ pub(crate) fn child_uses_parent_exec_policy(parent_config: &Config, child_config
                 .ignore_user_and_project_exec_policy_rules()
         && parent_config.config_layer_stack.requirements().exec_policy
             == child_config.config_layer_stack.requirements().exec_policy
+        && parent_config.exec_policy == child_config.exec_policy
 }
 
 fn is_policy_match(rule_match: &RuleMatch) -> bool {
@@ -216,6 +218,15 @@ pub enum ExecPolicyError {
         path: String,
         source: codex_execpolicy::Error,
     },
+
+    #[error("unknown exec-policy ruleset `{name}`")]
+    UnknownRuleset { name: String },
+
+    #[error("exec-policy ruleset `{name}` must include at least one rules file")]
+    EmptyRulesetFiles { name: String },
+
+    #[error("cannot combine overlay and exclusive exec-policy rulesets in one session")]
+    MixedRulesetModes,
 }
 
 #[derive(Debug, Error)]
@@ -236,6 +247,19 @@ pub enum ExecPolicyUpdateError {
 pub(crate) struct ExecPolicyManager {
     policy: ArcSwap<Policy>,
     update_lock: Semaphore,
+    unmatched_command_policy: UnmatchedCommandPolicy,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UnmatchedCommandPolicy {
+    Default,
+    Forbidden,
+}
+
+struct LoadedExecPolicy {
+    policy: Policy,
+    unmatched_command_policy: UnmatchedCommandPolicy,
+    warning: Option<ExecPolicyError>,
 }
 
 pub(crate) struct ExecApprovalRequest<'a> {
@@ -253,16 +277,40 @@ impl ExecPolicyManager {
         Self {
             policy: ArcSwap::from(policy),
             update_lock: Semaphore::new(/*permits*/ 1),
+            unmatched_command_policy: UnmatchedCommandPolicy::Default,
         }
     }
 
     #[instrument(level = "info", skip_all)]
-    pub(crate) async fn load(config_stack: &ConfigLayerStack) -> Result<Self, ExecPolicyError> {
+    pub(crate) async fn load(config: &Config) -> Result<Self, ExecPolicyError> {
+        let LoadedExecPolicy {
+            policy,
+            unmatched_command_policy,
+            warning,
+        } = load_exec_policy_for_config(config).await?;
+        if let Some(err) = warning.as_ref() {
+            tracing::warn!("failed to parse rules: {err}");
+        }
+        Ok(Self {
+            policy: ArcSwap::from(Arc::new(policy)),
+            update_lock: Semaphore::new(/*permits*/ 1),
+            unmatched_command_policy,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn load_from_config_stack(
+        config_stack: &ConfigLayerStack,
+    ) -> Result<Self, ExecPolicyError> {
         let (policy, warning) = load_exec_policy_with_warning(config_stack).await?;
         if let Some(err) = warning.as_ref() {
             tracing::warn!("failed to parse rules: {err}");
         }
-        Ok(Self::new(Arc::new(policy)))
+        Ok(Self {
+            policy: ArcSwap::from(Arc::new(policy)),
+            update_lock: Semaphore::new(/*permits*/ 1),
+            unmatched_command_policy: UnmatchedCommandPolicy::Default,
+        })
     }
 
     pub(crate) fn current(&self) -> Arc<Policy> {
@@ -292,8 +340,8 @@ impl ExecPolicyManager {
         // allow/prompt/forbidden rules still apply, but avoid auto-derived
         // amendments when only the heredoc fallback parser matched.
         let auto_amendment_allowed = !used_complex_parsing;
-        let exec_policy_fallback = |cmd: &[String]| {
-            render_decision_for_unmatched_command(
+        let exec_policy_fallback = |cmd: &[String]| match self.unmatched_command_policy {
+            UnmatchedCommandPolicy::Default => render_decision_for_unmatched_command(
                 cmd,
                 UnmatchedCommandContext {
                     approval_policy,
@@ -304,7 +352,8 @@ impl ExecPolicyManager {
                     used_complex_parsing,
                     command_origin,
                 },
-            )
+            ),
+            UnmatchedCommandPolicy::Forbidden => Decision::Forbidden,
         };
         let match_options = MatchOptions {
             resolve_host_executables: true,
@@ -569,6 +618,63 @@ async fn load_exec_policy_with_warning(
     }
 }
 
+async fn load_exec_policy_for_config(config: &Config) -> Result<LoadedExecPolicy, ExecPolicyError> {
+    if config.exec_policy.active_rulesets.is_empty() {
+        let (policy, warning) = load_exec_policy_with_warning(&config.config_layer_stack).await?;
+        return Ok(LoadedExecPolicy {
+            policy,
+            unmatched_command_policy: UnmatchedCommandPolicy::Default,
+            warning,
+        });
+    }
+
+    let mut ruleset_mode = None;
+    let mut policy_paths = Vec::new();
+    for ruleset_name in &config.exec_policy.active_rulesets {
+        let ruleset = config
+            .exec_policy
+            .rulesets
+            .get(ruleset_name)
+            .ok_or_else(|| ExecPolicyError::UnknownRuleset {
+                name: ruleset_name.clone(),
+            })?;
+        if ruleset.files.is_empty() {
+            return Err(ExecPolicyError::EmptyRulesetFiles {
+                name: ruleset_name.clone(),
+            });
+        }
+        match ruleset_mode {
+            Some(mode) if mode != ruleset.mode => {
+                return Err(ExecPolicyError::MixedRulesetModes);
+            }
+            Some(_) => {}
+            None => ruleset_mode = Some(ruleset.mode),
+        }
+        policy_paths.extend(ruleset.files.iter().map(AbsolutePathBuf::to_path_buf));
+    }
+
+    let ruleset_policy = parse_policy_files(&policy_paths).await?;
+    match ruleset_mode.unwrap_or(ExecPolicyRulesetMode::Overlay) {
+        ExecPolicyRulesetMode::Overlay => {
+            let (base_policy, warning) =
+                load_exec_policy_with_warning(&config.config_layer_stack).await?;
+            Ok(LoadedExecPolicy {
+                policy: base_policy.merge_overlay(&ruleset_policy),
+                unmatched_command_policy: UnmatchedCommandPolicy::Default,
+                warning,
+            })
+        }
+        ExecPolicyRulesetMode::Exclusive => {
+            let policy = merge_requirements_exec_policy(ruleset_policy, &config.config_layer_stack);
+            Ok(LoadedExecPolicy {
+                policy,
+                unmatched_command_policy: UnmatchedCommandPolicy::Forbidden,
+                warning: None,
+            })
+        }
+    }
+}
+
 pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy, ExecPolicyError> {
     // Disabled project layers already represent the trust decision, so hooks
     // and exec-policy loading can reuse the normal trusted-layer view.
@@ -599,8 +705,16 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
         "loaded exec policies"
     );
 
+    let policy = parse_policy_files(&policy_paths).await?;
+    tracing::debug!("loaded rules from {} files", policy_paths.len());
+    tracing::trace!(rules = ?policy, "exec policy rules loaded");
+
+    Ok(merge_requirements_exec_policy(policy, config_stack))
+}
+
+async fn parse_policy_files(policy_paths: &[PathBuf]) -> Result<Policy, ExecPolicyError> {
     let mut parser = PolicyParser::new();
-    for policy_path in &policy_paths {
+    for policy_path in policy_paths {
         let contents =
             fs::read_to_string(policy_path)
                 .await
@@ -616,16 +730,15 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
                 source,
             })?;
     }
+    Ok(parser.build())
+}
 
-    let policy = parser.build();
-    tracing::debug!("loaded rules from {} files", policy_paths.len());
-    tracing::trace!(rules = ?policy, "exec policy rules loaded");
-
+fn merge_requirements_exec_policy(policy: Policy, config_stack: &ConfigLayerStack) -> Policy {
     let Some(requirements_policy) = config_stack.requirements().exec_policy.as_deref() else {
-        return Ok(policy);
+        return policy;
     };
 
-    Ok(policy.merge_overlay(requirements_policy.as_ref()))
+    policy.merge_overlay(requirements_policy.as_ref())
 }
 
 /// If a command is not matched by any execpolicy rule, derive a [`Decision`].

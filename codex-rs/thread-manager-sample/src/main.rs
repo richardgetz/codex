@@ -199,6 +199,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         developer_instructions: None,
         conventional_commits: ConventionalCommitsConfig::default(),
         git_intent_notes: GitIntentNotesConfig::default(),
+        exec_policy: Default::default(),
         guardian_policy_config: None,
         include_permissions_instructions: false,
         include_apps_instructions: false,

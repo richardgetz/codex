@@ -46,6 +46,8 @@ mod thread_processor_behavior_tests {
     }
 
     use super::super::*;
+    use crate::error_code::INTERNAL_ERROR_CODE;
+    use crate::error_code::INVALID_REQUEST_ERROR_CODE;
     use crate::outgoing_message::OutgoingEnvelope;
     use crate::outgoing_message::OutgoingMessage;
     use anyhow::Result;
@@ -637,6 +639,7 @@ mod thread_processor_behavior_tests {
             approvals_reviewer: None,
             sandbox: None,
             permissions: None,
+            exec_policy: None,
             config: None,
             base_instructions: None,
             developer_instructions: None,
@@ -667,6 +670,142 @@ mod thread_processor_behavior_tests {
         assert_eq!(
             collect_resume_override_mismatches(&request, &config_snapshot),
             vec!["service_tier requested=Some(\"priority\") active=Some(\"flex\")".to_string()]
+        );
+    }
+
+    #[test]
+    fn collect_resume_override_mismatches_includes_exec_policy() {
+        let cwd = test_path_buf("/tmp").abs();
+        let request = ThreadResumeParams {
+            thread_id: "thread-1".to_string(),
+            exec_policy: Some(ThreadExecPolicyParams {
+                rulesets: vec!["implementation-agent".to_string()],
+            }),
+            ..ThreadResumeParams::default()
+        };
+        let config_snapshot = ThreadConfigSnapshot {
+            model: "gpt-5".to_string(),
+            model_provider_id: "openai".to_string(),
+            service_tier: None,
+            approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
+            permission_profile: codex_protocol::models::PermissionProfile::Disabled,
+            active_permission_profile: None,
+            cwd,
+            ephemeral: false,
+            reasoning_effort: None,
+            personality: None,
+            session_source: SessionSource::Cli,
+            thread_source: None,
+            memory_policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
+            user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
+        };
+
+        assert_eq!(
+            collect_resume_override_mismatches(&request, &config_snapshot),
+            vec!["execPolicy override was provided and ignored while running".to_string()]
+        );
+    }
+
+    #[test]
+    fn exec_policy_rulesets_from_params_accepts_named_rulesets() {
+        assert_eq!(
+            exec_policy_rulesets_from_params(Some(ThreadExecPolicyParams {
+                rulesets: vec!["implementation-agent".to_string()],
+            }))
+            .expect("valid exec policy rulesets"),
+            Some(vec!["implementation-agent".to_string()])
+        );
+    }
+
+    #[test]
+    fn exec_policy_rulesets_from_params_rejects_empty_and_duplicate_rulesets() {
+        assert!(
+            exec_policy_rulesets_from_params(Some(ThreadExecPolicyParams { rulesets: vec![] }))
+                .is_err()
+        );
+        assert!(
+            exec_policy_rulesets_from_params(Some(ThreadExecPolicyParams {
+                rulesets: vec![
+                    "implementation-agent".to_string(),
+                    "implementation-agent".to_string(),
+                ],
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn exec_policy_rulesets_from_params_rejects_unsafe_names() {
+        assert!(
+            exec_policy_rulesets_from_params(Some(ThreadExecPolicyParams {
+                rulesets: vec![" implementation-agent".to_string()],
+            }))
+            .is_err()
+        );
+        assert!(
+            exec_policy_rulesets_from_params(Some(ThreadExecPolicyParams {
+                rulesets: vec!["implementation\nagent".to_string()],
+            }))
+            .is_err()
+        );
+        assert!(
+            exec_policy_rulesets_from_params(Some(ThreadExecPolicyParams {
+                rulesets: vec!["x".repeat(129)],
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn exec_policy_config_override_rejected_when_ruleset_selected() {
+        let config = HashMap::from([(
+            "exec_policy.rulesets.implementation-agent.mode".to_string(),
+            json!("exclusive"),
+        )]);
+        assert!(
+            validate_exec_policy_config_overrides(
+                Some(&config),
+                &Some(vec!["implementation-agent".to_string()])
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn exec_policy_config_override_allowed_without_ruleset_selection() {
+        let config = HashMap::from([("exec_policy".to_string(), json!({"rulesets": {}}))]);
+        assert!(validate_exec_policy_config_overrides(Some(&config), &None).is_ok());
+    }
+
+    #[test]
+    fn thread_resume_error_preserves_invalid_request_classification() {
+        let error = thread_resume_error(
+            CodexErr::InvalidRequest("failed to load rules: unknown ruleset".to_string()),
+            "thread-1",
+        );
+
+        assert_eq!(error.code, INVALID_REQUEST_ERROR_CODE);
+        assert_eq!(
+            error.message,
+            "failed to load rules: unknown ruleset".to_string()
+        );
+    }
+
+    #[test]
+    fn thread_resume_error_keeps_unexpected_errors_internal() {
+        let error = thread_resume_error(
+            CodexErr::EnvVar(codex_protocol::error::EnvVarError {
+                var: "MISSING_TOKEN".to_string(),
+                instructions: None,
+            }),
+            "thread-1",
+        );
+
+        assert_eq!(error.code, INTERNAL_ERROR_CODE);
+        assert_eq!(
+            error.message,
+            "error resuming thread: Missing environment variable: `MISSING_TOKEN`.".to_string()
         );
     }
 

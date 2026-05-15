@@ -524,20 +524,19 @@ impl Codex {
             .user_instructions(primary_environment.as_deref())
             .await;
 
-        let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
-            // Guardian review should rely on the built-in shell safety checks,
-            // not on caller-provided exec-policy rules that could shape the
-            // reviewer or silently auto-approve commands.
-            Arc::new(ExecPolicyManager::default())
-        } else if let Some(exec_policy) = &inherited_exec_policy {
-            Arc::clone(exec_policy)
-        } else {
-            Arc::new(
-                ExecPolicyManager::load(&config.config_layer_stack)
-                    .await
-                    .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?,
-            )
-        };
+        let exec_policy =
+            if crate::guardian::is_guardian_reviewer_source(&session_source) {
+                // Guardian review should rely on the built-in shell safety checks,
+                // not on caller-provided exec-policy rules that could shape the
+                // reviewer or silently auto-approve commands.
+                Arc::new(ExecPolicyManager::default())
+            } else if let Some(exec_policy) = &inherited_exec_policy {
+                Arc::clone(exec_policy)
+            } else {
+                Arc::new(ExecPolicyManager::load(&config).await.map_err(|err| {
+                    CodexErr::InvalidRequest(format!("failed to load rules: {err}"))
+                })?)
+            };
 
         let config = Arc::new(config);
         let refresh_strategy = if session_source.is_non_root_agent() {

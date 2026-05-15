@@ -104,6 +104,10 @@ fn collect_resume_override_mismatches(
             config_snapshot.active_permission_profile
         ));
     }
+    if request.exec_policy.is_some() {
+        mismatch_details
+            .push("execPolicy override was provided and ignored while running".to_string());
+    }
     if let Some(requested_personality) = request.personality.as_ref()
         && config_snapshot.personality.as_ref() != Some(requested_personality)
     {
@@ -224,6 +228,10 @@ fn has_model_resume_override(
             .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"))
 }
 
+fn escape_identifier_for_error(value: &str) -> String {
+    value.escape_default().to_string()
+}
+
 fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
     const DYNAMIC_TOOL_NAME_MAX_LEN: usize = 128;
     const DYNAMIC_TOOL_NAMESPACE_MAX_LEN: usize = 64;
@@ -244,10 +252,6 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
         "tool_search",
         "web",
     ];
-
-    fn escape_identifier_for_error(value: &str) -> String {
-        value.escape_default().to_string()
-    }
 
     fn validate_dynamic_tool_identifier(
         value: &str,
@@ -339,6 +343,87 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn exec_policy_rulesets_from_params(
+    exec_policy: Option<ThreadExecPolicyParams>,
+) -> Result<Option<Vec<String>>, JSONRPCErrorError> {
+    const EXEC_POLICY_RULESET_NAME_MAX_LEN: usize = 128;
+
+    let Some(exec_policy) = exec_policy else {
+        return Ok(None);
+    };
+    if exec_policy.rulesets.is_empty() {
+        return Err(invalid_request(
+            "execPolicy.rulesets must include at least one ruleset",
+        ));
+    }
+
+    let mut seen = HashSet::new();
+    for ruleset in &exec_policy.rulesets {
+        let trimmed = ruleset.trim();
+        if trimmed.is_empty() {
+            return Err(invalid_request(
+                "execPolicy.rulesets must not include empty ruleset names",
+            ));
+        }
+        if trimmed != ruleset {
+            return Err(invalid_request(format!(
+                "execPolicy.rulesets must not include leading/trailing whitespace: {}",
+                escape_identifier_for_error(ruleset),
+            )));
+        }
+        if ruleset.len() > EXEC_POLICY_RULESET_NAME_MAX_LEN {
+            return Err(invalid_request(format!(
+                "execPolicy.rulesets entries must be at most {EXEC_POLICY_RULESET_NAME_MAX_LEN} bytes: {}",
+                escape_identifier_for_error(ruleset),
+            )));
+        }
+        if ruleset.chars().any(char::is_control) {
+            return Err(invalid_request(format!(
+                "execPolicy.rulesets entries must not include control characters: {}",
+                escape_identifier_for_error(ruleset),
+            )));
+        }
+        if !seen.insert(ruleset) {
+            return Err(invalid_request(format!(
+                "duplicate execPolicy.rulesets entry: {}",
+                escape_identifier_for_error(ruleset),
+            )));
+        }
+    }
+
+    Ok(Some(exec_policy.rulesets))
+}
+
+fn validate_exec_policy_config_overrides(
+    config_overrides: Option<&HashMap<String, serde_json::Value>>,
+    exec_policy_rulesets: &Option<Vec<String>>,
+) -> Result<(), JSONRPCErrorError> {
+    if exec_policy_rulesets.is_none() {
+        return Ok(());
+    }
+
+    for key in config_overrides.into_iter().flat_map(HashMap::keys) {
+        if key == "exec_policy" || key.starts_with("exec_policy.") {
+            return Err(invalid_request(format!(
+                "`config` overrides cannot define exec_policy while execPolicy selects rulesets: {}",
+                escape_identifier_for_error(key),
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn thread_resume_error(err: CodexErr, thread_id: &str) -> JSONRPCErrorError {
+    match err {
+        CodexErr::Io(_) | CodexErr::Json(_) => {
+            invalid_request(format!("failed to load thread {thread_id}: {err}"))
+        }
+        CodexErr::InvalidRequest(message) => invalid_request(message),
+        err => internal_error(format!("error resuming thread: {err}")),
+    }
 }
 
 #[derive(Clone)]
@@ -941,6 +1026,7 @@ impl ThreadRequestProcessor {
             approvals_reviewer,
             sandbox,
             permissions,
+            exec_policy,
             config,
             service_name,
             base_instructions,
@@ -962,6 +1048,8 @@ impl ThreadRequestProcessor {
                 "`permissions` cannot be combined with `sandbox`",
             ));
         }
+        let exec_policy_rulesets = exec_policy_rulesets_from_params(exec_policy)?;
+        validate_exec_policy_config_overrides(config.as_ref(), &exec_policy_rulesets)?;
         if persist_extended_history {
             self.send_persist_extended_history_deprecation_notice(request_id.connection_id)
                 .await;
@@ -981,6 +1069,7 @@ impl ThreadRequestProcessor {
             personality,
             user_preferences_memory_policy,
             memory_policy,
+            exec_policy_rulesets,
         );
         typesafe_overrides.ephemeral = ephemeral;
         let listener_task_context = ListenerTaskContext {
@@ -1351,6 +1440,7 @@ impl ThreadRequestProcessor {
             codex_protocol::config_types::UserPreferencesMemoryBucketPolicy,
         >,
         memory_policy: Option<codex_protocol::config_types::MemoryAccessPolicy>,
+        exec_policy_rulesets: Option<Vec<String>>,
     ) -> ConfigOverrides {
         let mut overrides = ConfigOverrides {
             model,
@@ -1369,6 +1459,7 @@ impl ThreadRequestProcessor {
             personality,
             memory_policy,
             user_preferences_memory_policy,
+            exec_policy_rulesets,
             ..Default::default()
         };
         apply_permission_profile_selection_to_config_overrides(&mut overrides, permissions);
@@ -2587,6 +2678,7 @@ impl ThreadRequestProcessor {
             approvals_reviewer,
             sandbox,
             permissions,
+            exec_policy,
             config: mut request_overrides,
             base_instructions,
             developer_instructions,
@@ -2597,6 +2689,19 @@ impl ThreadRequestProcessor {
             persist_extended_history: _persist_extended_history,
         } = params;
         let include_turns = !exclude_turns;
+        let exec_policy_rulesets = match exec_policy_rulesets_from_params(exec_policy) {
+            Ok(rulesets) => rulesets,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return Ok(());
+            }
+        };
+        if let Err(error) =
+            validate_exec_policy_config_overrides(request_overrides.as_ref(), &exec_policy_rulesets)
+        {
+            self.outgoing.send_error(request_id, error).await;
+            return Ok(());
+        }
 
         let (thread_history, resume_source_thread) = match if let Some(history) = history {
             self.resume_thread_from_history(history.as_slice())
@@ -2629,6 +2734,7 @@ impl ThreadRequestProcessor {
             personality,
             user_preferences_memory_policy,
             memory_policy,
+            exec_policy_rulesets,
         );
         self.load_and_apply_persisted_resume_metadata(
             &thread_history,
@@ -2794,7 +2900,7 @@ impl ThreadRequestProcessor {
                     .await;
             }
             Err(err) => {
-                let error = internal_error(format!("error resuming thread: {err}"));
+                let error = thread_resume_error(err, &thread_id);
                 self.outgoing.send_error(request_id, error).await;
             }
         }
@@ -3249,6 +3355,7 @@ impl ThreadRequestProcessor {
             approvals_reviewer,
             sandbox,
             permissions,
+            exec_policy,
             config: cli_overrides,
             base_instructions,
             developer_instructions,
@@ -3265,6 +3372,8 @@ impl ThreadRequestProcessor {
                 "`permissions` cannot be combined with `sandbox`",
             ));
         }
+        let exec_policy_rulesets = exec_policy_rulesets_from_params(exec_policy)?;
+        validate_exec_policy_config_overrides(cli_overrides.as_ref(), &exec_policy_rulesets)?;
         if persist_extended_history {
             self.send_persist_extended_history_deprecation_notice(request_id.connection_id)
                 .await;
@@ -3321,6 +3430,7 @@ impl ThreadRequestProcessor {
             /*personality*/ None,
             user_preferences_memory_policy,
             memory_policy,
+            exec_policy_rulesets,
         );
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
