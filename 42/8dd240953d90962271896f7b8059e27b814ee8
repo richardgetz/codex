@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-05-15/thread-exec-policy-rulesets#428dd240953d"
+  change_type: "feat"
+  scope: "exec-policy"
+  summary: "Allow app-server clients to select server-registered exec-policy rulesets per thread."
+  decision: "Define named exec-policy rulesets in config.toml, select them via app-server thread execPolicy params, support overlay and exclusive modes, and fail closed for unmatched commands in exclusive mode."
+  constraints:
+    - "Default behavior without selected rulesets must remain the normal layered .rules loading and unmatched-command heuristics."
+    - "Exclusive rulesets must not fall back to safe/dangerous heuristics for unmatched commands."
+    - "Clients may select server-registered ruleset names but cannot define or override exec_policy through request-local config when execPolicy is used."
+    - "Mandatory managed requirements exec policy remains applied even for exclusive rulesets."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/exec_policy.rs"
+    - "codex-rs/core/src/config/mod.rs"
+    - "codex-rs/app-server/src/request_processors/thread_processor.rs"
+    - "codex-rs/app-server-protocol/src/protocol/v2/thread.rs"
+    - "codex-rs/config/src/exec_policy_toml.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "GPT-5"
