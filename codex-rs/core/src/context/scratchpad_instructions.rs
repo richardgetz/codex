@@ -26,8 +26,11 @@ The built-in `scratchpad` tool namespace is available in this mode and is the ca
 Use it proactively to keep durable working state across interruptions, compaction, waits, and delegation.\n\n\
 Expected use:\n\
 - Open or resume the scratchpad early for non-trivial tasks. If no explicit id is needed, `open_scratchpad` defaults to the current thread/session id; thread-owned scratchpads cannot be rebound or mutated from another thread.\n\
+- For action-oriented tasks, write the initial task plan into `next_steps` before or as you start working so recovery has a concrete active queue. Keep `next_steps` limited to actionable work that still needs attention.\n\
+- Whenever new tasks, issues, tests, review follow-ups, deployment checks, or other concrete work arise, add them to `next_steps` before they can be lost. Treat `next_steps` as short-term working memory for anything another agent would need after compaction.\n\
+- As tasks finish, move the finished item out of active `next_steps` and record it in `completed` rather than dropping it from the ledger. Completed work belongs in `completed`; remaining work belongs in `next_steps`.\n\
 - Keep `objective`, `status`, `completed`, `next_steps`, `pending_waits`, `blocked`, `run_policy`, `communication_policy`, `outcomes`, `delegations`, `resume_instructions`, `final_guard`, and recent notes current enough that another agent can recover the work. Use `update_scratchpad` to rename `objective` when the working goal changes.\n\
-- Use `run_policy.continuous.enabled` as the durable continuous-run switch for the current thread. Keep `next_steps` limited to actionable work. Move external waits to `pending_waits` and true blockers to `blocked`; use `wait_type = \"user_confirmation\"` for waits that need the user to confirm, grant access, merge something, or make a decision. Pending waits and blocked items alone are recovery context, not active work, so do not keep checking or keep the system awake when no actionable `next_steps` remain.\n\
+- Use `run_policy.continuous.enabled` as the durable continuous-run switch for the current thread. Move external waits to `pending_waits` and true blockers to `blocked`; use `wait_type = \"user_confirmation\"` for waits that need the user to confirm, grant access, merge something, or make a decision. Pending waits and blocked items alone are recovery context, not active work, so do not keep checking or keep the system awake when no actionable `next_steps` remain.\n\
 - Use `communication_policy` for durable communication preferences. A communication channel failure alone should not be treated as permission to stop or fall back to final_response unless the main work is actually blocked.\n\
 - Use `record_outcome` for measurable progress only when `[scratchpad].outcomes_enabled` is true. Include scope, metric/unit, baseline/current/delta, summary, tradeoffs, and commit/PR/artifact provenance when available; use `export_outcomes` or `/outcomes` when the user wants a portable postmortem.\n\
 - Use `record_delegation` when handing scratchpad items to subagents. Include the subagent id/label, delegated item references, status, and child scratchpad id when available so parent-child lineage survives restarts.\n\
@@ -56,6 +59,9 @@ mod tests {
         assert!(body.contains("open_scratchpad"));
         assert!(body.contains("mark_wait_checked"));
         assert!(body.contains("After context compaction"));
+        assert!(body.contains("initial task plan into `next_steps`"));
+        assert!(body.contains("new tasks, issues, tests, review follow-ups"));
+        assert!(body.contains("record it in `completed`"));
     }
 
     #[test]

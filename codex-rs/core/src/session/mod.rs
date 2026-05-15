@@ -4010,6 +4010,23 @@ pub(crate) fn emit_subagent_session_started(
     });
 }
 
+const ACTIVE_SCRATCHPAD_RECENT_COMPLETED_LIMIT: usize = 10;
+const ACTIVE_SCRATCHPAD_RECENT_NOTES_LIMIT: usize = 5;
+
+fn recent_array_items(value: &Value, limit: usize) -> Option<(Vec<Value>, usize)> {
+    let array = value.as_array()?;
+    let recent = array
+        .iter()
+        .rev()
+        .take(limit)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+    Some((recent, array.len()))
+}
+
 fn compact_active_scratchpad_summary(value: &Value) -> Value {
     let mut summary = serde_json::Map::new();
     for key in [
@@ -4017,7 +4034,6 @@ fn compact_active_scratchpad_summary(value: &Value) -> Value {
         "origin_thread_id",
         "objective",
         "status",
-        "completed",
         "next_steps",
         "pending_waits",
         "blocked",
@@ -4034,18 +4050,26 @@ fn compact_active_scratchpad_summary(value: &Value) -> Value {
             summary.insert(key.to_string(), item.clone());
         }
     }
-    if let Some(notes) = value.get("notes").and_then(Value::as_array) {
-        let recent_notes = notes
-            .iter()
-            .rev()
-            .take(/*n*/ 5)
-            .cloned()
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>();
+    if let Some((recent_completed, completed_count)) =
+        value.get("completed").and_then(|completed| {
+            recent_array_items(completed, ACTIVE_SCRATCHPAD_RECENT_COMPLETED_LIMIT)
+        })
+    {
+        summary.insert(
+            "recent_completed".to_string(),
+            Value::Array(recent_completed),
+        );
+        summary.insert(
+            "completed_count".to_string(),
+            serde_json::json!(completed_count),
+        );
+    }
+    if let Some((recent_notes, notes_count)) = value
+        .get("notes")
+        .and_then(|notes| recent_array_items(notes, ACTIVE_SCRATCHPAD_RECENT_NOTES_LIMIT))
+    {
         summary.insert("recent_notes".to_string(), Value::Array(recent_notes));
-        summary.insert("notes_count".to_string(), serde_json::json!(notes.len()));
+        summary.insert("notes_count".to_string(), serde_json::json!(notes_count));
     }
     Value::Object(summary)
 }

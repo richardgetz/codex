@@ -7281,7 +7281,44 @@ async fn build_initial_context_injects_active_scratchpad_when_uncompleted_work_e
 
     assert!(developer_texts.contains("<active_scratchpad>"));
     assert!(developer_texts.contains("recover active work"));
+    assert!(developer_texts.contains("found root cause"));
     assert!(developer_texts.contains("ship fix"));
+}
+
+#[tokio::test]
+async fn build_initial_context_bounds_active_scratchpad_completed_ledger() {
+    let (session, turn_context) = make_session_and_context().await;
+    let completed = (0..12)
+        .map(|index| serde_json::json!(format!("completed step {index:02}")))
+        .collect::<Vec<_>>();
+
+    write_thread_scratchpad(
+        &turn_context,
+        session.conversation_id,
+        serde_json::json!({
+            "scratchpad_id": session.conversation_id.to_string(),
+            "objective": "recover active work with a long ledger",
+            "status": "active",
+            "completed": completed,
+            "next_steps": ["ship fix"],
+            "pending_waits": [],
+            "created_at": "2026-04-29T00:00:00Z",
+            "updated_at": "2026-04-29T00:00:00Z",
+            "archived_at": null
+        }),
+    );
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+
+    assert!(developer_texts.contains("<active_scratchpad>"));
+    assert!(developer_texts.contains("\"completed_count\": 12"));
+    assert!(developer_texts.contains("\"recent_completed\""));
+    assert!(developer_texts.contains("completed step 02"));
+    assert!(developer_texts.contains("completed step 11"));
+    assert!(!developer_texts.contains("completed step 00"));
+    assert!(!developer_texts.contains("completed step 01"));
+    assert!(!developer_texts.contains("\"completed\": ["));
 }
 
 #[tokio::test]
