@@ -1,0 +1,21 @@
+intent:
+  id: intent/2026-05-15/scratchpad-next-up-guidance
+change_type: feature
+scope: built-in scratchpad recovery guidance
+summary: Strengthen built-in scratchpad guidance so action-oriented agents keep next_steps current and record completed work durably.
+decision: Treat next_steps as the active short-term work queue, move finished work into completed, and keep active scratchpad recovery bounded by injecting recent_completed plus completed_count instead of the full completed ledger.
+constraints:
+  - Preserve current scratchpad ownership and thread-id binding behavior.
+  - Do not make completed or archived scratchpads loop back as active work.
+  - Keep recovery context bounded for long continuous sessions.
+intent_priority: should
+code_locations:
+  - codex-rs/core/src/context/scratchpad_instructions.rs
+  - codex-rs/core/src/session/mod.rs
+  - codex-rs/core/src/session/turn.rs
+  - codex-rs/core/src/session/tests.rs
+  - docs/fork-differences.md
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: GPT-5
