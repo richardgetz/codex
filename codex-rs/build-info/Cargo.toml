@@ -5,5 +5,9 @@ edition.workspace = true
 license.workspace = true
 build = "build.rs"
 
+[lib]
+test = false
+doctest = false
+
 [lints]
 workspace = true
