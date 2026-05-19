@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-05-19/stable-ci-drift#129a6390d31d"
+  change_type: "fix"
+  scope: "stable-release"
+  summary: "Address branch-side CI drift found after the rust-v0.131.0 stable refresh PR opened."
+  decision: "Update fork-only compile targets to the refreshed upstream API shapes, keep remote agents-prune on the current app-server endpoint contract with auth-token policy checks, and remove the stale unlinked core memory integration test file after memory startup coverage moved to the codex-memories-write crate."
+  constraints:
+    - "Must preserve the session-scoped remote agents-prune behavior and remote auth token safety restrictions."
+    - "Must keep manually constructed config fixtures aligned with new Config/AuthConfig fields."
+    - "Must satisfy CI cargo-shear by removing stale unlinked files rather than leaving dead coverage in the tree."
+    - "Must not touch sandbox network environment variable behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/cli/src/main.rs::run_agents_prune_command"
+    - "codex-rs/login/src/auth/auth_tests.rs"
+    - "codex-rs/thread-manager-sample/src/main.rs::new_config"
+    - "codex-rs/core/tests/suite/memories.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
