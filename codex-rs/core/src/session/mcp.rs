@@ -2,6 +2,7 @@ use super::*;
 use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
 use codex_mcp::ElicitationReviewerHandle;
+use codex_mcp::ToolInfo;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY as MCP_ELICITATION_APPROVAL_KIND_KEY;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_MCP_TOOL_CALL as MCP_ELICITATION_APPROVAL_KIND_MCP_TOOL_CALL;
@@ -15,9 +16,12 @@ use codex_protocol::mcp_approval_meta::TOOL_DESCRIPTION_KEY as MCP_ELICITATION_T
 use codex_protocol::mcp_approval_meta::TOOL_NAME_KEY as MCP_ELICITATION_TOOL_NAME_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_PARAMS_KEY as MCP_ELICITATION_TOOL_PARAMS_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_TITLE_KEY as MCP_ELICITATION_TOOL_TITLE_KEY;
+use codex_tools::ToolName;
 use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::ElicitationAction;
+use rmcp::model::JsonObject;
 use rmcp::model::Meta;
+use rmcp::model::Tool;
 use serde_json::Map;
 
 const MCP_ELICITATION_DECLINE_MESSAGE_KEY: &str = "message";
@@ -154,6 +158,9 @@ impl Session {
             id,
             request,
         });
+        turn_context
+            .turn_metadata_state
+            .mark_user_input_requested_during_turn();
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
     }
@@ -344,36 +351,6 @@ impl Session {
             .await
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "lazy MCP startup/tool listing is serialized through the session-owned manager guard"
-    )]
-    pub async fn list_tools_for_server_with_reconnect(
-        &self,
-        turn_context: &TurnContext,
-        server: &str,
-    ) -> anyhow::Result<Vec<ToolInfo>> {
-        let first_error = {
-            let manager = self.services.mcp_connection_manager.read().await;
-            match manager.list_tools_for_server(server).await {
-                Ok(tools) => return Ok(tools),
-                Err(error) => error,
-            }
-        };
-
-        if !should_retry_mcp_call_after_refresh(&first_error)
-            || !self.effective_mcp_server_names().await.contains(server)
-        {
-            return Err(first_error);
-        }
-
-        self.refresh_mcp_servers_after_call_error(turn_context, server, "tools/list", &first_error)
-            .await;
-
-        let manager = self.services.mcp_connection_manager.read().await;
-        manager.list_tools_for_server(server).await
-    }
-
     pub async fn call_tool_with_reconnect(
         &self,
         turn_context: &TurnContext,
@@ -432,22 +409,40 @@ impl Session {
         clippy::await_holding_invalid_type,
         reason = "MCP tool metadata reads through the session-owned manager guard"
     )]
-    pub(crate) async fn resolve_mcp_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
+    async fn resolve_mcp_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
         self.services
             .mcp_connection_manager
             .read()
             .await
-            .resolve_tool_info(tool_name)
+            .list_all_tools()
             .await
+            .into_iter()
+            .find(|tool| tool.canonical_tool_name() == *tool_name)
     }
 
-    pub(crate) async fn resolve_configured_mcp_tool_call(
+    pub(crate) async fn resolve_configured_mcp_tool_info(
         &self,
         turn_context: &TurnContext,
         tool_name: &ToolName,
-    ) -> Option<(ToolName, String, String)> {
-        let (server, tool) = parse_non_app_mcp_tool_name(tool_name)?;
-        let callable_namespace = format!("mcp__{server}__");
+    ) -> Option<ToolInfo> {
+        let (callable_namespace, tool) = parse_non_app_mcp_tool_name(tool_name)?;
+        let resolved_tool_name = ToolName::namespaced(callable_namespace.clone(), tool.clone());
+        if let Some(tool_info) = self.resolve_mcp_tool_info(&resolved_tool_name).await {
+            if !crate::enablement::mcp_tool_parts_allowed_in_mode(
+                &turn_context.config,
+                turn_context.collaboration_mode.mode,
+                &tool_info.server_name,
+                &tool_info.callable_namespace,
+                &tool_info.callable_name,
+            ) {
+                return None;
+            }
+            return Some(tool_info);
+        }
+
+        let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
+        let (server, server_config) = mcp_connection_manager
+            .configured_server_config_for_callable_namespace(&callable_namespace)?;
         if !crate::enablement::mcp_tool_parts_allowed_in_mode(
             &turn_context.config,
             turn_context.collaboration_mode.mode,
@@ -458,20 +453,54 @@ impl Session {
             return None;
         }
 
-        if !self
-            .services
-            .mcp_connection_manager
-            .read()
-            .await
-            .has_server(&server)
-        {
+        if !mcp_server_config_allows_tool(&server_config, &tool) {
             return None;
         }
 
+        if !mcp_connection_manager.has_enabled_server_config(&server) {
+            return None;
+        }
+
+        Some(ToolInfo {
+            server_name: server,
+            supports_parallel_tool_calls: false,
+            server_origin: None,
+            callable_name: tool.clone(),
+            callable_namespace,
+            namespace_description: None,
+            tool: Tool {
+                name: tool.clone().into(),
+                title: None,
+                description: Some(
+                    "Configured MCP tool placeholder recovered after tool listing was unavailable."
+                        .into(),
+                ),
+                input_schema: Arc::new(JsonObject::default()),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
+            connector_id: None,
+            connector_name: None,
+            plugin_display_names: Vec::new(),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn resolve_configured_mcp_tool_call(
+        &self,
+        turn_context: &TurnContext,
+        tool_name: &ToolName,
+    ) -> Option<(ToolName, String, String)> {
+        let tool_info = self
+            .resolve_configured_mcp_tool_info(turn_context, tool_name)
+            .await?;
         Some((
-            ToolName::namespaced(callable_namespace, tool.clone()),
-            server,
-            tool,
+            tool_info.canonical_tool_name(),
+            tool_info.server_name,
+            tool_info.tool.name.to_string(),
         ))
     }
 
@@ -531,6 +560,7 @@ impl Session {
                     .environment_manager
                     .default_environment()
                     .unwrap_or_else(|| self.services.environment_manager.local_environment()),
+                #[allow(deprecated)]
                 turn_context.cwd.to_path_buf(),
             ),
         };
@@ -551,6 +581,7 @@ impl Session {
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             host_owned_codex_apps_enabled,
+            mcp_config.client_elicitation_capability,
             tool_plugin_provenance,
             auth.as_ref(),
             elicitation_reviewer,
@@ -641,6 +672,25 @@ impl Session {
     }
 }
 
+fn mcp_server_config_allows_tool(config: &McpServerConfig, tool: &str) -> bool {
+    if let Some(enabled_tools) = &config.enabled_tools
+        && !enabled_tools
+            .iter()
+            .any(|enabled_tool| enabled_tool == tool)
+    {
+        return false;
+    }
+
+    !config
+        .disabled_tools
+        .as_ref()
+        .is_some_and(|disabled_tools| {
+            disabled_tools
+                .iter()
+                .any(|disabled_tool| disabled_tool == tool)
+        })
+}
+
 fn should_retry_mcp_call_after_refresh(error: &anyhow::Error) -> bool {
     let message = format!("{error:#}");
     message.contains("failed to get client") || message.contains("unknown MCP server")
@@ -655,26 +705,26 @@ fn should_refresh_mcp_manager_after_resource_error(error: &anyhow::Error) -> boo
 }
 
 fn parse_non_app_mcp_tool_name(tool_name: &ToolName) -> Option<(String, String)> {
-    let (server, tool) = match tool_name.namespace.as_deref() {
+    let (callable_namespace, tool) = match tool_name.namespace.as_deref() {
         Some(namespace) => {
-            let server = namespace
-                .strip_prefix("mcp__")?
-                .strip_suffix("__")?
-                .to_string();
-            (server, tool_name.name.clone())
+            namespace.strip_prefix("mcp__")?.strip_suffix("__")?;
+            (namespace.to_string(), tool_name.name.clone())
         }
         None => {
             let raw = tool_name.name.strip_prefix("mcp__")?;
             let (server, tool) = raw.split_once("__")?;
-            (server.to_string(), tool.to_string())
+            (format!("mcp__{server}__"), tool.to_string())
         }
     };
 
-    if server.is_empty() || tool.is_empty() || server == codex_mcp::CODEX_APPS_MCP_SERVER_NAME {
+    if callable_namespace == format!("mcp__{}__", codex_mcp::CODEX_APPS_MCP_SERVER_NAME)
+        || callable_namespace == "mcp____"
+        || tool.is_empty()
+    {
         return None;
     }
 
-    Some((server, tool))
+    Some((callable_namespace, tool))
 }
 
 async fn review_guardian_mcp_elicitation(

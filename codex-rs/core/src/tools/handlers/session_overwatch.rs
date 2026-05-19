@@ -23,19 +23,18 @@ use serde_json::Value;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExecutor;
 
 const SESSION_OVERWATCH_NAMESPACE: &str = "session_overwatch";
 const TOOL_LIST: &str = "list_sessions";
 const TOOL_WATCH: &str = "watch_session";
 const TOOL_UNWATCH: &str = "unwatch_session";
 const TOOL_MESSAGE: &str = "message_session";
-
-pub(crate) const SESSION_OVERWATCH_TOOL_NAMES: &[&str] =
-    &[TOOL_LIST, TOOL_WATCH, TOOL_UNWATCH, TOOL_MESSAGE];
 
 pub(crate) fn session_overwatch_namespace_spec() -> ToolSpec {
     let tools = [
@@ -84,22 +83,20 @@ pub(crate) fn session_overwatch_namespace_spec() -> ToolSpec {
 
 pub(crate) struct SessionOverwatchHandler;
 
-impl ToolHandler for SessionOverwatchHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for SessionOverwatchHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(SESSION_OVERWATCH_NAMESPACE, TOOL_LIST)
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(session_overwatch_namespace_spec())
     }
 
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        invocation.tool_name.name.as_str() != TOOL_LIST
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         if invocation.turn.collaboration_mode.mode != ModeKind::Orchestrator {
             return Err(FunctionCallError::RespondToModel(
                 "session_overwatch tools are only available in Orchestrator mode".to_string(),
@@ -127,14 +124,20 @@ impl ToolHandler for SessionOverwatchHandler {
             }
         };
 
-        Ok(FunctionToolOutput::from_text(
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(
             serde_json::to_string_pretty(&result).map_err(|err| {
                 FunctionCallError::RespondToModel(format!(
                     "failed to serialize session_overwatch result: {err}"
                 ))
             })?,
             /*success*/ Some(true),
-        ))
+        )))
+    }
+}
+
+impl CoreToolRuntime for SessionOverwatchHandler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
     }
 }
 

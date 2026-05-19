@@ -261,7 +261,6 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         | EventMsg::PatchApplyUpdated(_)
         | EventMsg::TurnDiff(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
-        | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)
         | EventMsg::ScratchpadUpdate(_)
         | EventMsg::TurnAborted(_)
@@ -336,7 +335,6 @@ pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static s
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::TurnDiff(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
-        | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)
         | EventMsg::ScratchpadUpdate(_)
         | EventMsg::EnteredReviewMode(_)

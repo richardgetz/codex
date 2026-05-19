@@ -57,7 +57,7 @@ pub fn run_current_thread_test_with_stack<F>(name: &str, future: F) -> anyhow::R
 where
     F: Future<Output = anyhow::Result<()>> + Send + 'static,
 {
-    const TEST_STACK_SIZE_BYTES: usize = 4 * 1024 * 1024;
+    const TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
     std::thread::Builder::new()
         .name(name.to_string())

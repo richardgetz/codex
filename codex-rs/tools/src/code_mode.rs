@@ -148,9 +148,7 @@ fn code_mode_tool_definitions_for_spec(spec: &ToolSpec) -> Vec<CodeModeToolDefin
             input_schema: serde_json::to_value(parameters).ok(),
             output_schema: None,
         }],
-        ToolSpec::LocalShell {} | ToolSpec::ImageGeneration { .. } | ToolSpec::WebSearch { .. } => {
-            Vec::new()
-        }
+        ToolSpec::ImageGeneration { .. } | ToolSpec::WebSearch { .. } => Vec::new(),
     }
 }
 

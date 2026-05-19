@@ -1,7 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::config::Config;
 use crate::config::DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
-use crate::config::MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS;
+use crate::config::HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -9,14 +9,11 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use codex_features::Feature;
-use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Settings;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -35,7 +32,7 @@ use std::collections::HashMap;
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
-pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS;
+pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
 
 pub(crate) fn function_arguments(payload: ToolPayload) -> Result<String, FunctionCallError> {
     match payload {
@@ -166,6 +163,19 @@ pub(crate) fn thread_spawn_source(
     }))
 }
 
+pub(crate) fn reject_recursive_subagent_spawn(
+    session_source: &SessionSource,
+) -> Result<(), FunctionCallError> {
+    if matches!(session_source, SessionSource::SubAgent(_)) {
+        return Err(FunctionCallError::RespondToModel(
+            "Spawned subagents cannot launch additional subagents; route that work back through the parent agent instead."
+                .to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 pub(crate) fn parse_collab_input(
     message: Option<String>,
     items: Option<Vec<UserInput>>,
@@ -200,18 +210,6 @@ pub(crate) fn parse_collab_input(
     }
 }
 
-pub(crate) fn reject_recursive_subagent_spawn(
-    session_source: &SessionSource,
-) -> Result<(), FunctionCallError> {
-    if matches!(session_source, SessionSource::SubAgent(_)) {
-        return Err(FunctionCallError::RespondToModel(
-            "Spawned subagents cannot launch additional subagents; route that work back through the parent agent instead.".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
 /// Builds the base config snapshot for a newly spawned sub-agent.
 ///
 /// The returned config starts from the parent's effective config and then refreshes the
@@ -242,14 +240,7 @@ pub(crate) fn build_agent_resume_config(
 fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallError> {
     let base_config = turn.config.clone();
     let mut config = (*base_config).clone();
-    config.model = Some(resolve_spawn_agent_model(
-        &turn.model_info.slug,
-        turn.auth_manager
-            .as_ref()
-            .and_then(|auth_manager| auth_manager.auth_cached())
-            .as_ref()
-            .is_some_and(CodexAuth::is_chatgpt_auth),
-    ));
+    config.model = Some(turn.model_info.slug.clone());
     config.model_provider = turn.provider.info().clone();
     config.model_reasoning_effort = turn
         .reasoning_effort
@@ -266,15 +257,10 @@ pub(crate) fn reject_full_fork_spawn_overrides(
     agent_type: Option<&str>,
     model: Option<&str>,
     reasoning_effort: Option<ReasoningEffort>,
-    collaboration_mode: Option<ModeKind>,
 ) -> Result<(), FunctionCallError> {
-    if agent_type.is_some()
-        || model.is_some()
-        || reasoning_effort.is_some()
-        || collaboration_mode.is_some()
-    {
+    if agent_type.is_some() || model.is_some() || reasoning_effort.is_some() {
         return Err(FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and collaboration mode; omit agent_type, model, reasoning_effort, and collaboration_mode, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without a full-history fork.".to_string(),
         ));
     }
     Ok(())
@@ -297,7 +283,9 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
         })?;
     config.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
     config.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
-    config.cwd = turn.cwd.clone();
+    #[allow(deprecated)]
+    let turn_cwd = turn.cwd.clone();
+    config.cwd = turn_cwd;
     config
         .permissions
         .set_permission_profile(turn.permission_profile())
@@ -314,12 +302,45 @@ pub(crate) fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32)
     }
 }
 
-pub(crate) fn resolve_spawn_agent_model(model: &str, is_chatgpt_auth: bool) -> String {
-    if is_chatgpt_auth && model == crate::config::DEFAULT_ORCHESTRATOR_MODEL {
-        crate::config::DEFAULT_ORCHESTRATOR_FALLBACK_MODEL.to_string()
+pub(crate) fn inherited_spawn_agent_collaboration_mode(
+    parent_mode: ModeKind,
+    config: &Config,
+    inherited_mode: CollaborationMode,
+) -> Option<CollaborationMode> {
+    if enforce_orchestrator_child_mode_allowlist(parent_mode, config, inherited_mode.mode).is_ok() {
+        Some(inherited_mode)
     } else {
-        model.to_string()
+        None
     }
+}
+
+fn enforce_orchestrator_child_mode_allowlist(
+    parent_mode: ModeKind,
+    config: &Config,
+    requested_mode: ModeKind,
+) -> Result<(), FunctionCallError> {
+    if parent_mode != ModeKind::Orchestrator {
+        return Ok(());
+    }
+    if config
+        .orchestrator
+        .allowed_spawn_modes
+        .contains(&requested_mode)
+    {
+        return Ok(());
+    }
+
+    let allowed = config
+        .orchestrator
+        .allowed_spawn_modes
+        .iter()
+        .map(|mode| mode.display_name().to_lowercase())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(FunctionCallError::RespondToModel(format!(
+        "Orchestrator mode can only spawn child collaboration modes allowed by `orchestrator.allowed_spawn_modes` (currently: {allowed}); `{}` is blocked.",
+        requested_mode.display_name().to_lowercase()
+    )))
 }
 
 pub(crate) async fn apply_requested_spawn_agent_model_overrides(
@@ -373,96 +394,48 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
     Ok(())
 }
 
-pub(crate) fn requested_spawn_agent_collaboration_mode(
-    turn: &TurnContext,
-    config: &Config,
-    requested_mode: Option<ModeKind>,
-    requested_model: Option<&str>,
-    requested_reasoning_effort: Option<ReasoningEffort>,
-    mode_masks: &[CollaborationModeMask],
-) -> Result<Option<CollaborationMode>, FunctionCallError> {
-    let Some(requested_mode) = requested_mode else {
-        return Ok(None);
-    };
-    enforce_orchestrator_child_mode_allowlist(
-        turn.collaboration_mode.mode,
-        config,
-        requested_mode,
-    )?;
-    if !requested_mode.is_tui_visible() {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "collaboration_mode `{requested_mode:?}` is not supported for spawned agents"
-        )));
-    }
-
-    let Some(mode_mask) = mode_masks
-        .iter()
-        .find(|mask| mask.mode == Some(requested_mode))
-    else {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "collaboration_mode `{}` is not available",
-            requested_mode.display_name()
-        )));
-    };
-
-    let base_mode = CollaborationMode {
-        mode: ModeKind::Default,
-        settings: Settings {
-            model: config
-                .model
-                .clone()
-                .unwrap_or_else(|| turn.model_info.slug.clone()),
-            reasoning_effort: config.model_reasoning_effort,
-            developer_instructions: None,
-        },
-    };
-    let collaboration_mode = base_mode.apply_mask(mode_mask).with_updates(
-        requested_model.map(str::to_string),
-        requested_reasoning_effort.map(Some),
-        /*developer_instructions*/ None,
-    );
-
-    Ok(Some(collaboration_mode))
-}
-
-pub(crate) fn inherited_spawn_agent_collaboration_mode(
-    parent_mode: ModeKind,
-    config: &Config,
-    inherited_mode: CollaborationMode,
-) -> Option<CollaborationMode> {
-    if enforce_orchestrator_child_mode_allowlist(parent_mode, config, inherited_mode.mode).is_ok() {
-        Some(inherited_mode)
-    } else {
-        None
-    }
-}
-
-fn enforce_orchestrator_child_mode_allowlist(
-    parent_mode: ModeKind,
-    config: &Config,
-    requested_mode: ModeKind,
+pub(crate) async fn apply_spawn_agent_service_tier(
+    session: &Session,
+    config: &mut Config,
+    parent_service_tier: Option<&str>,
+    requested_service_tier: Option<&str>,
 ) -> Result<(), FunctionCallError> {
-    if parent_mode != ModeKind::Orchestrator {
+    let Some(candidate_service_tier) = requested_service_tier.or(parent_service_tier) else {
         return Ok(());
-    }
-    if config
-        .orchestrator
-        .allowed_spawn_modes
-        .contains(&requested_mode)
-    {
+    };
+    let model = config.model.clone().ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "spawn_agent could not resolve the child model for service tier validation".to_string(),
+        )
+    })?;
+    let model_info = session
+        .services
+        .models_manager
+        .get_model_info(model.as_str(), &config.to_models_manager_config())
+        .await;
+
+    if model_info.supports_service_tier(candidate_service_tier) {
+        config.service_tier = Some(candidate_service_tier.to_string());
         return Ok(());
     }
 
-    let allowed = config
-        .orchestrator
-        .allowed_spawn_modes
-        .iter()
-        .map(|mode| mode.display_name().to_lowercase())
-        .collect::<Vec<_>>()
-        .join(", ");
+    if requested_service_tier.is_none() {
+        config.service_tier = None;
+        return Ok(());
+    }
+
+    let supported_service_tiers = if model_info.service_tiers.is_empty() {
+        "none".to_string()
+    } else {
+        model_info
+            .service_tiers
+            .iter()
+            .map(|tier| tier.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     Err(FunctionCallError::RespondToModel(format!(
-        "Orchestrator mode can only spawn child collaboration modes allowed by `orchestrator.allowed_spawn_modes` (currently: {allowed}); `{}` is blocked.",
-        requested_mode.display_name().to_lowercase()
+        "Service tier `{candidate_service_tier}` is not supported for model `{model}`. Supported service tiers: {supported_service_tiers}"
     )))
 }
 

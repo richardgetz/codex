@@ -7,7 +7,6 @@
 //! `codex-core`.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,6 +20,7 @@ use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationReviewerHandle;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
+use crate::mcp::qualified_mcp_tool_name_prefix;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::DEFAULT_STARTUP_TIMEOUT;
 use crate::rmcp_client::MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC;
@@ -46,7 +46,6 @@ use codex_config::McpServerStartupMode;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
-use codex_protocol::ToolName;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -57,6 +56,7 @@ use codex_protocol::protocol::McpStartupFailure;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_rmcp_client::ElicitationResponse;
+use rmcp::model::ElicitationCapability;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::PaginatedRequestParams;
@@ -91,6 +91,13 @@ impl McpConnectionManager {
         approval_policy: &Constrained<AskForApproval>,
         permission_profile: &Constrained<PermissionProfile>,
     ) -> Self {
+        Self::new_uninitialized_with_permission_profile(approval_policy, permission_profile.get())
+    }
+
+    pub fn new_uninitialized_with_permission_profile(
+        approval_policy: &Constrained<AskForApproval>,
+        permission_profile: &PermissionProfile,
+    ) -> Self {
         Self {
             clients: HashMap::new(),
             server_configs: HashMap::new(),
@@ -98,7 +105,7 @@ impl McpConnectionManager {
             host_owned_codex_apps_enabled: false,
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
-                permission_profile.get().clone(),
+                permission_profile.clone(),
                 /*reviewer*/ None,
             ),
             startup_cancellation_token: CancellationToken::new(),
@@ -111,6 +118,35 @@ impl McpConnectionManager {
 
     pub fn has_server(&self, server_name: &str) -> bool {
         self.clients.contains_key(server_name)
+    }
+
+    pub fn has_enabled_server_config(&self, server_name: &str) -> bool {
+        self.server_configs
+            .get(server_name)
+            .is_some_and(EffectiveMcpServer::enabled)
+    }
+
+    pub fn configured_server_config(&self, server_name: &str) -> Option<McpServerConfig> {
+        self.server_configs
+            .get(server_name)?
+            .configured_config()
+            .cloned()
+    }
+
+    pub fn configured_server_config_for_callable_namespace(
+        &self,
+        callable_namespace: &str,
+    ) -> Option<(String, McpServerConfig)> {
+        self.server_configs
+            .iter()
+            .find_map(|(server_name, server)| {
+                (qualified_mcp_tool_name_prefix(server_name) == callable_namespace).then(|| {
+                    server
+                        .configured_config()
+                        .cloned()
+                        .map(|config| (server_name.clone(), config))
+                })?
+            })
     }
 
     pub fn direct_server_names(&self) -> Vec<String> {
@@ -196,17 +232,6 @@ impl McpConnectionManager {
             .is_none_or(|metadata| metadata.pollutes_memory)
     }
 
-    pub fn parallel_tool_call_server_names(&self) -> HashSet<String> {
-        self.server_metadata
-            .iter()
-            .filter_map(|(name, metadata)| {
-                metadata
-                    .supports_parallel_tool_calls
-                    .then_some(name.clone())
-            })
-            .collect()
-    }
-
     pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
         self.host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME
     }
@@ -244,6 +269,7 @@ impl McpConnectionManager {
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         host_owned_codex_apps_enabled: bool,
+        client_elicitation_capability: ElicitationCapability,
         tool_plugin_provenance: ToolPluginProvenance,
         auth: Option<&CodexAuth>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
@@ -313,8 +339,8 @@ impl McpConnectionManager {
                 codex_apps_tools_cache_context,
                 Arc::clone(&tool_plugin_provenance),
                 runtime_environment.clone(),
-                codex_home.clone(),
                 runtime_auth_provider,
+                client_elicitation_capability.clone(),
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
@@ -439,7 +465,11 @@ impl McpConnectionManager {
             let Some(server_tools) = managed_client.listed_tools().await else {
                 continue;
             };
-            tools.extend(server_tools);
+            tools.extend(
+                server_tools
+                    .into_iter()
+                    .map(|tool| self.with_server_metadata(tool)),
+            );
         }
         normalize_tools_for_model(tools)
     }
@@ -490,9 +520,24 @@ impl McpConnectionManager {
             .into_iter()
             .map(|mut tool| {
                 tool.tool = tool_with_model_visible_input_schema(&tool.tool);
-                tool
+                self.with_server_metadata(tool)
             });
         Ok(normalize_tools_for_model(tools))
+    }
+
+    fn with_server_metadata(&self, mut tool: ToolInfo) -> ToolInfo {
+        let Some(metadata) = self.server_metadata.get(&tool.server_name) else {
+            tool.supports_parallel_tool_calls = false;
+            tool.server_origin = None;
+            return tool;
+        };
+
+        tool.supports_parallel_tool_calls = metadata.supports_parallel_tool_calls;
+        tool.server_origin = metadata
+            .origin
+            .as_ref()
+            .map(|origin| origin.as_str().to_string());
+        tool
     }
 
     /// Returns a single map that contains all resources. Each key is the
@@ -726,13 +771,6 @@ impl McpConnectionManager {
             .read_resource(params, timeout)
             .await
             .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
-    }
-
-    pub async fn resolve_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
-        let all_tools = self.list_all_tools().await;
-        all_tools
-            .into_iter()
-            .find(|tool| tool.canonical_tool_name() == *tool_name)
     }
 
     async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {

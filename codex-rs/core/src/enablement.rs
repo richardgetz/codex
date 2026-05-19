@@ -263,6 +263,8 @@ mod tests {
     fn make_mcp_tool(server_name: &str, tool_name: &str, connector_id: Option<&str>) -> ToolInfo {
         ToolInfo {
             server_name: server_name.to_string(),
+            supports_parallel_tool_calls: false,
+            server_origin: None,
             callable_name: tool_name.to_string(),
             callable_namespace: format!("mcp__{server_name}__"),
             namespace_description: None,
@@ -310,7 +312,7 @@ mod tests {
         let filtered = filter_mcp_tools_for_mode(&config, ModeKind::Orchestrator, &tools);
         let mut names = filtered
             .iter()
-            .map(|tool| tool.canonical_tool_name().display())
+            .map(|tool| tool.canonical_tool_name().to_string())
             .collect::<Vec<_>>();
         names.sort();
         assert_eq!(

@@ -383,6 +383,8 @@ Check supervised sessions directly for new progress, blockers, or operator instr
                 "/tmp/router",
             ))
             .expect("absolute path"),
+            workspace_roots: Vec::new(),
+            profile_workspace_roots: Vec::new(),
             ephemeral: false,
             reasoning_effort: Some(ReasoningEffort::High),
             personality: Some(Personality::Friendly),

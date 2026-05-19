@@ -6,7 +6,7 @@ For advanced configuration instructions, see [this documentation](https://develo
 
 For a full configuration reference, see [this documentation](https://developers.openai.com/codex/config-reference).
 
-## Commit attribution
+## Lifecycle hooks
 
 Codex can add a [git trailer](https://git-scm.com/docs/git-interpret-trailers) to
 generated commit messages so commits make Codex's involvement explicit. This
@@ -226,3 +226,9 @@ has the named member, Codex upserts configured fields and preserves other fields
 in that member. This config shape does not support setting opaque tracestate
 member values. Invalid trace metadata entries are ignored during config load and
 reported as startup warnings.
+
+Admins can set top-level `allow_managed_hooks_only = true` in
+`requirements.toml` to ignore user, project, and session hook configs while
+still allowing managed hooks from requirements and managed config layers. This
+setting is only supported in `requirements.toml`; putting it in `config.toml`
+does not enable managed-hooks-only mode.

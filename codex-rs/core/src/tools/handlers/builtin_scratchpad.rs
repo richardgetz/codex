@@ -23,10 +23,12 @@ use serde_json::Value;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExecutor;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
 use codex_protocol::protocol::ScratchpadUpdateEvent;
@@ -51,27 +53,6 @@ const TOOL_CHECK_ACTION: &str = "check_action_allowed";
 const TOOL_RECORD_OUTCOME: &str = "record_outcome";
 const TOOL_EXPORT_OUTCOMES: &str = "export_outcomes";
 const TOOL_RECORD_DELEGATION: &str = "record_delegation";
-
-pub(crate) const BUILTIN_SCRATCHPAD_TOOL_NAMES: &[&str] = &[
-    TOOL_OPEN,
-    TOOL_RESUME,
-    TOOL_GET,
-    TOOL_SUMMARY,
-    TOOL_APPEND_NOTE,
-    TOOL_SET_NEXT_STEPS,
-    TOOL_SET_PENDING_WAITS,
-    TOOL_SET_ACTION_POLICY,
-    TOOL_MARK_WAIT_CHECKED,
-    TOOL_UPDATE,
-    TOOL_ARCHIVE,
-    TOOL_UNARCHIVE,
-    TOOL_LOOKUP,
-    TOOL_SCHEMA,
-    TOOL_CHECK_ACTION,
-    TOOL_RECORD_OUTCOME,
-    TOOL_EXPORT_OUTCOMES,
-    TOOL_RECORD_DELEGATION,
-];
 
 const ABSORBED_SCRATCHPAD_ARTIFACT_TYPE: &str = "scratchpad_absorb";
 const ABSORBED_SCRATCHPAD_CONTROL_FIELDS: &[&str] = &[
@@ -235,31 +216,20 @@ fn loose_object_schema() -> JsonSchema {
 
 pub(crate) struct BuiltinScratchpadHandler;
 
-impl ToolHandler for BuiltinScratchpadHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for BuiltinScratchpadHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(SCRATCHPAD_NAMESPACE, TOOL_OPEN)
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(scratchpad_namespace_spec())
     }
 
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        !matches!(
-            invocation.tool_name.name.as_str(),
-            TOOL_RESUME
-                | TOOL_GET
-                | TOOL_SUMMARY
-                | TOOL_LOOKUP
-                | TOOL_SCHEMA
-                | TOOL_CHECK_ACTION
-                | TOOL_EXPORT_OUTCOMES
-        )
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -333,10 +303,16 @@ impl ToolHandler for BuiltinScratchpadHandler {
                 .await;
         }
 
-        Ok(FunctionToolOutput::from_text(
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(
             json_text(result)?,
             Some(true),
-        ))
+        )))
+    }
+}
+
+impl CoreToolRuntime for BuiltinScratchpadHandler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
     }
 }
 

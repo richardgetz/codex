@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE: &str = "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed.";
 const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str = "Optional model override for the new agent. Leave unset to inherit the same model as the parent, which is the preferred default. Only set this when the user explicitly asks for a different model or the task clearly requires one.";
+const SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION: &str = "Optional service tier override for the new agent. Leave unset unless the user explicitly asks for one.";
 
 #[derive(Debug, Clone, Default)]
 pub struct SpawnAgentToolOptions {
@@ -546,8 +547,10 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
             )),
         ),
         (
-            "collaboration_mode".to_string(),
-            spawn_agent_collaboration_mode_schema(),
+            "service_tier".to_string(),
+            JsonSchema::string(Some(
+                SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION.to_string(),
+            )),
         ),
     ])
 }
@@ -570,6 +573,13 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
             )),
         ),
         (
+            "collaboration_mode".to_string(),
+            JsonSchema::string_enum(
+                vec![json!("default"), json!("plan"), json!("orchestrator")],
+                Some("Optional collaboration mode for the child agent.".to_string()),
+            ),
+        ),
+        (
             "model".to_string(),
             JsonSchema::string(Some(
                 SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION.to_string(),
@@ -583,8 +593,10 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
             )),
         ),
         (
-            "collaboration_mode".to_string(),
-            spawn_agent_collaboration_mode_schema(),
+            "service_tier".to_string(),
+            JsonSchema::string(Some(
+                SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION.to_string(),
+            )),
         ),
     ])
 }
@@ -593,16 +605,7 @@ fn hide_spawn_agent_metadata_options(properties: &mut BTreeMap<String, JsonSchem
     properties.remove("agent_type");
     properties.remove("model");
     properties.remove("reasoning_effort");
-}
-
-fn spawn_agent_collaboration_mode_schema() -> JsonSchema {
-    JsonSchema::string_enum(
-        vec![json!("default"), json!("plan"), json!("orchestrator")],
-        Some(
-            "Optional collaboration mode for the new agent. Use `plan` for planning-only work, `default` for normal one-turn work, or `orchestrator` for a delegated coordinator."
-                .to_string(),
-        ),
-    )
+    properties.remove("service_tier");
 }
 
 fn spawn_agent_tool_description(
@@ -694,10 +697,10 @@ fn spawn_agent_tool_description_v2(
         {agent_role_guidance}
         Spawns an agent to work on the specified task. If your current task is `/root/task1` and you spawn_agent with task_name "task_3" the agent will have canonical task name `/root/task1/task_3`.
 You are then able to refer to this agent as `task_3` or `/root/task1/task_3` interchangeably. However an agent `/root/task2/task_3` would only be able to communicate with this agent via its canonical name `/root/task1/task_3`.
-The spawned agent will have the same tools as you and the ability to spawn its own subagents.
-{SPAWN_AGENT_INHERITED_MODEL_GUIDANCE}
-Use collaboration_mode to choose how the child should operate: default for normal work, plan for planning, or orchestrator for a delegated coordinator.
-It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes.
+	The spawned agent will have the same tools as you and the ability to spawn its own subagents.
+	{SPAWN_AGENT_INHERITED_MODEL_GUIDANCE}
+	Use collaboration_mode to choose how the child should operate.
+	It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes.
 The new agent's canonical task name will be provided to it along with the message.
 {concurrency_guidance}"#
     );
@@ -731,13 +734,24 @@ fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
                 .map(|preset| format!("{} ({})", preset.effort, preset.description))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let service_tiers = if model.service_tiers.is_empty() {
+                "none".to_string()
+            } else {
+                model
+                    .service_tiers
+                    .iter()
+                    .map(|tier| format!("{} ({}: {})", tier.id, tier.name, tier.description))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
             format!(
-                "- {} (`{}`): {} Default reasoning effort: {}. Supported reasoning efforts: {}.",
+                "- {} (`{}`): {} Default reasoning effort: {}. Supported reasoning efforts: {}. Supported service tiers: {}.",
                 model.display_name,
                 model.model,
                 model.description,
                 model.default_reasoning_effort,
-                efforts
+                efforts,
+                service_tiers
             )
         })
         .collect::<Vec<_>>()

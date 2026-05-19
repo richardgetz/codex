@@ -152,6 +152,8 @@ pub(super) async fn user_input_or_turn_inner(
                     approval_policy: Some(approval_policy),
                     approvals_reviewer,
                     sandbox_policy: Some(sandbox_policy),
+                    workspace_roots: None,
+                    profile_workspace_roots: None,
                     permission_profile,
                     active_permission_profile: None,
                     windows_sandbox_level: None,
@@ -171,6 +173,8 @@ pub(super) async fn user_input_or_turn_inner(
         }
         Op::UserInputWithTurnContext {
             cwd,
+            workspace_roots,
+            profile_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
@@ -203,6 +207,8 @@ pub(super) async fn user_input_or_turn_inner(
                 items,
                 SessionSettingsUpdate {
                     cwd,
+                    workspace_roots,
+                    profile_workspace_roots,
                     approval_policy,
                     approvals_reviewer,
                     sandbox_policy,
@@ -1068,7 +1074,7 @@ async fn clear_memory_root_contents(memory_root: &std::path::Path) -> std::io::R
     Ok(())
 }
 
-pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
+async fn shutdown_session_runtime(sess: &Arc<Session>) {
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
     let _ = sess.conversation.shutdown().await;
     sess.services
@@ -1081,6 +1087,19 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
     };
     mcp_shutdown.await;
     sess.guardian_review_session.shutdown().await;
+}
+
+fn emit_thread_stop_lifecycle(sess: &Session) {
+    for contributor in sess.services.extensions.thread_lifecycle_contributors() {
+        contributor.on_thread_stop(codex_extension_api::ThreadStopInput {
+            session_store: &sess.services.session_extension_data,
+            thread_store: &sess.services.thread_extension_data,
+        });
+    }
+}
+
+pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
+    shutdown_session_runtime(sess).await;
     info!("Shutting down Codex instance");
     let history = sess.clone_history().await;
     let turn_count = history
@@ -1093,6 +1112,8 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         i64::try_from(turn_count).unwrap_or(0),
         &[],
     );
+
+    emit_thread_stop_lifecycle(sess.as_ref());
 
     // Gracefully flush and shutdown thread persistence on session end so tests
     // that inspect durable state do not race with the background writer.
@@ -1135,6 +1156,7 @@ pub async fn review(
         .await;
     sess.refresh_mcp_servers_if_requested(&turn_context, Some(sess.mcp_elicitation_reviewer()))
         .await;
+    #[allow(deprecated)]
     match resolve_review_request(review_request, &turn_context.cwd) {
         Ok(resolved) => {
             spawn_review_thread(
@@ -1165,6 +1187,7 @@ pub(super) async fn submission_loop(
     rx_sub: Receiver<Submission>,
 ) {
     // To break out of this loop, send Op::Shutdown.
+    let mut shutdown_received = false;
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
         let dispatch_span = submission_dispatch_span(&sub);
@@ -1377,23 +1400,16 @@ pub(super) async fn submission_loop(
         .instrument(dispatch_span)
         .await;
         if should_exit {
+            shutdown_received = true;
             break;
         }
     }
     // If the submission loop exits because the channel closed without an
-    // explicit shutdown op, still run process teardown for child processes
-    // owned by this session.
-    sess.services
-        .unified_exec_manager
-        .terminate_all_processes()
-        .await;
-    let mcp_shutdown = {
-        let mut manager = sess.services.mcp_connection_manager.write().await;
-        manager.begin_shutdown()
-    };
-    mcp_shutdown.await;
-    // Also drain cached guardian state on this implicit shutdown path.
-    sess.guardian_review_session.shutdown().await;
+    // explicit shutdown op, still run session teardown.
+    if !shutdown_received {
+        shutdown_session_runtime(&sess).await;
+        emit_thread_stop_lifecycle(sess.as_ref());
+    }
     debug!("Agent loop exited");
 }
 

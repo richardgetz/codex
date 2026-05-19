@@ -21,10 +21,12 @@ use uuid::Uuid;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExecutor;
 
 const SCHEDULE_NAMESPACE: &str = "schedule";
 const TOOL_CREATE: &str = "create_scheduled_trigger";
@@ -37,19 +39,6 @@ const TOOL_REOPEN: &str = "reopen_scheduled_trigger";
 const TOOL_DELETE: &str = "delete_scheduled_trigger";
 const TOOL_MARK_FIRED: &str = "mark_scheduled_trigger_fired";
 const TOOL_SCHEMA: &str = "get_schedule_schema";
-
-pub(crate) const BUILTIN_SCHEDULE_TOOL_NAMES: &[&str] = &[
-    TOOL_CREATE,
-    TOOL_GET,
-    TOOL_LIST,
-    TOOL_DUE,
-    TOOL_UPDATE,
-    TOOL_CLOSE,
-    TOOL_REOPEN,
-    TOOL_DELETE,
-    TOOL_MARK_FIRED,
-    TOOL_SCHEMA,
-];
 
 pub(crate) fn schedule_namespace_spec() -> ToolSpec {
     let tools = [
@@ -118,25 +107,20 @@ fn loose_object_schema() -> JsonSchema {
 
 pub(crate) struct BuiltinScheduleHandler;
 
-impl ToolHandler for BuiltinScheduleHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for BuiltinScheduleHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(SCHEDULE_NAMESPACE, TOOL_CREATE)
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(schedule_namespace_spec())
     }
 
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        !matches!(
-            invocation.tool_name.name.as_str(),
-            TOOL_GET | TOOL_LIST | TOOL_DUE | TOOL_SCHEMA
-        )
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let arguments = match invocation.payload {
             ToolPayload::Function { arguments } => arguments,
             _ => {
@@ -168,10 +152,16 @@ impl ToolHandler for BuiltinScheduleHandler {
             ))),
         }?;
 
-        Ok(FunctionToolOutput::from_text(
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(
             json_text(result)?,
             Some(true),
-        ))
+        )))
+    }
+}
+
+impl CoreToolRuntime for BuiltinScheduleHandler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
     }
 }
 

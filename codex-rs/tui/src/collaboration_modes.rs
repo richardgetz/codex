@@ -22,7 +22,6 @@ pub(crate) fn presets_for_tui_with_config(
     filtered_presets(model_catalog, collaboration_modes_config)
 }
 
-#[cfg(test)]
 pub(crate) fn default_mask(model_catalog: &ModelCatalog) -> Option<CollaborationModeMask> {
     default_mask_with_config(model_catalog, CollaborationModesConfig::default())
 }
@@ -39,7 +38,6 @@ pub(crate) fn default_mask_with_config(
         .or_else(|| presets.into_iter().next())
 }
 
-#[cfg(test)]
 pub(crate) fn mask_for_kind(
     model_catalog: &ModelCatalog,
     kind: ModeKind,
@@ -77,7 +75,6 @@ pub(crate) fn next_mask_with_config(
     presets.get(next_index).cloned()
 }
 
-#[cfg(test)]
 pub(crate) fn default_mode_mask(model_catalog: &ModelCatalog) -> Option<CollaborationModeMask> {
     default_mode_mask_with_config(model_catalog, CollaborationModesConfig::default())
 }
@@ -89,7 +86,6 @@ pub(crate) fn default_mode_mask_with_config(
     mask_for_kind_with_config(model_catalog, ModeKind::Default, collaboration_modes_config)
 }
 
-#[cfg(test)]
 pub(crate) fn plan_mask(model_catalog: &ModelCatalog) -> Option<CollaborationModeMask> {
     plan_mask_with_config(model_catalog, CollaborationModesConfig::default())
 }
@@ -99,4 +95,11 @@ pub(crate) fn plan_mask_with_config(
     collaboration_modes_config: CollaborationModesConfig,
 ) -> Option<CollaborationModeMask> {
     mask_for_kind_with_config(model_catalog, ModeKind::Plan, collaboration_modes_config)
+}
+
+pub(crate) fn next_mask(
+    model_catalog: &ModelCatalog,
+    current: Option<&CollaborationModeMask>,
+) -> Option<CollaborationModeMask> {
+    next_mask_with_config(model_catalog, current, CollaborationModesConfig::default())
 }
