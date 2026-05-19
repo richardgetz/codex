@@ -239,6 +239,7 @@ async fn build_test_processor(
         config.codex_home.to_path_buf(),
         Vec::new(),
         LoaderOverrides::default(),
+        /*strict_config*/ false,
         CloudRequirementsLoader::default(),
         Arg0DispatchPaths::default(),
         Arc::new(codex_config::NoopThreadConfigLoader),
@@ -274,7 +275,7 @@ fn run_current_thread_test_with_stack<F>(name: &str, future: F) -> Result<()>
 where
     F: Future<Output = Result<()>> + Send + 'static,
 {
-    const TEST_STACK_SIZE_BYTES: usize = 4 * 1024 * 1024;
+    const TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
     let handle = std::thread::Builder::new()
         .name(name.to_string())
@@ -659,6 +660,7 @@ fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
                         }],
                         responsesapi_client_metadata: None,
                         cwd: None,
+                        runtime_workspace_roots: None,
                         approval_policy: None,
                         sandbox_policy: None,
                         permissions: None,

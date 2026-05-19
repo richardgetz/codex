@@ -85,6 +85,7 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
         config: Arc::new(config),
         cli_overrides: Vec::new(),
         loader_overrides,
+        strict_config: false,
         cloud_requirements: CloudRequirementsLoader::default(),
         thread_config_loader: Arc::new(NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),
@@ -112,9 +113,8 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
             params: ThreadStartParams::default(),
         })
         .await?
-        .expect("thread/start should succeed");
-    let ThreadStartResponse { thread, .. } =
-        serde_json::from_value(response).expect("thread/start response should parse");
+        .map_err(|error| anyhow::anyhow!("thread/start should succeed: {error:?}"))?;
+    let ThreadStartResponse { thread, .. } = serde_json::from_value(response)?;
     assert_eq!(thread.path, None);
 
     client
@@ -130,7 +130,7 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
             },
         })
         .await?
-        .expect("turn/start should succeed");
+        .map_err(|error| anyhow::anyhow!("turn/start should succeed: {error:?}"))?;
 
     timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
@@ -165,9 +165,8 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
             },
         })
         .await?
-        .expect("thread/list should succeed");
-    let ThreadListResponse { data, .. } =
-        serde_json::from_value(response).expect("thread/list response should parse");
+        .map_err(|error| anyhow::anyhow!("thread/list should succeed: {error:?}"))?;
+    let ThreadListResponse { data, .. } = serde_json::from_value(response)?;
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].id, thread.id);
     assert_eq!(data[0].path, None);
@@ -238,6 +237,7 @@ fn assert_no_local_persistence_artifacts(codex_home: &Path) -> Result<()> {
     entries.remove("orchestrator_supervision");
     entries.remove("schedule");
     entries.remove("scratchpad");
+    entries.remove("accounts");
     assert_eq!(
         entries,
         BTreeSet::from([

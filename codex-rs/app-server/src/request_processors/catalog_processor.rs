@@ -297,16 +297,11 @@ impl CatalogRequestProcessor {
             .iter()
             .map(|spec| {
                 let (stage, display_name, description, announcement) = match spec.stage {
-                    Stage::Experimental {
-                        name,
-                        menu_description,
-                        announcement,
-                        owner: _,
-                    } => (
+                    Stage::Experimental { .. } => (
                         ApiExperimentalFeatureStage::Beta,
-                        Some(name.to_string()),
-                        Some(menu_description.to_string()),
-                        Some(announcement.to_string()),
+                        spec.user_facing_experimental_name(),
+                        spec.user_facing_experimental_description(),
+                        spec.user_facing_experimental_announcement(),
                     ),
                     Stage::UnderDevelopment => (
                         ApiExperimentalFeatureStage::UnderDevelopment,
@@ -527,6 +522,7 @@ impl CatalogRequestProcessor {
             };
             let hooks = codex_hooks::list_hooks(codex_hooks::HooksConfig {
                 feature_enabled: config.features.enabled(Feature::CodexHooks),
+                bypass_hook_trust: config.bypass_hook_trust,
                 config_layer_stack: Some(config.config_layer_stack),
                 plugin_hook_sources: plugin_outcome.effective_plugin_hook_sources(),
                 plugin_hook_load_warnings: plugin_outcome.effective_plugin_hook_warnings(),

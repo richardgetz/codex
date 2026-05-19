@@ -102,6 +102,7 @@ mod tests {
                 cwd: codex_home.clone(),
                 cli_version: "0.0.0".to_string(),
                 title: "target".to_string(),
+                preview: None,
                 sandbox_policy: "read-only".to_string(),
                 approval_mode: "on-request".to_string(),
                 tokens_used: 0,

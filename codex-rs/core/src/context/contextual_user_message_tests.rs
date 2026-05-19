@@ -40,6 +40,18 @@ fn subagent_notification_marks_parent_handling_required() {
 }
 
 #[test]
+fn detects_goal_context_fragment() {
+    let text = GoalContext {
+        prompt: "Continue working toward the active thread goal.".to_string(),
+    }
+    .render();
+
+    assert!(is_contextual_user_fragment(&ContentItem::InputText {
+        text
+    }));
+}
+
+#[test]
 fn ignores_regular_user_text() {
     assert!(!is_contextual_user_fragment(&ContentItem::InputText {
         text: "hello".to_string(),
