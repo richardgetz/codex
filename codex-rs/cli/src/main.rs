@@ -1565,17 +1565,30 @@ async fn run_agents_prune_command(
             "`codex agents-prune` requires `--remote <ws://host:port>` for the target app-server"
         )
     })?;
-    let websocket_url = codex_tui::normalize_remote_addr(&remote_addr)
+    let mut endpoint = codex_tui::resolve_remote_addr(&remote_addr)
         .map_err(|err| anyhow::anyhow!("invalid remote app-server address: {err}"))?;
     let remote_auth_token_env = remote.remote_auth_token_env.or(root_remote_auth_token_env);
     let auth_token = remote_auth_token_env
         .as_deref()
         .map(read_remote_auth_token_from_env_var)
         .transpose()?;
+    if auth_token.is_some() && !codex_tui::remote_addr_supports_auth_token(&endpoint) {
+        anyhow::bail!("`--remote-auth-token-env` requires a `wss://` or loopback `ws://` remote.");
+    }
+    if let Some(auth_token) = auth_token {
+        let codex_tui::RemoteAppServerEndpoint::WebSocket {
+            auth_token: slot, ..
+        } = &mut endpoint
+        else {
+            anyhow::bail!(
+                "`--remote-auth-token-env` requires a `wss://` or loopback `ws://` remote."
+            );
+        };
+        *slot = Some(auth_token);
+    }
 
     let client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
-        websocket_url,
-        auth_token,
+        endpoint,
         client_name: "codex-cli".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         experimental_api: true,
@@ -1927,6 +1940,7 @@ fn unsupported_subcommand_name_for_strict_config(
         Some(Subcommand::StdioToUds(_)) => Some("stdio-to-uds"),
         Some(Subcommand::ExecServer(_)) => Some("exec-server"),
         Some(Subcommand::Features(_)) => Some("features"),
+        Some(Subcommand::AgentsPrune(_)) => Some("agents-prune"),
     }
 }
 

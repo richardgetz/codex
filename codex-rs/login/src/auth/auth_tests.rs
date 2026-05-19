@@ -896,6 +896,7 @@ async fn enforce_login_restrictions_allows_any_matching_workspace_in_list() {
 
     let config = build_config(
         codex_home.path(),
+        codex_home.path(),
         /*forced_login_method*/ None,
         Some(vec![
             WORKSPACE_ID_SECOND_ALLOWED.to_string(),
@@ -950,6 +951,7 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
 
     let config = AuthConfig {
         codex_home: codex_home.path().to_path_buf(),
+        auth_storage_home: codex_home.path().to_path_buf(),
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         forced_login_method: None,
         forced_chatgpt_workspace_id: Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),

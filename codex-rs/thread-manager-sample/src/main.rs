@@ -50,7 +50,6 @@ use codex_core_api::ScheduleConfig;
 use codex_core_api::ScratchpadConfig;
 use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
-use codex_core_api::ShellEnvironmentPolicy;
 use codex_core_api::SituationalRequirementsConfig;
 use codex_core_api::SkillsConfig;
 use codex_core_api::TerminalResizeReflowConfig;
@@ -196,6 +195,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         user_instructions: None,
         base_instructions: None,
         developer_instructions: None,
+        commit_attribution: None,
         conventional_commits: ConventionalCommitsConfig::default(),
         git_intent_notes: GitIntentNotesConfig::default(),
         exec_policy: Default::default(),
