@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-05-19/cargo-shear-build-info#78773cc72715"
+  change_type: "fix"
+  scope: "ci"
+  summary: "Make cargo-shear@1.11.2 pass under --deny-warnings for codex-build-info."
+  decision: "Set test=false and doctest=false on the codex-build-info lib target because the crate has no lib tests or doctests and CI treats those cargo-shear warnings as failures."
+  constraints:
+    - "Must keep the build-info crate behavior unchanged outside Cargo target metadata."
+    - "Must use the cargo-shear version pinned by CI when reproducing the failure."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/build-info/Cargo.toml"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
