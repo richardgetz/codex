@@ -1,0 +1,28 @@
+intent:
+  id: "intent/2026-05-19/stable-rust-v0.131.0#987331f6efe5"
+  change_type: "chore"
+  scope: "stable-release"
+  summary: "Merge upstream rust-v0.131.0 into the fork stable branch."
+  decision: "Use a stable-based merge of upstream rust-v0.131.0 and resolve conflicts by preserving fork-only account, memory, scratchpad, session control, MCP recovery, app-server, config, schema, TUI, CI, and migration surfaces while adopting upstream 0.131.0 release changes."
+  constraints:
+    - "Must preserve fork-only runtime features, slash commands, and app-server policy controls."
+    - "Must keep generated config, app-server schema, Bazel, and Cargo lock artifacts in sync with resolved sources."
+    - "Must keep shipped state migrations unique; upstream thread preview migration is staged as 0034 after existing 0032/0033 migrations."
+    - "Must guard upstream-only self-hosted or BuildBuddy workflow jobs so fork PRs do not require upstream secrets or runners."
+    - "Must preserve MCP placeholder recovery for sanitized and hyphenated configured MCP server names."
+    - "Must not touch sandbox network environment variable behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core"
+    - "codex-rs/codex-mcp"
+    - "codex-rs/tui"
+    - "codex-rs/app-server"
+    - "codex-rs/app-server-protocol"
+    - "codex-rs/config"
+    - "codex-rs/state/migrations"
+    - ".github/workflows"
+    - "docs/config.md"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
