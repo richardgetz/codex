@@ -380,11 +380,20 @@ impl SessionConfiguration {
                 &file_system_sandbox_policy,
                 network_sandbox_policy,
             );
-        self.permission_profile_state.set_active_permission_profile(
-            effective_permission_profile,
-            active_permission_profile,
-            profile_workspace_roots,
-        )
+
+        let permission_snapshot = match active_permission_profile {
+            Some(active_permission_profile) => {
+                PermissionProfileSnapshot::active_with_profile_workspace_roots(
+                    effective_permission_profile,
+                    active_permission_profile,
+                    profile_workspace_roots,
+                )
+            }
+            None => PermissionProfileSnapshot::legacy(effective_permission_profile),
+        };
+
+        self.permission_profile_state
+            .set_permission_profile_snapshot(permission_snapshot)
     }
 
     fn apply_memory_policy_to_permission_profile(&mut self) -> ConstraintResult<()> {
@@ -419,18 +428,18 @@ impl SessionConfiguration {
 
         let active_permission_profile = self.active_permission_profile();
         let profile_workspace_roots = self.profile_workspace_roots().to_vec();
-        self.permission_profile_state
-            .set_active_permission_profile(
-                PermissionProfile::from_runtime_permissions_with_enforcement(
-                    self.permission_profile_state
-                        .permission_profile()
-                        .enforcement(),
-                    &file_system_sandbox_policy,
-                    self.network_sandbox_policy(),
-                ),
-                active_permission_profile,
-                profile_workspace_roots,
-            )?;
+        self.set_permission_profile_projection(
+            PermissionProfile::from_runtime_permissions_with_enforcement(
+                self.permission_profile_state
+                    .permission_profile()
+                    .enforcement(),
+                &file_system_sandbox_policy,
+                self.network_sandbox_policy(),
+            ),
+            active_permission_profile,
+            profile_workspace_roots,
+            None,
+        )?;
         Ok(())
     }
 }
@@ -972,7 +981,7 @@ impl Session {
                     config: config.as_ref(),
                     session_store: &session_extension_data,
                     thread_store: &thread_extension_data,
-                });
+                }).await;
             }
 
             let services = SessionServices {

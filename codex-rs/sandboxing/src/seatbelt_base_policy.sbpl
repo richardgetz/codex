@@ -102,6 +102,12 @@
   (global-name "com.apple.PowerManagement.control")
 )
 
+; Allow CLI credential helpers that use the macOS Keychain, such as `gh`, to
+; resolve credentials even when network access is restricted.
+(allow mach-lookup
+  (global-name "com.apple.SecurityServer")
+)
+
 ; allow openpty()
 (allow pseudo-tty)
 (allow file-read* file-write* file-ioctl (literal "/dev/ptmx"))

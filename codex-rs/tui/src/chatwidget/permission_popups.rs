@@ -138,7 +138,7 @@ impl ChatWidget {
                         Self::with_restorable_permission_action(
                             Self::approval_preset_actions(
                                 preset_approval,
-                                preset.permission_profile.clone(),
+                                preset.active_permission_profile.clone(),
                                 base_name.clone(),
                                 ApprovalsReviewer::User,
                             ),
@@ -151,7 +151,7 @@ impl ChatWidget {
                     Self::with_restorable_permission_action(
                         Self::approval_preset_actions(
                             preset_approval,
-                            preset.permission_profile.clone(),
+                            preset.active_permission_profile.clone(),
                             base_name.clone(),
                             ApprovalsReviewer::User,
                         ),
@@ -162,7 +162,7 @@ impl ChatWidget {
                 Self::with_restorable_permission_action(
                     Self::approval_preset_actions(
                         preset_approval,
-                        preset.permission_profile.clone(),
+                        preset.active_permission_profile.clone(),
                         base_name.clone(),
                         ApprovalsReviewer::User,
                     ),
@@ -203,7 +203,7 @@ impl ChatWidget {
                         actions: Self::with_restorable_permission_action(
                             Self::approval_preset_actions(
                                 preset_approval,
-                                preset.permission_profile.clone(),
+                                preset.active_permission_profile.clone(),
                                 "Auto-review".to_string(),
                                 ApprovalsReviewer::AutoReview,
                             ),
@@ -420,27 +420,53 @@ impl ChatWidget {
     fn restorable_permission_actions(
         selection: RestorablePermissionSelection,
     ) -> Vec<SelectionAction> {
-        Self::approval_preset_actions(
-            selection.approval_policy,
-            selection.permission_profile,
-            "Previous Custom".to_string(),
-            selection.approvals_reviewer,
-        )
+        vec![Box::new(move |tx| {
+            tx.send(AppEvent::CodexOp(
+                AppCommand::override_turn_context_with_permission_profile(
+                    /*cwd*/ None,
+                    Some(selection.approval_policy),
+                    Some(selection.approvals_reviewer),
+                    /*active_permission_profile*/ None,
+                    Some(selection.permission_profile.clone()),
+                    /*windows_sandbox_level*/ None,
+                    /*model*/ None,
+                    /*effort*/ None,
+                    /*summary*/ None,
+                    /*service_tier*/ None,
+                    /*collaboration_mode*/ None,
+                    /*personality*/ None,
+                ),
+            ));
+            tx.send(AppEvent::UpdateAskForApprovalPolicy(
+                selection.approval_policy,
+            ));
+            tx.send(AppEvent::UpdatePermissionProfile(
+                selection.permission_profile.clone(),
+            ));
+            tx.send(AppEvent::UpdateApprovalsReviewer(
+                selection.approvals_reviewer,
+            ));
+            tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(
+                    "Permissions updated to Previous Custom".to_string(),
+                    /*hint*/ None,
+                ),
+            )));
+        })]
     }
 
     pub(super) fn approval_preset_actions(
         approval: AskForApproval,
-        permission_profile: PermissionProfile,
+        active_permission_profile: ActivePermissionProfile,
         label: String,
         approvals_reviewer: ApprovalsReviewer,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
-            let permission_profile_clone = permission_profile.clone();
             tx.send(AppEvent::CodexOp(AppCommand::override_turn_context(
                 /*cwd*/ None,
                 Some(approval),
                 Some(approvals_reviewer),
-                Some(permission_profile_clone.clone()),
+                Some(active_permission_profile.clone()),
                 /*windows_sandbox_level*/ None,
                 /*model*/ None,
                 /*effort*/ None,
@@ -450,7 +476,9 @@ impl ChatWidget {
                 /*personality*/ None,
             )));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
-            tx.send(AppEvent::UpdatePermissionProfile(permission_profile_clone));
+            tx.send(AppEvent::UpdateActivePermissionProfile(
+                active_permission_profile.clone(),
+            ));
             tx.send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
             tx.send(AppEvent::InsertHistoryCell(Box::new(
                 history_cell::new_info_event(
@@ -507,7 +535,6 @@ impl ChatWidget {
     ) {
         let selected_name = preset.label.to_string();
         let approval = AskForApproval::from(preset.approval);
-        let permission_profile = preset.permission_profile;
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let title_line = Line::from("Enable full access?").bold();
         let info_line = Line::from(vec![
@@ -524,7 +551,7 @@ impl ChatWidget {
 
         let mut accept_actions = Self::approval_preset_actions(
             approval,
-            permission_profile.clone(),
+            preset.active_permission_profile.clone(),
             selected_name.clone(),
             ApprovalsReviewer::User,
         );
@@ -534,7 +561,7 @@ impl ChatWidget {
 
         let mut accept_and_remember_actions = Self::approval_preset_actions(
             approval,
-            permission_profile,
+            preset.active_permission_profile,
             selected_name,
             ApprovalsReviewer::User,
         );

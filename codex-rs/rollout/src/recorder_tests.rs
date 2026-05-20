@@ -211,6 +211,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             })),
         },
     ];
@@ -501,6 +502,7 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         ))])
         .await?;

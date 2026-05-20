@@ -18,6 +18,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::Op;
@@ -44,7 +45,7 @@ pub(crate) enum AppCommand {
         cwd: PathBuf,
         approval_policy: AskForApproval,
         approvals_reviewer: Option<ApprovalsReviewer>,
-        permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
         model: String,
         effort: Option<ReasoningEffortConfig>,
         summary: Option<ReasoningSummaryConfig>,
@@ -57,6 +58,7 @@ pub(crate) enum AppCommand {
         cwd: Option<PathBuf>,
         approval_policy: Option<AskForApproval>,
         approvals_reviewer: Option<ApprovalsReviewer>,
+        active_permission_profile: Option<ActivePermissionProfile>,
         permission_profile: Option<PermissionProfile>,
         windows_sandbox_level: Option<WindowsSandboxLevel>,
         model: Option<String>,
@@ -160,7 +162,7 @@ impl AppCommand {
         items: Vec<UserInput>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
-        permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
         model: String,
         effort: Option<ReasoningEffortConfig>,
         summary: Option<ReasoningSummaryConfig>,
@@ -174,7 +176,7 @@ impl AppCommand {
             cwd,
             approval_policy,
             approvals_reviewer: None,
-            permission_profile,
+            active_permission_profile,
             model,
             effort,
             summary,
@@ -190,6 +192,37 @@ impl AppCommand {
         cwd: Option<PathBuf>,
         approval_policy: Option<AskForApproval>,
         approvals_reviewer: Option<ApprovalsReviewer>,
+        active_permission_profile: Option<ActivePermissionProfile>,
+        windows_sandbox_level: Option<WindowsSandboxLevel>,
+        model: Option<String>,
+        effort: Option<Option<ReasoningEffortConfig>>,
+        summary: Option<ReasoningSummaryConfig>,
+        service_tier: Option<Option<String>>,
+        collaboration_mode: Option<CollaborationMode>,
+        personality: Option<Personality>,
+    ) -> Self {
+        Self::override_turn_context_with_permission_profile(
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            active_permission_profile,
+            /*permission_profile*/ None,
+            windows_sandbox_level,
+            model,
+            effort,
+            summary,
+            service_tier,
+            collaboration_mode,
+            personality,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn override_turn_context_with_permission_profile(
+        cwd: Option<PathBuf>,
+        approval_policy: Option<AskForApproval>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+        active_permission_profile: Option<ActivePermissionProfile>,
         permission_profile: Option<PermissionProfile>,
         windows_sandbox_level: Option<WindowsSandboxLevel>,
         model: Option<String>,
@@ -203,6 +236,7 @@ impl AppCommand {
             cwd,
             approval_policy,
             approvals_reviewer,
+            active_permission_profile,
             permission_profile,
             windows_sandbox_level,
             model,

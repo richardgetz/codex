@@ -184,6 +184,18 @@ fn dynamic_network_policy_allows_tls_without_darwin_user_cache_write() {
 }
 
 #[test]
+fn base_policy_allows_keychain_security_server_for_cli_credential_helpers() {
+    assert!(
+        MACOS_SEATBELT_BASE_POLICY.contains("(global-name \"com.apple.SecurityServer\")"),
+        "base policy must allow macOS Keychain-backed CLI credential helpers, such as gh auth, to reach SecurityServer even when network is restricted:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+    assert!(
+        !MACOS_SEATBELT_BASE_POLICY.contains("DARWIN_USER_CACHE_DIR"),
+        "base policy should not restore broad Darwin user cache writes for Keychain access:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+}
+
+#[test]
 fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access() {
     let unreadable = absolute_path("/tmp/codex-unreadable");
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![

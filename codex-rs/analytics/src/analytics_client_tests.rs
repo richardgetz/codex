@@ -139,7 +139,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
@@ -284,6 +283,7 @@ fn sample_turn_start_request(thread_id: &str, request_id: i64) -> ClientRequest 
                 },
                 UserInput::Image {
                     url: "https://example.com/a.png".to_string(),
+                    detail: None,
                 },
             ],
             ..Default::default()
@@ -371,9 +371,7 @@ fn sample_turn_resolved_config(thread_id: &str, turn_id: &str) -> TurnResolvedCo
         session_source: SessionSource::Exec,
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
-        permission_profile: CorePermissionProfile::from_legacy_sandbox_policy(
-            &SandboxPolicy::new_read_only_policy(),
-        ),
+        permission_profile: CorePermissionProfile::read_only(),
         permission_profile_cwd: PathBuf::from("/tmp"),
         reasoning_effort: None,
         reasoning_summary: None,
@@ -404,6 +402,7 @@ fn sample_turn_steer_request(
                 },
                 UserInput::LocalImage {
                     path: "/tmp/a.png".into(),
+                    detail: None,
                 },
             ],
             responsesapi_client_metadata: None,
