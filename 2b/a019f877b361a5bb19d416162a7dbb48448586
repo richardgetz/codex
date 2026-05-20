@@ -1,0 +1,22 @@
+intent:
+  id: stable-rust-v0-132-0-gh-keychain-auth
+change_type: fix
+scope: stable refresh, macOS seatbelt, TUI permission restore, Python SDK schema
+summary: Refresh stable from upstream rust-v0.132.0 and restore Keychain-backed gh auth in workspace-write.
+decision: Add narrow SecurityServer mach-lookup to the base Seatbelt policy, preserve fork permission/profile behavior, renumber the colliding upstream migration, and regenerate the Python SDK from the staged app-server schema.
+constraints:
+  - Do not leak credentials or token values.
+  - Preserve fork-only stable surfaces while taking upstream rust-v0.132.0 changes.
+  - Keep shipped migration numbers stable.
+  - Keep generated SDK artifacts aligned with the staged app-server schema.
+intent_priority: must
+code_locations:
+  - codex-rs/sandboxing/src/seatbelt_base_policy.sbpl
+  - codex-rs/sandboxing/src/seatbelt_tests.rs
+  - codex-rs/tui/src/chatwidget/permission_popups.rs
+  - codex-rs/state/migrations/0035_upstream_thread_goal_stopped_statuses.sql
+  - sdk/python/src/openai_codex/generated/v2_all.py
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: GPT-5
