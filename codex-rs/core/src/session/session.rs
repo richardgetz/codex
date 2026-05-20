@@ -438,7 +438,7 @@ impl SessionConfiguration {
             ),
             active_permission_profile,
             profile_workspace_roots,
-            None,
+            /*preserve_deny_reads_from*/ None,
         )?;
         Ok(())
     }
