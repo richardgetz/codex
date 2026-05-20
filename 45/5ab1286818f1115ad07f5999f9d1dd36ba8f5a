@@ -1,0 +1,16 @@
+intent:
+  id: stable-rust-v0-132-0-argument-comment-lint-fix
+change_type: fix
+scope: CI lint follow-up
+summary: Add the required argument-comment marker for preserve_deny_reads_from.
+decision: Preserve the existing None behavior while making the positional optional argument self-documenting for the repository argument-comment lint.
+constraints:
+  - Do not change runtime behavior.
+  - Keep CI lint expectations satisfied across Linux, macOS, and Windows.
+intent_priority: should
+code_locations:
+  - codex-rs/core/src/session/session.rs
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: GPT-5
