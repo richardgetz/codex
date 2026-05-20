@@ -187,6 +187,7 @@ use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintError;
 use crate::config::ConstraintResult;
+use crate::config::PermissionProfileSnapshot;
 use crate::config::PermissionProfileState;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
@@ -3610,12 +3611,14 @@ impl Session {
             };
             if let Some(token_info) = token_info.as_ref() {
                 for contributor in self.services.extensions.token_usage_contributors() {
-                    contributor.on_token_usage(
-                        &self.services.session_extension_data,
-                        &self.services.thread_extension_data,
-                        turn_context.extension_data.as_ref(),
-                        token_info,
-                    );
+                    contributor
+                        .on_token_usage(
+                            &self.services.session_extension_data,
+                            &self.services.thread_extension_data,
+                            turn_context.extension_data.as_ref(),
+                            token_info,
+                        )
+                        .await;
                 }
             }
         }
@@ -4016,13 +4019,16 @@ impl Session {
 
     pub async fn interrupt_task(self: &Arc<Self>) {
         info!("interrupt received: abort current task, if any");
-        self.cancel_mcp_startup().await;
+        let had_active_turn = self.active_turn.lock().await.is_some();
         self.release_active_continuous_control().await;
-        if self.active_turn.lock().await.is_some() {
+        if had_active_turn {
             self.release_active_orchestrator_control().await;
         }
         // Even without an active task, interrupt handling pauses any active goal.
         self.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        if !had_active_turn {
+            self.cancel_mcp_startup().await;
+        }
     }
 
     pub(crate) fn hooks(&self) -> Arc<Hooks> {

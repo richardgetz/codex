@@ -64,6 +64,7 @@ from .v2_all import ThreadUnarchivedNotification
 from .v2_all import TurnCompletedNotification
 from .v2_all import TurnDiffUpdatedNotification
 from .v2_all import TurnPlanUpdatedNotification
+from .v2_all import TurnScratchpadUpdatedNotification
 from .v2_all import TurnStartedNotification
 from .v2_all import WarningNotification
 from .v2_all import WindowsSandboxSetupCompletedNotification
@@ -129,6 +130,7 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "turn/completed": TurnCompletedNotification,
     "turn/diff/updated": TurnDiffUpdatedNotification,
     "turn/plan/updated": TurnPlanUpdatedNotification,
+    "turn/scratchpad/updated": TurnScratchpadUpdatedNotification,
     "turn/started": TurnStartedNotification,
     "warning": WarningNotification,
     "windows/worldWritableWarning": WindowsWorldWritableWarningNotification,
@@ -160,6 +162,7 @@ DIRECT_TURN_ID_NOTIFICATION_TYPES: tuple[type[BaseModel], ...] = (
     ThreadTokenUsageUpdatedNotification,
     TurnDiffUpdatedNotification,
     TurnPlanUpdatedNotification,
+    TurnScratchpadUpdatedNotification,
 )
 
 NESTED_TURN_NOTIFICATION_TYPES: tuple[type[BaseModel], ...] = (

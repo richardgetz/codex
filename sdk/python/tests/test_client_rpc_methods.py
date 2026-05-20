@@ -7,6 +7,9 @@ from openai_codex.generated.notification_registry import notification_turn_id
 from openai_codex.generated.v2_all import (
     AgentMessageDeltaNotification,
     ApprovalsReviewer,
+    ImageDetail,
+    ThreadGoalStatus,
+    ThreadGoalUpdatedNotification,
     ThreadListParams,
     ThreadResumeResponse,
     ThreadTokenUsageUpdatedNotification,
@@ -60,6 +63,38 @@ def test_thread_resume_response_accepts_auto_review_reviewer() -> None:
     )
 
     assert response.approvals_reviewer is ApprovalsReviewer.auto_review
+
+
+def test_thread_goal_status_accepts_stopped_statuses() -> None:
+    """Generated goal models should accept the current app-server status enum."""
+    event = ThreadGoalUpdatedNotification.model_validate(
+        {
+            "threadId": "thread-1",
+            "goal": {
+                "createdAt": 1,
+                "objective": "ship",
+                "status": "usageLimited",
+                "threadId": "thread-1",
+                "timeUsedSeconds": 2,
+                "tokenBudget": None,
+                "tokensUsed": 3,
+                "updatedAt": 4,
+            },
+        }
+    )
+
+    assert {
+        "blocked": ThreadGoalStatus.blocked.value,
+        "usage_limited": event.goal.status,
+    } == {
+        "blocked": "blocked",
+        "usage_limited": ThreadGoalStatus.usage_limited,
+    }
+
+
+def test_image_detail_matches_current_schema_values() -> None:
+    """Generated image detail enum should match the current app-server schema."""
+    assert [detail.value for detail in ImageDetail] == ["high", "original"]
 
 
 def test_notifications_are_typed_with_canonical_v2_methods() -> None:

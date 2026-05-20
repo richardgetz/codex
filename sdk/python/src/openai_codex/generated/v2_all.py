@@ -49,24 +49,22 @@ class AccountLoginCompletedNotification(BaseModel):
     success: bool
 
 
-class AdditionalWritableRootActivePermissionProfileModification(BaseModel):
+class ActivePermissionProfile(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    path: AbsolutePathBuf
-    type: Annotated[
-        Literal["additionalWritableRoot"],
-        Field(title="AdditionalWritableRootActivePermissionProfileModificationType"),
+    extends: Annotated[
+        str | None,
+        Field(
+            description="Parent profile identifier once permissions profiles support inheritance. This is currently always `null`."
+        ),
+    ] = None
+    id: Annotated[
+        str,
+        Field(
+            description="Identifier from `default_permissions` or the implicit built-in default, such as `:workspace` or a user-defined `[permissions.<id>]` profile."
+        ),
     ]
-
-
-class ActivePermissionProfileModification(
-    RootModel[AdditionalWritableRootActivePermissionProfileModification]
-):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: AdditionalWritableRootActivePermissionProfileModification
 
 
 class AddCreditsNudgeCreditType(Enum):
@@ -597,6 +595,12 @@ class UserConfigLayerSource(BaseModel):
             description="This is the path to the user's config.toml file, though it is not guaranteed to exist."
         ),
     ]
+    profile: Annotated[
+        str | None,
+        Field(
+            description="Name of the selected profile-v2 config layered on top of the base user config, when this layer represents one."
+        ),
+    ] = None
     type: Annotated[Literal["user"], Field(title="UserConfigLayerSourceType")]
 
 
@@ -680,6 +684,7 @@ class CommandConfiguredHookHandler(BaseModel):
     )
     async_: Annotated[bool, Field(alias="async")]
     command: str
+    command_windows: Annotated[str | None, Field(alias="commandWindows")] = None
     status_message: Annotated[str | None, Field(alias="statusMessage")] = None
     timeout_sec: Annotated[int | None, Field(alias="timeoutSec", ge=0)] = None
     type: Annotated[Literal["command"], Field(title="CommandConfiguredHookHandlerType")]
@@ -841,6 +846,13 @@ class ExperimentalFeatureListParams(BaseModel):
     limit: Annotated[
         int | None,
         Field(description="Optional page size; defaults to a reasonable server-side value.", ge=0),
+    ] = None
+    thread_id: Annotated[
+        str | None,
+        Field(
+            alias="threadId",
+            description="Optional loaded thread id. Pass this when showing feature state for an existing thread so enablement is computed from that thread's refreshed config, including project-local config for the thread's cwd.",
+        ),
     ] = None
 
 
@@ -1012,6 +1024,18 @@ class FileSystemSpecialPath(
         | SlashTmpFileSystemSpecialPath
         | FileSystemSpecialPath1
     )
+
+
+class ForcedChatgptWorkspaceIds(RootModel[str | list[str]]):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Annotated[
+        str | list[str],
+        Field(
+            description="Backward-compatible API shape for ChatGPT workspace login restrictions."
+        ),
+    ]
 
 
 class ForcedLoginMethod(Enum):
@@ -1482,8 +1506,6 @@ class HooksListParams(BaseModel):
 
 
 class ImageDetail(Enum):
-    auto = "auto"
-    low = "low"
     high = "high"
     original = "original"
 
@@ -1926,6 +1948,14 @@ class McpToolCallStatus(Enum):
     failed = "failed"
 
 
+class MemoryAccessPolicy(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    read: bool
+    write: bool
+
+
 class MemoryCitationEntry(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -1948,6 +1978,7 @@ class MessagePhase(Enum):
 
 class ModeKind(Enum):
     plan = "plan"
+    orchestrator = "orchestrator"
     default = "default"
 
 
@@ -2166,66 +2197,6 @@ class PatchChangeKind(
     root: AddPatchChangeKind | DeletePatchChangeKind | UpdatePatchChangeKind
 
 
-class DisabledPermissionProfile(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    type: Annotated[Literal["disabled"], Field(title="DisabledPermissionProfileType")]
-
-
-class UnrestrictedPermissionProfileFileSystemPermissions(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    type: Annotated[
-        Literal["unrestricted"],
-        Field(title="UnrestrictedPermissionProfileFileSystemPermissionsType"),
-    ]
-
-
-class AdditionalWritableRootPermissionProfileModificationParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    path: AbsolutePathBuf
-    type: Annotated[
-        Literal["additionalWritableRoot"],
-        Field(title="AdditionalWritableRootPermissionProfileModificationParamsType"),
-    ]
-
-
-class PermissionProfileModificationParams(
-    RootModel[AdditionalWritableRootPermissionProfileModificationParams]
-):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: AdditionalWritableRootPermissionProfileModificationParams
-
-
-class PermissionProfileNetworkPermissions(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    enabled: bool
-
-
-class ProfilePermissionProfileSelectionParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: str
-    modifications: list[PermissionProfileModificationParams] | None = None
-    type: Annotated[Literal["profile"], Field(title="ProfilePermissionProfileSelectionParamsType")]
-
-
-class PermissionProfileSelectionParams(RootModel[ProfilePermissionProfileSelectionParams]):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: ProfilePermissionProfileSelectionParams
-
-
 class Personality(Enum):
     none = "none"
     friendly = "friendly"
@@ -2296,6 +2267,23 @@ class PluginInstallResponse(BaseModel):
     )
     apps_needing_auth: Annotated[list[AppSummary], Field(alias="appsNeedingAuth")]
     auth_policy: Annotated[PluginAuthPolicy, Field(alias="authPolicy")]
+
+
+class PluginInstalledParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    cwds: Annotated[
+        list[AbsolutePathBuf] | None,
+        Field(description="Optional working directories used to discover repo marketplaces."),
+    ] = None
+    install_suggestion_plugin_names: Annotated[
+        list[str] | None,
+        Field(
+            alias="installSuggestionPluginNames",
+            description="Additional uninstalled plugin names that should be returned when present locally. This is used by mention surfaces that intentionally expose install entrypoints.",
+        ),
+    ] = None
 
 
 class PluginInterface(BaseModel):
@@ -2383,6 +2371,26 @@ class PluginReadParams(BaseModel):
     marketplace_path: Annotated[AbsolutePathBuf | None, Field(alias="marketplacePath")] = None
     plugin_name: Annotated[str, Field(alias="pluginName")]
     remote_marketplace_name: Annotated[str | None, Field(alias="remoteMarketplaceName")] = None
+
+
+class PluginShareCheckoutParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    remote_plugin_id: Annotated[str, Field(alias="remotePluginId")]
+
+
+class PluginShareCheckoutResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    marketplace_name: Annotated[str, Field(alias="marketplaceName")]
+    marketplace_path: Annotated[AbsolutePathBuf, Field(alias="marketplacePath")]
+    plugin_id: Annotated[str, Field(alias="pluginId")]
+    plugin_name: Annotated[str, Field(alias="pluginName")]
+    plugin_path: Annotated[AbsolutePathBuf, Field(alias="pluginPath")]
+    remote_plugin_id: Annotated[str, Field(alias="remotePluginId")]
+    remote_version: Annotated[str | None, Field(alias="remoteVersion")] = None
 
 
 class PluginShareDeleteParams(BaseModel):
@@ -2745,6 +2753,7 @@ class RemoteControlStatusChangedNotification(BaseModel):
     )
     environment_id: Annotated[str | None, Field(alias="environmentId")] = None
     installation_id: Annotated[str, Field(alias="installationId")]
+    server_name: Annotated[str, Field(alias="serverName")]
     status: RemoteControlConnectionStatus
 
 
@@ -2909,6 +2918,13 @@ class CompactionResponseItem(BaseModel):
     )
     encrypted_content: str
     type: Annotated[Literal["compaction"], Field(title="CompactionResponseItemType")]
+
+
+class CompactionTriggerResponseItem(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    type: Annotated[Literal["compaction_trigger"], Field(title="CompactionTriggerResponseItemType")]
 
 
 class ContextCompactionResponseItem(BaseModel):
@@ -3487,6 +3503,7 @@ class SortDirection(Enum):
 class SubAgentSourceValue(Enum):
     review = "review"
     compact = "compact"
+    memory_extraction = "memory_extraction"
     memory_consolidation = "memory_consolidation"
 
 
@@ -3503,6 +3520,25 @@ class SubagentMigration(BaseModel):
         populate_by_name=True,
     )
     name: str
+
+
+class SwitchAccountParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    alias: Annotated[
+        str | None,
+        Field(
+            description="Managed account alias to activate. `null` means use the original root auth store."
+        ),
+    ] = None
+
+
+class SwitchAccountResponse(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
 
 
 class TerminalInteractionNotification(BaseModel):
@@ -3617,6 +3653,48 @@ class ThreadCompactStartResponse(BaseModel):
     )
 
 
+class ThreadControlMode(RootModel[Literal["orchestrator"]]):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Literal["orchestrator"]
+
+
+class ThreadControlReadParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadControlReleaseParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadControlSetParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    mode: ThreadControlMode
+    reason: str
+    release_channel: Annotated[str | None, Field(alias="releaseChannel")] = None
+    target_thread_ids: Annotated[list[str] | None, Field(alias="targetThreadIds")] = None
+    thread_id: Annotated[str, Field(alias="threadId")]
+    watch_interval_seconds: Annotated[int | None, Field(alias="watchIntervalSeconds", ge=0)] = None
+
+
+class ThreadExecPolicyParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    rulesets: Annotated[
+        list[str], Field(description="Named exec-policy rulesets to apply to this thread.")
+    ]
+
+
 class ThreadGoalClearedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -3627,6 +3705,8 @@ class ThreadGoalClearedNotification(BaseModel):
 class ThreadGoalStatus(Enum):
     active = "active"
     paused = "paused"
+    blocked = "blocked"
+    usage_limited = "usageLimited"
     budget_limited = "budgetLimited"
     complete = "complete"
 
@@ -3856,6 +3936,21 @@ class ThreadMemoryMode(Enum):
     disabled = "disabled"
 
 
+class ThreadMemoryPolicySetParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    policy: MemoryAccessPolicy
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadMemoryPolicySetResponse(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
+
 class ThreadMetadataGitInfoUpdateParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -3901,6 +3996,35 @@ class ThreadNameUpdatedNotification(BaseModel):
     )
     thread_id: Annotated[str, Field(alias="threadId")]
     thread_name: Annotated[str | None, Field(alias="threadName")] = None
+
+
+class ThreadOrchestratorMemoryConsolidateParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadOrchestratorMemoryConsolidateResponse(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
+
+class ThreadOrchestratorMemoryForgetParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    needle: str
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadOrchestratorMemoryForgetResponse(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
 
 
 class ThreadReadParams(BaseModel):
@@ -4027,32 +4151,6 @@ class ThreadRealtimeTranscriptDoneNotification(BaseModel):
     thread_id: Annotated[str, Field(alias="threadId")]
 
 
-class ThreadResumeParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    approval_policy: Annotated[AskForApproval | None, Field(alias="approvalPolicy")] = None
-    approvals_reviewer: Annotated[
-        ApprovalsReviewer | None,
-        Field(
-            alias="approvalsReviewer",
-            description="Override where approval requests are routed for review on this thread and subsequent turns.",
-        ),
-    ] = None
-    base_instructions: Annotated[str | None, Field(alias="baseInstructions")] = None
-    config: dict[str, Any] | None = None
-    cwd: str | None = None
-    developer_instructions: Annotated[str | None, Field(alias="developerInstructions")] = None
-    model: Annotated[
-        str | None, Field(description="Configuration overrides for the resumed thread, if any.")
-    ] = None
-    model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
-    personality: Personality | None = None
-    sandbox: SandboxMode | None = None
-    service_tier: Annotated[str | None, Field(alias="serviceTier")] = None
-    thread_id: Annotated[str, Field(alias="threadId")]
-
-
 class ThreadRollbackParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -4066,6 +4164,21 @@ class ThreadRollbackParams(BaseModel):
         ),
     ]
     thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadScratchpadContinuousPolicySetParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    enabled: bool
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadScratchpadContinuousPolicySetResponse(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
 
 
 class ThreadSetNameParams(BaseModel):
@@ -4207,6 +4320,27 @@ class ThreadUnsubscribeStatus(Enum):
     unsubscribed = "unsubscribed"
 
 
+class ThreadUserPreferencesMemoryMigrateParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadUserPreferencesMemoryMigrateResponse(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
+
+class ThreadUserPreferencesMemoryPolicySetResponse(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
+
 class TokenUsageBreakdown(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -4276,6 +4410,24 @@ class TurnPlanStepStatus(Enum):
     completed = "completed"
 
 
+class TurnScratchpadUpdatedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    archived_at: Annotated[str | None, Field(alias="archivedAt")] = None
+    blocked: list[str]
+    completed: list[str]
+    continuous_enabled: Annotated[bool, Field(alias="continuousEnabled")]
+    next_steps: Annotated[list[str], Field(alias="nextSteps")]
+    objective: str
+    pending_waits: Annotated[list[str], Field(alias="pendingWaits")]
+    scratchpad_id: Annotated[str, Field(alias="scratchpadId")]
+    status: str
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[str, Field(alias="turnId")]
+    updated_at: Annotated[str, Field(alias="updatedAt")]
+
+
 class TurnStatus(Enum):
     completed = "completed"
     interrupted = "interrupted"
@@ -4308,6 +4460,7 @@ class ImageUserInput(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    detail: ImageDetail | None = None
     type: Annotated[Literal["image"], Field(title="ImageUserInputType")]
     url: str
 
@@ -4316,6 +4469,7 @@ class LocalImageUserInput(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    detail: ImageDetail | None = None
     path: str
     type: Annotated[Literal["localImage"], Field(title="LocalImageUserInputType")]
 
@@ -4347,6 +4501,23 @@ class UserInput(
         populate_by_name=True,
     )
     root: TextUserInput | ImageUserInput | LocalImageUserInput | SkillUserInput | MentionUserInput
+
+
+class UserPreferencesMemoryBucket(Enum):
+    durable_preference = "durable_preference"
+    personal_context = "personal_context"
+    relational_attunement = "relational_attunement"
+    operator_playbook = "operator_playbook"
+    ongoing_threads = "ongoing_threads"
+    followup_state = "followup_state"
+
+
+class UserPreferencesMemoryBucketPolicy(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    read_buckets: Annotated[list[UserPreferencesMemoryBucket], Field(alias="readBuckets")]
+    write_buckets: Annotated[list[UserPreferencesMemoryBucket], Field(alias="writeBuckets")]
 
 
 class Verbosity(Enum):
@@ -4521,32 +4692,9 @@ class AccountUpdatedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    account: Account | None = None
     auth_mode: Annotated[AuthMode | None, Field(alias="authMode")] = None
     plan_type: Annotated[PlanType | None, Field(alias="planType")] = None
-
-
-class ActivePermissionProfile(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    extends: Annotated[
-        str | None,
-        Field(
-            description="Parent profile identifier once permissions profiles support inheritance. This is currently always `null`."
-        ),
-    ] = None
-    id: Annotated[
-        str,
-        Field(
-            description="Identifier from `default_permissions` or the implicit built-in default, such as `:workspace` or a user-defined `[permissions.<id>]` profile."
-        ),
-    ]
-    modifications: Annotated[
-        list[ActivePermissionProfileModification] | None,
-        Field(
-            description="Bounded user-requested modifications applied on top of the named profile, if any."
-        ),
-    ] = []
 
 
 class AppConfig(BaseModel):
@@ -4606,15 +4754,6 @@ class InitializeRequest(BaseModel):
     params: InitializeParams
 
 
-class ThreadResumeRequest(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Annotated[Literal["thread/resume"], Field(title="Thread/resumeRequestMethod")]
-    params: ThreadResumeParams
-
-
 class ThreadArchiveRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -4642,6 +4781,29 @@ class ThreadNameSetRequest(BaseModel):
     params: ThreadSetNameParams
 
 
+class ThreadScratchpadContinuousPolicySetRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/scratchpad/continuousPolicy/set"],
+        Field(title="Thread/scratchpad/continuousPolicy/setRequestMethod"),
+    ]
+    params: ThreadScratchpadContinuousPolicySetParams
+
+
+class ThreadMemoryPolicySetRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/memoryPolicy/set"], Field(title="Thread/memoryPolicy/setRequestMethod")
+    ]
+    params: ThreadMemoryPolicySetParams
+
+
 class ThreadMetadataUpdateRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -4651,6 +4813,37 @@ class ThreadMetadataUpdateRequest(BaseModel):
         Literal["thread/metadata/update"], Field(title="Thread/metadata/updateRequestMethod")
     ]
     params: ThreadMetadataUpdateParams
+
+
+class ThreadControlReadRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/control/read"], Field(title="Thread/control/readRequestMethod")
+    ]
+    params: ThreadControlReadParams
+
+
+class ThreadControlSetRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["thread/control/set"], Field(title="Thread/control/setRequestMethod")]
+    params: ThreadControlSetParams
+
+
+class ThreadControlReleaseRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/control/release"], Field(title="Thread/control/releaseRequestMethod")
+    ]
+    params: ThreadControlReleaseParams
 
 
 class ThreadUnarchiveRequest(BaseModel):
@@ -4694,6 +4887,42 @@ class ThreadApproveGuardianDeniedActionRequest(BaseModel):
         Field(title="Thread/approveGuardianDeniedActionRequestMethod"),
     ]
     params: ThreadApproveGuardianDeniedActionParams
+
+
+class ThreadOrchestratorMemoryConsolidateRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/orchestratorMemory/consolidate"],
+        Field(title="Thread/orchestratorMemory/consolidateRequestMethod"),
+    ]
+    params: ThreadOrchestratorMemoryConsolidateParams
+
+
+class ThreadOrchestratorMemoryForgetRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/orchestratorMemory/forget"],
+        Field(title="Thread/orchestratorMemory/forgetRequestMethod"),
+    ]
+    params: ThreadOrchestratorMemoryForgetParams
+
+
+class ThreadUserPreferencesMemoryMigrateRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/userPreferencesMemory/migrate"],
+        Field(title="Thread/userPreferencesMemory/migrateRequestMethod"),
+    ]
+    params: ThreadUserPreferencesMemoryMigrateParams
 
 
 class ThreadRollbackRequest(BaseModel):
@@ -4790,6 +5019,15 @@ class PluginListRequest(BaseModel):
     params: PluginListParams
 
 
+class PluginInstalledRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["plugin/installed"], Field(title="Plugin/installedRequestMethod")]
+    params: PluginInstalledParams
+
+
 class PluginReadRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -4815,6 +5053,17 @@ class PluginShareListRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["plugin/share/list"], Field(title="Plugin/share/listRequestMethod")]
     params: PluginShareListParams
+
+
+class PluginShareCheckoutRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["plugin/share/checkout"], Field(title="Plugin/share/checkoutRequestMethod")
+    ]
+    params: PluginShareCheckoutParams
 
 
 class PluginShareDeleteRequest(BaseModel):
@@ -5190,6 +5439,15 @@ class AccountReadRequest(BaseModel):
     params: GetAccountParams
 
 
+class AccountSwitchRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["account/switch"], Field(title="Account/switchRequestMethod")]
+    params: SwitchAccountParams
+
+
 class FuzzyFileSearchRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -5424,6 +5682,7 @@ class ConfigRequirements(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    allow_managed_hooks_only: Annotated[bool | None, Field(alias="allowManagedHooksOnly")] = None
     allowed_approval_policies: Annotated[
         list[AskForApproval] | None, Field(alias="allowedApprovalPolicies")
     ] = None
@@ -5842,6 +6101,14 @@ class ModelListResponse(BaseModel):
     ] = None
 
 
+class OrchestratorThreadControlConfig(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    model: str | None = None
+    reasoning_effort: ReasoningEffort | None = None
+
+
 class OverriddenMetadata(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -5849,40 +6116,6 @@ class OverriddenMetadata(BaseModel):
     effective_value: Annotated[Any, Field(alias="effectiveValue")]
     message: str
     overriding_layer: Annotated[ConfigLayerMetadata, Field(alias="overridingLayer")]
-
-
-class ExternalPermissionProfile(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    network: PermissionProfileNetworkPermissions
-    type: Annotated[Literal["external"], Field(title="ExternalPermissionProfileType")]
-
-
-class RestrictedPermissionProfileFileSystemPermissions(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    entries: list[FileSystemSandboxEntry]
-    glob_scan_max_depth: Annotated[int | None, Field(alias="globScanMaxDepth", ge=1)] = None
-    type: Annotated[
-        Literal["restricted"], Field(title="RestrictedPermissionProfileFileSystemPermissionsType")
-    ]
-
-
-class PermissionProfileFileSystemPermissions(
-    RootModel[
-        RestrictedPermissionProfileFileSystemPermissions
-        | UnrestrictedPermissionProfileFileSystemPermissions
-    ]
-):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: (
-        RestrictedPermissionProfileFileSystemPermissions
-        | UnrestrictedPermissionProfileFileSystemPermissions
-    )
 
 
 class PluginSharePrincipal(BaseModel):
@@ -6077,6 +6310,16 @@ class TurnDiffUpdatedServerNotification(BaseModel):
         Literal["turn/diff/updated"], Field(title="Turn/diff/updatedNotificationMethod")
     ]
     params: TurnDiffUpdatedNotification
+
+
+class TurnScratchpadUpdatedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Annotated[
+        Literal["turn/scratchpad/updated"], Field(title="Turn/scratchpad/updatedNotificationMethod")
+    ]
+    params: TurnScratchpadUpdatedNotification
 
 
 class CommandExecOutputDeltaServerNotification(BaseModel):
@@ -6311,6 +6554,48 @@ class SubAgentSource(
     root: SubAgentSourceValue | ThreadSpawnSubAgentSource | OtherSubAgentSource
 
 
+class ThreadControl(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    mode: ThreadControlMode
+    reason: str
+    release_channel: Annotated[str | None, Field(alias="releaseChannel")] = None
+    released_at: Annotated[int | None, Field(alias="releasedAt")] = None
+    target_thread_ids: Annotated[list[str], Field(alias="targetThreadIds")]
+    thread_id: Annotated[str, Field(alias="threadId")]
+    updated_at: Annotated[int, Field(alias="updatedAt")]
+    watch_interval_seconds: Annotated[int | None, Field(alias="watchIntervalSeconds", ge=0)] = None
+
+
+class ThreadControlConfig(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    orchestrator: OrchestratorThreadControlConfig | None = None
+
+
+class ThreadControlReadResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    control: ThreadControl | None = None
+
+
+class ThreadControlReleaseResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    control: ThreadControl | None = None
+
+
+class ThreadControlSetResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    control: ThreadControl
+
+
 class ThreadForkParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6328,6 +6613,13 @@ class ThreadForkParams(BaseModel):
     cwd: str | None = None
     developer_instructions: Annotated[str | None, Field(alias="developerInstructions")] = None
     ephemeral: bool | None = None
+    memory_policy: Annotated[
+        MemoryAccessPolicy | None,
+        Field(
+            alias="memoryPolicy",
+            description="Session-local read/write access for the outer memories layer. Omitted inherits the server's `[memories]` config defaults.",
+        ),
+    ] = None
     model: Annotated[
         str | None, Field(description="Configuration overrides for the forked thread, if any.")
     ] = None
@@ -6340,6 +6632,13 @@ class ThreadForkParams(BaseModel):
         Field(
             alias="threadSource",
             description="Optional client-supplied analytics source classification for this forked thread.",
+        ),
+    ] = None
+    user_preferences_memory_policy: Annotated[
+        UserPreferencesMemoryBucketPolicy | None,
+        Field(
+            alias="userPreferencesMemoryPolicy",
+            description="Session-local memory bucket policy for this thread. Omitted inherits the server's `[user_preferences_memory]` config defaults.",
         ),
     ] = None
 
@@ -6562,6 +6861,46 @@ class ThreadListParams(BaseModel):
     ] = None
 
 
+class ThreadResumeParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    approval_policy: Annotated[AskForApproval | None, Field(alias="approvalPolicy")] = None
+    approvals_reviewer: Annotated[
+        ApprovalsReviewer | None,
+        Field(
+            alias="approvalsReviewer",
+            description="Override where approval requests are routed for review on this thread and subsequent turns.",
+        ),
+    ] = None
+    base_instructions: Annotated[str | None, Field(alias="baseInstructions")] = None
+    config: dict[str, Any] | None = None
+    cwd: str | None = None
+    developer_instructions: Annotated[str | None, Field(alias="developerInstructions")] = None
+    memory_policy: Annotated[
+        MemoryAccessPolicy | None,
+        Field(
+            alias="memoryPolicy",
+            description="Session-local read/write access for the outer memories layer. Omitted uses the server's `[memories]` config defaults.",
+        ),
+    ] = None
+    model: Annotated[
+        str | None, Field(description="Configuration overrides for the resumed thread, if any.")
+    ] = None
+    model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
+    personality: Personality | None = None
+    sandbox: SandboxMode | None = None
+    service_tier: Annotated[str | None, Field(alias="serviceTier")] = None
+    thread_id: Annotated[str, Field(alias="threadId")]
+    user_preferences_memory_policy: Annotated[
+        UserPreferencesMemoryBucketPolicy | None,
+        Field(
+            alias="userPreferencesMemoryPolicy",
+            description="Session-local memory bucket policy for this thread. Omitted uses the server's `[user_preferences_memory]` config defaults.",
+        ),
+    ] = None
+
+
 class ThreadStartParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6579,6 +6918,13 @@ class ThreadStartParams(BaseModel):
     cwd: str | None = None
     developer_instructions: Annotated[str | None, Field(alias="developerInstructions")] = None
     ephemeral: bool | None = None
+    memory_policy: Annotated[
+        MemoryAccessPolicy | None,
+        Field(
+            alias="memoryPolicy",
+            description="Session-local read/write access for the outer memories layer. Omitted uses the server's `[memories]` config defaults.",
+        ),
+    ] = None
     model: str | None = None
     model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
     personality: Personality | None = None
@@ -6593,6 +6939,13 @@ class ThreadStartParams(BaseModel):
         Field(
             alias="threadSource",
             description="Optional client-supplied analytics source classification for this thread.",
+        ),
+    ] = None
+    user_preferences_memory_policy: Annotated[
+        UserPreferencesMemoryBucketPolicy | None,
+        Field(
+            alias="userPreferencesMemoryPolicy",
+            description="Session-local memory bucket policy for this thread. Omitted uses the server's `[user_preferences_memory]` config defaults.",
         ),
     ] = None
 
@@ -6622,11 +6975,18 @@ class ThreadUnsubscribeResponse(BaseModel):
     status: ThreadUnsubscribeStatus
 
 
+class ThreadUserPreferencesMemoryPolicySetParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    policy: UserPreferencesMemoryBucketPolicy
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
 class ToolsV2(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    view_image: bool | None = None
     web_search: WebSearchToolConfig | None = None
 
 
@@ -6821,6 +7181,15 @@ class ThreadStartRequest(BaseModel):
     params: ThreadStartParams
 
 
+class ThreadResumeRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["thread/resume"], Field(title="Thread/resumeRequestMethod")]
+    params: ThreadResumeParams
+
+
 class ThreadForkRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6828,6 +7197,18 @@ class ThreadForkRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["thread/fork"], Field(title="Thread/forkRequestMethod")]
     params: ThreadForkParams
+
+
+class ThreadUserPreferencesMemoryPolicySetRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/userPreferencesMemoryPolicy/set"],
+        Field(title="Thread/userPreferencesMemoryPolicy/setRequestMethod"),
+    ]
+    params: ThreadUserPreferencesMemoryPolicySetParams
 
 
 class ThreadListRequest(BaseModel):
@@ -7072,24 +7453,6 @@ class ListMcpServerStatusResponse(BaseModel):
     ] = None
 
 
-class ManagedPermissionProfile(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    file_system: Annotated[PermissionProfileFileSystemPermissions, Field(alias="fileSystem")]
-    network: PermissionProfileNetworkPermissions
-    type: Annotated[Literal["managed"], Field(title="ManagedPermissionProfileType")]
-
-
-class PermissionProfile(
-    RootModel[ManagedPermissionProfile | DisabledPermissionProfile | ExternalPermissionProfile]
-):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: ManagedPermissionProfile | DisabledPermissionProfile | ExternalPermissionProfile
-
-
 class PluginShareContext(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -7098,6 +7461,13 @@ class PluginShareContext(BaseModel):
     creator_name: Annotated[str | None, Field(alias="creatorName")] = None
     discoverability: PluginShareDiscoverability | None = None
     remote_plugin_id: Annotated[str, Field(alias="remotePluginId")]
+    remote_version: Annotated[
+        str | None,
+        Field(
+            alias="remoteVersion",
+            description="Version of the remote shared plugin release when available.",
+        ),
+    ] = None
     share_principals: Annotated[
         list[PluginSharePrincipal] | None, Field(alias="sharePrincipals")
     ] = None
@@ -7129,7 +7499,20 @@ class PluginSummary(BaseModel):
     installed: bool
     interface: PluginInterface | None = None
     keywords: list[str] | None = []
+    local_version: Annotated[
+        str | None,
+        Field(
+            alias="localVersion",
+            description="Version of the locally materialized plugin package when available.",
+        ),
+    ] = None
     name: str
+    remote_plugin_id: Annotated[
+        str | None,
+        Field(
+            alias="remotePluginId", description="Backend remote plugin identifier when available."
+        ),
+    ] = None
     share_context: Annotated[
         PluginShareContext | None,
         Field(
@@ -7209,6 +7592,7 @@ class ResponseItem(
         | WebSearchCallResponseItem
         | ImageGenerationCallResponseItem
         | CompactionResponseItem
+        | CompactionTriggerResponseItem
         | ContextCompactionResponseItem
         | OtherResponseItem
     ]
@@ -7229,6 +7613,7 @@ class ResponseItem(
         | WebSearchCallResponseItem
         | ImageGenerationCallResponseItem
         | CompactionResponseItem
+        | CompactionTriggerResponseItem
         | ContextCompactionResponseItem
         | OtherResponseItem
     )
@@ -7448,8 +7833,9 @@ class Config(BaseModel):
         ),
     ] = None
     compact_prompt: str | None = None
+    desktop: dict[str, Any] | None = None
     developer_instructions: str | None = None
-    forced_chatgpt_workspace_id: str | None = None
+    forced_chatgpt_workspace_id: ForcedChatgptWorkspaceIds | None = None
     forced_login_method: ForcedLoginMethod | None = None
     instructions: str | None = None
     model: str | None = None
@@ -7465,6 +7851,7 @@ class Config(BaseModel):
     sandbox_mode: SandboxMode | None = None
     sandbox_workspace_write: SandboxWorkspaceWrite | None = None
     service_tier: str | None = None
+    thread_control: ThreadControlConfig | None = None
     tools: ToolsV2 | None = None
     web_search: WebSearchMode | None = None
 
@@ -7821,17 +8208,41 @@ class ThreadForkResponse(BaseModel):
             description="Instruction source files currently loaded for this thread.",
         ),
     ] = []
+    memory_policy: Annotated[MemoryAccessPolicy | None, Field(alias="memoryPolicy")] = {
+        "read": True,
+        "write": True,
+    }
     model: str
     model_provider: Annotated[str, Field(alias="modelProvider")]
     reasoning_effort: Annotated[ReasoningEffort | None, Field(alias="reasoningEffort")] = None
     sandbox: Annotated[
         SandboxPolicy,
         Field(
-            description="Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+            description="Legacy sandbox policy retained for compatibility. Experimental clients should prefer `activePermissionProfile` for profile provenance."
         ),
     ]
     service_tier: Annotated[str | None, Field(alias="serviceTier")] = None
     thread: Thread
+    user_preferences_memory_policy: Annotated[
+        UserPreferencesMemoryBucketPolicy | None, Field(alias="userPreferencesMemoryPolicy")
+    ] = {
+        "readBuckets": [
+            "durable_preference",
+            "personal_context",
+            "relational_attunement",
+            "operator_playbook",
+            "ongoing_threads",
+            "followup_state",
+        ],
+        "writeBuckets": [
+            "durable_preference",
+            "personal_context",
+            "relational_attunement",
+            "operator_playbook",
+            "ongoing_threads",
+            "followup_state",
+        ],
+    }
 
 
 class ThreadListResponse(BaseModel):
@@ -7889,17 +8300,41 @@ class ThreadResumeResponse(BaseModel):
             description="Instruction source files currently loaded for this thread.",
         ),
     ] = []
+    memory_policy: Annotated[MemoryAccessPolicy | None, Field(alias="memoryPolicy")] = {
+        "read": True,
+        "write": True,
+    }
     model: str
     model_provider: Annotated[str, Field(alias="modelProvider")]
     reasoning_effort: Annotated[ReasoningEffort | None, Field(alias="reasoningEffort")] = None
     sandbox: Annotated[
         SandboxPolicy,
         Field(
-            description="Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+            description="Legacy sandbox policy retained for compatibility. Experimental clients should prefer `activePermissionProfile` for profile provenance."
         ),
     ]
     service_tier: Annotated[str | None, Field(alias="serviceTier")] = None
     thread: Thread
+    user_preferences_memory_policy: Annotated[
+        UserPreferencesMemoryBucketPolicy | None, Field(alias="userPreferencesMemoryPolicy")
+    ] = {
+        "readBuckets": [
+            "durable_preference",
+            "personal_context",
+            "relational_attunement",
+            "operator_playbook",
+            "ongoing_threads",
+            "followup_state",
+        ],
+        "writeBuckets": [
+            "durable_preference",
+            "personal_context",
+            "relational_attunement",
+            "operator_playbook",
+            "ongoing_threads",
+            "followup_state",
+        ],
+    }
 
 
 class ThreadRollbackResponse(BaseModel):
@@ -7934,17 +8369,41 @@ class ThreadStartResponse(BaseModel):
             description="Instruction source files currently loaded for this thread.",
         ),
     ] = []
+    memory_policy: Annotated[MemoryAccessPolicy | None, Field(alias="memoryPolicy")] = {
+        "read": True,
+        "write": True,
+    }
     model: str
     model_provider: Annotated[str, Field(alias="modelProvider")]
     reasoning_effort: Annotated[ReasoningEffort | None, Field(alias="reasoningEffort")] = None
     sandbox: Annotated[
         SandboxPolicy,
         Field(
-            description="Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+            description="Legacy sandbox policy retained for compatibility. Experimental clients should prefer `activePermissionProfile` for profile provenance."
         ),
     ]
     service_tier: Annotated[str | None, Field(alias="serviceTier")] = None
     thread: Thread
+    user_preferences_memory_policy: Annotated[
+        UserPreferencesMemoryBucketPolicy | None, Field(alias="userPreferencesMemoryPolicy")
+    ] = {
+        "readBuckets": [
+            "durable_preference",
+            "personal_context",
+            "relational_attunement",
+            "operator_playbook",
+            "ongoing_threads",
+            "followup_state",
+        ],
+        "writeBuckets": [
+            "durable_preference",
+            "personal_context",
+            "relational_attunement",
+            "operator_playbook",
+            "ongoing_threads",
+            "followup_state",
+        ],
+    }
 
 
 class ThreadStartedNotification(BaseModel):
@@ -7982,11 +8441,20 @@ class ClientRequest(
         | ThreadArchiveRequest
         | ThreadUnsubscribeRequest
         | ThreadNameSetRequest
+        | ThreadScratchpadContinuousPolicySetRequest
+        | ThreadMemoryPolicySetRequest
+        | ThreadUserPreferencesMemoryPolicySetRequest
         | ThreadMetadataUpdateRequest
+        | ThreadControlReadRequest
+        | ThreadControlSetRequest
+        | ThreadControlReleaseRequest
         | ThreadUnarchiveRequest
         | ThreadCompactStartRequest
         | ThreadShellCommandRequest
         | ThreadApproveGuardianDeniedActionRequest
+        | ThreadOrchestratorMemoryConsolidateRequest
+        | ThreadOrchestratorMemoryForgetRequest
+        | ThreadUserPreferencesMemoryMigrateRequest
         | ThreadRollbackRequest
         | ThreadListRequest
         | ThreadLoadedListRequest
@@ -7998,11 +8466,13 @@ class ClientRequest(
         | MarketplaceRemoveRequest
         | MarketplaceUpgradeRequest
         | PluginListRequest
+        | PluginInstalledRequest
         | PluginReadRequest
         | PluginSkillReadRequest
         | PluginShareSaveRequest
         | PluginShareUpdateTargetsRequest
         | PluginShareListRequest
+        | PluginShareCheckoutRequest
         | PluginShareDeleteRequest
         | AppListRequest
         | FsReadFileRequest
@@ -8049,6 +8519,7 @@ class ClientRequest(
         | ConfigBatchWriteRequest
         | ConfigRequirementsReadRequest
         | AccountReadRequest
+        | AccountSwitchRequest
         | FuzzyFileSearchRequest
     ]
 ):
@@ -8063,11 +8534,20 @@ class ClientRequest(
         | ThreadArchiveRequest
         | ThreadUnsubscribeRequest
         | ThreadNameSetRequest
+        | ThreadScratchpadContinuousPolicySetRequest
+        | ThreadMemoryPolicySetRequest
+        | ThreadUserPreferencesMemoryPolicySetRequest
         | ThreadMetadataUpdateRequest
+        | ThreadControlReadRequest
+        | ThreadControlSetRequest
+        | ThreadControlReleaseRequest
         | ThreadUnarchiveRequest
         | ThreadCompactStartRequest
         | ThreadShellCommandRequest
         | ThreadApproveGuardianDeniedActionRequest
+        | ThreadOrchestratorMemoryConsolidateRequest
+        | ThreadOrchestratorMemoryForgetRequest
+        | ThreadUserPreferencesMemoryMigrateRequest
         | ThreadRollbackRequest
         | ThreadListRequest
         | ThreadLoadedListRequest
@@ -8079,11 +8559,13 @@ class ClientRequest(
         | MarketplaceRemoveRequest
         | MarketplaceUpgradeRequest
         | PluginListRequest
+        | PluginInstalledRequest
         | PluginReadRequest
         | PluginSkillReadRequest
         | PluginShareSaveRequest
         | PluginShareUpdateTargetsRequest
         | PluginShareListRequest
+        | PluginShareCheckoutRequest
         | PluginShareDeleteRequest
         | AppListRequest
         | FsReadFileRequest
@@ -8130,9 +8612,20 @@ class ClientRequest(
         | ConfigBatchWriteRequest
         | ConfigRequirementsReadRequest
         | AccountReadRequest
+        | AccountSwitchRequest
         | FuzzyFileSearchRequest,
         Field(description="Request from the client to the server.", title="ClientRequest"),
     ]
+
+
+class PluginInstalledResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    marketplace_load_errors: Annotated[
+        list[MarketplaceLoadErrorInfo] | None, Field(alias="marketplaceLoadErrors")
+    ] = []
+    marketplaces: list[PluginMarketplaceEntry]
 
 
 class PluginListResponse(BaseModel):
@@ -8173,6 +8666,7 @@ class ServerNotification(
         | HookCompletedServerNotification
         | TurnDiffUpdatedServerNotification
         | TurnPlanUpdatedServerNotification
+        | TurnScratchpadUpdatedServerNotification
         | ItemStartedServerNotification
         | ItemAutoApprovalReviewStartedServerNotification
         | ItemAutoApprovalReviewCompletedServerNotification
@@ -8242,6 +8736,7 @@ class ServerNotification(
         | HookCompletedServerNotification
         | TurnDiffUpdatedServerNotification
         | TurnPlanUpdatedServerNotification
+        | TurnScratchpadUpdatedServerNotification
         | ItemStartedServerNotification
         | ItemAutoApprovalReviewStartedServerNotification
         | ItemAutoApprovalReviewCompletedServerNotification

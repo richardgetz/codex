@@ -125,6 +125,7 @@ pub struct ToolsConfig {
     pub builtin_scratchpad_enabled: bool,
     pub builtin_schedule_enabled: bool,
     pub builtin_session_overwatch_enabled: bool,
+    pub multi_agent_v2_tool_namespace: Option<String>,
     pub max_concurrent_threads_per_session: Option<usize>,
     pub wait_agent_min_timeout_ms: Option<i64>,
     pub wait_agent_max_timeout_ms: Option<i64>,
@@ -270,6 +271,7 @@ impl ToolsConfig {
             builtin_scratchpad_enabled: true,
             builtin_schedule_enabled: false,
             builtin_session_overwatch_enabled: false,
+            multi_agent_v2_tool_namespace: None,
             max_concurrent_threads_per_session: None,
             wait_agent_min_timeout_ms: None,
             wait_agent_max_timeout_ms: None,
@@ -341,6 +343,14 @@ impl ToolsConfig {
         builtin_session_overwatch_enabled: bool,
     ) -> Self {
         self.builtin_session_overwatch_enabled = builtin_session_overwatch_enabled;
+        self
+    }
+
+    pub fn with_multi_agent_v2_tool_namespace(
+        mut self,
+        multi_agent_v2_tool_namespace: Option<String>,
+    ) -> Self {
+        self.multi_agent_v2_tool_namespace = multi_agent_v2_tool_namespace;
         self
     }
 

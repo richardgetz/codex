@@ -1,17 +1,16 @@
 use super::*;
-use codex_app_server_protocol::FileSystemAccessMode;
-use codex_app_server_protocol::FileSystemPath;
-use codex_app_server_protocol::FileSystemSandboxEntry;
-use codex_app_server_protocol::FileSystemSpecialPath;
-use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
-use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
-use codex_app_server_protocol::PermissionProfileNetworkPermissions;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 
 fn app_server_workspace_write_profile(extra_root: AbsolutePathBuf) -> PermissionProfile {
-    AppServerPermissionProfile::Managed {
-        network: PermissionProfileNetworkPermissions { enabled: false },
-        file_system: PermissionProfileFileSystemPermissions::Restricted {
+    PermissionProfile::Managed {
+        network: NetworkSandboxPolicy::Restricted,
+        file_system: ManagedFileSystemPermissions::Restricted {
             entries: vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
@@ -45,7 +44,6 @@ fn app_server_workspace_write_profile(extra_root: AbsolutePathBuf) -> Permission
             glob_scan_max_depth: None,
         },
     }
-    .into()
 }
 
 #[tokio::test]
@@ -127,9 +125,9 @@ async fn preset_matching_does_not_treat_non_cwd_writable_profile_as_read_only() 
         .into_iter()
         .find(|p| p.id == "read-only")
         .expect("read-only preset exists");
-    let current_profile: PermissionProfile = AppServerPermissionProfile::Managed {
-        network: PermissionProfileNetworkPermissions { enabled: false },
-        file_system: PermissionProfileFileSystemPermissions::Restricted {
+    let current_profile: PermissionProfile = PermissionProfile::Managed {
+        network: NetworkSandboxPolicy::Restricted,
+        file_system: ManagedFileSystemPermissions::Restricted {
             entries: vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
@@ -146,8 +144,7 @@ async fn preset_matching_does_not_treat_non_cwd_writable_profile_as_read_only() 
             ],
             glob_scan_max_depth: None,
         },
-    }
-    .into();
+    };
     let cwd = test_path_buf("/tmp/project").abs();
 
     assert!(
@@ -547,6 +544,78 @@ async fn permissions_selection_shows_previous_custom_swap_back() {
 }
 
 #[tokio::test]
+async fn permissions_selection_previous_custom_sends_legacy_permission_profile() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
+    chat.config.notices.hide_full_access_warning = Some(true);
+    let custom_profile = app_server_workspace_write_profile(test_path_buf("/tmp/extra").abs());
+    chat.remember_custom_permission_selection(RestorablePermissionSelection {
+        approval_policy: AskForApproval::OnRequest,
+        permission_profile: custom_profile.clone(),
+        approvals_reviewer: ApprovalsReviewer::User,
+    });
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::Never.to_core())
+        .expect("set approval policy");
+    chat.config
+        .permissions
+        .set_permission_profile(PermissionProfile::Disabled)
+        .expect("set permission profile");
+
+    chat.open_permissions_popup();
+
+    let mut selected_previous_custom = false;
+    for _ in 0..10 {
+        let popup = render_bottom_popup(&chat, /*width*/ 120);
+        if popup
+            .lines()
+            .any(|line| line.contains("Previous Custom") && line.contains('›'))
+        {
+            selected_previous_custom = true;
+            break;
+        }
+        chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    }
+    assert!(
+        selected_previous_custom,
+        "expected Previous Custom to become selectable"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let op = std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::CodexOp(op @ Op::OverrideTurnContext { .. }) => Some(op),
+            _ => None,
+        })
+        .expect("expected OverrideTurnContext op");
+
+    assert_eq!(
+        op,
+        Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: Some(AskForApproval::OnRequest),
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            active_permission_profile: None,
+            permission_profile: Some(custom_profile),
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        }
+    );
+}
+
+#[tokio::test]
 async fn permissions_selection_emits_history_cell_when_current_is_selected() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]
@@ -816,7 +885,10 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             cwd: None,
             approval_policy: Some(AskForApproval::OnRequest),
             approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-            permission_profile: Some(PermissionProfile::workspace_write()),
+            active_permission_profile: Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+            )),
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -825,6 +897,20 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             collaboration_mode: None,
             personality: None,
         }
+    );
+
+    let active_permission_profile_update = std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::UpdateActivePermissionProfile(active_permission_profile) => {
+                Some(active_permission_profile)
+            }
+            _ => None,
+        })
+        .expect("expected UpdateActivePermissionProfile event");
+
+    assert_eq!(
+        active_permission_profile_update,
+        ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE)
     );
 }
 
