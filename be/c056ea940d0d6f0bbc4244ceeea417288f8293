@@ -1,0 +1,18 @@
+intent:
+  id: preserve-local-daemon-startup-cwd
+change_type: fix
+scope: codex-rs/tui local daemon startup
+summary: Preserve the invoking cwd when normal TUI launch silently reuses the local daemon socket.
+decision: Split implicit local daemon reuse from explicit remote app-server targets so local daemon sessions use embedded/local thread parameters while explicit --remote keeps remote workspace semantics.
+constraints:
+  - Do not change explicit --remote cwd fallback behavior.
+  - Keep local daemon session lookup and config loading scoped to the invoking local project cwd.
+  - Add regression coverage that fails without a distinct LocalDaemon target.
+intent_priority: must
+code_locations:
+  - codex-rs/tui/src/lib.rs
+  - codex-rs/tui/src/app_server_session.rs
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: GPT-5
