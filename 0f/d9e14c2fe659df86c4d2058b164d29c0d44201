@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-05-22/restore-stable-refresh-settings-fixes#0fd9e14c2"
+  change_type: "fix"
+  scope: "codex-rs/tui stable refresh"
+  summary: "Restore upstream TUI/app-server settings fixes dropped during stable refresh while preserving fork-specific active permission profile behavior."
+  decision: "Reapply client-resolved service-tier defaults, personality propagation, full ThreadSettingsUpdated sync, and the upstream/fork preservation audit guidance instead of fast-forwarding to mainline or flattening fork contracts."
+  constraints:
+    - "Must preserve fork-owned app-server behavior, including active-permission-profile-only override turn context."
+    - "Must not recompute away app-server-provided service tier updates in the TUI notification path."
+    - "Must keep explicit remote app-server cwd fallback behavior unchanged; cwd preservation for implicit local daemon sessions remains covered by PR #56."
+    - "Must document that future stable refreshes need effective-behavior audits for both upstream fixes and fork-only surfaces."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/app_server_session.rs"
+    - "codex-rs/tui/src/chatwidget/settings.rs"
+    - "codex-rs/tui/src/chatwidget/tests/app_server.rs"
+    - "codex-rs/tui/src/chatwidget/tests/permissions.rs"
+    - ".codex/skills/fork-stable-release/SKILL.md"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
