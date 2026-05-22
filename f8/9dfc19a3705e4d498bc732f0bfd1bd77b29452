@@ -1,0 +1,20 @@
+intent:
+  id: stable-rust-v0-133-argument-comment-ci-repair
+change_type: fix
+scope: codex-rs argument-comment CI fixtures
+summary: Repair PR #55 macOS argument-comment compile failures after the rust-v0.133.0 stable refresh.
+decision: Align thread-manager-sample and app-server test fixtures with the current Config and ThreadConfigSnapshot shapes, avoid duplicate app-server test module names, and add required argument comments for opaque None arguments in session handler thread-settings updates.
+constraints:
+  - Preserve fork stable behavior.
+  - Do not introduce or record secrets.
+  - Keep the change scoped to CI compile/lint failures from PR #55.
+intent_priority: must
+code_locations:
+  - codex-rs/thread-manager-sample/src/main.rs
+  - codex-rs/app-server/src/thread_state.rs
+  - codex-rs/app-server/src/request_processors/thread_processor_tests.rs
+  - codex-rs/core/src/session/handlers.rs
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: GPT-5
