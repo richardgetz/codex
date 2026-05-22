@@ -1,0 +1,20 @@
+intent:
+  id: pr55-ci-argument-comment-fixtures
+change_type: fix
+scope: codex-rs/codex-mcp,codex-rs/tui
+summary: Repair stale test fixtures and slash-command alias wiring exposed by PR #55 argument-comment checks.
+decision: Keep the CI repair limited to fixture/API drift and preserve fork-stable /btw side-conversation behavior while leaving the gh SecurityServer sandbox guard intact.
+constraints:
+  - Do not include secrets or credentials.
+  - Preserve the gh Keychain SecurityServer sandbox regression test and base policy allow.
+  - Do not rerun tests after final just fix/fmt per repo guidance.
+intent_priority: should
+code_locations:
+  - codex-rs/codex-mcp/src/connection_manager_tests.rs
+  - codex-rs/codex-mcp/src/runtime.rs
+  - codex-rs/tui/src/slash_command.rs
+  - codex-rs/tui/src/chatwidget/slash_dispatch.rs
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: GPT-5
