@@ -934,7 +934,7 @@ impl Session {
                         network_policy_decider.as_ref().map(Arc::clone),
                         blocked_request_observer.as_ref().map(Arc::clone),
                         managed_network_requirements_configured,
-                        network_proxy_audit_metadata,
+                        network_proxy_audit_metadata.clone(),
                     )
                     .instrument(info_span!(
                         "session_init.network_proxy",
@@ -1026,7 +1026,9 @@ impl Session {
                 session_extension_data,
                 thread_extension_data,
                 agent_control,
-                network_proxy,
+                network_proxy: arc_swap::ArcSwapOption::from(network_proxy.map(Arc::new)),
+                network_proxy_audit_metadata,
+                managed_network_requirements_configured,
                 network_approval: Arc::clone(&network_approval),
                 state_db: state_db_ctx.clone(),
                 live_thread: live_thread_init.as_ref().cloned(),
@@ -1161,14 +1163,16 @@ impl Session {
             .cloned();
             let mcp_runtime_environment = match turn_environment {
                 Some(turn_environment) => McpRuntimeEnvironment::new(
-                    Arc::clone(&turn_environment.environment),
+                    Some(Arc::clone(&turn_environment.environment)),
+                    sess.services.environment_manager.try_local_environment(),
                     turn_environment.cwd.to_path_buf(),
                 ),
                 None => McpRuntimeEnvironment::new(
                     sess.services
                         .environment_manager
                         .default_environment()
-                        .unwrap_or_else(|| sess.services.environment_manager.local_environment()),
+                        .or_else(|| sess.services.environment_manager.try_local_environment()),
+                    sess.services.environment_manager.try_local_environment(),
                     session_configuration.cwd.to_path_buf(),
                 ),
             };

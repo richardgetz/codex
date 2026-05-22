@@ -16,9 +16,23 @@ impl ScratchpadInstructions {
 }
 
 impl ContextualUserFragment for ScratchpadInstructions {
-    const ROLE: &'static str = "developer";
-    const START_MARKER: &'static str = SCRATCHPAD_INSTRUCTIONS_OPEN_TAG;
-    const END_MARKER: &'static str = SCRATCHPAD_INSTRUCTIONS_CLOSE_TAG;
+    fn role() -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        (
+            SCRATCHPAD_INSTRUCTIONS_OPEN_TAG,
+            SCRATCHPAD_INSTRUCTIONS_CLOSE_TAG,
+        )
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        (
+            SCRATCHPAD_INSTRUCTIONS_OPEN_TAG,
+            SCRATCHPAD_INSTRUCTIONS_CLOSE_TAG,
+        )
+    }
 
     fn body(&self) -> String {
         let mut body = "\n## Built-in Scratchpad\n\

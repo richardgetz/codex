@@ -447,7 +447,7 @@ mod thread_processor_behavior_tests {
                         path: FileSystemPath::GlobPattern {
                             pattern: "/tmp/project/**/*.env".to_string(),
                         },
-                        access: FileSystemAccessMode::None,
+                        access: FileSystemAccessMode::Deny,
                     },
                 ]),
                 NetworkSandboxPolicy::Restricted,

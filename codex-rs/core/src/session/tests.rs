@@ -372,7 +372,7 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
         .await;
 
     assert_eq!(
-        response,
+        response.response,
         Some(ElicitationResponse {
             action: ElicitationAction::Accept,
             content: Some(json!({})),
@@ -604,7 +604,9 @@ async fn preview_session_start_hooks(
             transcript_path: None,
             model: "gpt-5.2".to_string(),
             permission_mode: "default".to_string(),
-            source: codex_hooks::SessionStartSource::Startup,
+            target: codex_hooks::StartHookTarget::SessionStart {
+                source: codex_hooks::SessionStartSource::Startup,
+            },
         }),
     )
 }
@@ -889,7 +891,7 @@ async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::R
 
 #[tokio::test]
 async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow::Result<()> {
-    let (mut session, _turn_context) = make_session_and_context().await;
+    let (session, _turn_context) = make_session_and_context().await;
     let initial_permission_profile = PermissionProfile::workspace_write();
 
     let mut network_config = NetworkProxyConfig::default();
@@ -944,7 +946,10 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
             .set_permission_profile_for_tests(initial_permission_profile)
             .expect("test setup should allow permission profile");
     }
-    session.services.network_proxy = Some(started_proxy);
+    session
+        .services
+        .network_proxy
+        .store(Some(Arc::new(started_proxy)));
 
     session
         .new_turn_with_sub_id(
@@ -959,7 +964,7 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
     let started_proxy = session
         .services
         .network_proxy
-        .as_ref()
+        .load_full()
         .expect("managed network proxy should be present");
     assert_eq!(
         started_proxy
@@ -1370,7 +1375,9 @@ async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
         transcript_path: None,
         model: "gpt-5.2".to_string(),
         permission_mode: "default".to_string(),
-        source: codex_hooks::SessionStartSource::Startup,
+        target: codex_hooks::StartHookTarget::SessionStart {
+            source: codex_hooks::SessionStartSource::Startup,
+        },
     };
     assert!(session.hooks().preview_session_start(&request).is_empty());
 
@@ -1475,7 +1482,9 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
         transcript_path: None,
         model: "gpt-5.2".to_string(),
         permission_mode: "default".to_string(),
-        source: codex_hooks::SessionStartSource::Startup,
+        target: codex_hooks::StartHookTarget::SessionStart {
+            source: codex_hooks::SessionStartSource::Startup,
+        },
     };
     assert!(session.hooks().preview_session_start(&request).is_empty());
 
@@ -2296,6 +2305,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -2359,6 +2369,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&forked.thread, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -5097,7 +5108,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
-        network_proxy: None,
+        network_proxy: None.into(),
+        network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
+        managed_network_requirements_configured: false,
         network_approval: Arc::clone(&network_approval),
         state_db: None,
         live_thread: None,
@@ -6007,6 +6020,7 @@ fn op_kind_distinguishes_turn_ops() {
             items: vec![],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         }
         .kind(),
         "user_input"
@@ -6979,7 +6993,9 @@ where
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
-        network_proxy: None,
+        network_proxy: None.into(),
+        network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
+        managed_network_requirements_configured: false,
         network_approval: Arc::clone(&network_approval),
         state_db: state_db.clone(),
         live_thread: None,
@@ -10445,6 +10461,7 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -10549,6 +10566,7 @@ async fn pending_request_user_input_does_not_spawn_extra_goal_continuation() -> 
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -11033,6 +11051,7 @@ async fn completed_goal_accounts_current_turn_tokens_before_tool_response() -> a
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
 

@@ -214,6 +214,7 @@ mod thread_events;
 mod thread_goal_actions;
 mod thread_routing;
 mod thread_session_state;
+mod thread_settings;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
@@ -576,7 +577,9 @@ pub(crate) struct App {
     pub(crate) feedback: codex_feedback::CodexFeedback,
     feedback_audience: FeedbackAudience,
     environment_manager: Arc<EnvironmentManager>,
+    app_server_target: crate::AppServerTarget,
     remote_app_server_endpoint: Option<RemoteAppServerEndpoint>,
+    pending_startup_thread_start: bool,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
@@ -1031,7 +1034,13 @@ See the Codex keymap documentation for supported actions and examples."
             feedback: feedback.clone(),
             feedback_audience,
             environment_manager,
+            app_server_target: remote_app_server_endpoint
+                .clone()
+                .map_or(crate::AppServerTarget::Embedded, |endpoint| {
+                    crate::AppServerTarget::Remote { endpoint }
+                }),
             remote_app_server_endpoint,
+            pending_startup_thread_start: false,
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),

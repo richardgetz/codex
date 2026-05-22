@@ -73,6 +73,35 @@ fn root_write_policy_with_carveouts_still_uses_platform_sandbox() {
 }
 
 #[test]
+fn root_write_policy_with_deny_mode_carveouts_still_uses_platform_sandbox() {
+    let blocked = AbsolutePathBuf::resolve_path_against_base(
+        "blocked",
+        std::env::current_dir().expect("current dir"),
+    );
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Write,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: blocked },
+            access: FileSystemAccessMode::Deny,
+        },
+    ]);
+
+    assert_eq!(
+        should_require_platform_sandbox(
+            &policy,
+            NetworkSandboxPolicy::Enabled,
+            /*has_managed_network_requirements*/ false
+        ),
+        true
+    );
+}
+
+#[test]
 fn full_access_restricted_policy_still_uses_platform_sandbox_for_restricted_network() {
     let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
         path: FileSystemPath::Special {
@@ -204,6 +233,39 @@ fn normalize_additional_permissions_preserves_deny_globs() {
                         pattern: "**/*.env".to_string(),
                     },
                     access: FileSystemAccessMode::None,
+                }],
+                glob_scan_max_depth: std::num::NonZeroUsize::new(2),
+            }),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn normalize_additional_permissions_preserves_deny_mode_globs() {
+    let permissions = normalize_additional_permissions(PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: "**/*.env".to_string(),
+                },
+                access: FileSystemAccessMode::Deny,
+            }],
+            glob_scan_max_depth: std::num::NonZeroUsize::new(2),
+        }),
+        ..Default::default()
+    })
+    .expect("deny-mode glob permissions are supported");
+
+    assert_eq!(
+        permissions,
+        PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                entries: vec![FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: "**/*.env".to_string(),
+                    },
+                    access: FileSystemAccessMode::Deny,
                 }],
                 glob_scan_max_depth: std::num::NonZeroUsize::new(2),
             }),
@@ -807,6 +869,42 @@ fn merge_file_system_policy_with_additional_permissions_carries_bounded_glob_sca
             pattern: "**/*.env".to_string(),
         },
         access: FileSystemAccessMode::None,
+    };
+    let merged_policy = merge_file_system_policy_with_additional_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Write,
+        }]),
+        &FileSystemPermissions {
+            entries: vec![deny_env_files.clone()],
+            glob_scan_max_depth: std::num::NonZeroUsize::new(2),
+        },
+    );
+
+    assert_eq!(merged_policy, {
+        let mut policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            deny_env_files,
+        ]);
+        policy.glob_scan_max_depth = Some(2);
+        policy
+    });
+}
+
+#[test]
+fn merge_file_system_policy_with_additional_permissions_carries_deny_mode_glob_depth() {
+    let deny_env_files = FileSystemSandboxEntry {
+        path: FileSystemPath::GlobPattern {
+            pattern: "**/*.env".to_string(),
+        },
+        access: FileSystemAccessMode::Deny,
     };
     let merged_policy = merge_file_system_policy_with_additional_permissions(
         &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {

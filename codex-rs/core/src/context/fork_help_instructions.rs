@@ -14,9 +14,17 @@ impl ForkHelpInstructions {
 }
 
 impl ContextualUserFragment for ForkHelpInstructions {
-    const ROLE: &'static str = "developer";
-    const START_MARKER: &'static str = FORK_HELP_OPEN_TAG;
-    const END_MARKER: &'static str = FORK_HELP_CLOSE_TAG;
+    fn role() -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        (FORK_HELP_OPEN_TAG, FORK_HELP_CLOSE_TAG)
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        (FORK_HELP_OPEN_TAG, FORK_HELP_CLOSE_TAG)
+    }
 
     fn body(&self) -> String {
         format!(

@@ -241,6 +241,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                 chunk_id: String::new(),
                 wall_time: std::time::Duration::ZERO,
                 raw_output: output.into_text().into_bytes(),
+                truncation_policy: turn.truncation_policy,
                 max_output_tokens: Some(max_output_tokens),
                 process_id: None,
                 exit_code: None,
@@ -284,6 +285,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                     chunk_id: generate_chunk_id(),
                     wall_time: output.duration,
                     raw_output: output_text.into_bytes(),
+                    truncation_policy: turn.truncation_policy,
                     max_output_tokens: Some(max_output_tokens),
                     // Sandbox denial is terminal, so there is no live
                     // process for write_stdin to resume.

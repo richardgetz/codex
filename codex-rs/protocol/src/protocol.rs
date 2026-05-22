@@ -398,6 +398,46 @@ pub struct ConversationTextParams {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ThreadSettingsOverrides {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<AskForApproval>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_policy: Option<SandboxPolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<PermissionProfile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows_sandbox_level: Option<WindowsSandboxLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Option<ReasoningEffortConfig>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<ReasoningSummaryConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collaboration_mode: Option<CollaborationMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personality: Option<Personality>,
+}
+
+impl ThreadSettingsOverrides {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 /// Submission operation
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -427,6 +467,11 @@ pub enum Op {
     /// Request the list of voices supported by realtime conversation streams.
     RealtimeConversationListVoices,
 
+    /// Update persistent thread settings without starting a turn.
+    ThreadSettings {
+        thread_settings: ThreadSettingsOverrides,
+    },
+
     /// Legacy user input.
     ///
     /// Prefer [`Op::UserTurn`] so the caller provides full turn context
@@ -443,6 +488,9 @@ pub enum Op {
         /// Optional turn-scoped Responses API `client_metadata`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         responsesapi_client_metadata: Option<HashMap<String, String>>,
+        /// Persistent thread settings to apply before starting this turn.
+        #[serde(default, skip_serializing_if = "ThreadSettingsOverrides::is_empty")]
+        thread_settings: ThreadSettingsOverrides,
     },
 
     /// Similar to [`Op::UserInput`], but first applies persistent turn-context
@@ -839,6 +887,7 @@ impl From<Vec<UserInput>> for Op {
             items: value,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: ThreadSettingsOverrides::default(),
         }
     }
 }
@@ -904,6 +953,7 @@ impl Op {
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
+            Self::ThreadSettings { .. } => "thread_settings",
             Self::UserInput { .. } => "user_input",
             Self::UserInputWithTurnContext { .. } => "user_input_with_turn_context",
             Self::UserTurn { .. } => "user_turn",
@@ -1369,6 +1419,10 @@ pub enum EventMsg {
     #[serde(rename = "task_started", alias = "turn_started")]
     TurnStarted(TurnStartedEvent),
 
+    /// Persistent thread-settings overrides from the correlated submission have
+    /// been applied to the session configuration.
+    ThreadSettingsApplied(ThreadSettingsAppliedEvent),
+
     /// Agent has completed all actions.
     /// v1 wire format uses `task_complete`; accept `turn_complete` for v2 interop.
     #[serde(rename = "task_complete", alias = "turn_complete")]
@@ -1532,6 +1586,8 @@ pub enum HookEventName {
     PostCompact,
     SessionStart,
     UserPromptSubmit,
+    SubagentStart,
+    SubagentStop,
     Stop,
 }
 
@@ -2069,6 +2125,33 @@ pub struct TurnStartedEvent {
     pub collaboration_mode_kind: ModeKind,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ThreadSettingsAppliedEvent {
+    pub thread_settings: ThreadSettingsSnapshot,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ThreadSettingsSnapshot {
+    pub model: String,
+    pub model_provider_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    pub permission_profile: PermissionProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
+    pub cwd: AbsolutePathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffortConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_summary: Option<ReasoningSummaryConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personality: Option<Personality>,
+    pub collaboration_mode: CollaborationMode,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]
 pub struct TokenUsage {
     #[ts(type = "number")]
@@ -2368,6 +2451,9 @@ pub struct McpToolCallBeginEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub mcp_app_resource_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plugin_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
@@ -2378,6 +2464,9 @@ pub struct McpToolCallEndEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub mcp_app_resource_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plugin_id: Option<String>,
     #[ts(type = "string")]
     pub duration: Duration,
     /// Result of the tool call. Note this could be an error.
@@ -4752,6 +4841,7 @@ mod tests {
                 tool: "tool".into(),
                 arguments: json!({"arg": "value"}),
                 mcp_app_resource_uri: Some("app://connector".into()),
+                plugin_id: None,
                 status: McpToolCallStatus::InProgress,
                 result: None,
                 error: None,
@@ -4857,6 +4947,7 @@ mod tests {
                 tool: "tool".into(),
                 arguments: json!({"arg": "value"}),
                 mcp_app_resource_uri: Some("app://connector".into()),
+                plugin_id: None,
                 status: McpToolCallStatus::Completed,
                 result: Some(CallToolResult {
                     content: vec![json!({"type": "text", "text": "ok"})],
@@ -5141,6 +5232,7 @@ mod tests {
             items: Vec::new(),
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -5160,6 +5252,7 @@ mod tests {
                 items: Vec::new(),
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             }
         );
 
@@ -5181,6 +5274,7 @@ mod tests {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -5206,6 +5300,7 @@ mod tests {
                 "fiber_run_id".to_string(),
                 "fiber-123".to_string(),
             )])),
+            thread_settings: Default::default(),
         };
 
         let json_op = serde_json::to_value(&op)?;

@@ -13,9 +13,23 @@ impl ConventionalCommitsInstructions {
 }
 
 impl ContextualUserFragment for ConventionalCommitsInstructions {
-    const ROLE: &'static str = "developer";
-    const START_MARKER: &'static str = CONVENTIONAL_COMMITS_INSTRUCTIONS_OPEN_TAG;
-    const END_MARKER: &'static str = CONVENTIONAL_COMMITS_INSTRUCTIONS_CLOSE_TAG;
+    fn role() -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        (
+            CONVENTIONAL_COMMITS_INSTRUCTIONS_OPEN_TAG,
+            CONVENTIONAL_COMMITS_INSTRUCTIONS_CLOSE_TAG,
+        )
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        (
+            CONVENTIONAL_COMMITS_INSTRUCTIONS_OPEN_TAG,
+            CONVENTIONAL_COMMITS_INSTRUCTIONS_CLOSE_TAG,
+        )
+    }
 
     fn body(&self) -> String {
         "\n## Conventional Commits\n\

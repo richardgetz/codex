@@ -118,11 +118,15 @@ pub enum FileSystemAccessMode {
     Read,
     Write,
     None,
+    Deny,
 }
 
 impl FileSystemAccessMode {
     pub fn can_read(self) -> bool {
-        !matches!(self, FileSystemAccessMode::None)
+        !matches!(
+            self,
+            FileSystemAccessMode::None | FileSystemAccessMode::Deny
+        )
     }
 
     pub fn can_write(self) -> bool {
@@ -341,7 +345,7 @@ pub enum FileSystemPath {
         path: AbsolutePathBuf,
     },
     /// A git-style glob pattern. Pattern entries currently support
-    /// FileSystemAccessMode::None only.
+    /// explicit read-deny access modes only.
     GlobPattern {
         pattern: String,
     },
@@ -409,10 +413,7 @@ impl FileSystemSandboxPolicy {
 
     pub fn has_denied_read_restrictions(&self) -> bool {
         matches!(self.kind, FileSystemSandboxKind::Restricted)
-            && self
-                .entries
-                .iter()
-                .any(|entry| entry.access == FileSystemAccessMode::None)
+            && self.entries.iter().any(|entry| !entry.access.can_read())
     }
 
     pub fn from_legacy_sandbox_policy_preserving_deny_entries(
@@ -429,7 +430,7 @@ impl FileSystemSandboxPolicy {
         for deny_entry in existing
             .entries
             .iter()
-            .filter(|entry| entry.access == FileSystemAccessMode::None)
+            .filter(|entry| !entry.access.can_read())
         {
             if !rebuilt.entries.iter().any(|entry| entry == deny_entry) {
                 rebuilt.entries.push(deny_entry.clone());
@@ -445,7 +446,7 @@ impl FileSystemSandboxPolicy {
         let has_deny_read_entries = existing
             .entries
             .iter()
-            .any(|entry| entry.access == FileSystemAccessMode::None);
+            .any(|entry| !entry.access.can_read());
         if matches!(self.kind, FileSystemSandboxKind::Unrestricted) && has_deny_read_entries {
             *self = Self::restricted(vec![FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -466,7 +467,7 @@ impl FileSystemSandboxPolicy {
         for deny_entry in existing
             .entries
             .iter()
-            .filter(|entry| entry.access == FileSystemAccessMode::None)
+            .filter(|entry| !entry.access.can_read())
         {
             if !self.entries.iter().any(|entry| entry == deny_entry) {
                 self.entries.push(deny_entry.clone());
@@ -492,7 +493,7 @@ impl FileSystemSandboxPolicy {
                     FileSystemPath::Path { .. } => !self.has_same_target_write_override(entry),
                     FileSystemPath::GlobPattern { .. } => true,
                     FileSystemPath::Special { value } => match value {
-                        FileSystemSpecialPath::Root => entry.access == FileSystemAccessMode::None,
+                        FileSystemSpecialPath::Root => !entry.access.can_read(),
                         FileSystemSpecialPath::Minimal | FileSystemSpecialPath::Unknown { .. } => {
                             false
                         }
@@ -1062,7 +1063,7 @@ impl FileSystemSandboxPolicy {
         dedup_absolute_paths(
             self.resolved_entries_with_cwd(cwd)
                 .iter()
-                .filter(|entry| entry.access == FileSystemAccessMode::None)
+                .filter(|entry| !entry.access.can_read())
                 .filter(|entry| !self.can_read_path_with_cwd(entry.path.as_path(), cwd))
                 // Restricted policies already deny reads outside explicit allow roots,
                 // so materializing the filesystem root here would erase narrower
@@ -1083,7 +1084,7 @@ impl FileSystemSandboxPolicy {
         let mut patterns = self
             .entries
             .iter()
-            .filter(|entry| entry.access == FileSystemAccessMode::None)
+            .filter(|entry| !entry.access.can_read())
             .filter_map(|entry| match &entry.path {
                 FileSystemPath::GlobPattern { pattern } => {
                     Some(AbsolutePathBuf::resolve_path_against_base(pattern, cwd))
@@ -1142,7 +1143,7 @@ impl FileSystemSandboxPolicy {
                         }
                         FileSystemPath::Special { value } => match value {
                             FileSystemSpecialPath::Root => match entry.access {
-                                FileSystemAccessMode::None => {}
+                                FileSystemAccessMode::None | FileSystemAccessMode::Deny => {}
                                 FileSystemAccessMode::Read => {}
                                 FileSystemAccessMode::Write => {
                                     unbridgeable_root_write = true;
@@ -3057,6 +3058,48 @@ mod tests {
         ]);
         expected.glob_scan_max_depth = Some(2);
         assert_eq!(replacement, expected);
+    }
+
+    #[test]
+    fn deny_mode_entries_are_preserved_as_read_denies() {
+        let deny_entry = FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: "/tmp/project/**/*.env".to_string(),
+            },
+            access: FileSystemAccessMode::Deny,
+        };
+        let mut existing = FileSystemSandboxPolicy::restricted(vec![deny_entry.clone()]);
+        existing.glob_scan_max_depth = Some(2);
+        let mut replacement = FileSystemSandboxPolicy::unrestricted();
+
+        replacement.preserve_deny_read_restrictions_from(&existing);
+
+        let mut expected = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            deny_entry,
+        ]);
+        expected.glob_scan_max_depth = Some(2);
+        assert_eq!(replacement, expected);
+    }
+
+    #[test]
+    fn deny_mode_globs_are_returned_as_unreadable_globs() {
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: "secrets/**/*.json".to_string(),
+            },
+            access: FileSystemAccessMode::Deny,
+        }]);
+
+        assert_eq!(
+            policy.get_unreadable_globs_with_cwd(Path::new("/tmp/project")),
+            vec!["/tmp/project/secrets/**/*.json".to_string()]
+        );
     }
 
     fn deny_policy(path: &Path) -> FileSystemSandboxPolicy {

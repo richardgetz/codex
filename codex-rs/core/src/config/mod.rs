@@ -97,6 +97,7 @@ use codex_model_provider_info::built_in_model_providers;
 use codex_model_provider_info::merge_configured_model_providers;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -725,6 +726,9 @@ pub struct Config {
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
+
+    /// Controls whether auto-compaction uses total context or post-prefix body growth.
+    pub model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope,
 
     /// Key into the model_providers map that specifies which provider to use.
     pub model_provider_id: String,
@@ -1631,6 +1635,17 @@ impl Config {
                 ElicitationCapability::default()
             },
             configured_mcp_servers,
+            plugin_ids_by_mcp_server_name: loaded_plugins
+                .plugins()
+                .iter()
+                .filter(|plugin| plugin.is_active())
+                .flat_map(|plugin| {
+                    plugin
+                        .mcp_servers
+                        .keys()
+                        .map(|server_name| (server_name.clone(), plugin.config_name.clone()))
+                })
+                .collect(),
             plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
         }
     }
@@ -2782,6 +2797,7 @@ impl Config {
             network: network_requirements,
             filesystem: filesystem_requirements,
             guardian_policy_config_source: _,
+            ..
         } = config_layer_stack.requirements().clone();
 
         let user_instructions = AgentsMdManager::load_global_instructions(Some(&codex_home))
@@ -3882,6 +3898,9 @@ impl Config {
             review_model,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
+            model_auto_compact_token_limit_scope: cfg
+                .model_auto_compact_token_limit_scope
+                .unwrap_or_default(),
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Stage one or more Codex npm packages for release."""
 
-from __future__ import annotations
-
 import argparse
 import importlib.util
 import json
@@ -12,11 +10,11 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = REPO_ROOT / "codex-cli" / "scripts" / "build_npm_package.py"
 INSTALL_NATIVE_DEPS = REPO_ROOT / "codex-cli" / "scripts" / "install_native_deps.py"
 WORKFLOW_NAME = ".github/workflows/rust-release.yml"
+GITHUB_REPO = "openai/codex"
 RELEASE_CONFIG_MODULE = REPO_ROOT / "codex-cli" / "scripts" / "release_config.py"
 
 _SPEC = importlib.util.spec_from_file_location("codex_build_npm_package", BUILD_SCRIPT)
@@ -69,11 +67,6 @@ def parse_args() -> argparse.Namespace:
         help="Retain temporary staging directories instead of deleting them.",
     )
     parser.add_argument(
-        "--release-config",
-        type=Path,
-        help="Optional JSON file that overrides npm package and repo metadata for fork releases.",
-    )
-    parser.add_argument(
         "--allow-missing-native-component",
         dest="allow_missing_native_components",
         action="append",
@@ -82,6 +75,20 @@ def parse_args() -> argparse.Namespace:
             "Native component that may be absent from reused workflow artifacts. "
             "Intended for CI compatibility only; release staging should not use this."
         ),
+    )
+    parser.add_argument(
+        "--allow-legacy-codex-package",
+        action="store_true",
+        help=(
+            "Allow codex-package layouts to be synthesized from legacy per-binary "
+            "workflow artifacts. Intended for CI compatibility only; release staging "
+            "should not use this."
+        ),
+    )
+    parser.add_argument(
+        "--release-config",
+        type=Path,
+        help="Optional JSON file that overrides npm package and repo metadata for fork releases.",
     )
     return parser.parse_args()
 
@@ -93,12 +100,16 @@ def collect_native_components(packages: list[str]) -> set[str]:
     return components
 
 
-def expand_packages(packages: list[str], supported_targets: set[str]) -> list[str]:
+def expand_packages(packages: list[str], supported_targets: set[str] | None = None) -> list[str]:
     expanded: list[str] = []
     for package in packages:
         for expanded_package in PACKAGE_EXPANSIONS.get(package, [package]):
-            target_filter = CODEX_PLATFORM_PACKAGES.get(expanded_package, {}).get("target_triple")
-            if target_filter and target_filter not in supported_targets:
+            package_config = CODEX_PLATFORM_PACKAGES.get(expanded_package)
+            if (
+                supported_targets is not None
+                and package_config is not None
+                and package_config["target_triple"] not in supported_targets
+            ):
                 continue
             if expanded_package in expanded:
                 continue
@@ -144,11 +155,15 @@ def install_native_components(
     vendor_root: Path,
     github_repo: str,
     supported_targets: set[str],
+    *,
+    allow_legacy_codex_package: bool,
 ) -> None:
     if not components:
         return
 
     cmd = [str(INSTALL_NATIVE_DEPS), "--workflow-url", workflow_url, "--repo", github_repo]
+    if allow_legacy_codex_package:
+        cmd.append("--allow-legacy-codex-package")
     for component in sorted(components):
         cmd.extend(["--component", component])
     for target in sorted(supported_targets):
@@ -204,6 +219,7 @@ def main() -> int:
                 vendor_temp_root,
                 release_config["github_repo"],
                 set(release_config["supported_targets"]),
+                allow_legacy_codex_package=args.allow_legacy_codex_package,
             )
             vendor_src = vendor_temp_root / "vendor"
 

@@ -121,7 +121,9 @@ pub(crate) async fn run_pending_session_start_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        source: session_start_source,
+        target: codex_hooks::StartHookTarget::SessionStart {
+            source: session_start_source,
+        },
     };
     let hooks = sess.hooks();
     let preview_runs = hooks.preview_session_start(&request);
@@ -555,6 +557,8 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookEventName::PostCompact => "PostCompact",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        HookEventName::SubagentStart => "SubagentStart",
+        HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
     };
     let hook_source = match run.source {
@@ -639,7 +643,9 @@ mod tests {
                             .iter()
                             .map(|item| match item {
                                 ContentItem::InputText { text } => text.as_str(),
-                                ContentItem::InputImage { .. } | ContentItem::OutputText { .. } => {
+                                ContentItem::InputImage { .. }
+                                | ContentItem::OutputText { .. }
+                                | ContentItem::EncryptedContent { .. } => {
                                     panic!("expected input text content, got {item:?}")
                                 }
                             })

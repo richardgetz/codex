@@ -177,6 +177,9 @@ fn response_input_to_code_mode_result(response: ResponseInputItem) -> JsonValue 
                             detail: detail.or(Some(DEFAULT_IMAGE_DETAIL)),
                         }
                     }
+                    codex_protocol::models::ContentItem::EncryptedContent { encrypted_content } => {
+                        FunctionCallOutputContentItem::EncryptedContent { encrypted_content }
+                    }
                 })
                 .collect::<Vec<_>>(),
         ),
@@ -209,7 +212,8 @@ fn content_items_to_code_mode_result(items: &[FunctionCallOutputContentItem]) ->
                     Some(image_url.clone())
                 }
                 FunctionCallOutputContentItem::InputText { .. }
-                | FunctionCallOutputContentItem::InputImage { .. } => None,
+                | FunctionCallOutputContentItem::InputImage { .. }
+                | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
             })
             .collect::<Vec<_>>()
             .join("\n"),

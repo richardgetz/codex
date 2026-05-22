@@ -49,6 +49,14 @@ impl ToolRouter {
         build_tool_router(config, params)
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_turn_context(
+        turn_context: &TurnContext,
+        params: ToolRouterParams<'_>,
+    ) -> Self {
+        build_tool_router(&turn_context.tools_config, params)
+    }
+
     pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
         Self {
             registry,

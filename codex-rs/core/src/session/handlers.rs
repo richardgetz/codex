@@ -45,6 +45,9 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::ThreadRolledBackEvent;
+use codex_protocol::protocol::ThreadSettingsAppliedEvent;
+use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -99,6 +102,98 @@ pub async fn override_turn_context(sess: &Session, sub_id: String, updates: Sess
             }),
         })
         .await;
+    } else {
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
+                thread_settings: thread_settings_snapshot(sess).await,
+            }),
+        })
+        .await;
+    }
+}
+
+async fn thread_settings_snapshot(sess: &Session) -> ThreadSettingsSnapshot {
+    let state = sess.state.lock().await;
+    let snapshot = state.session_configuration.thread_config_snapshot();
+    let model = snapshot.model.clone();
+    let reasoning_effort = snapshot.reasoning_effort;
+    ThreadSettingsSnapshot {
+        model: snapshot.model,
+        model_provider_id: snapshot.model_provider_id,
+        service_tier: snapshot.service_tier,
+        approval_policy: snapshot.approval_policy,
+        approvals_reviewer: snapshot.approvals_reviewer,
+        permission_profile: snapshot.permission_profile,
+        active_permission_profile: snapshot.active_permission_profile,
+        cwd: snapshot.cwd,
+        reasoning_effort,
+        reasoning_summary: None,
+        personality: snapshot.personality,
+        collaboration_mode: CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model,
+                reasoning_effort,
+                developer_instructions: None,
+            },
+        },
+    }
+}
+
+async fn settings_update_from_overrides(
+    sess: &Session,
+    thread_settings: ThreadSettingsOverrides,
+    final_output_json_schema: Option<Option<Value>>,
+    environments: Option<Vec<codex_protocol::protocol::TurnEnvironmentSelection>>,
+) -> SessionSettingsUpdate {
+    let ThreadSettingsOverrides {
+        cwd,
+        workspace_roots,
+        profile_workspace_roots,
+        approval_policy,
+        approvals_reviewer,
+        sandbox_policy,
+        permission_profile,
+        active_permission_profile,
+        windows_sandbox_level,
+        model,
+        effort,
+        summary,
+        service_tier,
+        collaboration_mode,
+        personality,
+    } = thread_settings;
+    let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
+        Some(collab_mode)
+    } else if model.is_some() || effort.is_some() {
+        let state = sess.state.lock().await;
+        Some(
+            state
+                .session_configuration
+                .collaboration_mode
+                .with_updates(model, effort, /*developer_instructions*/ None),
+        )
+    } else {
+        None
+    };
+    SessionSettingsUpdate {
+        cwd,
+        workspace_roots,
+        profile_workspace_roots,
+        approval_policy,
+        approvals_reviewer,
+        sandbox_policy,
+        permission_profile,
+        active_permission_profile,
+        windows_sandbox_level,
+        collaboration_mode,
+        reasoning_summary: summary,
+        service_tier,
+        final_output_json_schema,
+        environments,
+        personality,
+        ..Default::default()
     }
 }
 
@@ -234,13 +329,16 @@ pub(super) async fn user_input_or_turn_inner(
             environments,
             final_output_json_schema,
             responsesapi_client_metadata,
+            thread_settings,
         } => (
             items,
-            SessionSettingsUpdate {
-                final_output_json_schema: Some(final_output_json_schema),
+            settings_update_from_overrides(
+                sess,
+                thread_settings,
+                Some(final_output_json_schema),
                 environments,
-                ..Default::default()
-            },
+            )
+            .await,
             responsesapi_client_metadata,
         ),
         _ => unreachable!(),
@@ -1232,6 +1330,17 @@ pub(super) async fn submission_loop(
                 }
                 Op::RealtimeConversationListVoices => {
                     realtime_conversation_list_voices(&sess, sub.id.clone()).await;
+                    false
+                }
+                Op::ThreadSettings { thread_settings } => {
+                    let updates = settings_update_from_overrides(
+                        &sess,
+                        thread_settings,
+                        /*final_output_json_schema*/ None,
+                        /*environments*/ None,
+                    )
+                    .await;
+                    override_turn_context(&sess, sub.id.clone(), updates).await;
                     false
                 }
                 Op::OverrideTurnContext {

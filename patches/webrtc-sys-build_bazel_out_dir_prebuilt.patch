@@ -1,0 +1,16 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index e1924f5..487cd76 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -90,2 +90,6 @@ pub fn custom_dir() -> Option<path::PathBuf> {
++pub fn prebuilt_root() -> path::PathBuf {
++    PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("webrtc-prebuilt")
++}
++
+-pub fn prebuilt_dir() -> path::PathBuf {
+-    let target_dir = scratch::path(SCRATH_PATH);
++pub fn prebuilt_dir() -> path::PathBuf {
++    let target_dir = prebuilt_root();
+@@ -200,1 +204,1 @@ pub fn download_webrtc() -> Result<()> {
+-    let dir = scratch::path(SCRATH_PATH);
++    let dir = prebuilt_root();

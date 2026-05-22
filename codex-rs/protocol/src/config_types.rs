@@ -21,6 +21,21 @@ use wildmatch::WildMatchPattern;
 
 use crate::openai_models::ReasoningEffort;
 
+/// Selects which part of the active context is charged against
+/// `model_auto_compact_token_limit`.
+#[derive(
+    Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum AutoCompactTokenLimitScope {
+    /// Count the full active context against the limit.
+    #[default]
+    Total,
+    /// Count sampled output and later growth after the carried window prefix.
+    BodyAfterPrefix,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -512,6 +527,12 @@ pub enum ServiceTier {
     Fast,
     Flex,
 }
+
+/// Request/config sentinel for explicit standard routing.
+///
+/// This is not a catalog service tier id. It means the user intentionally
+/// selected no service tier, so model catalog defaults should not apply.
+pub const SERVICE_TIER_DEFAULT_REQUEST_VALUE: &str = "default";
 
 impl ServiceTier {
     pub const fn request_value(self) -> &'static str {

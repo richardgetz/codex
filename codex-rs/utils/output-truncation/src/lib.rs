@@ -34,7 +34,8 @@ pub fn formatted_truncate_text_content_items_with_policy(
         .iter()
         .filter_map(|item| match item {
             FunctionCallOutputContentItem::InputText { text } => Some(text.as_str()),
-            FunctionCallOutputContentItem::InputImage { .. } => None,
+            FunctionCallOutputContentItem::InputImage { .. }
+            | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
         })
         .collect::<Vec<_>>();
 
@@ -65,6 +66,11 @@ pub fn formatted_truncate_text_content_items_with_policy(
             })
         }
         FunctionCallOutputContentItem::InputText { .. } => None,
+        FunctionCallOutputContentItem::EncryptedContent { encrypted_content } => {
+            Some(FunctionCallOutputContentItem::EncryptedContent {
+                encrypted_content: encrypted_content.clone(),
+            })
+        }
     }));
 
     (out, Some(approx_token_count(&combined)))
@@ -115,6 +121,11 @@ pub fn truncate_function_output_items_with_policy(
                 out.push(FunctionCallOutputContentItem::InputImage {
                     image_url: image_url.clone(),
                     detail: *detail,
+                });
+            }
+            FunctionCallOutputContentItem::EncryptedContent { encrypted_content } => {
+                out.push(FunctionCallOutputContentItem::EncryptedContent {
+                    encrypted_content: encrypted_content.clone(),
                 });
             }
         }

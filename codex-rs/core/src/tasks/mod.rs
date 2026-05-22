@@ -358,7 +358,7 @@ impl Session {
         };
         {
             let mut turn_state = turn_state.lock().await;
-            turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
+            turn_state.token_usage_at_turn_start = token_usage_at_turn_start.clone();
             for item in queued_response_items {
                 turn_state.push_pending_input(item);
             }
@@ -366,7 +366,7 @@ impl Session {
                 turn_state.push_pending_input(item);
             }
         }
-        self.emit_turn_start_lifecycle(turn_context.extension_data.as_ref())
+        self.emit_turn_start_lifecycle(&turn_context, &token_usage_at_turn_start)
             .await;
 
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
@@ -641,7 +641,7 @@ impl Session {
                     "false"
                 },
             );
-            let network_proxy_active = match self.services.network_proxy.as_ref() {
+            let network_proxy_active = match self.services.network_proxy.load_full() {
                 Some(started_network_proxy) => {
                     match started_network_proxy.proxy().current_cfg().await {
                         Ok(config) => config.network.enabled,

@@ -458,7 +458,7 @@ impl ChatWidget {
             .unwrap_or(current_effort)
     }
 
-    pub(super) fn effective_collaboration_mode(&self) -> CollaborationMode {
+    pub(crate) fn effective_collaboration_mode(&self) -> CollaborationMode {
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.clone();
         }
@@ -647,6 +647,28 @@ impl ChatWidget {
             message.push_str(" mode.");
             self.add_info_message(message, /*hint*/ None);
         }
+        self.request_redraw();
+    }
+
+    pub(super) fn on_thread_settings_updated(
+        &mut self,
+        notification: ThreadSettingsUpdatedNotification,
+    ) {
+        let settings = notification.thread_settings;
+        self.effective_service_tier = settings.service_tier.clone();
+        self.config.approvals_reviewer = settings.approvals_reviewer.to_core();
+        self.config.personality = settings.personality;
+        self.current_collaboration_mode = settings.collaboration_mode;
+        self.current_collaboration_mode
+            .settings
+            .model
+            .clone_from(&settings.model);
+        self.current_collaboration_mode.settings.reasoning_effort = settings.effort;
+        self.update_collaboration_mode_indicator();
+        self.refresh_model_display();
+        self.refresh_status_surfaces();
+        self.sync_service_tier_commands();
+        self.sync_personality_command_enabled();
         self.request_redraw();
     }
 }

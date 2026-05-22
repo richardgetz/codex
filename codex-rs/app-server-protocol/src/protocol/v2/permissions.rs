@@ -180,7 +180,8 @@ v2_enum_from_core!(
     pub enum FileSystemAccessMode from CoreFileSystemAccessMode {
         Read,
         Write,
-        None
+        None,
+        Deny
     }
 );
 
@@ -289,48 +290,39 @@ impl From<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfileListParams {
+    /// Opaque pagination cursor returned by a previous call.
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    /// Optional page size; defaults to the full result set.
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+    /// Optional working directory to resolve project config layers.
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ActivePermissionProfile {
-    /// Identifier from `default_permissions` or the implicit built-in default,
-    /// such as `:workspace` or a user-defined `[permissions.<id>]` profile.
+pub struct PermissionProfileSummary {
+    /// Available permission profile identifier.
     pub id: String,
-    /// Parent profile identifier once permissions profiles support
-    /// inheritance. This is currently always `null`.
-    #[serde(default)]
-    pub extends: Option<String>,
+    /// Optional user-facing description for display in clients.
+    pub description: Option<String>,
 }
 
-impl ActivePermissionProfile {
-    pub fn new(id: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            extends: None,
-        }
-    }
-
-    pub fn read_only() -> Self {
-        CoreActivePermissionProfile::read_only().into()
-    }
-}
-
-impl From<CoreActivePermissionProfile> for ActivePermissionProfile {
-    fn from(value: CoreActivePermissionProfile) -> Self {
-        Self {
-            id: value.id,
-            extends: value.extends,
-        }
-    }
-}
-
-impl From<ActivePermissionProfile> for CoreActivePermissionProfile {
-    fn from(value: ActivePermissionProfile) -> Self {
-        Self {
-            id: value.id,
-            extends: value.extends,
-        }
-    }
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfileListResponse {
+    pub data: Vec<PermissionProfileSummary>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// If None, there are no more items to return.
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -425,6 +417,50 @@ impl<'de> Deserialize<'de> for PermissionProfileSelectionParams {
                     legacy_additional_writable_roots,
                 })
             }
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ActivePermissionProfile {
+    /// Identifier from `default_permissions` or the implicit built-in default,
+    /// such as `:workspace` or a user-defined `[permissions.<id>]` profile.
+    pub id: String,
+    /// Parent profile identifier from the selected permissions profile's
+    /// `extends` setting, when present.
+    #[serde(default)]
+    pub extends: Option<String>,
+}
+
+impl ActivePermissionProfile {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            extends: None,
+        }
+    }
+
+    pub fn read_only() -> Self {
+        CoreActivePermissionProfile::read_only().into()
+    }
+}
+
+impl From<CoreActivePermissionProfile> for ActivePermissionProfile {
+    fn from(value: CoreActivePermissionProfile) -> Self {
+        Self {
+            id: value.id,
+            extends: value.extends,
+        }
+    }
+}
+
+impl From<ActivePermissionProfile> for CoreActivePermissionProfile {
+    fn from(value: ActivePermissionProfile) -> Self {
+        Self {
+            id: value.id,
+            extends: value.extends,
         }
     }
 }
