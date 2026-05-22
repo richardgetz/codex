@@ -6,6 +6,7 @@
 use crate::bottom_pane::FeedbackAudience;
 use crate::legacy_core::config::Config;
 use crate::permission_compat::legacy_compatible_permission_profile;
+use crate::service_tier_resolution;
 use crate::session_state::MessageHistoryMetadata;
 use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
@@ -125,6 +126,7 @@ use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
 use codex_protocol::config_types::MemoryAccessPolicy;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
@@ -176,6 +178,8 @@ pub(crate) struct AppServerSession {
     next_request_id: i64,
     remote_cwd_override: Option<PathBuf>,
     thread_params_mode: ThreadParamsMode,
+    default_model: Option<String>,
+    available_models: Vec<ModelPreset>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,6 +224,8 @@ impl AppServerSession {
             next_request_id: 1,
             remote_cwd_override: None,
             thread_params_mode,
+            default_model: None,
+            available_models: Vec::new(),
         }
     }
 
@@ -274,6 +280,8 @@ impl AppServerSession {
             })
             .or_else(|| available_models.first().map(|model| model.model.clone()))
             .wrap_err("model/list returned no models for TUI bootstrap")?;
+        self.default_model = Some(default_model.clone());
+        self.available_models = available_models.clone();
 
         let (
             account_email,
@@ -385,12 +393,13 @@ impl AppServerSession {
         session_start_source: Option<ThreadStartSource>,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
+        let session_config = self.session_config_with_effective_service_tier(config);
         let response: ThreadStartResponse = self
             .client
             .request_typed(ClientRequest::ThreadStart {
                 request_id,
                 params: thread_start_params_from_config(
-                    config,
+                    &session_config,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
                     session_start_source,
@@ -409,12 +418,13 @@ impl AppServerSession {
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
+        let session_config = self.session_config_with_effective_service_tier(&config);
         let response: ThreadResumeResponse = self
             .client
             .request_typed(ClientRequest::ThreadResume {
                 request_id,
                 params: thread_resume_params_from_config(
-                    config.clone(),
+                    session_config,
                     thread_id,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
@@ -440,12 +450,13 @@ impl AppServerSession {
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
+        let session_config = self.session_config_with_effective_service_tier(&config);
         let response: ThreadForkResponse = self
             .client
             .request_typed(ClientRequest::ThreadFork {
                 request_id,
                 params: thread_fork_params_from_config(
-                    config.clone(),
+                    session_config,
                     thread_id,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
@@ -466,6 +477,32 @@ impl AppServerSession {
 
     fn thread_params_mode(&self) -> ThreadParamsMode {
         self.thread_params_mode
+    }
+
+    fn session_config_with_effective_service_tier(&self, config: &Config) -> Config {
+        let Some(model) = config.model.as_deref().or(self.default_model.as_deref()) else {
+            return config.clone();
+        };
+        let mut session_config = config.clone();
+        match service_tier_resolution::service_tier_update_for_core(
+            config,
+            model,
+            &self.available_models,
+        ) {
+            Some(Some(service_tier)) => {
+                session_config.service_tier = Some(service_tier);
+                session_config.notices.fast_default_opt_out = None;
+            }
+            Some(None) => {
+                session_config.service_tier = Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string());
+                session_config.notices.fast_default_opt_out = None;
+            }
+            None => {
+                session_config.service_tier = None;
+                session_config.notices.fast_default_opt_out = None;
+            }
+        }
+        session_config
     }
 
     async fn fork_parent_title_from_app_server(
@@ -1375,11 +1412,10 @@ fn config_request_overrides_from_config(
 }
 
 fn service_tier_override_from_config(config: &Config) -> Option<Option<String>> {
-    config
-        .service_tier
-        .clone()
-        .map(Some)
-        .or_else(|| (config.notices.fast_default_opt_out == Some(true)).then_some(None))
+    config.service_tier.clone().map(Some).or_else(|| {
+        (config.notices.fast_default_opt_out == Some(true))
+            .then(|| Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()))
+    })
 }
 
 fn sandbox_mode_from_permission_profile(
@@ -1821,7 +1857,7 @@ async fn thread_session_state_from_thread_response(
         instruction_source_paths,
         reasoning_effort,
         collaboration_mode: None,
-        personality: None,
+        personality: config.personality,
         message_history: Some(MessageHistoryMetadata {
             log_id,
             entry_count,
@@ -2298,6 +2334,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn thread_lifecycle_params_forward_fast_default_opt_out_as_default_service_tier() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.service_tier = None;
+        config.notices.fast_default_opt_out = Some(true);
+        let thread_id = ThreadId::new();
+
+        let start = thread_start_params_from_config(
+            &config,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
+        );
+        let resume = thread_resume_params_from_config(
+            config.clone(),
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+        let fork = thread_fork_params_from_config(
+            config,
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+
+        let expected_service_tier = Some(Some(
+            codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string(),
+        ));
+        assert_eq!(start.service_tier, expected_service_tier);
+        assert_eq!(resume.service_tier, expected_service_tier);
+        assert_eq!(fork.service_tier, expected_service_tier);
+    }
+
+    #[tokio::test]
     async fn config_request_overrides_preserve_implicit_personality_default() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let mut config = build_config(&temp_dir).await;
@@ -2583,6 +2654,37 @@ mod tests {
         .expect("session should map");
 
         assert_eq!(session.forked_from_id, Some(forked_from_id));
+    }
+
+    #[tokio::test]
+    async fn session_configured_preserves_personality_from_config() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.personality = Some(Personality::Pragmatic);
+        let thread_id = ThreadId::new();
+
+        let session = thread_session_state_from_thread_response(
+            &thread_id.to_string(),
+            /*forked_from_id*/ None,
+            Some("restore".to_string()),
+            /*rollout_path*/ None,
+            "gpt-5.4".to_string(),
+            "openai".to_string(),
+            /*service_tier*/ None,
+            AskForApproval::Never,
+            codex_protocol::config_types::ApprovalsReviewer::User,
+            PermissionProfile::read_only(),
+            /*active_permission_profile*/ None,
+            test_path_buf("/tmp/project").abs(),
+            Vec::new(),
+            Vec::new(),
+            /*reasoning_effort*/ None,
+            &config,
+        )
+        .await
+        .expect("session should map");
+
+        assert_eq!(session.personality, Some(Personality::Pragmatic));
     }
 
     #[test]

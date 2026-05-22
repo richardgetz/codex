@@ -138,6 +138,30 @@ Stop and ask the user before proceeding when any of the following happens:
 - replaying the fork commits would require new product decisions instead of straightforward adaptation
 - the audit shows a previously maintained stable surface that now needs to be intentionally dropped or redesigned
 
+## Upstream And Fork Preservation Audit
+
+After conflict resolution, do not treat ancestry as proof that either side's
+behavior survived. A refresh can contain an upstream commit in history while
+dropping its effective code during merge conflict resolution, and it can also
+silently lose fork-only behavior while adopting upstream files.
+
+Before opening the PR:
+
+- inspect manual merge resolutions with `git show --cc <merge_commit>`; when the
+  local Git version and writable temp dirs allow it, also inspect
+  `git show --remerge-diff <merge_commit>`
+- list upstream commits touching conflicted files with
+  `git log --oneline <old_stable>..<upstream_tag> -- <conflicted_paths>`
+- for each upstream fix or behavior change in those files, confirm the final
+  branch still contains the effective behavior, not just the commit ancestry
+- for each fork-owned surface in those files, confirm the final branch still
+  preserves or intentionally adapts the fork contract
+- run the upstream test filters or focused regression tests that prove any
+  restored behavior; examples from prior refresh losses include TUI local-daemon
+  cwd preservation and client-resolved service-tier defaults
+- record intentionally skipped upstream behavior and intentionally dropped fork
+  behavior in the PR body
+
 ## Verification
 
 After resolving the upstream merge:
