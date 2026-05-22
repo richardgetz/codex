@@ -310,7 +310,7 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
     let environment_manager = Arc::new(
         codex_exec_server::EnvironmentManager::create_for_tests(
             Some("none".to_string()),
-            runtime_paths,
+            Some(runtime_paths),
         )
         .await,
     );
@@ -374,7 +374,7 @@ args = ["dev", "cd /tmp && true"]
     let environment_manager = Arc::new(
         codex_exec_server::EnvironmentManager::from_codex_home(
             config.codex_home.clone(),
-            runtime_paths,
+            Some(runtime_paths),
         )
         .await
         .expect("environment manager"),

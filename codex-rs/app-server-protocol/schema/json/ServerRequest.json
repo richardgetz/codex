@@ -631,7 +631,8 @@
       "enum": [
         "read",
         "write",
-        "none"
+        "none",
+        "deny"
       ],
       "type": "string"
     },

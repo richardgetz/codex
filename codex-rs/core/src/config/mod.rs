@@ -1631,6 +1631,17 @@ impl Config {
                 ElicitationCapability::default()
             },
             configured_mcp_servers,
+            plugin_ids_by_mcp_server_name: loaded_plugins
+                .plugins()
+                .iter()
+                .filter(|plugin| plugin.is_active())
+                .flat_map(|plugin| {
+                    plugin
+                        .mcp_servers
+                        .keys()
+                        .map(|server_name| (server_name.clone(), plugin.config_name.clone()))
+                })
+                .collect(),
             plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
         }
     }
@@ -2782,6 +2793,7 @@ impl Config {
             network: network_requirements,
             filesystem: filesystem_requirements,
             guardian_policy_config_source: _,
+            ..
         } = config_layer_stack.requirements().clone();
 
         let user_instructions = AgentsMdManager::load_global_instructions(Some(&codex_home))

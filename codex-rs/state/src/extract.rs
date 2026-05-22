@@ -156,7 +156,6 @@ mod tests {
     use chrono::DateTime;
     use chrono::Utc;
     use codex_protocol::ThreadId;
-    use codex_protocol::config_types::ReasoningSummary;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::openai_models::ReasoningEffort;
@@ -353,7 +352,7 @@ mod tests {
                 collaboration_mode: None,
                 realtime_active: None,
                 effort: None,
-                summary: ReasoningSummary::Auto,
+                summary: codex_protocol::config_types::ReasoningSummary::Auto,
                 user_instructions: None,
                 developer_instructions: None,
                 final_output_json_schema: None,
@@ -393,7 +392,7 @@ mod tests {
                 collaboration_mode: None,
                 realtime_active: None,
                 effort: Some(ReasoningEffort::High),
-                summary: ReasoningSummary::Auto,
+                summary: codex_protocol::config_types::ReasoningSummary::Auto,
                 user_instructions: None,
                 developer_instructions: None,
                 final_output_json_schema: None,
@@ -427,7 +426,7 @@ mod tests {
                 collaboration_mode: None,
                 realtime_active: None,
                 effort: Some(ReasoningEffort::High),
-                summary: ReasoningSummary::Auto,
+                summary: codex_protocol::config_types::ReasoningSummary::Auto,
                 user_instructions: None,
                 developer_instructions: None,
                 final_output_json_schema: None,

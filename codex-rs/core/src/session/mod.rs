@@ -1054,7 +1054,7 @@ impl Session {
     }
 
     async fn refresh_managed_network_proxy_for_current_permission_profile(&self) {
-        let Some(started_proxy) = self.services.network_proxy.as_ref() else {
+        let Some(started_proxy) = self.services.network_proxy.load_full() else {
             return;
         };
         let Ok(_refresh_guard) = self.managed_network_proxy_refresh_lock.acquire().await else {
@@ -1093,7 +1093,7 @@ impl Session {
                 spec
             }
         };
-        if let Err(err) = spec.apply_to_started_proxy(started_proxy).await {
+        if let Err(err) = spec.apply_to_started_proxy(&started_proxy).await {
             warn!("failed to refresh managed network proxy for sandbox change: {err}");
         }
     }
@@ -1554,6 +1554,7 @@ impl Session {
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             },
             /*mirror_user_text_to_realtime*/ None,
         )
@@ -2414,7 +2415,7 @@ impl Session {
         let execpolicy_amendment =
             execpolicy_network_rule_amendment(amendment, network_approval_context, &host);
 
-        if let Some(started_network_proxy) = self.services.network_proxy.as_ref() {
+        if let Some(started_network_proxy) = self.services.network_proxy.load_full() {
             let proxy = started_network_proxy.proxy();
             match amendment.action {
                 NetworkPolicyRuleAction::Allow => proxy

@@ -2,6 +2,13 @@ version = 1
 revision = 3
 requires-python = ">=3.10"
 
+[options]
+exclude-newer = "2026-05-14T23:15:33.60389Z"
+exclude-newer-span = "P7D"
+
+[options.exclude-newer-package]
+openai-codex-cli-bin = "2026-05-10T00:00:00Z"
+
 [[package]]
 name = "annotated-types"
 version = "0.7.0"

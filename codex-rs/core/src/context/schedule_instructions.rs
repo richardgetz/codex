@@ -10,9 +10,17 @@ impl ScheduleInstructions {
 }
 
 impl ContextualUserFragment for ScheduleInstructions {
-    const ROLE: &'static str = "developer";
-    const START_MARKER: &'static str = "<schedule_instructions>";
-    const END_MARKER: &'static str = "</schedule_instructions>";
+    fn role() -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        ("<schedule_instructions>", "</schedule_instructions>")
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("<schedule_instructions>", "</schedule_instructions>")
+    }
 
     fn body(&self) -> String {
         "\n## Built-in Schedule\n\nThe built-in `schedule` tool namespace is available in this mode for durable time-based or conditional future triggers.\n\

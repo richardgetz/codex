@@ -51,6 +51,7 @@ pub(super) fn start_thread_inbound_message_poller(
                         environments: None,
                         final_output_json_schema: None,
                         responsesapi_client_metadata: None,
+                        thread_settings: Default::default(),
                     },
                     trace: None,
                 };
@@ -140,6 +141,7 @@ mod tests {
                 environments: None,
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             }
         );
 

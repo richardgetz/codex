@@ -158,10 +158,11 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
         let response = session
             .request_mcp_server_elicitation(turn.as_ref(), request_id, params)
             .await;
-        if let Some(response) = response.as_ref() {
+        if let Some(response) = response.response.as_ref() {
             maybe_persist_disabled_install_request(&session, &turn, &tool, response).await;
         }
         let user_confirmed = response
+            .response
             .as_ref()
             .is_some_and(|response| response.action == ElicitationAction::Accept);
 

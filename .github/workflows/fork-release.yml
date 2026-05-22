@@ -203,6 +203,11 @@ jobs:
           cp "target/${{ matrix.target }}/release/codex" "${dest}/codex-${{ matrix.target }}"
           tar -C "${dest}" -czf "${dest}/codex-${{ matrix.target }}.tar.gz" "codex-${{ matrix.target }}"
           zstd -T0 -19 --rm "${dest}/codex-${{ matrix.target }}"
+          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
+            --target "${{ matrix.target }}" \
+            --bundle primary \
+            --entrypoint-dir "target/${{ matrix.target }}/release" \
+            --archive-dir "${dest}"
 
       - name: "[70%] Upload build artifacts"
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7

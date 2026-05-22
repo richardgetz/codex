@@ -164,6 +164,7 @@ mod render;
 mod resize_reflow_cap;
 mod resume_picker;
 mod selection_list;
+mod service_tier_resolution;
 mod session_log;
 mod session_resume;
 mod session_state;
@@ -314,6 +315,12 @@ async fn start_embedded_app_server(
 pub(crate) enum AppServerTarget {
     Embedded,
     Remote { endpoint: RemoteAppServerEndpoint },
+}
+
+impl AppServerTarget {
+    pub(crate) fn uses_remote_workspace(&self) -> bool {
+        matches!(self, Self::Remote { .. })
+    }
 }
 
 async fn init_state_db_for_app_server_target(
@@ -853,9 +860,9 @@ pub async fn run_main(
     )?;
     let environment_manager =
         if should_load_configured_environments(&loader_overrides, &app_server_target) {
-            EnvironmentManager::from_codex_home(codex_home.clone(), local_runtime_paths).await
+            EnvironmentManager::from_codex_home(codex_home.clone(), Some(local_runtime_paths)).await
         } else {
-            EnvironmentManager::from_env(local_runtime_paths).await
+            EnvironmentManager::from_env(Some(local_runtime_paths)).await
         }
         .map(Arc::new)
         .map_err(std::io::Error::other)?;

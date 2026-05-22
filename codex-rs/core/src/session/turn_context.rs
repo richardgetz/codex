@@ -861,7 +861,7 @@ impl Session {
             &self.services.models_manager,
             self.services
                 .network_proxy
-                .as_ref()
+                .load_full()
                 .and_then(|started_proxy| {
                     Self::managed_network_proxy_active_for_permission_profile(
                         &session_configuration.permission_profile(),

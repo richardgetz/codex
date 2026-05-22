@@ -1,3 +1,4 @@
+mod auto_compact_window;
 mod service;
 mod session;
 mod turn;

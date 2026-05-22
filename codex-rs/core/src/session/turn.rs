@@ -628,6 +628,7 @@ pub(crate) async fn run_turn(
                         permission_mode: stop_hook_permission_mode,
                         stop_hook_active,
                         last_assistant_message: last_agent_message.clone(),
+                        target: codex_hooks::StopHookTarget::Stop,
                     };
                     let hooks = sess.hooks();
                     for run in hooks.preview_stop(&stop_request) {
@@ -2107,6 +2108,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::ContextCompacted(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnStarted(_)
+        | EventMsg::ThreadSettingsApplied(_)
         | EventMsg::TurnComplete(_)
         | EventMsg::TokenCount(_)
         | EventMsg::UserMessage(_)

@@ -20,9 +20,23 @@ impl SituationalRequirementsInstructions {
 }
 
 impl ContextualUserFragment for SituationalRequirementsInstructions {
-    const ROLE: &'static str = "developer";
-    const START_MARKER: &'static str = SITUATIONAL_REQUIREMENTS_OPEN_TAG;
-    const END_MARKER: &'static str = SITUATIONAL_REQUIREMENTS_CLOSE_TAG;
+    fn role() -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        (
+            SITUATIONAL_REQUIREMENTS_OPEN_TAG,
+            SITUATIONAL_REQUIREMENTS_CLOSE_TAG,
+        )
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        (
+            SITUATIONAL_REQUIREMENTS_OPEN_TAG,
+            SITUATIONAL_REQUIREMENTS_CLOSE_TAG,
+        )
+    }
 
     fn body(&self) -> String {
         let mut body = "\n## Situational Requirements\n\

@@ -13,9 +13,23 @@ impl GitIntentNotesInstructions {
 }
 
 impl ContextualUserFragment for GitIntentNotesInstructions {
-    const ROLE: &'static str = "developer";
-    const START_MARKER: &'static str = GIT_INTENT_NOTES_INSTRUCTIONS_OPEN_TAG;
-    const END_MARKER: &'static str = GIT_INTENT_NOTES_INSTRUCTIONS_CLOSE_TAG;
+    fn role() -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        (
+            GIT_INTENT_NOTES_INSTRUCTIONS_OPEN_TAG,
+            GIT_INTENT_NOTES_INSTRUCTIONS_CLOSE_TAG,
+        )
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        (
+            GIT_INTENT_NOTES_INSTRUCTIONS_OPEN_TAG,
+            GIT_INTENT_NOTES_INSTRUCTIONS_CLOSE_TAG,
+        )
+    }
 
     fn body(&self) -> String {
         "\n## Git Intent Notes\n\

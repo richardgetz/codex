@@ -99,6 +99,8 @@ use codex_app_server_protocol::ThreadScratchpadContinuousPolicySetParams;
 use codex_app_server_protocol::ThreadScratchpadContinuousPolicySetResponse;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
+use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadSource;
@@ -190,6 +192,7 @@ impl ThreadParamsMode {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct AppServerStartedThread {
     pub(crate) session: ThreadSessionState,
     pub(crate) turns: Vec<Turn>,
@@ -217,6 +220,10 @@ impl AppServerSession {
     pub(crate) fn with_remote_cwd_override(mut self, remote_cwd_override: Option<PathBuf>) -> Self {
         self.remote_cwd_override = remote_cwd_override;
         self
+    }
+
+    pub(crate) fn uses_remote_workspace(&self) -> bool {
+        self.remote_cwd_override.is_some()
     }
 
     pub(crate) fn remote_cwd_override(&self) -> Option<&std::path::Path> {
@@ -688,6 +695,19 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/name/set failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_settings_update(
+        &mut self,
+        params: ThreadSettingsUpdateParams,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadSettingsUpdateResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadSettingsUpdate { request_id, params })
+            .await
+            .wrap_err("thread/settings/update failed in TUI")?;
         Ok(())
     }
 
@@ -1290,6 +1310,7 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
                 description: service_tier.description,
             })
             .collect(),
+        default_service_tier: model.default_service_tier,
         is_default: model.is_default,
         upgrade,
         show_in_picker: !model.hidden,
@@ -1393,16 +1414,13 @@ fn turn_permissions_overrides(
     cwd: &std::path::Path,
 ) -> (
     Option<codex_app_server_protocol::SandboxPolicy>,
-    Option<PermissionProfileSelectionParams>,
+    Option<String>,
 ) {
     match permissions_override {
         TurnPermissionsOverride::Preserve => (None, None),
-        TurnPermissionsOverride::ActiveProfile(active_permission_profile) => (
-            None,
-            Some(permissions_selection_from_active_profile(
-                active_permission_profile,
-            )),
-        ),
+        TurnPermissionsOverride::ActiveProfile(active_permission_profile) => {
+            (None, Some(active_permission_profile.id))
+        }
         TurnPermissionsOverride::LegacySandbox(permission_profile) => {
             let legacy_profile = legacy_compatible_permission_profile(&permission_profile, cwd);
             let policy = legacy_profile
@@ -1798,6 +1816,8 @@ async fn thread_session_state_from_thread_response(
         runtime_workspace_roots,
         instruction_source_paths,
         reasoning_effort,
+        collaboration_mode: None,
+        personality: None,
         message_history: Some(MessageHistoryMetadata {
             log_id,
             entry_count,

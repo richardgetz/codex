@@ -466,6 +466,7 @@ impl ChatWidget {
                 /*cwd*/ None,
                 Some(approval),
                 Some(approvals_reviewer),
+                /*permission_profile*/ None,
                 Some(active_permission_profile.clone()),
                 /*windows_sandbox_level*/ None,
                 /*model*/ None,

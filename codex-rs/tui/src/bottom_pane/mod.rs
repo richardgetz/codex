@@ -434,6 +434,8 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_queue_submissions(&mut self, _queue_submissions: bool) {}
+
     pub(crate) fn set_placeholder_text(&mut self, placeholder: String) {
         self.composer.set_placeholder_text(placeholder);
         self.request_redraw();
@@ -1326,7 +1328,7 @@ impl BottomPane {
             self.has_input_focus,
             self.enhanced_keys_supported,
             self.disable_paste_burst,
-            self.keymap.list.clone(),
+            self.keymap.clone(),
         );
         self.pause_status_timer_for_modal();
         self.set_composer_input_enabled(

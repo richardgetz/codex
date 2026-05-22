@@ -44,6 +44,44 @@ pub fn request_user_input_available_modes(features: &Features) -> Vec<ModeKind> 
         .collect()
 }
 
+pub fn shell_command_backend_for_features(features: &Features) -> ShellCommandBackendConfig {
+    if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
+        ShellCommandBackendConfig::ZshFork
+    } else {
+        ShellCommandBackendConfig::Classic
+    }
+}
+
+pub fn shell_type_for_model_and_features(
+    model_info: &ModelInfo,
+    features: &Features,
+) -> ConfigShellToolType {
+    let unified_exec_enabled = features.enabled(Feature::UnifiedExec);
+    let model_shell_type = match model_info.shell_type {
+        ConfigShellToolType::UnifiedExec if !unified_exec_enabled => {
+            ConfigShellToolType::ShellCommand
+        }
+        ConfigShellToolType::Default | ConfigShellToolType::Local => {
+            ConfigShellToolType::ShellCommand
+        }
+        other => other,
+    };
+
+    if !features.enabled(Feature::ShellTool) {
+        ConfigShellToolType::Disabled
+    } else if features.enabled(Feature::ShellZshFork) {
+        ConfigShellToolType::ShellCommand
+    } else if unified_exec_enabled {
+        if codex_utils_pty::conpty_supported() {
+            ConfigShellToolType::UnifiedExec
+        } else {
+            ConfigShellToolType::ShellCommand
+        }
+    } else {
+        model_shell_type
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum UnifiedExecShellMode {
     Direct,
