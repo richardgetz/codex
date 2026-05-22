@@ -1,0 +1,15 @@
+intent:
+  id: pr55-macos-argument-comment-timeout
+change_type: fix
+scope: github-workflows-rust-ci
+summary: Extend macOS argument-comment lint timeout after the 0.133.0 refresh made the Bazel path exceed the previous 30-minute limit.
+decision: Match the existing Windows 45-minute budget for the macOS argument-comment lint matrix entry instead of changing product code or broadening unrelated CI behavior.
+constraints:
+  - Keep the diff limited to CI timeout behavior.
+  - Preserve the gh auth SecurityServer sandbox allow and regression test.
+  - Do not include secrets or credential material.
+intent_priority: should
+code_locations:
+  - .github/workflows/rust-ci.yml
+requested_by: Rick
+recorded_by: Codex
