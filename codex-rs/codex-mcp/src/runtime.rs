@@ -116,6 +116,8 @@ mod tests {
     use std::collections::HashMap;
 
     use codex_config::McpServerConfig;
+    use codex_config::McpServerSharingMode;
+    use codex_config::McpServerStartupMode;
     use codex_config::McpServerTransportConfig;
     use pretty_assertions::assert_eq;
 
@@ -134,6 +136,8 @@ mod tests {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            startup: McpServerStartupMode::Auto,
+            sharing: McpServerSharingMode::Auto,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,

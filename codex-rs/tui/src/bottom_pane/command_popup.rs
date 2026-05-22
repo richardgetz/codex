@@ -20,7 +20,7 @@ use crate::slash_command::SlashCommand;
 // Hide alias commands in the default popup list so each unique action appears once.
 // `quit` is an alias of `exit`, and `btw` is an alias of `side`, so we skip
 // those aliases here.
-const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit];
+const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit, SlashCommand::Btw];
 const COMMAND_COLUMN_WIDTH: ColumnWidthConfig = ColumnWidthConfig::new(
     ColumnWidthMode::AutoAllRows,
     /*name_column_width*/ None,

@@ -893,7 +893,6 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             active_permission_profile: Some(ActivePermissionProfile::new(
                 BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
             )),
-            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,

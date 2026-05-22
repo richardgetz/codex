@@ -92,7 +92,7 @@ impl ChatWidget {
                     &self.config,
                     self.model_catalog.as_ref(),
                     Some(&default_model),
-                    None,
+                    /*initial_mode*/ None,
                 );
                 if let Some(mask) = self.active_collaboration_mask.as_mut() {
                     mask.reasoning_effort = Some(session.reasoning_effort);

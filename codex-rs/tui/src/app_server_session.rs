@@ -2000,8 +2000,7 @@ mod tests {
         let cwd = test_path_buf("/workspace/project").abs();
         let active_permission_profile =
             ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE);
-        let expected_permissions =
-            permissions_selection_from_active_profile(active_permission_profile.clone());
+        let expected_permissions = active_permission_profile.id.clone();
 
         let (sandbox_policy, permissions) = turn_permissions_overrides(
             TurnPermissionsOverride::ActiveProfile(active_permission_profile),
@@ -2026,9 +2025,7 @@ mod tests {
         assert_eq!(sandbox_policy, None);
         assert_eq!(
             permissions,
-            Some(PermissionProfileSelectionParams::new(
-                BUILT_IN_PERMISSION_PROFILE_WORKSPACE
-            ))
+            Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string())
         );
     }
 
@@ -2065,8 +2062,7 @@ mod tests {
     fn remote_turn_permissions_preserve_active_profile_selection() {
         let cwd = test_path_buf("/workspace/project").abs();
         let active_permission_profile = ActivePermissionProfile::new("strict");
-        let expected_permissions =
-            permissions_selection_from_active_profile(active_permission_profile.clone());
+        let expected_permissions = active_permission_profile.id.clone();
 
         let (sandbox_policy, permissions) = turn_permissions_overrides(
             TurnPermissionsOverride::ActiveProfile(active_permission_profile),
