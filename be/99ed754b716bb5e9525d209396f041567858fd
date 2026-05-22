@@ -1,0 +1,20 @@
+intent:
+  id: pr55-webrtc-bazel-scratch-paths
+change_type: fix
+scope: MODULE.bazel,patches
+summary: Keep WebRTC and cxx-build Bazel build-script scratch output inside the current sandbox OUT_DIR so macOS argument-comment CI can build hermetically.
+decision: Patch only Bazel-resolved third-party crates instead of product/runtime code, preserving fork-stable behavior and the gh SecurityServer sandbox guard.
+constraints:
+  - Do not include secrets or credentials.
+  - Preserve the gh Keychain SecurityServer sandbox regression test and base policy allow.
+  - Keep Cargo behavior unaffected; these patches are applied through Bazel crate annotations.
+intent_priority: should
+code_locations:
+  - MODULE.bazel
+  - patches/cxx-build_bazel_out_dir_shared_dir.patch
+  - patches/webrtc-sys-build_bazel_out_dir_prebuilt.patch
+  - patches/webrtc-sys_hermetic_darwin_sysroot.patch
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: GPT-5
