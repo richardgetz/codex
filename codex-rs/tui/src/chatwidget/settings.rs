@@ -65,6 +65,7 @@ impl ChatWidget {
             }
         }
         if feature == Feature::FastMode {
+            self.refresh_effective_service_tier();
             self.sync_service_tier_commands();
         }
         if feature == Feature::Personality {
@@ -237,6 +238,7 @@ impl ChatWidget {
         {
             mask.model = Some(model.to_string());
         }
+        self.refresh_effective_service_tier();
         self.refresh_model_dependent_surfaces();
     }
 
@@ -490,6 +492,27 @@ impl ChatWidget {
         self.refresh_status_line();
     }
 
+    pub(super) fn set_effective_collaboration_mode(&mut self, mode: CollaborationMode) {
+        let mode_kind = mode.mode;
+        let settings = mode.settings;
+        if mode_kind == ModeKind::Default {
+            self.current_collaboration_mode = CollaborationMode {
+                mode: ModeKind::Default,
+                settings: settings.clone(),
+            };
+        }
+        self.active_collaboration_mask = Some(CollaborationModeMask {
+            name: mode_kind.display_name().to_string(),
+            mode: Some(mode_kind),
+            model: Some(settings.model.clone()),
+            reasoning_effort: Some(settings.reasoning_effort),
+            developer_instructions: Some(settings.developer_instructions),
+        });
+        self.update_collaboration_mode_indicator();
+        self.refresh_plan_mode_nudge();
+        self.refresh_model_dependent_surfaces();
+    }
+
     pub(super) fn model_display_name(&self) -> &str {
         let model = self.current_model();
         if model.is_empty() {
@@ -654,21 +677,85 @@ impl ChatWidget {
         &mut self,
         notification: ThreadSettingsUpdatedNotification,
     ) {
-        let settings = notification.thread_settings;
+        let thread_id = match ThreadId::from_string(&notification.thread_id) {
+            Ok(thread_id) => thread_id,
+            Err(err) => {
+                tracing::warn!(
+                    thread_id = notification.thread_id,
+                    error = %err,
+                    "ignoring app-server ThreadSettingsUpdated with invalid thread_id"
+                );
+                return;
+            }
+        };
+        if self.thread_id != Some(thread_id) {
+            return;
+        }
+        self.apply_thread_settings(notification.thread_settings);
+    }
+
+    fn apply_thread_settings(&mut self, mut settings: ThreadSettings) {
+        let cwd_changed = self.config.cwd != settings.cwd;
+        self.apply_thread_settings_cwd(settings.cwd.clone());
+        self.config.model_provider_id = settings.model_provider.clone();
         self.effective_service_tier = settings.service_tier.clone();
-        self.config.approvals_reviewer = settings.approvals_reviewer.to_core();
+        self.set_approval_policy(settings.approval_policy);
+        self.set_approvals_reviewer(settings.approvals_reviewer.to_core());
         self.config.personality = settings.personality;
-        self.current_collaboration_mode = settings.collaboration_mode;
-        self.current_collaboration_mode
-            .settings
-            .model
-            .clone_from(&settings.model);
-        self.current_collaboration_mode.settings.reasoning_effort = settings.effort;
-        self.update_collaboration_mode_indicator();
-        self.refresh_model_display();
+        let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+            &settings.sandbox_policy.to_core(),
+            settings.cwd.as_path(),
+        );
+        let permission_snapshot = PermissionProfileSnapshot::from_session_snapshot(
+            permission_profile,
+            settings.active_permission_profile.take().map(Into::into),
+        );
+        let permission_sync = self
+            .config
+            .permissions
+            .set_permission_profile_from_session_snapshot(permission_snapshot.clone());
+        if let Err(err) = permission_sync {
+            tracing::warn!(%err, "failed to sync permissions from ThreadSettingsUpdated");
+            if let Err(replace_err) = self
+                .config
+                .permissions
+                .replace_permission_profile_from_session_snapshot(permission_snapshot)
+            {
+                tracing::error!(
+                    %replace_err,
+                    "failed to replace permissions from ThreadSettingsUpdated after constraint fallback"
+                );
+            }
+        }
+        settings.collaboration_mode.settings.model = settings.model;
+        settings.collaboration_mode.settings.reasoning_effort = settings.effort;
+        self.set_effective_collaboration_mode(settings.collaboration_mode);
         self.refresh_status_surfaces();
         self.sync_service_tier_commands();
         self.sync_personality_command_enabled();
+        if cwd_changed {
+            self.refresh_skills_for_current_cwd(/*force_reload*/ true);
+        }
+        self.refresh_plugin_mentions();
         self.request_redraw();
+    }
+
+    fn apply_thread_settings_cwd(&mut self, cwd: AbsolutePathBuf) {
+        let previous_cwd = std::mem::replace(&mut self.config.cwd, cwd.clone());
+        self.current_cwd = Some(cwd.to_path_buf());
+        self.status_line_project_root_name_cache = None;
+        if !self.config.workspace_roots.contains(&previous_cwd) {
+            return;
+        }
+        let previous_roots = std::mem::take(&mut self.config.workspace_roots);
+        self.config.workspace_roots.push(cwd);
+        for root in previous_roots {
+            if root != previous_cwd && !self.config.workspace_roots.contains(&root) {
+                self.config.workspace_roots.push(root);
+            }
+        }
+        self.config
+            .permissions
+            .set_workspace_roots(self.config.workspace_roots.clone());
     }
 }
