@@ -571,7 +571,7 @@ impl ThreadStateManager {
 }
 
 #[cfg(test)]
-mod tests {
+mod manager_tests {
     use super::ThreadState;
 
     #[test]

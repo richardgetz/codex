@@ -1333,8 +1333,13 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::ThreadSettings { thread_settings } => {
-                    let updates =
-                        settings_update_from_overrides(&sess, thread_settings, None, None).await;
+                    let updates = settings_update_from_overrides(
+                        &sess,
+                        thread_settings,
+                        /*final_output_json_schema*/ None,
+                        /*environments*/ None,
+                    )
+                    .await;
                     override_turn_context(&sess, sub.id.clone(), updates).await;
                     false
                 }
