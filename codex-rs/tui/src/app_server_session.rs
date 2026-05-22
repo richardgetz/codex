@@ -175,10 +175,11 @@ pub(crate) struct AppServerSession {
     client: AppServerClient,
     next_request_id: i64,
     remote_cwd_override: Option<PathBuf>,
+    thread_params_mode: ThreadParamsMode,
 }
 
-#[derive(Clone, Copy)]
-enum ThreadParamsMode {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ThreadParamsMode {
     Embedded,
     Remote,
 }
@@ -210,11 +211,21 @@ pub(crate) enum TurnPermissionsOverride {
 
 impl AppServerSession {
     pub(crate) fn new(client: AppServerClient) -> Self {
+        let thread_params_mode = match &client {
+            AppServerClient::InProcess(_) => ThreadParamsMode::Embedded,
+            AppServerClient::Remote(_) => ThreadParamsMode::Remote,
+        };
         Self {
             client,
             next_request_id: 1,
             remote_cwd_override: None,
+            thread_params_mode,
         }
+    }
+
+    pub(crate) fn with_thread_params_mode(mut self, thread_params_mode: ThreadParamsMode) -> Self {
+        self.thread_params_mode = thread_params_mode;
+        self
     }
 
     pub(crate) fn with_remote_cwd_override(mut self, remote_cwd_override: Option<PathBuf>) -> Self {
@@ -223,15 +234,11 @@ impl AppServerSession {
     }
 
     pub(crate) fn uses_remote_workspace(&self) -> bool {
-        self.remote_cwd_override.is_some()
+        matches!(self.thread_params_mode, ThreadParamsMode::Remote)
     }
 
     pub(crate) fn remote_cwd_override(&self) -> Option<&std::path::Path> {
         self.remote_cwd_override.as_deref()
-    }
-
-    pub(crate) fn is_remote(&self) -> bool {
-        matches!(self.client, AppServerClient::Remote(_))
     }
 
     pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
@@ -458,10 +465,7 @@ impl AppServerSession {
     }
 
     fn thread_params_mode(&self) -> ThreadParamsMode {
-        match &self.client {
-            AppServerClient::InProcess(_) => ThreadParamsMode::Embedded,
-            AppServerClient::Remote(_) => ThreadParamsMode::Remote,
-        }
+        self.thread_params_mode
     }
 
     async fn fork_parent_title_from_app_server(

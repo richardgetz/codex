@@ -20,6 +20,7 @@ use app::App;
 pub use app::AppExitInfo;
 pub use app::ExitReason;
 use app_server_session::AppServerSession;
+use app_server_session::ThreadParamsMode;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::InProcessAppServerClient;
@@ -314,12 +315,35 @@ async fn start_embedded_app_server(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AppServerTarget {
     Embedded,
+    LocalDaemon { endpoint: RemoteAppServerEndpoint },
     Remote { endpoint: RemoteAppServerEndpoint },
 }
 
 impl AppServerTarget {
     pub(crate) fn uses_remote_workspace(&self) -> bool {
         matches!(self, Self::Remote { .. })
+    }
+
+    fn thread_params_mode(&self) -> ThreadParamsMode {
+        if self.uses_remote_workspace() {
+            ThreadParamsMode::Remote
+        } else {
+            ThreadParamsMode::Embedded
+        }
+    }
+}
+
+fn app_server_target_for_launch(
+    explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
+    probed_local_daemon_socket: Option<AbsolutePathBuf>,
+) -> AppServerTarget {
+    match explicit_remote_endpoint {
+        Some(endpoint) => AppServerTarget::Remote { endpoint },
+        None => probed_local_daemon_socket
+            .map(|socket_path| AppServerTarget::LocalDaemon {
+                endpoint: RemoteAppServerEndpoint::UnixSocket { socket_path },
+            })
+            .unwrap_or(AppServerTarget::Embedded),
     }
 }
 
@@ -334,7 +358,9 @@ async fn init_state_db_for_app_server_target(
                 err.to_string(),
             ))
         }),
-        AppServerTarget::Remote { .. } => Ok(state_db::get_state_db(config).await),
+        AppServerTarget::LocalDaemon { .. } | AppServerTarget::Remote { .. } => {
+            Ok(state_db::get_state_db(config).await)
+        }
     }
 }
 
@@ -504,7 +530,9 @@ async fn start_app_server(
         )
         .await
         .map(AppServerClient::InProcess),
-        AppServerTarget::Remote { endpoint } => connect_remote_app_server(endpoint.clone()).await,
+        AppServerTarget::LocalDaemon { endpoint } | AppServerTarget::Remote { endpoint } => {
+            connect_remote_app_server(endpoint.clone()).await
+        }
     }
 }
 
@@ -528,7 +556,7 @@ pub(crate) async fn start_app_server_for_picker(
         environment_manager,
     )
     .await?;
-    Ok(AppServerSession::new(app_server))
+    Ok(AppServerSession::new(app_server).with_thread_params_mode(target.thread_params_mode()))
 }
 
 #[cfg(test)]
@@ -703,7 +731,7 @@ async fn lookup_latest_session_target_with_app_server(
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     let response = app_server
         .thread_list(latest_session_lookup_params(
-            app_server.is_remote(),
+            app_server.uses_remote_workspace(),
             config,
             cwd_filter,
             include_non_interactive,
@@ -838,21 +866,23 @@ pub async fn run_main(
         }
     };
 
-    let remote_endpoint = match explicit_remote_endpoint {
-        Some(endpoint) => Some(endpoint),
-        None => maybe_probe_default_daemon_socket(&codex_home)
-            .await
-            .map(|socket_path| RemoteAppServerEndpoint::UnixSocket { socket_path }),
+    let probed_local_daemon_socket = if explicit_remote_endpoint.is_none() {
+        maybe_probe_default_daemon_socket(&codex_home).await
+    } else {
+        None
     };
-    let app_server_target = remote_endpoint
-        .clone()
-        .map_or(AppServerTarget::Embedded, |endpoint| {
-            AppServerTarget::Remote { endpoint }
-        });
+    let app_server_target =
+        app_server_target_for_launch(explicit_remote_endpoint, probed_local_daemon_socket);
+    let remote_endpoint = match &app_server_target {
+        AppServerTarget::Embedded => None,
+        AppServerTarget::LocalDaemon { endpoint } | AppServerTarget::Remote { endpoint } => {
+            Some(endpoint.clone())
+        }
+    };
     let remote_cwd_override = cli
         .cwd
         .clone()
-        .filter(|_| matches!(app_server_target, AppServerTarget::Remote { .. }));
+        .filter(|_| app_server_target.uses_remote_workspace());
 
     let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
         arg0_paths.codex_self_exe.clone(),
@@ -1221,7 +1251,7 @@ async fn run_ratatui_app(
     remote_endpoint: Option<RemoteAppServerEndpoint>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppExitInfo> {
-    let remote_mode = matches!(&app_server_target, AppServerTarget::Remote { .. });
+    let remote_mode = app_server_target.uses_remote_workspace();
     color_eyre::install()?;
 
     tooltips::announcement::prewarm();
@@ -1284,7 +1314,8 @@ async fn run_ratatui_app(
     )
     .await
     {
-        Ok(app_server) => AppServerSession::new(app_server),
+        Ok(app_server) => AppServerSession::new(app_server)
+            .with_thread_params_mode(app_server_target.thread_params_mode()),
         Err(err) => {
             terminal_restore_guard.restore_silently();
             session_log::log_session_end();
@@ -1643,6 +1674,7 @@ async fn run_ratatui_app(
         .await
         {
             Ok(app_server) => AppServerSession::new(app_server)
+                .with_thread_params_mode(app_server_target.thread_params_mode())
                 .with_remote_cwd_override(remote_cwd_override.clone()),
             Err(err) => {
                 terminal_restore_guard.restore_silently();
@@ -2296,6 +2328,70 @@ mod tests {
                 temp_dir.path()
             )?)?)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn config_cwd_for_app_server_target_canonicalizes_local_daemon_cli_cwd()
+    -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let target = AppServerTarget::LocalDaemon {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
+        };
+        let environment_manager = EnvironmentManager::default_for_tests();
+
+        let config_cwd =
+            config_cwd_for_app_server_target(Some(temp_dir.path()), &target, &environment_manager)?;
+
+        assert_eq!(
+            config_cwd,
+            Some(AbsolutePathBuf::from_absolute_path(dunce::canonicalize(
+                temp_dir.path()
+            )?)?)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn app_server_target_for_launch_uses_local_daemon_for_implicit_socket() -> color_eyre::Result<()>
+    {
+        let socket_path = AbsolutePathBuf::relative_to_current_dir("codex.sock")?;
+        let target = app_server_target_for_launch(
+            /*explicit_remote_endpoint*/ None,
+            Some(socket_path.clone()),
+        );
+
+        assert_eq!(
+            target,
+            AppServerTarget::LocalDaemon {
+                endpoint: RemoteAppServerEndpoint::UnixSocket { socket_path },
+            }
+        );
+        assert!(!target.uses_remote_workspace());
+        assert_eq!(target.thread_params_mode(), ThreadParamsMode::Embedded);
+        Ok(())
+    }
+
+    #[test]
+    fn app_server_target_for_launch_prefers_explicit_remote_endpoint() -> color_eyre::Result<()> {
+        let explicit_endpoint = RemoteAppServerEndpoint::UnixSocket {
+            socket_path: AbsolutePathBuf::relative_to_current_dir("explicit.sock")?,
+        };
+        let target = app_server_target_for_launch(
+            Some(explicit_endpoint.clone()),
+            Some(AbsolutePathBuf::relative_to_current_dir("default.sock")?),
+        );
+
+        assert_eq!(
+            target,
+            AppServerTarget::Remote {
+                endpoint: explicit_endpoint,
+            }
+        );
+        assert!(target.uses_remote_workspace());
+        assert_eq!(target.thread_params_mode(), ThreadParamsMode::Remote);
         Ok(())
     }
 
