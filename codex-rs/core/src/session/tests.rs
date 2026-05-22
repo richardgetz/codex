@@ -372,7 +372,7 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
         .await;
 
     assert_eq!(
-        response,
+        response.response,
         Some(ElicitationResponse {
             action: ElicitationAction::Accept,
             content: Some(json!({})),
@@ -604,7 +604,9 @@ async fn preview_session_start_hooks(
             transcript_path: None,
             model: "gpt-5.2".to_string(),
             permission_mode: "default".to_string(),
-            source: codex_hooks::SessionStartSource::Startup,
+            target: codex_hooks::StartHookTarget::SessionStart {
+                source: codex_hooks::SessionStartSource::Startup,
+            },
         }),
     )
 }
@@ -889,7 +891,7 @@ async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::R
 
 #[tokio::test]
 async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow::Result<()> {
-    let (mut session, _turn_context) = make_session_and_context().await;
+    let (session, _turn_context) = make_session_and_context().await;
     let initial_permission_profile = PermissionProfile::workspace_write();
 
     let mut network_config = NetworkProxyConfig::default();
@@ -944,7 +946,10 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
             .set_permission_profile_for_tests(initial_permission_profile)
             .expect("test setup should allow permission profile");
     }
-    session.services.network_proxy = Some(started_proxy);
+    session
+        .services
+        .network_proxy
+        .store(Some(Arc::new(started_proxy)));
 
     session
         .new_turn_with_sub_id(
@@ -959,7 +964,7 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
     let started_proxy = session
         .services
         .network_proxy
-        .as_ref()
+        .load_full()
         .expect("managed network proxy should be present");
     assert_eq!(
         started_proxy
@@ -1370,7 +1375,9 @@ async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
         transcript_path: None,
         model: "gpt-5.2".to_string(),
         permission_mode: "default".to_string(),
-        source: codex_hooks::SessionStartSource::Startup,
+        target: codex_hooks::StartHookTarget::SessionStart {
+            source: codex_hooks::SessionStartSource::Startup,
+        },
     };
     assert!(session.hooks().preview_session_start(&request).is_empty());
 
@@ -1475,7 +1482,9 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
         transcript_path: None,
         model: "gpt-5.2".to_string(),
         permission_mode: "default".to_string(),
-        source: codex_hooks::SessionStartSource::Startup,
+        target: codex_hooks::StartHookTarget::SessionStart {
+            source: codex_hooks::SessionStartSource::Startup,
+        },
     };
     assert!(session.hooks().preview_session_start(&request).is_empty());
 
@@ -5099,7 +5108,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
-        network_proxy: None,
+        network_proxy: None.into(),
+        network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
+        managed_network_requirements_configured: false,
         network_approval: Arc::clone(&network_approval),
         state_db: None,
         live_thread: None,
@@ -6982,7 +6993,9 @@ where
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
-        network_proxy: None,
+        network_proxy: None.into(),
+        network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
+        managed_network_requirements_configured: false,
         network_approval: Arc::clone(&network_approval),
         state_db: state_db.clone(),
         live_thread: None,

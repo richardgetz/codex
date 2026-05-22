@@ -151,18 +151,17 @@ strip_request_headers = ["x-api-key"]
     )
     .expect("higher layer should parse");
 
-    let mut accumulator = NetworkConfigAccumulator::default();
-    accumulator
-        .apply_network_tables(
-            network_tables_from_toml(&lower_network).expect("lower layer should deserialize"),
-        )
-        .expect("lower layer should apply");
-    accumulator
-        .apply_network_tables(
-            network_tables_from_toml(&higher_network).expect("higher layer should deserialize"),
-        )
-        .expect("higher layer should apply");
-    let config = accumulator.finish().expect("merged config should build");
+    let mut config = NetworkProxyConfig::default();
+    apply_network_tables(
+        &mut config,
+        network_tables_from_toml(&lower_network).expect("lower layer should deserialize"),
+    )
+    .expect("lower layer should apply");
+    apply_network_tables(
+        &mut config,
+        network_tables_from_toml(&higher_network).expect("higher layer should deserialize"),
+    )
+    .expect("higher layer should apply");
 
     assert_eq!(config.network.mode, codex_network_proxy::NetworkMode::Full);
     assert!(config.network.mitm);

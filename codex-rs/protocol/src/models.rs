@@ -717,6 +717,9 @@ pub enum ContentItem {
         #[ts(optional)]
         detail: Option<ImageDetail>,
     },
+    EncryptedContent {
+        encrypted_content: String,
+    },
     OutputText {
         text: String,
     },
@@ -1314,6 +1317,9 @@ pub enum FunctionCallOutputContentItem {
         #[ts(optional)]
         detail: Option<ImageDetail>,
     },
+    EncryptedContent {
+        encrypted_content: String,
+    },
 }
 
 /// Converts structured function-call output content into plain text for
@@ -1337,7 +1343,8 @@ pub fn function_call_output_content_items_to_text(
                 Some(text.as_str())
             }
             FunctionCallOutputContentItem::InputText { .. }
-            | FunctionCallOutputContentItem::InputImage { .. } => None,
+            | FunctionCallOutputContentItem::InputImage { .. }
+            | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
         })
         .collect::<Vec<_>>();
 

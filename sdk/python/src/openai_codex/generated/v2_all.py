@@ -743,6 +743,14 @@ class InputTextContentItem(BaseModel):
     type: Annotated[Literal["input_text"], Field(title="InputTextContentItemType")]
 
 
+class EncryptedContentContentItem(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    encrypted_content: str
+    type: Annotated[Literal["encrypted_content"], Field(title="EncryptedContentContentItemType")]
+
+
 class OutputTextContentItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -1286,6 +1294,17 @@ class InputTextFunctionCallOutputContentItem(BaseModel):
     text: str
     type: Annotated[
         Literal["input_text"], Field(title="InputTextFunctionCallOutputContentItemType")
+    ]
+
+
+class EncryptedContentFunctionCallOutputContentItem(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    encrypted_content: str
+    type: Annotated[
+        Literal["encrypted_content"],
+        Field(title="EncryptedContentFunctionCallOutputContentItemType"),
     ]
 
 
@@ -5853,11 +5872,23 @@ class InputImageContentItem(BaseModel):
     type: Annotated[Literal["input_image"], Field(title="InputImageContentItemType")]
 
 
-class ContentItem(RootModel[InputTextContentItem | InputImageContentItem | OutputTextContentItem]):
+class ContentItem(
+    RootModel[
+        InputTextContentItem
+        | InputImageContentItem
+        | EncryptedContentContentItem
+        | OutputTextContentItem
+    ]
+):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    root: InputTextContentItem | InputImageContentItem | OutputTextContentItem
+    root: (
+        InputTextContentItem
+        | InputImageContentItem
+        | EncryptedContentContentItem
+        | OutputTextContentItem
+    )
 
 
 class ExperimentalFeature(BaseModel):
@@ -5956,13 +5987,19 @@ class InputImageFunctionCallOutputContentItem(BaseModel):
 
 
 class FunctionCallOutputContentItem(
-    RootModel[InputTextFunctionCallOutputContentItem | InputImageFunctionCallOutputContentItem]
+    RootModel[
+        InputTextFunctionCallOutputContentItem
+        | InputImageFunctionCallOutputContentItem
+        | EncryptedContentFunctionCallOutputContentItem
+    ]
 ):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     root: Annotated[
-        InputTextFunctionCallOutputContentItem | InputImageFunctionCallOutputContentItem,
+        InputTextFunctionCallOutputContentItem
+        | InputImageFunctionCallOutputContentItem
+        | EncryptedContentFunctionCallOutputContentItem,
         Field(
             description="Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs."
         ),

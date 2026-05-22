@@ -389,7 +389,7 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
                     pieces.push(text.as_str());
                 }
             }
-            ContentItem::InputImage { .. } => {}
+            ContentItem::InputImage { .. } | ContentItem::EncryptedContent { .. } => {}
         }
     }
     if pieces.is_empty() {

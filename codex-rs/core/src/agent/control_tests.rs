@@ -135,7 +135,7 @@ fn has_subagent_notification(history_items: &[ResponseItem]) -> bool {
             ContentItem::InputText { text } | ContentItem::OutputText { text } => {
                 SubagentNotification::matches_text(text)
             }
-            ContentItem::InputImage { .. } => false,
+            ContentItem::InputImage { .. } | ContentItem::EncryptedContent { .. } => false,
         })
     })
 }
@@ -150,7 +150,7 @@ fn history_contains_text(history_items: &[ResponseItem], needle: &str) -> bool {
             ContentItem::InputText { text } | ContentItem::OutputText { text } => {
                 text.contains(needle)
             }
-            ContentItem::InputImage { .. } => false,
+            ContentItem::InputImage { .. } | ContentItem::EncryptedContent { .. } => false,
         })
     })
 }
@@ -173,7 +173,9 @@ fn history_contains_assistant_inter_agent_communication(
                     .as_ref()
                     == Some(expected)
             }
-            ContentItem::InputText { .. } | ContentItem::InputImage { .. } => false,
+            ContentItem::InputText { .. }
+            | ContentItem::InputImage { .. }
+            | ContentItem::EncryptedContent { .. } => false,
         })
     })
 }
@@ -536,13 +538,7 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 
     timeout(Duration::from_secs(5), async {
         loop {
-            if thread
-                .codex
-                .session
-                .input_queue
-                .has_pending_input(&thread.codex.session.active_turn)
-                .await
-            {
+            if thread.codex.session.has_pending_input().await {
                 break;
             }
             sleep(Duration::from_millis(10)).await;

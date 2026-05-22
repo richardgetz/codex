@@ -308,6 +308,11 @@ impl ToolRegistry {
     }
 
     #[cfg(test)]
+    pub(crate) fn has_tool(&self, name: &ToolName) -> bool {
+        self.tools.contains_key(name)
+    }
+
+    #[cfg(test)]
     pub(crate) fn tool_exposure(&self, name: &ToolName) -> Option<ToolExposure> {
         self.tools.get(name).map(|tool| tool.exposure())
     }
