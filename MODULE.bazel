@@ -360,6 +360,18 @@ llvm = use_extension("@llvm//extensions:llvm.bzl", "llvm")
 use_repo(llvm, "llvm-project")
 
 crate.annotation(
+    # Bazel build scripts do not have Cargo's stable target-dir layout. Keep
+    # cxxbridge's shared/debug symlink directory inside the current build
+    # script OUT_DIR instead of the `scratch` crate's compile-time OUT_DIR,
+    # which can point at a stale sandbox on macOS runners.
+    crate = "cxx-build",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:cxx-build_bazel_out_dir_shared_dir.patch",
+    ],
+)
+
+crate.annotation(
     # Provide the hermetic SDK path so the build script doesn't try to invoke an unhermetic `xcrun --show-sdk-path`.
     build_script_data = [
         "@macos_sdk//sysroot",
@@ -378,6 +390,17 @@ crate.annotation(
 )
 
 inject_repo(crate, "llvm", "llvm-project", "macos_sdk")
+
+crate.annotation(
+    # Bazel build scripts run in hermetic sandboxes. Avoid the `scratch`
+    # crate's compile-time OUT_DIR for WebRTC prebuilts because it can point
+    # outside the current sandbox on macOS.
+    crate = "webrtc-sys-build",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:webrtc-sys-build_bazel_out_dir_prebuilt.patch",
+    ],
+)
 
 crate.annotation(
     # Provide the hermetic SDK path so the build script doesn't try to invoke an unavailable `xcrun --show-sdk-path`.

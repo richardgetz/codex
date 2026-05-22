@@ -1,0 +1,7 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 9075c31..a606f19 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -177,1 +177,1 @@ impl Project {
+-            TargetDir::Unknown => scratch::path("cxxbridge"),
++            TargetDir::Unknown => out_dir.join("cxxbridge"),

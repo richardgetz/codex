@@ -17,10 +17,10 @@ index 3b4a24a..6aa06ff 100644
 +        webrtc_lib
 +    };
 +    println!("cargo:rustc-link-search=native={}", webrtc_link_lib.to_str().unwrap());
-@@ -255,1 +264,1 @@
+@@ -255,1 +263,1 @@
 -            println!("cargo:rustc-link-lib=framework=Appkit");
 +            println!("cargo:rustc-link-lib=framework=AppKit");
-@@ -320,1 +329,18 @@
+@@ -320,1 +328,18 @@
 -    builder.warnings(false).compile("webrtcsys-cxx");
 +    builder.warnings(false).compile("webrtcsys-cxx");
 +    let cxxbridge_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("cxxbridge");
@@ -40,12 +40,12 @@ index 3b4a24a..6aa06ff 100644
 +        fs::remove_file(crate_link).unwrap();
 +    }
 +
-@@ -375,1 +384,3 @@
+@@ -375,1 +383,3 @@
 -    println!("cargo:rustc-link-lib={}", clang_rt);
 +    if env::var_os("WEBRTC_SYS_LINK_OUT_DIR").is_none() {
 +        println!("cargo:rustc-link-lib={}", clang_rt);
 +    }
-@@ -378,6 +389,21 @@
+@@ -378,6 +388,21 @@
 -    let sysroot = Command::new("xcrun").args(["--sdk", sdk, "--show-sdk-path"]).output().unwrap();
 -
 -    let sysroot = String::from_utf8_lossy(&sysroot.stdout);
@@ -73,3 +73,19 @@ index 3b4a24a..6aa06ff 100644
 +        .arg("--print-search-dirs")
 +        .output()
 +        .unwrap();
+diff --git a/build/src/lib.rs b/build/src/lib.rs
+index e1924f5..4d37552 100644
+--- a/build/src/lib.rs
++++ b/build/src/lib.rs
+@@ -90,2 +90,6 @@ pub fn custom_dir() -> Option<path::PathBuf> {
++pub fn prebuilt_root() -> path::PathBuf {
++    PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("webrtc-prebuilt")
++}
++
+-pub fn prebuilt_dir() -> path::PathBuf {
+-    let target_dir = scratch::path(SCRATH_PATH);
++pub fn prebuilt_dir() -> path::PathBuf {
++    let target_dir = prebuilt_root();
+@@ -200,1 +204,1 @@ pub fn download_webrtc() -> Result<()> {
+-    let dir = scratch::path(SCRATH_PATH);
++    let dir = prebuilt_root();
