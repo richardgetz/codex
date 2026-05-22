@@ -1,0 +1,23 @@
+intent:
+  id: stable-rust-v0-133-ci-repair
+change_type: fix
+scope: codex-rs ci, protocol schema, core tests
+summary: Repair PR #55 CI failures after merging upstream rust-v0.133.0 into the fork stable refresh branch.
+decision: Restore upstream 0.133 behavior and generated artifacts where the merge left stale fork surfaces, wire the plugin install list handler, remove the unlinked stale input queue module, regenerate app-server schema and Python SDK types for encrypted content, and keep the gh Keychain SecurityServer sandbox regression guard intact.
+constraints:
+  - Preserve fork stable behavior and existing gh auth sandbox fix.
+  - Do not introduce or record secrets.
+  - Keep the change scoped to PR #55 check failures and generated artifacts required by protocol changes.
+intent_priority: must
+code_locations:
+  - codex-rs/core/src/session/turn.rs
+  - codex-rs/core/src/session/mod.rs
+  - codex-rs/core/src/state/session.rs
+  - codex-rs/core/src/tools/spec_plan.rs
+  - codex-rs/protocol/src/models.rs
+  - codex-rs/app-server-protocol/schema
+  - sdk/python/src/openai_codex/generated/v2_all.py
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: GPT-5
