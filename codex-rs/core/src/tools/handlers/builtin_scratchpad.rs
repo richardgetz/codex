@@ -372,6 +372,21 @@ pub(crate) fn scratchpad_update_event_from_result(result: &Value) -> Option<Scra
     })
 }
 
+pub(crate) fn scratchpad_absent_update_event(scratchpad_id: String) -> ScratchpadUpdateEvent {
+    ScratchpadUpdateEvent {
+        scratchpad_id,
+        objective: String::new(),
+        status: "deleted".to_string(),
+        continuous_enabled: false,
+        completed: Vec::new(),
+        next_steps: Vec::new(),
+        pending_waits: Vec::new(),
+        blocked: Vec::new(),
+        updated_at: now(),
+        archived_at: None,
+    }
+}
+
 fn string_array_value(value: Option<&Value>) -> Vec<String> {
     value
         .and_then(Value::as_array)
@@ -527,6 +542,7 @@ struct ScratchpadNote {
 struct ScratchpadStore {
     root: PathBuf,
     entries_dir: PathBuf,
+    history_dir: PathBuf,
 }
 
 impl ScratchpadStore {
@@ -537,6 +553,7 @@ impl ScratchpadStore {
             .unwrap_or_else(|| codex_home.join("scratchpad"));
         Ok(Self {
             entries_dir: root.join("entries"),
+            history_dir: root.join("history"),
             root,
         })
     }
@@ -544,6 +561,108 @@ impl ScratchpadStore {
     fn path(&self, scratchpad_id: &str) -> Result<PathBuf, FunctionCallError> {
         let safe_id = sanitize_id(scratchpad_id)?;
         Ok(self.entries_dir.join(format!("{safe_id}.json")))
+    }
+
+    fn history_path(&self, scratchpad_id: &str) -> Result<PathBuf, FunctionCallError> {
+        let safe_id = sanitize_id(scratchpad_id)?;
+        Ok(self.history_dir.join(format!("{safe_id}.json")))
+    }
+
+    fn read_raw(&self, scratchpad_id: &str) -> Result<Option<Value>, FunctionCallError> {
+        let path = self.path(scratchpad_id)?;
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(io_error(err)),
+        };
+        let value = serde_json::from_str::<Value>(&text).map_err(|_| {
+            FunctionCallError::RespondToModel("scratchpad file is invalid".to_string())
+        })?;
+        if value.get("scratchpad_id").and_then(Value::as_str) != Some(scratchpad_id) {
+            return Err(FunctionCallError::RespondToModel(
+                "scratchpad file is invalid".to_string(),
+            ));
+        }
+        Ok(Some(value))
+    }
+
+    fn write_raw(&self, scratchpad_id: &str, value: &Value) -> Result<(), FunctionCallError> {
+        if value.get("scratchpad_id").and_then(Value::as_str) != Some(scratchpad_id) {
+            return Err(FunctionCallError::RespondToModel(
+                "scratchpad file is invalid".to_string(),
+            ));
+        }
+        fs::create_dir_all(&self.entries_dir).map_err(io_error)?;
+        let path = self.path(scratchpad_id)?;
+        let text = serde_json::to_string_pretty(value).map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to serialize scratchpad: {err}"))
+        })?;
+        atomic_write_json(&path, &format!("{text}\n"))?;
+        self.write_index()
+    }
+
+    fn remove_if_exists(&self, scratchpad_id: &str) -> Result<bool, FunctionCallError> {
+        let path = self.path(scratchpad_id)?;
+        match fs::remove_file(path) {
+            Ok(()) => {
+                self.write_index()?;
+                Ok(true)
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                self.write_index()?;
+                Ok(false)
+            }
+            Err(err) => Err(io_error(err)),
+        }
+    }
+
+    fn remove_history_if_exists(&self, scratchpad_id: &str) -> Result<(), FunctionCallError> {
+        let path = self.history_path(scratchpad_id)?;
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(io_error(err)),
+        }
+    }
+
+    fn read_rollback_journal(
+        &self,
+        scratchpad_id: &str,
+    ) -> Result<ScratchpadRollbackJournal, FunctionCallError> {
+        let path = self.history_path(scratchpad_id)?;
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(ScratchpadRollbackJournal {
+                    scratchpad_id: scratchpad_id.to_string(),
+                    checkpoints: Vec::new(),
+                });
+            }
+            Err(err) => return Err(io_error(err)),
+        };
+        let journal = serde_json::from_str::<ScratchpadRollbackJournal>(&text).map_err(|_| {
+            FunctionCallError::RespondToModel("scratchpad rollback journal is invalid".to_string())
+        })?;
+        if journal.scratchpad_id != scratchpad_id {
+            return Err(FunctionCallError::RespondToModel(
+                "scratchpad rollback journal is invalid".to_string(),
+            ));
+        }
+        Ok(journal)
+    }
+
+    fn write_rollback_journal(
+        &self,
+        journal: &ScratchpadRollbackJournal,
+    ) -> Result<(), FunctionCallError> {
+        fs::create_dir_all(&self.history_dir).map_err(io_error)?;
+        let path = self.history_path(&journal.scratchpad_id)?;
+        let text = serde_json::to_string_pretty(journal).map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to serialize scratchpad rollback journal: {err}"
+            ))
+        })?;
+        atomic_write_json(&path, &format!("{text}\n"))
     }
 
     fn read(&self, scratchpad_id: &str) -> Result<Scratchpad, FunctionCallError> {
@@ -614,6 +733,7 @@ impl ScratchpadStore {
     fn remove(&self, scratchpad_id: &str) -> Result<(), FunctionCallError> {
         let path = self.path(scratchpad_id)?;
         fs::remove_file(path).map_err(io_error)?;
+        self.remove_history_if_exists(scratchpad_id)?;
         self.write_index()
     }
 
@@ -690,6 +810,27 @@ struct ScratchpadIndexEntry {
     archived_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct ScratchpadRollbackJournal {
+    scratchpad_id: String,
+    #[serde(default)]
+    checkpoints: Vec<ScratchpadRollbackCheckpoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct ScratchpadRollbackCheckpoint {
+    turn_index: usize,
+    created_at: String,
+    scratchpad: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ScratchpadCheckpointRestore {
+    Restored(Value),
+    RestoredAbsent { deleted: bool },
+    MissingCheckpoint,
+}
+
 /// Archives inactive built-in scratchpads and deletes old archived scratchpads.
 ///
 /// `*_after_days = 0` disables the corresponding cleanup phase.
@@ -739,6 +880,98 @@ pub(crate) fn run_lifecycle_cleanup(
         }
     }
     store.write_index()
+}
+
+pub(crate) fn record_thread_scratchpad_checkpoint(
+    codex_home: &Path,
+    scratchpad_id: &str,
+    turn_index: usize,
+    max_user_turn_checkpoints: usize,
+) -> Result<(), FunctionCallError> {
+    if max_user_turn_checkpoints == 0 {
+        return Ok(());
+    }
+
+    let _guard = scratchpad_write_guard()?;
+    let store = ScratchpadStore::new(/*state_home*/ None, codex_home)?;
+    let snapshot = store.read_raw(scratchpad_id)?;
+    let mut journal = store.read_rollback_journal(scratchpad_id)?;
+
+    // A new branch of history after rollback invalidates checkpoints from the discarded suffix.
+    journal
+        .checkpoints
+        .retain(|checkpoint| checkpoint.turn_index < turn_index);
+
+    if journal
+        .checkpoints
+        .last()
+        .is_some_and(|checkpoint| checkpoint.scratchpad == snapshot)
+    {
+        store.write_rollback_journal(&journal)?;
+        return Ok(());
+    }
+
+    journal.checkpoints.push(ScratchpadRollbackCheckpoint {
+        turn_index,
+        created_at: now(),
+        scratchpad: snapshot,
+    });
+    prune_rollback_checkpoints(&mut journal, max_user_turn_checkpoints);
+    store.write_rollback_journal(&journal)
+}
+
+pub(crate) fn restore_thread_scratchpad_checkpoint(
+    codex_home: &Path,
+    scratchpad_id: &str,
+    target_turn_index: usize,
+    max_user_turn_checkpoints: usize,
+) -> Result<ScratchpadCheckpointRestore, FunctionCallError> {
+    if max_user_turn_checkpoints == 0 {
+        return Ok(ScratchpadCheckpointRestore::MissingCheckpoint);
+    }
+
+    let _guard = scratchpad_write_guard()?;
+    let store = ScratchpadStore::new(/*state_home*/ None, codex_home)?;
+    let mut journal = store.read_rollback_journal(scratchpad_id)?;
+    journal
+        .checkpoints
+        .retain(|checkpoint| checkpoint.turn_index <= target_turn_index);
+    prune_rollback_checkpoints(&mut journal, max_user_turn_checkpoints);
+
+    let checkpoint = journal
+        .checkpoints
+        .iter()
+        .rev()
+        .find(|checkpoint| checkpoint.turn_index <= target_turn_index)
+        .cloned();
+
+    let restored = match checkpoint {
+        Some(checkpoint) => {
+            if let Some(scratchpad) = checkpoint.scratchpad {
+                store.write_raw(scratchpad_id, &scratchpad)?;
+                ScratchpadCheckpointRestore::Restored(scratchpad)
+            } else {
+                let deleted = store.remove_if_exists(scratchpad_id)?;
+                ScratchpadCheckpointRestore::RestoredAbsent { deleted }
+            }
+        }
+        None => ScratchpadCheckpointRestore::MissingCheckpoint,
+    };
+    store.write_rollback_journal(&journal)?;
+    Ok(restored)
+}
+
+fn prune_rollback_checkpoints(
+    journal: &mut ScratchpadRollbackJournal,
+    max_user_turn_checkpoints: usize,
+) {
+    let excess = journal
+        .checkpoints
+        .len()
+        .saturating_sub(max_user_turn_checkpoints);
+    if excess > 0 {
+        journal.checkpoints.drain(..excess);
+    }
 }
 
 pub(crate) fn set_thread_continuous_policy(
@@ -2223,6 +2456,126 @@ mod tests {
     }
 
     #[test]
+    fn rollback_checkpoints_restore_full_raw_scratchpad_and_prune_by_user_turns() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let codex_home = tmp.path();
+        let store = ScratchpadStore::new(/*state_home*/ None, codex_home).unwrap();
+        let scratchpad_id = "thread-rollback";
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "rollback objective",
+                "next_steps": ["initial"]
+            }),
+            scratchpad_id,
+        )
+        .unwrap();
+
+        record_thread_scratchpad_checkpoint(codex_home, scratchpad_id, /*turn_index*/ 0, 2)
+            .unwrap();
+        set_next_steps(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": scratchpad_id,
+                "next_steps": ["after first turn"],
+                "status": "active"
+            }),
+            scratchpad_id,
+        )
+        .unwrap();
+        let mut turn_one = store.read_raw(scratchpad_id).unwrap().unwrap();
+        turn_one["future_unknown_field"] = serde_json::json!({ "preserved": true });
+        store.write_raw(scratchpad_id, &turn_one).unwrap();
+        record_thread_scratchpad_checkpoint(codex_home, scratchpad_id, /*turn_index*/ 1, 2)
+            .unwrap();
+
+        update_scratchpad(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": scratchpad_id,
+                "completed": ["done in second turn"],
+                "next_steps": ["after second turn"],
+                "pending_waits": [{"wait_id": "w1", "summary": "wait"}],
+                "blocked": [{"blocker_id": "b1", "summary": "blocked"}],
+                "run_policy": {"continuous": {"enabled": true}}
+            }),
+            scratchpad_id,
+        )
+        .unwrap();
+        record_thread_scratchpad_checkpoint(codex_home, scratchpad_id, /*turn_index*/ 2, 2)
+            .unwrap();
+
+        let journal = store.read_rollback_journal(scratchpad_id).unwrap();
+        assert_eq!(
+            journal
+                .checkpoints
+                .iter()
+                .map(|checkpoint| checkpoint.turn_index)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+
+        let restored = restore_thread_scratchpad_checkpoint(
+            codex_home,
+            scratchpad_id,
+            /*target_turn_index*/ 1,
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            restored,
+            ScratchpadCheckpointRestore::Restored(turn_one.clone())
+        );
+        assert_eq!(store.read_raw(scratchpad_id).unwrap().unwrap(), turn_one);
+        assert_eq!(
+            store.read(scratchpad_id).unwrap().next_steps,
+            vec!["after first turn".to_string()]
+        );
+        assert_eq!(
+            store.read_raw(scratchpad_id).unwrap().unwrap()["future_unknown_field"],
+            serde_json::json!({ "preserved": true })
+        );
+    }
+
+    #[test]
+    fn rollback_checkpoint_can_restore_absent_scratchpad() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let codex_home = tmp.path();
+        let store = ScratchpadStore::new(/*state_home*/ None, codex_home).unwrap();
+        let scratchpad_id = "thread-created-later";
+
+        record_thread_scratchpad_checkpoint(codex_home, scratchpad_id, /*turn_index*/ 0, 10)
+            .unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "created later",
+                "next_steps": ["new"]
+            }),
+            scratchpad_id,
+        )
+        .unwrap();
+        record_thread_scratchpad_checkpoint(codex_home, scratchpad_id, /*turn_index*/ 1, 10)
+            .unwrap();
+
+        let restored = restore_thread_scratchpad_checkpoint(
+            codex_home,
+            scratchpad_id,
+            /*target_turn_index*/ 0,
+            10,
+        )
+        .unwrap();
+
+        assert_eq!(
+            restored,
+            ScratchpadCheckpointRestore::RestoredAbsent { deleted: true }
+        );
+        assert!(store.read_raw(scratchpad_id).unwrap().is_none());
+        let index_text = fs::read_to_string(codex_home.join("scratchpad/index.json")).unwrap();
+        assert!(!index_text.contains(scratchpad_id));
+    }
+
+    #[test]
     fn pending_wait_formatter_uses_description_and_metadata() {
         assert_eq!(
             format_pending_wait(&serde_json::json!({
@@ -3670,6 +4023,14 @@ mod tests {
                 archived_at: Some(old_archived_at),
             })
             .unwrap();
+        record_thread_scratchpad_checkpoint(
+            tmp.path(),
+            "sp-old-archived",
+            /*turn_index*/ 0,
+            10,
+        )
+        .unwrap();
+        assert!(store.history_path("sp-old-archived").unwrap().exists());
         store
             .write(&Scratchpad {
                 scratchpad_id: "sp-recent-archived".to_string(),
@@ -3715,6 +4076,7 @@ mod tests {
         assert!(inactive.archived_at.is_some());
         assert_eq!(inactive.notes.len(), 1);
         assert!(store.read("sp-old-archived").is_err());
+        assert!(!store.history_path("sp-old-archived").unwrap().exists());
         assert!(store.read("sp-recent-archived").is_ok());
 
         let index_text = fs::read_to_string(tmp.path().join("scratchpad/index.json")).unwrap();

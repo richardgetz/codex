@@ -350,7 +350,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   discovered tasks/issues/tests/review follow-ups before they can be lost, and
   move finished work into `completed` instead of dropping it from the ledger.
 - Built-in scratchpads are JSON-backed under `<codex_home>/scratchpad/entries`
-  unless a tool call provides `state_home`.
+  unless a tool call provides `state_home`. Scratchpad rollback checkpoints
+  are stored separately under `<codex_home>/scratchpad/history` and are
+  keyed by user-turn boundaries so thread backtracking can restore the full
+  scratchpad document, including fields beyond `next_steps`.
 - A generated `<codex_home>/scratchpad/index.json` manifest lists scratchpads by
   id, objective, status, session key, creation time, update time, and archive
   time so recent work can be found without manually scanning every entry file.
@@ -421,6 +424,12 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 - Scratchpad lifecycle cleanup runs mechanically during config load. By
   default, non-archived pads are archived after 30 days without updates, and
   archived pads are deleted after 90 days in the archive.
+- Scratchpad rollback retention is bounded independently from transcript
+  backtrack. Conversation backtrack remains able to walk the retained thread
+  history, while scratchpad restore keeps the last
+  `[scratchpad.rollback].max_user_turn_checkpoints` user-turn checkpoints. The
+  default is 10; set it to 0 to disable scratchpad rollback checkpoints or
+  raise it for deeper scratchpad restore history.
 - After context compaction, actionable built-in scratchpad state is looped back
   through hidden developer context, using the same model-visible hidden-context
   path as other post-compaction recovery state rather than a synthetic user
@@ -434,6 +443,9 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   recover_after_compaction = true
   auto_archive_after_days = 30
   delete_archived_after_days = 90
+
+  [scratchpad.rollback]
+  max_user_turn_checkpoints = 10
 
   [scratchpad.fanout]
   enabled = false

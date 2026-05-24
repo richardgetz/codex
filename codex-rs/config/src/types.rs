@@ -663,11 +663,53 @@ pub struct ScratchpadToml {
     pub outcomes_enabled: Option<bool>,
     /// Optional agent fanout policy for disconnected scratchpad next_steps.
     pub fanout: Option<ScratchpadFanoutToml>,
+    /// Scratchpad state rollback behavior tied to thread backtracking.
+    pub rollback: Option<ScratchpadRollbackToml>,
     /// TUI rendering controls for live scratchpad update cards.
     pub view: Option<ScratchpadViewToml>,
     /// Collaboration-mode-specific overrides.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub modes: HashMap<ModeKind, ScratchpadModeToml>,
+}
+
+/// Scratchpad rollback settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ScratchpadRollbackToml {
+    /// Maximum scratchpad checkpoints to keep, counted by user-turn boundary.
+    ///
+    /// Set to 0 to disable scratchpad rollback checkpoints.
+    #[schemars(range(max = 1024))]
+    pub max_user_turn_checkpoints: Option<usize>,
+}
+
+/// Effective scratchpad rollback settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScratchpadRollbackConfig {
+    pub max_user_turn_checkpoints: usize,
+}
+
+impl Default for ScratchpadRollbackConfig {
+    fn default() -> Self {
+        Self {
+            max_user_turn_checkpoints: 10,
+        }
+    }
+}
+
+impl From<Option<ScratchpadRollbackToml>> for ScratchpadRollbackConfig {
+    fn from(toml: Option<ScratchpadRollbackToml>) -> Self {
+        let defaults = ScratchpadRollbackConfig::default();
+        let Some(toml) = toml else {
+            return defaults;
+        };
+        Self {
+            max_user_turn_checkpoints: toml
+                .max_user_turn_checkpoints
+                .unwrap_or(defaults.max_user_turn_checkpoints)
+                .min(1024),
+        }
+    }
 }
 
 /// Opt-in scratchpad agent fanout settings loaded from config.toml.
@@ -804,6 +846,7 @@ pub struct ScratchpadConfig {
     pub delete_archived_after_days: u64,
     pub outcomes_enabled: bool,
     pub fanout: ScratchpadFanoutConfig,
+    pub rollback: ScratchpadRollbackConfig,
     pub view: ScratchpadViewConfig,
 }
 
@@ -825,6 +868,7 @@ impl Default for ScratchpadConfig {
             delete_archived_after_days: 90,
             outcomes_enabled: false,
             fanout: ScratchpadFanoutConfig::default(),
+            rollback: ScratchpadRollbackConfig::default(),
             view: ScratchpadViewConfig::default(),
         }
     }
@@ -878,6 +922,7 @@ impl From<ScratchpadToml> for ScratchpadConfig {
                 .unwrap_or(default_delete_archived_after_days),
             outcomes_enabled: toml.outcomes_enabled.unwrap_or(defaults.outcomes_enabled),
             fanout: toml.fanout.into(),
+            rollback: toml.rollback.into(),
             view: toml.view.into(),
         }
     }

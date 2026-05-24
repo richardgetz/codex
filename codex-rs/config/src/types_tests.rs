@@ -205,6 +205,32 @@ fn scratchpad_fanout_defaults_off_and_clamps_max_agents() {
 }
 
 #[test]
+fn scratchpad_rollback_defaults_allows_disable_and_clamps_retention() {
+    assert_eq!(
+        ScratchpadRollbackConfig::from(None),
+        ScratchpadRollbackConfig {
+            max_user_turn_checkpoints: 10,
+        }
+    );
+    assert_eq!(
+        ScratchpadRollbackConfig::from(Some(ScratchpadRollbackToml {
+            max_user_turn_checkpoints: Some(0),
+        })),
+        ScratchpadRollbackConfig {
+            max_user_turn_checkpoints: 0,
+        }
+    );
+    assert_eq!(
+        ScratchpadRollbackConfig::from(Some(ScratchpadRollbackToml {
+            max_user_turn_checkpoints: Some(2048),
+        })),
+        ScratchpadRollbackConfig {
+            max_user_turn_checkpoints: 1024,
+        }
+    );
+}
+
+#[test]
 fn accounts_config_trims_blank_active_alias() {
     let config = AccountsConfig::from(AccountsToml {
         active: Some("   ".to_string()),

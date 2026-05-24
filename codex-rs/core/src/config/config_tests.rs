@@ -79,6 +79,8 @@ use codex_config::types::ScratchpadConfig;
 use codex_config::types::ScratchpadFanoutConfig;
 use codex_config::types::ScratchpadFanoutToml;
 use codex_config::types::ScratchpadModeToml;
+use codex_config::types::ScratchpadRollbackConfig;
+use codex_config::types::ScratchpadRollbackToml;
 use codex_config::types::ScratchpadToml;
 use codex_config::types::ScratchpadViewConfig;
 use codex_config::types::ScratchpadViewToml;
@@ -901,6 +903,9 @@ auto_archive_after_days = 14
 delete_archived_after_days = 120
 outcomes_enabled = true
 
+[scratchpad.rollback]
+max_user_turn_checkpoints = 12
+
 [scratchpad.fanout]
 enabled = true
 max_agents = 6
@@ -937,6 +942,9 @@ recover_after_compaction = false
             fanout: Some(ScratchpadFanoutToml {
                 enabled: Some(true),
                 max_agents: Some(6),
+            }),
+            rollback: Some(ScratchpadRollbackToml {
+                max_user_turn_checkpoints: Some(12),
             }),
             view: Some(ScratchpadViewToml {
                 enabled: Some(true),
@@ -1094,6 +1102,9 @@ blocked = 4
 [scratchpad.fanout]
 enabled = true
 max_agents = 5
+
+[scratchpad.rollback]
+max_user_turn_checkpoints = 11
 "#,
         )
         .expect("TOML deserialization should succeed"),
@@ -1124,6 +1135,18 @@ max_agents = 5
         ScratchpadFanoutConfig {
             enabled: true,
             max_agents: 5,
+        }
+    );
+    assert_eq!(
+        config.scratchpad.rollback,
+        ScratchpadRollbackConfig {
+            max_user_turn_checkpoints: 11,
+        }
+    );
+    assert_eq!(
+        ScratchpadConfig::default().rollback,
+        ScratchpadRollbackConfig {
+            max_user_turn_checkpoints: 10,
         }
     );
     assert_eq!(
