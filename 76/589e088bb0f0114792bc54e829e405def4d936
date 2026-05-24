@@ -1,0 +1,19 @@
+intent:
+  id: scratchpad-pr58-macos-argument-lint-target-scope
+  change_type: fix
+  scope: argument-comment-lint-ci
+  summary: Keep PR macOS argument-comment lint inside its normal budget by excluding one heavyweight manual WebRTC test helper on macOS.
+  decision: Revert the prior timeout increase and instead filter only //codex-rs/realtime-webrtc:realtime-webrtc-unit-tests-bin from the generated manual target list when RUNNER_OS is macOS, because hosted macOS repeatedly cancelled while building that helper, while Linux and Windows both passed the same branch and continue linting it.
+  constraints:
+    - Keep //codex-rs/... linting active on macOS.
+    - Preserve Linux and Windows lint coverage for the WebRTC unit-test helper.
+    - Do not alter product code or scratchpad rollback semantics.
+    - Keep the PR macOS timeout at the existing 45-minute budget.
+  intent_priority: should
+  code_locations:
+    - tools/argument-comment-lint/list-bazel-targets.sh
+    - .github/workflows/rust-ci.yml
+  requested_by: Rick
+  recorded_by:
+    agent: Codex
+    model: gpt-5
