@@ -1,0 +1,16 @@
+intent:
+  id: scratchpad-argument-comment-lint-fix
+change_type: fix
+scope: codex-rs scratchpad rollback tests
+summary: Add required argument comments for scratchpad checkpoint retention literals in tests.
+decision: Keep the test API calls explicit for turn index and checkpoint retention so CI argument-comment lint passes without changing behavior.
+constraints:
+  - Preserve the scratchpad rollback behavior from the feature commit.
+  - Only adjust test callsite annotation style required by the repository lint.
+intent_priority: should
+code_locations:
+  - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs
+requested_by: Rick Getz
+recorded_by: Codex
+agent: Codex
+model: GPT-5
