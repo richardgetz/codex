@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-24/account-alias-startup#e51921fef67c"
+  change_type: "fix"
+  scope: "codex-rs/tui account aliases"
+  summary: "Preserve the selected account alias across TUI startup and fresh-session config refreshes."
+  decision: "Sync the app-server account store from the active startup config before lightweight login-status reads, and keep the session-only active account alias when reloading config from disk for fresh sessions."
+  constraints:
+    - "Must keep alias names generic and avoid recording private account or company identifiers."
+    - "Must preserve root/default auth behavior when no account alias is active."
+    - "Must keep /account and --account session-scoped rather than persisting alias changes to config.toml."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/lib.rs::get_login_status"
+    - "codex-rs/tui/src/app/config_persistence.rs::refresh_in_memory_config_from_disk"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
