@@ -1785,8 +1785,8 @@ pub enum LoginStatus {
     NotAuthenticated,
 }
 
-/// Determines the user's authentication mode using a lightweight account read
-/// rather than a full `bootstrap`, avoiding the model-list fetch and
+/// Selects the configured account store and determines the user's authentication mode using a
+/// lightweight account read rather than a full `bootstrap`, avoiding the model-list fetch and
 /// rate-limit round-trip that `bootstrap` would trigger.
 async fn get_login_status(
     app_server: &mut AppServerSession,
@@ -1796,6 +1796,9 @@ async fn get_login_status(
         return Ok(LoginStatus::NotAuthenticated);
     }
 
+    app_server
+        .switch_account(config.active_account_alias().map(str::to_string))
+        .await?;
     let account = app_server.read_account().await?;
     Ok(match account.account {
         Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AppServerAuthMode::ApiKey),
@@ -2521,6 +2524,36 @@ mod tests {
                 ));
 
             let login_status = get_login_status(&mut app_server, &config).await?;
+            assert_eq!(login_status, LoginStatus::NotAuthenticated);
+
+            app_server.shutdown().await?;
+            Ok(())
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn startup_account_alias_reselects_app_server_auth_store() -> color_eyre::Result<()> {
+        Box::pin(async {
+            let temp_dir = TempDir::new()?;
+            let first_alias_home = temp_dir.path().join("accounts/personal");
+            std::fs::create_dir_all(&first_alias_home)?;
+            login_with_api_key(
+                &first_alias_home,
+                "sk-personal",
+                AuthCredentialsStoreMode::File,
+            )?;
+
+            let mut base_config = build_config(&temp_dir).await?;
+            base_config.accounts.active = Some("personal".to_string());
+            let mut app_server =
+                AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
+                    start_test_embedded_app_server(base_config.clone()).await?,
+                ));
+
+            let startup_config =
+                crate::app::config_for_startup_account_alias(&base_config, Some("work"));
+            let login_status = get_login_status(&mut app_server, &startup_config).await?;
             assert_eq!(login_status, LoginStatus::NotAuthenticated);
 
             app_server.shutdown().await?;
