@@ -2471,8 +2471,13 @@ mod tests {
         )
         .unwrap();
 
-        record_thread_scratchpad_checkpoint(codex_home, scratchpad_id, /*turn_index*/ 0, 2)
-            .unwrap();
+        record_thread_scratchpad_checkpoint(
+            codex_home,
+            scratchpad_id,
+            /*turn_index*/ 0,
+            /*max_user_turn_checkpoints*/ 2,
+        )
+        .unwrap();
         set_next_steps(
             &store,
             &serde_json::json!({
@@ -2486,8 +2491,13 @@ mod tests {
         let mut turn_one = store.read_raw(scratchpad_id).unwrap().unwrap();
         turn_one["future_unknown_field"] = serde_json::json!({ "preserved": true });
         store.write_raw(scratchpad_id, &turn_one).unwrap();
-        record_thread_scratchpad_checkpoint(codex_home, scratchpad_id, /*turn_index*/ 1, 2)
-            .unwrap();
+        record_thread_scratchpad_checkpoint(
+            codex_home,
+            scratchpad_id,
+            /*turn_index*/ 1,
+            /*max_user_turn_checkpoints*/ 2,
+        )
+        .unwrap();
 
         update_scratchpad(
             &store,
@@ -2502,8 +2512,13 @@ mod tests {
             scratchpad_id,
         )
         .unwrap();
-        record_thread_scratchpad_checkpoint(codex_home, scratchpad_id, /*turn_index*/ 2, 2)
-            .unwrap();
+        record_thread_scratchpad_checkpoint(
+            codex_home,
+            scratchpad_id,
+            /*turn_index*/ 2,
+            /*max_user_turn_checkpoints*/ 2,
+        )
+        .unwrap();
 
         let journal = store.read_rollback_journal(scratchpad_id).unwrap();
         assert_eq!(
@@ -2519,7 +2534,7 @@ mod tests {
             codex_home,
             scratchpad_id,
             /*target_turn_index*/ 1,
-            2,
+            /*max_user_turn_checkpoints*/ 2,
         )
         .unwrap();
         assert_eq!(
@@ -2544,8 +2559,13 @@ mod tests {
         let store = ScratchpadStore::new(/*state_home*/ None, codex_home).unwrap();
         let scratchpad_id = "thread-created-later";
 
-        record_thread_scratchpad_checkpoint(codex_home, scratchpad_id, /*turn_index*/ 0, 10)
-            .unwrap();
+        record_thread_scratchpad_checkpoint(
+            codex_home,
+            scratchpad_id,
+            /*turn_index*/ 0,
+            /*max_user_turn_checkpoints*/ 10,
+        )
+        .unwrap();
         open_scratchpad(
             &store,
             &serde_json::json!({
@@ -2555,14 +2575,19 @@ mod tests {
             scratchpad_id,
         )
         .unwrap();
-        record_thread_scratchpad_checkpoint(codex_home, scratchpad_id, /*turn_index*/ 1, 10)
-            .unwrap();
+        record_thread_scratchpad_checkpoint(
+            codex_home,
+            scratchpad_id,
+            /*turn_index*/ 1,
+            /*max_user_turn_checkpoints*/ 10,
+        )
+        .unwrap();
 
         let restored = restore_thread_scratchpad_checkpoint(
             codex_home,
             scratchpad_id,
             /*target_turn_index*/ 0,
-            10,
+            /*max_user_turn_checkpoints*/ 10,
         )
         .unwrap();
 
@@ -4027,7 +4052,7 @@ mod tests {
             tmp.path(),
             "sp-old-archived",
             /*turn_index*/ 0,
-            10,
+            /*max_user_turn_checkpoints*/ 10,
         )
         .unwrap();
         assert!(store.history_path("sp-old-archived").unwrap().exists());
