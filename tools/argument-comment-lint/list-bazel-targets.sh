@@ -17,6 +17,11 @@ manual_rust_test_targets="$(
 if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
   manual_rust_test_targets="$(printf '%s\n' "${manual_rust_test_targets}" | grep -v -- '-windows-cross-bin$' || true)"
 fi
+if [[ "${RUNNER_OS:-}" == "macOS" ]]; then
+  # The WebRTC unit-test helper pulls a large native artifact on hosted macOS
+  # runners and can exceed the PR lint budget. Linux and Windows still lint it.
+  manual_rust_test_targets="$(printf '%s\n' "${manual_rust_test_targets}" | grep -v -- '/realtime-webrtc:realtime-webrtc-unit-tests-bin$' || true)"
+fi
 
 printf '%s\n' "//codex-rs/..."
 printf '%s\n' "${manual_rust_test_targets}"

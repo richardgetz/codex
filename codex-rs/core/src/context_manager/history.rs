@@ -130,6 +130,10 @@ impl ContextManager {
         self.history_version
     }
 
+    pub(crate) fn user_turn_count(&self) -> usize {
+        user_message_positions(&self.items).len()
+    }
+
     // Estimate token usage using byte-based heuristics from the truncation helpers.
     // This is a coarse lower bound, not a tokenizer-accurate count.
     pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {

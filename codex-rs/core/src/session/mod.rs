@@ -3578,6 +3578,46 @@ impl Session {
         state.clone_history()
     }
 
+    pub(crate) async fn user_turn_count(&self) -> usize {
+        let state = self.state.lock().await;
+        state.history.user_turn_count()
+    }
+
+    pub(crate) async fn record_scratchpad_checkpoint_before_turn(
+        &self,
+        turn_context: &TurnContext,
+    ) {
+        let max_checkpoints = turn_context
+            .config
+            .scratchpad
+            .rollback
+            .max_user_turn_checkpoints;
+        if max_checkpoints == 0 {
+            return;
+        }
+
+        let turn_index = self.user_turn_count().await;
+        let scratchpad_id = self.conversation_id.to_string();
+        if let Err(err) =
+            crate::tools::handlers::builtin_scratchpad::record_thread_scratchpad_checkpoint(
+                &turn_context.config.codex_home,
+                &scratchpad_id,
+                turn_index,
+                max_checkpoints,
+            )
+        {
+            self.send_event(
+                turn_context,
+                EventMsg::Warning(WarningEvent {
+                    message: format!(
+                        "Could not checkpoint scratchpad before this turn; scratchpad backtrack may not restore this boundary. Error: {err}"
+                    ),
+                }),
+            )
+            .await;
+        }
+    }
+
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
         let state = self.state.lock().await;
         state.reference_context_item()

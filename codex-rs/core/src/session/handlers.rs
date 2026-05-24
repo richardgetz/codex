@@ -12,6 +12,9 @@ use tracing::info_span;
 use crate::session::SteerInputError;
 use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
+use crate::tools::handlers::builtin_scratchpad::ScratchpadCheckpointRestore;
+use crate::tools::handlers::builtin_scratchpad::restore_thread_scratchpad_checkpoint;
+use crate::tools::handlers::builtin_scratchpad::scratchpad_absent_update_event;
 use crate::tools::handlers::builtin_scratchpad::scratchpad_update_event_from_result;
 use crate::tools::handlers::builtin_scratchpad::set_thread_continuous_policy;
 
@@ -348,6 +351,8 @@ pub(super) async fn user_input_or_turn_inner(
         // new_turn_with_sub_id already emits the error event.
         return;
     };
+    sess.record_scratchpad_checkpoint_before_turn(current_context.as_ref())
+        .await;
     sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
         .await;
     let accepted_items = match sess
@@ -913,6 +918,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         msg: rollback_msg,
     })
     .await;
+    restore_scratchpad_after_thread_rollback(&turn_context, sess).await;
 }
 
 pub(super) async fn persist_thread_memory_mode_update(
@@ -1001,6 +1007,67 @@ pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) 
     }
 
     sess.deliver_event_raw(Event { id: sub_id, msg }).await;
+}
+
+async fn restore_scratchpad_after_thread_rollback(
+    turn_context: &Arc<crate::session::turn_context::TurnContext>,
+    sess: &Arc<Session>,
+) {
+    let max_checkpoints = turn_context
+        .config
+        .scratchpad
+        .rollback
+        .max_user_turn_checkpoints;
+    if max_checkpoints == 0 {
+        return;
+    }
+
+    let scratchpad_id = sess.conversation_id.to_string();
+    let target_turn_index = sess.user_turn_count().await;
+    match restore_thread_scratchpad_checkpoint(
+        &turn_context.config.codex_home,
+        &scratchpad_id,
+        target_turn_index,
+        max_checkpoints,
+    ) {
+        Ok(ScratchpadCheckpointRestore::Restored(scratchpad)) => {
+            if let Some(event) = scratchpad_update_event_from_result(&serde_json::json!({
+                "scratchpad": scratchpad,
+            })) {
+                sess.send_event(turn_context.as_ref(), EventMsg::ScratchpadUpdate(event))
+                    .await;
+            }
+        }
+        Ok(ScratchpadCheckpointRestore::RestoredAbsent { deleted }) => {
+            if deleted {
+                sess.send_event(
+                    turn_context.as_ref(),
+                    EventMsg::ScratchpadUpdate(scratchpad_absent_update_event(scratchpad_id)),
+                )
+                .await;
+            }
+        }
+        Ok(ScratchpadCheckpointRestore::MissingCheckpoint) => {
+            sess.send_event(
+                turn_context.as_ref(),
+                EventMsg::Warning(WarningEvent {
+                    message: "Rolled the thread back, but no scratchpad checkpoint was retained for this boundary; leaving the current scratchpad unchanged.".to_string(),
+                }),
+            )
+            .await;
+        }
+        Err(err) => {
+            sess.send_event(
+                turn_context.as_ref(),
+                EventMsg::Warning(WarningEvent {
+                    message: format!(
+                        "Rolled the thread back, but could not restore scratchpad state. Error: {err}"
+                    ),
+                }),
+            )
+            .await;
+        }
+    }
 }
 
 pub async fn set_scratchpad_continuous_policy(sess: &Arc<Session>, sub_id: String, enabled: bool) {

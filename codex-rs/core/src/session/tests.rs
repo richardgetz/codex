@@ -129,6 +129,7 @@ use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::ScratchpadUpdateEvent;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::Submission;
@@ -2547,6 +2548,242 @@ async fn thread_rollback_drops_last_turn_from_history() {
 }
 
 #[tokio::test]
+async fn thread_rollback_restores_scratchpad_checkpoint_for_target_user_turn() {
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
+
+    let thread_id = sess.conversation_id;
+    let initial_scratchpad = serde_json::json!({
+        "scratchpad_id": thread_id.to_string(),
+        "objective": "rollback scratchpad",
+        "status": "active",
+        "created_at": "2026-05-01T00:00:00Z",
+        "updated_at": "2026-05-01T00:00:00Z",
+        "archived_at": null,
+        "next_steps": ["before turn 1"]
+    });
+    write_thread_scratchpad(tc.as_ref(), thread_id, initial_scratchpad);
+    crate::tools::handlers::builtin_scratchpad::record_thread_scratchpad_checkpoint(
+        &tc.config.codex_home,
+        &thread_id.to_string(),
+        /*turn_index*/ 0,
+        tc.config.scratchpad.rollback.max_user_turn_checkpoints,
+    )
+    .unwrap();
+
+    let after_turn_one = serde_json::json!({
+        "scratchpad_id": thread_id.to_string(),
+        "objective": "rollback scratchpad",
+        "status": "active",
+        "created_at": "2026-05-01T00:00:00Z",
+        "updated_at": "2026-05-01T00:01:00Z",
+        "archived_at": null,
+        "completed": ["turn 1 done"],
+        "next_steps": ["before turn 2"],
+        "pending_waits": [{"wait_id": "wait-1", "summary": "hold"}],
+        "unknown_future_field": {"preserve": true}
+    });
+    write_thread_scratchpad(tc.as_ref(), thread_id, after_turn_one.clone());
+    crate::tools::handlers::builtin_scratchpad::record_thread_scratchpad_checkpoint(
+        &tc.config.codex_home,
+        &thread_id.to_string(),
+        /*turn_index*/ 1,
+        tc.config.scratchpad.rollback.max_user_turn_checkpoints,
+    )
+    .unwrap();
+
+    let after_turn_two = serde_json::json!({
+        "scratchpad_id": thread_id.to_string(),
+        "objective": "rollback scratchpad",
+        "status": "active",
+        "created_at": "2026-05-01T00:00:00Z",
+        "updated_at": "2026-05-01T00:02:00Z",
+        "archived_at": null,
+        "completed": ["turn 1 done", "turn 2 done"],
+        "next_steps": ["after turn 2"]
+    });
+    write_thread_scratchpad(tc.as_ref(), thread_id, after_turn_two);
+
+    let initial_context = sess.build_initial_context(tc.as_ref()).await;
+    let turn_1 = vec![
+        user_message("turn 1 user"),
+        assistant_message("turn 1 assistant"),
+    ];
+    let turn_2 = vec![
+        user_message("turn 2 user"),
+        assistant_message("turn 2 assistant"),
+    ];
+    let mut full_history = Vec::new();
+    full_history.extend(initial_context);
+    full_history.extend(turn_1);
+    full_history.extend(turn_2);
+    sess.replace_history(full_history.clone(), Some(tc.to_turn_context_item()))
+        .await;
+    let rollout_items: Vec<RolloutItem> = full_history
+        .into_iter()
+        .map(RolloutItem::ResponseItem)
+        .collect();
+    sess.persist_rollout_items(&rollout_items).await;
+
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
+
+    let rollback_event = wait_for_thread_rolled_back(&rx).await;
+    assert_eq!(rollback_event.num_turns, 1);
+    let restored_path = tc
+        .config
+        .codex_home
+        .join("scratchpad")
+        .join("entries")
+        .join(format!("{thread_id}.json"));
+    let restored = serde_json::from_str::<serde_json::Value>(
+        &std::fs::read_to_string(restored_path).expect("read restored scratchpad"),
+    )
+    .expect("parse restored scratchpad");
+    assert_eq!(restored, after_turn_one);
+}
+
+#[tokio::test]
+async fn thread_rollback_emits_deleted_scratchpad_update_for_absent_checkpoint() {
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
+
+    let thread_id = sess.conversation_id;
+    crate::tools::handlers::builtin_scratchpad::record_thread_scratchpad_checkpoint(
+        &tc.config.codex_home,
+        &thread_id.to_string(),
+        /*turn_index*/ 0,
+        tc.config.scratchpad.rollback.max_user_turn_checkpoints,
+    )
+    .unwrap();
+
+    let created_scratchpad = serde_json::json!({
+        "scratchpad_id": thread_id.to_string(),
+        "objective": "created after first turn",
+        "status": "active",
+        "created_at": "2026-05-01T00:00:00Z",
+        "updated_at": "2026-05-01T00:01:00Z",
+        "archived_at": null,
+        "next_steps": ["remove on rollback"]
+    });
+    write_thread_scratchpad(tc.as_ref(), thread_id, created_scratchpad);
+    crate::tools::handlers::builtin_scratchpad::record_thread_scratchpad_checkpoint(
+        &tc.config.codex_home,
+        &thread_id.to_string(),
+        /*turn_index*/ 1,
+        tc.config.scratchpad.rollback.max_user_turn_checkpoints,
+    )
+    .unwrap();
+
+    let initial_context = sess.build_initial_context(tc.as_ref()).await;
+    let turn_1 = vec![
+        user_message("turn 1 user"),
+        assistant_message("turn 1 assistant"),
+    ];
+    let mut full_history = Vec::new();
+    full_history.extend(initial_context);
+    full_history.extend(turn_1);
+    sess.replace_history(full_history.clone(), Some(tc.to_turn_context_item()))
+        .await;
+    let rollout_items: Vec<RolloutItem> = full_history
+        .into_iter()
+        .map(RolloutItem::ResponseItem)
+        .collect();
+    sess.persist_rollout_items(&rollout_items).await;
+
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
+
+    let rollback_event = wait_for_thread_rolled_back(&rx).await;
+    assert_eq!(rollback_event.num_turns, 1);
+    let update = wait_for_scratchpad_update(&rx).await;
+    let updated_at = update.updated_at.clone();
+    assert_eq!(
+        update,
+        ScratchpadUpdateEvent {
+            scratchpad_id: thread_id.to_string(),
+            objective: String::new(),
+            status: "deleted".to_string(),
+            continuous_enabled: false,
+            completed: Vec::new(),
+            next_steps: Vec::new(),
+            pending_waits: Vec::new(),
+            blocked: Vec::new(),
+            updated_at,
+            archived_at: None,
+        }
+    );
+    assert!(
+        !tc.config
+            .codex_home
+            .join("scratchpad")
+            .join("entries")
+            .join(format!("{thread_id}.json"))
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn scratchpad_checkpoint_before_turn_counts_inter_agent_boundaries() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let thread_id = sess.conversation_id;
+    let snapshot = serde_json::json!({
+        "scratchpad_id": thread_id.to_string(),
+        "objective": "after inter-agent boundary",
+        "status": "active",
+        "created_at": "2026-05-01T00:00:00Z",
+        "updated_at": "2026-05-01T00:02:00Z",
+        "archived_at": null,
+        "next_steps": ["before trigger turn"]
+    });
+    write_thread_scratchpad(tc.as_ref(), thread_id, snapshot.clone());
+
+    let communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::root().join("worker").unwrap(),
+        Vec::new(),
+        "trigger turn".to_string(),
+        /*trigger_turn*/ true,
+    );
+    let inter_agent_turn = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: serde_json::to_string(&communication).unwrap(),
+        }],
+        phase: None,
+    };
+    let initial_context = sess.build_initial_context(tc.as_ref()).await;
+    let mut full_history = Vec::new();
+    full_history.extend(initial_context);
+    full_history.push(user_message("turn 1 user"));
+    full_history.push(assistant_message("turn 1 assistant"));
+    full_history.push(inter_agent_turn);
+    sess.replace_history(full_history, Some(tc.to_turn_context_item()))
+        .await;
+
+    sess.record_scratchpad_checkpoint_before_turn(tc.as_ref())
+        .await;
+
+    let restored =
+        crate::tools::handlers::builtin_scratchpad::restore_thread_scratchpad_checkpoint(
+            &tc.config.codex_home,
+            &thread_id.to_string(),
+            /*target_turn_index*/ 2,
+            tc.config.scratchpad.rollback.max_user_turn_checkpoints,
+        )
+        .unwrap();
+    assert_eq!(
+        restored,
+        crate::tools::handlers::builtin_scratchpad::ScratchpadCheckpointRestore::Restored(snapshot)
+    );
+}
+
+#[tokio::test]
 async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() {
     let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
     attach_thread_persistence(
@@ -3774,6 +4011,22 @@ async fn wait_for_thread_rolled_back(rx: &async_channel::Receiver<Event>) -> Thr
             .expect("event");
         match evt.msg {
             EventMsg::ThreadRolledBack(payload) => return payload,
+            _ => continue,
+        }
+    }
+}
+
+async fn wait_for_scratchpad_update(rx: &async_channel::Receiver<Event>) -> ScratchpadUpdateEvent {
+    let deadline = StdDuration::from_secs(2);
+    let start = std::time::Instant::now();
+    loop {
+        let remaining = deadline.saturating_sub(start.elapsed());
+        let evt = tokio::time::timeout(remaining, rx.recv())
+            .await
+            .expect("timeout waiting for event")
+            .expect("event");
+        match evt.msg {
+            EventMsg::ScratchpadUpdate(payload) => return payload,
             _ => continue,
         }
     }
