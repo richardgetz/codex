@@ -1,0 +1,17 @@
+intent:
+  id: scratchpad-pr58-macos-argument-lint-timeout
+  change_type: fix
+  scope: github-workflows-rust-ci
+  summary: Extend the PR macOS argument-comment lint timeout after repeated hosted-runner cancellations on PR #58.
+  decision: Increase only the macOS argument-comment lint matrix timeout from 45 to 75 minutes because the branch passed Linux and Windows lint but macOS repeatedly cancelled at the 45-minute budget while processing the Bazel lint target set.
+  constraints:
+    - Keep the change limited to PR CI timeout behavior.
+    - Do not alter product code or scratchpad rollback semantics.
+    - Preserve the existing cross-platform argument-comment lint requirement.
+  intent_priority: should
+  code_locations:
+    - .github/workflows/rust-ci.yml
+  requested_by: Rick
+  recorded_by:
+    agent: Codex
+    model: gpt-5
