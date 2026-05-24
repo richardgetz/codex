@@ -1,0 +1,19 @@
+intent:
+  id: scratchpad-rollback-checkpoints
+change_type: feature
+scope: codex-rs scratchpad rollback
+summary: Add bounded scratchpad checkpoint history so thread rollback can restore scratchpad state alongside conversation history.
+decision: Store whole raw scratchpad JSON snapshots by user-turn boundary, default retention to 10 checkpoints via config.toml, and keep transcript backtrack behavior unchanged.
+constraints:
+  - Preserve existing unlimited transcript backtrack semantics; only scratchpad checkpoint retention is bounded.
+  - Preserve thread-owned scratchpad isolation and raw JSON fields, including unknown future fields.
+  - Remove checkpoint journals when lifecycle deletion removes archived scratchpads.
+intent_priority: must
+code_locations:
+  - codex-rs/core/src/tools/handlers/builtin_scratchpad.rs
+  - codex-rs/core/src/session/handlers.rs
+  - codex-rs/config/src/types.rs
+requested_by: Rick Getz
+recorded_by: Codex
+agent: Codex
+model: GPT-5
