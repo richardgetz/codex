@@ -83,6 +83,14 @@
 (allow iokit-open
   (iokit-registry-entry-class "RootDomainUserClient")
 )
+; Allow GPU-backed compute frameworks such as Metal, MPS, and MLX to enumerate
+; and open Apple GPU devices while still keeping IOKit access narrowly scoped.
+(allow iokit-open
+  (iokit-user-client-class "AGXDeviceUserClient")
+  (iokit-user-client-class "AppleCLCD2")
+  (iokit-user-client-class "IOAccelSharedUserClient")
+  (iokit-user-client-class "IOGPUDeviceUserClient")
+)
 
 ; needed to look up user info, see https://crbug.com/792228
 (allow mach-lookup

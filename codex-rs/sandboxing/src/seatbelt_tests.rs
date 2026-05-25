@@ -196,6 +196,22 @@ fn base_policy_allows_keychain_security_server_for_cli_credential_helpers() {
 }
 
 #[test]
+fn base_policy_allows_metal_gpu_iokit_user_clients() {
+    for user_client_class in [
+        "AGXDeviceUserClient",
+        "AppleCLCD2",
+        "IOAccelSharedUserClient",
+        "IOGPUDeviceUserClient",
+    ] {
+        let expected = format!(r#"(iokit-user-client-class "{user_client_class}")"#);
+        assert!(
+            MACOS_SEATBELT_BASE_POLICY.contains(&expected),
+            "base policy must allow Metal/GPU IOKit user client class {user_client_class} so MPS, MLX, and other GPU-backed compute frameworks can enumerate and open devices under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+}
+
+#[test]
 fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access() {
     let unreadable = absolute_path("/tmp/codex-unreadable");
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
