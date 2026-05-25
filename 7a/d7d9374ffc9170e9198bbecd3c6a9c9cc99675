@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-05-25/macos-gpu-iokit#7ad7d9374ffc"
+  change_type: "fix"
+  scope: "sandbox"
+  summary: "Allow macOS Seatbelt-sandboxed commands to open GPU IOKit user clients."
+  decision: "Add a narrow base Seatbelt iokit-open allowlist for Metal/GPU user-client classes used by MPS, MLX, and similar GPU-backed compute frameworks instead of adding PyTorch-specific handling or broad IOKit access."
+  constraints:
+    - "Must preserve existing workspace-write sandbox filesystem and network boundaries."
+    - "Must preserve existing Keychain/SecurityServer and RootDomainUserClient allowances."
+    - "Must not touch sandbox network environment variable behavior."
+    - "Must keep the proof test focused on the policy contract rather than requiring physical GPU access in CI."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/sandboxing/src/seatbelt_base_policy.sbpl"
+    - "codex-rs/sandboxing/src/seatbelt_tests.rs::base_policy_allows_metal_gpu_iokit_user_clients"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
