@@ -33,6 +33,19 @@ or behaves differently from upstream.
 
 See [Fork npm releases](./fork-release.md) for the release workflow details.
 
+### macOS GPU compute in Seatbelt sandboxes
+
+- The fork's macOS Seatbelt base policy intentionally allows a narrow set of
+  GPU/Metal IOKit user-client classes: `AGXDeviceUserClient`, `AppleCLCD2`,
+  `IOAccelSharedUserClient`, and `IOGPUDeviceUserClient`.
+- This is meant to let workspace-write commands use GPU-backed compute
+  frameworks such as Metal, MPS, MLX, and PyTorch MPS without disabling the
+  filesystem/network sandbox.
+- The allowance is scoped to those IOKit user-client classes. It does not
+  broaden writable roots, network access, or general IOKit access.
+- Regression coverage lives in
+  `codex-rs/sandboxing/src/seatbelt_tests.rs::base_policy_allows_metal_gpu_iokit_user_clients`.
+
 ### Feature toggles
 
 - This fork carries `enable_mcp_approvals` as a Rick-owned feature.
