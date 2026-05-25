@@ -22,9 +22,11 @@ impl App {
     }
 
     pub(super) async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {
+        let active_account_alias = self.config.accounts.active.clone();
         let mut config = self
             .rebuild_config_for_cwd(self.chat_widget.config_ref().cwd.to_path_buf())
             .await?;
+        config.accounts.active = active_account_alias;
         self.apply_runtime_policy_overrides(&mut config);
         self.config = config;
         self.chat_widget.sync_plugin_mentions_config(&self.config);
@@ -665,6 +667,25 @@ mod tests {
         assert_eq!(
             app_enabled_in_effective_config(&app.config, &app_id),
             Some(false)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_preserves_session_account_alias() -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
+        app.config.accounts.active = Some("personal".to_string());
+        app.chat_widget
+            .set_active_account_alias(Some("personal".to_string()));
+
+        app.refresh_in_memory_config_from_disk().await?;
+
+        assert_eq!(app.config.accounts.active.as_deref(), Some("personal"));
+        assert_eq!(
+            app.chat_widget.config_ref().active_account_alias(),
+            Some("personal")
         );
         Ok(())
     }
