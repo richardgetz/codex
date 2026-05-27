@@ -59,6 +59,28 @@ fn seatbelt_policy_arg(args: &[String]) -> &str {
         .expect("seatbelt args should include policy text")
 }
 
+fn base_policy_rule_contains(action: &str, expected: &str) -> bool {
+    let rule_prefix = format!("(allow {action}");
+    MACOS_SEATBELT_BASE_POLICY
+        .match_indices(&rule_prefix)
+        .any(|(start, _)| {
+            let action_end = start + rule_prefix.len();
+            let is_exact_action = MACOS_SEATBELT_BASE_POLICY[action_end..]
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_whitespace() || ch == ')');
+            if !is_exact_action {
+                return false;
+            }
+            let tail = &MACOS_SEATBELT_BASE_POLICY[start..];
+            let end = tail
+                .find("\n)")
+                .map(|index| index + 2)
+                .unwrap_or(tail.len());
+            tail[..end].contains(expected)
+        })
+}
+
 fn seatbelt_protected_metadata_name_requirements(root: &Path) -> String {
     let mut root = root.to_string_lossy().to_string();
     while root.len() > 1 && root.ends_with('/') {
@@ -106,6 +128,20 @@ fn base_policy_allows_node_cpu_sysctls() {
         MACOS_SEATBELT_BASE_POLICY.contains("(sysctl-name \"hw.model\")"),
         "base policy must allow hardware model lookup for os.cpus()"
     );
+}
+
+#[test]
+fn base_policy_allows_named_sysctl_lookup_plumbing() {
+    for expected in [
+        r#"(sysctl-name "sysctl.name2oid")"#,
+        r#"(sysctl-name-prefix "sysctl.oidfmt.")"#,
+        r#"(sysctl-name "sysctl.proc_native")"#,
+    ] {
+        assert!(
+            MACOS_SEATBELT_BASE_POLICY.contains(expected),
+            "base policy must allow named sysctl lookup plumbing {expected} so allowlisted sysctl reads, including OS-version checks used by PyTorch MPS, work under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
 }
 
 #[test]
@@ -207,6 +243,314 @@ fn base_policy_allows_metal_gpu_iokit_user_clients() {
         assert!(
             MACOS_SEATBELT_BASE_POLICY.contains(&expected),
             "base policy must allow Metal/GPU IOKit user client class {user_client_class} so MPS, MLX, and other GPU-backed compute frameworks can enumerate and open devices under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+}
+
+#[test]
+fn base_policy_allows_metal_device_creation_iokit_user_clients() {
+    for user_client_class in [
+        "AGXCommandQueue",
+        "AGXDevice",
+        "AGXDeviceUserClient",
+        "AGXSharedUserClient",
+        "IOAccelCommandQueue",
+        "IOAccelContext",
+        "IOAccelContext2",
+        "IOAccelDevice",
+        "IOAccelDevice2",
+        "IOAccelSharedUserClient",
+        "IOAccelSharedUserClient2",
+        "IOAccelSubmitter2",
+        "IOGPUDeviceUserClient",
+        "IOSurfaceAcceleratorClient",
+        "IOSurfaceRootUserClient",
+        "IOSurfaceSendRight",
+    ] {
+        let expected = format!(r#"(iokit-user-client-class "{user_client_class}")"#);
+        assert!(
+            base_policy_rule_contains("iokit-open-user-client", &expected),
+            "base policy must allow Metal device creation IOKit user client class {user_client_class} with iokit-open-user-client so MPS, MLX, and other GPU-backed compute frameworks can create usable Metal devices under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+}
+
+#[test]
+fn base_policy_avoids_metal_iokit_message_filters_in_workspace_profile() {
+    for unsupported_fragment in ["(apply-message-filter", "(iokit-method-number"] {
+        assert!(
+            !MACOS_SEATBELT_BASE_POLICY.contains(unsupported_fragment),
+            "base policy must not use Metal IOKit message-filter fragments {unsupported_fragment} because generated workspace profiles must remain applicable by sandbox-exec:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+}
+
+#[test]
+fn base_policy_allows_core_metal_iosurface_iokit_access() {
+    for user_client_class in [
+        "IOAccelSharedUserClient2",
+        "IOSurfaceAcceleratorClient",
+        "IOSurfaceRootUserClient",
+        "IOSurfaceSendRight",
+    ] {
+        let expected = format!(r#"(iokit-user-client-class "{user_client_class}")"#);
+        assert!(
+            MACOS_SEATBELT_BASE_POLICY.contains(&expected),
+            "base policy must allow Metal/IOSurface IOKit user client class {user_client_class} so MPS, MLX, and other GPU-backed compute frameworks can create usable Metal devices under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+
+    for registry_class in ["IOAccelerator", "IOSurfaceRoot"] {
+        let expected = format!(r#"(iokit-registry-entry-class "{registry_class}")"#);
+        assert!(
+            MACOS_SEATBELT_BASE_POLICY.contains(&expected),
+            "base policy must allow Metal/IOSurface IOKit registry class {registry_class} so GPU-backed compute frameworks can discover required services under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+
+    for property in [
+        "GPUConfigurationVariable",
+        "GPURawCounterBundleName",
+        "GPURawCounterPluginClassName",
+        "IOSurfaceAcceleratorCapabilitiesDict",
+        "MetalPluginClassName",
+        "MetalPluginName",
+        "MetalStatisticsName",
+    ] {
+        let expected = format!(r#"(iokit-property "{property}")"#);
+        assert!(
+            MACOS_SEATBELT_BASE_POLICY.contains(&expected),
+            "base policy must allow Metal/IOSurface IOKit property {property} so GPU-backed compute frameworks can inspect Metal driver metadata under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+}
+
+#[test]
+fn base_policy_allows_metal_enumeration_iokit_open_registry_classes() {
+    assert!(
+        base_policy_rule_contains(
+            "iokit-open",
+            r#"(iokit-registry-entry-class-prefix "AGXAcceleratorG")"#,
+        ),
+        "base policy must allow AGX accelerator registry entries under legacy iokit-open so Metal can enumerate Apple GPU devices under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+
+    for registry_class in [
+        "AGPM",
+        "AppleGraphicsControl",
+        "AppleGraphicsPolicy",
+        "IOAccelerator",
+        "IOFramebuffer",
+        "IOGPUDevice",
+        "IOSurfaceRoot",
+    ] {
+        let expected = format!(r#"(iokit-registry-entry-class "{registry_class}")"#);
+        assert!(
+            base_policy_rule_contains("iokit-open", &expected),
+            "base policy must allow Metal enumeration IOKit registry class {registry_class} under legacy iokit-open so GPU-backed compute frameworks can discover devices under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+}
+
+#[test]
+fn base_policy_allows_metal_open_time_iokit_user_clients_without_wildcard_action() {
+    assert!(
+        !MACOS_SEATBELT_BASE_POLICY.contains("(allow iokit-open*"),
+        "base policy must not use iokit-open* because generated workspace profiles must remain applicable by sandbox-exec:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+
+    for user_client_class in ["AGXDeviceUserClient", "IOSurfaceRootUserClient"] {
+        let expected = format!(r#"(iokit-user-client-class "{user_client_class}")"#);
+        assert!(
+            base_policy_rule_contains("iokit-open", &expected),
+            "base policy must allow Metal open-time IOKit user client class {user_client_class} under explicit iokit-open so AGX/IOSurface IOServiceOpen calls can create usable Metal devices under Seatbelt. Do not use iokit-open* here because generated workspace profiles must remain applicable by sandbox-exec:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+}
+
+#[test]
+fn base_policy_allows_coreml_metal_legacy_iokit_user_clients() {
+    for user_client_class in [
+        "AGXCommandQueue",
+        "AGXDevice",
+        "AGXSharedUserClient",
+        "IOAccelCommandQueue",
+        "IOAccelContext",
+        "IOAccelContext2",
+        "IOAccelDevice",
+        "IOAccelDevice2",
+        "IOAccelSubmitter2",
+    ] {
+        let expected = format!(r#"(iokit-user-client-class "{user_client_class}")"#);
+        assert!(
+            base_policy_rule_contains("iokit-open", &expected),
+            "base policy must allow Metal/CoreML IOKit user client class {user_client_class} under legacy iokit-open because Apple GPU compute profiles still use that action for these clients:
+{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+}
+
+#[test]
+fn base_policy_allows_gputools_metal_service_discovery_dependencies() {
+    for property in ["AAPL,slot-name", "Removable", "SafeEjectRequested"] {
+        let expected = format!(r#"(iokit-property "{property}")"#);
+        assert!(
+            base_policy_rule_contains("iokit-get-properties", &expected),
+            "base policy must allow Apple GPU tools Metal property {property} so Metal can inspect GPU service metadata under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+}
+
+#[test]
+fn base_policy_allows_safety_inference_metal_discovery_dependencies() {
+    for property in [
+        "AGCInfo",
+        "AGXParameterBufferMaxSize",
+        "AGXParameterBufferMaxSizeEverMemless",
+        "AGXParameterBufferMaxSizeNeverMemless",
+        "AGXTraceCodeVersion",
+        "CFBundleIdentifier",
+        "CFBundleIdentifierKernel",
+        "CommandSubmissionEnabled",
+        "gpu-core-count",
+        "IOClass",
+        "IOGLBundleName",
+        "IOGLESBundleName",
+        "IOMatchCategory",
+        "IONameMatch",
+        "IONameMatched",
+        "IOPersonalityPublisher",
+        "IOPowerManagement",
+        "IOProbeScore",
+        "IOProviderClass",
+        "IORegistryEntryPropertyKeys",
+        "IOReportLegend",
+        "IOReportLegendPublic",
+        "IOSourceVersion",
+        "KDebugVersion",
+        "model",
+        "PerformanceStatistics",
+        "SchedulerState",
+        "SCMBuildTime",
+        "SCMVersionNumber",
+        "SurfaceList",
+        "vendor-id",
+    ] {
+        let expected = format!(r#"(iokit-property "{property}")"#);
+        assert!(
+            base_policy_rule_contains("iokit-get-properties", &expected),
+            "base policy must allow Apple safety-inference Metal discovery IOKit property {property} so Metal can enumerate devices under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+
+    for service_class in ["IOClassNameOverride", "IOSurfaceRoot"] {
+        let expected = format!(r#"(iokit-user-client-class "{service_class}")"#);
+        assert!(
+            base_policy_rule_contains("iokit-open-service", &expected),
+            "base policy must allow Apple safety-inference Metal service class {service_class} so Metal can discover IOSurface/AGX services under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+
+    for service in [
+        "com.apple.SystemConfiguration.configd",
+        "com.apple.coreservices.launchservicesd",
+        "com.apple.windowserver.active",
+    ] {
+        let expected = format!(r#"(global-name "{service}")"#);
+        assert!(
+            base_policy_rule_contains("mach-lookup", &expected),
+            "base policy must allow Apple safety-inference Metal mach service {service} so Metal can complete device discovery under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+}
+
+#[test]
+fn base_policy_allows_system_graphics_metal_device_dependencies() {
+    for service in [
+        "com.apple.CARenderServer",
+        "com.apple.CoreDisplay.master",
+        "com.apple.CoreDisplay.Notification",
+        "com.apple.cvmsServ",
+    ] {
+        let expected = format!(r#"(global-name "{service}")"#);
+        assert!(
+            MACOS_SEATBELT_BASE_POLICY.contains(&expected),
+            "base policy must allow system graphics service {service} used by Apple's Metal/graphics profiles while creating devices under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+
+    for path in ["/Library/GPUBundles", "/private/var/db/CVMS"] {
+        let expected = format!(r#"(subpath "{path}")"#);
+        assert!(
+            MACOS_SEATBELT_BASE_POLICY.contains(&expected),
+            "base policy must allow read access to system graphics path {path} used by Apple's Metal/graphics profiles under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+
+    let agx_metal_bundle =
+        r##"(regex #"^/System/Library/Extensions/AGXMetal[A-Za-z0-9_]+\.bundle/")"##;
+    assert!(
+        base_policy_rule_contains("file-map-executable", agx_metal_bundle),
+        "base policy must allow mapping AGXMetal driver bundles as executable code so Metal can load Apple GPU plugins under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+
+    for registry_class in [
+        "IOFramebuffer",
+        "AGPM",
+        "AppleGraphicsControl",
+        "AppleGraphicsPolicy",
+    ] {
+        let expected = format!(r#"(iokit-registry-entry-class "{registry_class}")"#);
+        assert!(
+            base_policy_rule_contains("iokit-open-service", &expected),
+            "base policy must allow system graphics IOKit service class {registry_class} used by Apple's Metal/graphics profiles under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+
+    for user_client_class in [
+        "IOFramebufferSharedUserClient",
+        "AppleIntelMEUserClient",
+        "AppleSNBFBUserClient",
+        "AGPMClient",
+        "AppleGraphicsControlClient",
+        "AppleGraphicsPolicyClient",
+        "AppleMGPUPowerControlClient",
+    ] {
+        let expected = format!(r#"(iokit-user-client-class "{user_client_class}")"#);
+        assert!(
+            base_policy_rule_contains("iokit-open-user-client", &expected),
+            "base policy must allow system graphics IOKit user client class {user_client_class} used by Apple's Metal/graphics profiles under Seatbelt:\n{MACOS_SEATBELT_BASE_POLICY}"
+        );
+    }
+}
+
+#[test]
+fn base_policy_avoids_broad_metal_iokit_connection_predicates() {
+    for (action, broad_predicate) in [
+        (
+            "iokit-open-service",
+            r#"(iokit-connection "AppleGraphicsDeviceControl")"#,
+        ),
+        (
+            "iokit-open-service",
+            r#"(iokit-registry-entry-class-prefix "AGX")"#,
+        ),
+        (
+            "iokit-open-service",
+            r#"(iokit-registry-entry-class-prefix "AGXAcceleratorG")"#,
+        ),
+        (
+            "iokit-open-user-client",
+            r#"(iokit-connection "IOAccelerator")"#,
+        ),
+        (
+            "iokit-open-user-client",
+            r#"(iokit-registry-entry-class-prefix "AGXAcceleratorG")"#,
+        ),
+    ] {
+        assert!(
+            !base_policy_rule_contains(action, broad_predicate),
+            "base policy must not grant broad Metal IOKit predicate {broad_predicate} under {action}; keep runtime MPS access scoped to explicit GPU/Metal/IOSurface registry and user-client classes:\n{MACOS_SEATBELT_BASE_POLICY}"
         );
     }
 }
