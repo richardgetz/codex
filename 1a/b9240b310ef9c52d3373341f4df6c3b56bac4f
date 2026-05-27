@@ -1,0 +1,25 @@
+intent:
+  id: stable-refresh-rust-v0.134.0
+change_type: chore
+scope: stable
+summary: Merge upstream rust-v0.134.0 into fork stable while preserving fork-owned release/runtime surfaces.
+decision: Branch from fork stable and merge upstream release tag rather than replaying fork main, preserving fork packaging, account/orchestrator/scratchpad/memory/MCP/app-server behavior.
+constraints:
+  - Do not merge fork main into stable.
+  - Preserve fork-only stable contract and upstream release fixes.
+  - Keep generated schemas and lockfiles aligned with resolved sources.
+  - Do not touch sandbox network environment variable behavior.
+intent_priority: must
+code_locations:
+  - README.md
+  - codex-cli/scripts/build_npm_package.py
+  - scripts/stage_npm_packages.py
+  - codex-rs/core
+  - codex-rs/tui
+  - codex-rs/app-server
+  - codex-rs/app-server-protocol
+  - codex-rs/tools
+requested_by: Rick
+recorded_by:
+  agent: Codex
+  model: gpt-5
