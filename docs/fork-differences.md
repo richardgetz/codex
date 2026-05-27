@@ -33,6 +33,56 @@ or behaves differently from upstream.
 
 See [Fork npm releases](./fork-release.md) for the release workflow details.
 
+### macOS GPU compute in Seatbelt sandboxes
+
+- The fork's macOS Seatbelt base policy intentionally allows a focused set of
+  GPU/Metal IOKit user-client classes, including the modern
+  `iokit-open-user-client` classes Metal uses to create devices,
+  legacy `iokit-open` user-client and registry classes Apple GPU compute
+  profiles still use while opening and enumerating devices, an
+  `AGXAcceleratorG` registry-class prefix for Apple GPU generation names,
+  explicit AGX/IOSurface open-time user-client allowances,
+  IOSurface/IOAccelerator service classes, non-mutating Apple
+  `system-graphics`
+  and safety-inference Metal discovery dependencies, GPU tools Metal service
+  discovery dependencies, AGXMetal driver bundle mapping, expanded Metal driver
+  metadata properties, Metal service lookups including
+  `com.apple.windowserver.active`, and named sysctl lookup plumbing used by
+  Apple GPU-backed compute and runtime OS checks.
+- Because this is in the base Seatbelt policy, it applies to generated macOS
+  command sandboxes rather than only workspace-write profiles. The intent is to
+  let sandboxed commands use GPU-backed compute
+  frameworks such as Metal, MPS, MLX, and PyTorch MPS without disabling the
+  filesystem/network sandbox.
+- The allowance intentionally adds GPU-adjacent IOKit and macOS service lookup
+  surface, but it avoids wildcard IOKit open actions, broad Metal IOKit
+  connection predicates, writable-root expansion, network expansion, and
+  unrestricted sysctl reads.
+- Regression coverage lives in
+  `codex-rs/sandboxing/src/seatbelt_tests.rs::base_policy_allows_metal_gpu_iokit_user_clients`
+  and
+  `codex-rs/sandboxing/src/seatbelt_tests.rs::base_policy_allows_core_metal_iosurface_iokit_access`
+  and
+  `codex-rs/sandboxing/src/seatbelt_tests.rs::base_policy_allows_metal_device_creation_iokit_user_clients`
+  and
+  `codex-rs/sandboxing/src/seatbelt_tests.rs::base_policy_avoids_metal_iokit_message_filters_in_workspace_profile`
+  and
+  `codex-rs/sandboxing/src/seatbelt_tests.rs::base_policy_allows_metal_open_time_iokit_user_clients_without_wildcard_action`
+  and
+  `codex-rs/sandboxing/src/seatbelt_tests.rs::base_policy_allows_metal_enumeration_iokit_open_registry_classes`
+  and
+  `codex-rs/sandboxing/src/seatbelt_tests.rs::base_policy_allows_coreml_metal_legacy_iokit_user_clients`
+  and
+  `codex-rs/sandboxing/src/seatbelt_tests.rs::base_policy_allows_system_graphics_metal_device_dependencies`
+  and
+  `codex-rs/sandboxing/src/seatbelt_tests.rs::base_policy_allows_safety_inference_metal_discovery_dependencies`
+  and
+  `codex-rs/sandboxing/src/seatbelt_tests.rs::base_policy_allows_gputools_metal_service_discovery_dependencies`
+  and
+  `codex-rs/sandboxing/src/seatbelt_tests.rs::base_policy_avoids_broad_metal_iokit_connection_predicates`
+  and
+  `codex-rs/sandboxing/src/seatbelt_tests.rs::base_policy_allows_named_sysctl_lookup_plumbing`.
+
 ### Feature toggles
 
 - This fork carries `enable_mcp_approvals` as a Rick-owned feature.
