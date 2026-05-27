@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_core::sandboxing::SandboxPermissions;
@@ -227,7 +228,7 @@ async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Res
                         env_vars: Vec::new(),
                         cwd: None,
                     },
-                    experimental_environment: None,
+                    environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
                     enabled: true,
                     required: false,
                     supports_parallel_tool_calls: false,

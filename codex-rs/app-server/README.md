@@ -2036,7 +2036,7 @@ reason up through the containing type:
 
 ```rust
 #[derive(ExperimentalApi)]
-struct ProfileV2 {
+struct Config {
     #[experimental(nested)]
     approval_policy: Option<AskForApproval>,
 }
@@ -2055,5 +2055,5 @@ For server-initiated request payloads, annotate the field the same way so schema
 5. Verify the protocol crate:
 
    ```bash
-   cargo test -p codex-app-server-protocol
+   just test -p codex-app-server-protocol
    ```

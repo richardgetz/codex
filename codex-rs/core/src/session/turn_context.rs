@@ -611,7 +611,7 @@ impl Session {
         let mut per_turn_config = per_turn_config;
         per_turn_config.service_tier = per_turn_config
             .service_tier
-            .filter(|service_tier| model_info.supports_service_tier(service_tier));
+            .filter(|service_tier| service_tier_supported_by_model(service_tier, &model_info));
         let per_turn_config = Arc::new(per_turn_config);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             session_id.to_string(),

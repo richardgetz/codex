@@ -222,8 +222,8 @@ impl ToolExecutor<ToolInvocation> for BuiltinScratchpadHandler {
         ToolName::namespaced(SCRATCHPAD_NAMESPACE, TOOL_OPEN)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(scratchpad_namespace_spec())
+    fn spec(&self) -> ToolSpec {
+        scratchpad_namespace_spec()
     }
 
     async fn handle(

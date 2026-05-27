@@ -5,7 +5,6 @@
 //! events, and owns helper hooks used by goal lifecycle behavior.
 
 use crate::StateDbHandle;
-use crate::context::ContextualUserFragment;
 use crate::context::GoalContext;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -24,7 +23,6 @@ use codex_otel::GOAL_RESUMED_METRIC;
 use codex_otel::GOAL_TOKEN_COUNT_METRIC;
 use codex_otel::GOAL_USAGE_LIMITED_METRIC;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadGoal;
@@ -1592,14 +1590,7 @@ fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
 }
 
 fn goal_context_input_item(prompt: String) -> ResponseInputItem {
-    let context = GoalContext { prompt };
-    ResponseInputItem::Message {
-        role: GoalContext::role().to_string(),
-        content: vec![ContentItem::InputText {
-            text: context.render(),
-        }],
-        phase: None,
-    }
+    GoalContext::new(prompt).into_response_input_item()
 }
 
 pub(crate) fn protocol_goal_from_state(goal: codex_state::ThreadGoal) -> ThreadGoal {

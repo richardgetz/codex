@@ -592,7 +592,7 @@ fn read_write_glob_patterns_still_reject_non_subpath_globs() {
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     assert!(
         err.to_string()
-            .contains("filesystem glob path `src/**/*.rs` only supports `deny` access"),
+            .contains("filesystem glob path `src/**/*.rs` only supports `deny` or `none` access"),
         "{err}"
     );
 }

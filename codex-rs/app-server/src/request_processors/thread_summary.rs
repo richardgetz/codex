@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 
 #[cfg(test)]
 use chrono::DateTime;
@@ -236,7 +237,9 @@ pub(crate) fn thread_settings_from_core_snapshot(
         ),
         model: snapshot.model,
         model_provider: snapshot.model_provider_id,
-        service_tier: snapshot.service_tier,
+        service_tier: snapshot
+            .service_tier
+            .or_else(|| Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())),
         effort: snapshot.reasoning_effort,
         summary: snapshot.reasoning_summary,
         collaboration_mode: snapshot.collaboration_mode,

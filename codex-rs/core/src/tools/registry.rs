@@ -186,7 +186,7 @@ impl ToolExecutor<ToolInvocation> for ExposureOverride {
         self.handler.tool_name()
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
+    fn spec(&self) -> ToolSpec {
         self.handler.spec()
     }
 
@@ -195,7 +195,7 @@ impl ToolExecutor<ToolInvocation> for ExposureOverride {
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
-        self.handler.supports_parallel_tool_calls()
+        self.exposure != ToolExposure::Hidden && self.handler.supports_parallel_tool_calls()
     }
 
     async fn handle(
@@ -261,7 +261,7 @@ impl ToolRegistry {
         let mut tools_by_name = HashMap::new();
         for tool in tools {
             let mut names = vec![tool.tool_name()];
-            if let Some(ToolSpec::Namespace(namespace)) = tool.spec() {
+            if let ToolSpec::Namespace(namespace) = tool.spec() {
                 names.extend(namespace.tools.into_iter().map(|tool| match tool {
                     ResponsesApiNamespaceTool::Function(function) => {
                         ToolName::namespaced(&namespace.name, function.name)
@@ -387,7 +387,24 @@ impl ToolRegistry {
                     .resolve_configured_mcp_tool_info(invocation.turn.as_ref(), &tool_name)
                     .await
                 {
-                    Arc::new(McpHandler::new(tool_info)) as Arc<dyn CoreToolRuntime>
+                    match McpHandler::new(tool_info) {
+                        Ok(handler) => Arc::new(handler) as Arc<dyn CoreToolRuntime>,
+                        Err(err) => {
+                            let message = format!("failed to build MCP tool spec: {err}");
+                            let log_payload = invocation.payload.log_payload();
+                            otel.tool_result_with_tags(
+                                tool_name_flat.as_ref(),
+                                &call_id_owned,
+                                log_payload.as_ref(),
+                                Duration::ZERO,
+                                /*success*/ false,
+                                &message,
+                                &[],
+                                &[],
+                            );
+                            return Err(FunctionCallError::RespondToModel(message));
+                        }
+                    }
                 } else {
                     let message = unsupported_tool_call_message(&invocation.payload, &tool_name);
                     let log_payload = invocation.payload.log_payload();

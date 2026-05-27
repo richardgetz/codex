@@ -922,7 +922,7 @@ async fn account_switch_clears_cached_status_line_rate_limits() {
     drain_insert_history(&mut rx);
     assert_eq!(
         chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::FiveHourLimit),
-        Some("1h 8%".to_string())
+        Some("usage 8%".to_string())
     );
 
     chat.set_active_account_alias(Some("personal".to_string()));

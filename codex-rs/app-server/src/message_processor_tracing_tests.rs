@@ -677,13 +677,14 @@ fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
                 Some(remote_trace),
             )
             .await;
+        let expected_op = "user_input_with_turn_context";
         let spans = wait_for_exported_spans(harness.tracing, |spans| {
             spans.iter().any(|span| {
                 span.span_kind == SpanKind::Server
                     && span_attr(span, "rpc.method") == Some("turn/start")
                     && span.span_context.trace_id() == remote_trace_id
             }) && spans.iter().any(|span| {
-                span_attr(span, "codex.op") == Some("user_input")
+                span_attr(span, "codex.op") == Some(expected_op)
                     && span.span_context.trace_id() == remote_trace_id
             })
         })
@@ -692,8 +693,8 @@ fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
         let server_request_span =
             find_rpc_span_with_trace(&spans, SpanKind::Server, "turn/start", remote_trace_id);
         let core_turn_span =
-            find_span_with_trace(&spans, remote_trace_id, "codex.op=user_input", |span| {
-                span_attr(span, "codex.op") == Some("user_input")
+            find_span_with_trace(&spans, remote_trace_id, "codex.op={expected_op}", |span| {
+                span_attr(span, "codex.op") == Some(expected_op)
             });
 
         assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);

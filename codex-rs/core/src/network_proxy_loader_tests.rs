@@ -90,17 +90,16 @@ default_permissions = "dev"
     )
     .expect("higher layer should parse");
 
-    let mut config = NetworkProxyConfig::default();
-    apply_network_tables(
-        &mut config,
-        network_tables_from_toml(&lower_network).expect("lower layer should deserialize"),
+    let lower_layer = ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, lower_network);
+    let higher_layer = ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, higher_network);
+    let layers = ConfigLayerStack::new(
+        vec![lower_layer, higher_layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
     )
-    .expect("lower layer should apply");
-    apply_network_tables(
-        &mut config,
-        network_tables_from_toml(&higher_network).expect("higher layer should deserialize"),
-    )
-    .expect("higher layer should apply");
+    .expect("layer stack should be valid");
+
+    let config = config_from_layers(&layers, &Policy::empty()).expect("network layers should load");
 
     assert_eq!(
         config.network.allowed_domains(),
@@ -151,25 +150,24 @@ strip_request_headers = ["x-api-key"]
     )
     .expect("higher layer should parse");
 
-    let mut config = NetworkProxyConfig::default();
-    apply_network_tables(
-        &mut config,
-        network_tables_from_toml(&lower_network).expect("lower layer should deserialize"),
+    let lower_layer = ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, lower_network);
+    let higher_layer = ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, higher_network);
+    let layers = ConfigLayerStack::new(
+        vec![lower_layer, higher_layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
     )
-    .expect("lower layer should apply");
-    apply_network_tables(
-        &mut config,
-        network_tables_from_toml(&higher_network).expect("higher layer should deserialize"),
-    )
-    .expect("higher layer should apply");
+    .expect("layer stack should be valid");
+
+    let config = config_from_layers(&layers, &Policy::empty()).expect("network layers should load");
 
     assert_eq!(config.network.mode, codex_network_proxy::NetworkMode::Full);
     assert!(config.network.mitm);
     assert_eq!(
         config.network.allowed_domains(),
         Some(vec![
-            "lower.example.com".to_string(),
-            "higher.example.com".to_string()
+            "higher.example.com".to_string(),
+            "lower.example.com".to_string()
         ])
     );
     assert_eq!(config.network.mitm_hooks.len(), 1);
