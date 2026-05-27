@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-05-27/macos-metal-sandbox#da6f7ff1b65e"
+  change_type: "fix"
+  scope: "sandbox"
+  summary: "Enable sandboxed macOS Metal/MPS GPU compute in the fork while keeping access scoped."
+  decision: "Extend the macOS Seatbelt base policy with explicit GPU, Metal, IOSurface, AGXMetal driver, sysctl lookup, and Metal service allowances needed by MPS/MLX-style workloads, and avoid unsupported or broad IOKit predicates that break sandbox application or overstate scope."
+  constraints:
+    - "Must keep filesystem writable roots and network policy unchanged."
+    - "Must avoid PyTorch-specific handling; support the general Metal/MPS/MLX runtime path."
+    - "Must avoid unsupported Seatbelt constructs such as iokit-open*, apply-message-filter, and iokit-method-number."
+    - "Must avoid broad IOAccelerator and AppleGraphicsDeviceControl connection predicates under iokit-open-service or iokit-open-user-client."
+    - "Must retain test-proof coverage with static policy regression tests and local runtime validation on Apple Silicon."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/sandboxing/src/seatbelt_base_policy.sbpl"
+    - "codex-rs/sandboxing/src/seatbelt_tests.rs"
+    - "docs/fork-differences.md"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
