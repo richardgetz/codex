@@ -1,0 +1,17 @@
+intent:
+  id: stable-refresh-rust-v0.134.0-mcp-fixture
+change_type: fix
+scope: stable-ci
+summary: Update codex-mcp test fixture to the current MCP server environment field after the upstream 0.134 merge.
+decision: Replace the removed experimental_environment fixture field with the effective environment_id default so Bazel argument-comment-lint can compile codex-mcp tests on PR #61.
+constraints:
+  - Keep the fix scoped to the failing CI fixture.
+  - Preserve existing MCP startup mode behavior under test.
+  - Do not touch sandbox network environment variable behavior.
+intent_priority: must
+code_locations:
+  - codex-rs/codex-mcp/src/connection_manager_tests.rs
+requested_by: Rick
+recorded_by:
+  agent: Codex
+  model: gpt-5
