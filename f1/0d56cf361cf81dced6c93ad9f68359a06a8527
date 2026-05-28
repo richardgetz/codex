@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-05-28/stable-refresh-cargo-shear#f10d56cf361c"
+  change_type: "fix"
+  scope: "stable-refresh/rust-v0.135.0"
+  summary: "Remove unused TUI dependency and unlinked core source left by the stable refresh."
+  decision: "Keep the CI repair scoped to cargo-shear findings without changing runtime behavior."
+  constraints:
+    - "Must preserve the rust-v0.135.0 stable refresh merge commit as the PR base work."
+    - "Must not broaden the CI fix beyond cargo-shear findings."
+    - "Must keep fork release behavior and runtime surfaces unchanged."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/Cargo.toml"
+    - "codex-rs/core/src/session/input_queue.rs"
+    - "codex-rs/Cargo.lock"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "Codex"
+    model: "gpt-5"
