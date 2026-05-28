@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-05-28/scratchpad-action-policy#e77a40c9c876"
+  change_type: "feat"
+  scope: "scratchpad"
+  summary: "Make session action policies visible and enforce PR/merge guardrails."
+  decision: "Persist user-stated operational boundaries in scratchpad action_policy, include that policy in recovery context, and teach check_action_allowed repo-level deny flags for PR and merge actions."
+  constraints:
+    - "Must keep scratchpad state thread-owned and recovery-scoped."
+    - "Must preserve existing branch and environment policy checks."
+    - "Must not merge work when a session policy or user instruction forbids merging."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/context/scratchpad_instructions.rs"
+    - "codex-rs/core/src/session/mod.rs::compact_active_scratchpad_summary"
+    - "codex-rs/core/src/session/turn.rs::build_continuous_run_block_message"
+    - "codex-rs/core/src/tools/handlers/builtin_scratchpad.rs::evaluate_action_policy"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
