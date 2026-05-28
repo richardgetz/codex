@@ -2154,7 +2154,7 @@ mod tests {
         let config = build_config(&temp_dir).await?;
 
         let params = latest_session_lookup_params(
-            /*uses_remote_workspace*/ true, &config, /*cwd_filter*/ None,
+            /*is_remote*/ true, &config, /*cwd_filter*/ None,
             /*include_non_interactive*/ true,
         );
 

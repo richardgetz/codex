@@ -613,6 +613,7 @@ fn source_category(source: &str) -> &'static str {
         SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
             "subagent:memory_consolidation"
         }
+        SessionSource::SubAgent(SubAgentSource::MemoryExtraction) => "subagent:memory_extraction",
         SessionSource::SubAgent(SubAgentSource::Other(_)) => "subagent:other",
         SessionSource::Unknown => "unknown",
     }
@@ -900,6 +901,10 @@ INSERT INTO threads (
         assert_eq!(
             source_category(r#"{"subagent":"memory_consolidation"}"#),
             "subagent:memory_consolidation"
+        );
+        assert_eq!(
+            source_category(r#"{"subagent":"memory_extraction"}"#),
+            "subagent:memory_extraction"
         );
         assert_eq!(
             source_category(
