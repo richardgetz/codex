@@ -687,10 +687,30 @@ fn build_continuous_run_block_message(scratchpad: &serde_json::Value) -> String 
         "Continue working from the scratchpad until every actionable next_steps item is complete. As items finish, record them in completed and keep next_steps for remaining active work. Move external waits to pending_waits and true blockers to blocked before ending the continuous session; pending_waits and blocked alone are not active work."
             .to_string(),
     );
+    append_scratchpad_action_policy_section(&mut lines, scratchpad);
     append_scratchpad_recovery_section(&mut lines, scratchpad, "next_steps", "Next up");
     append_scratchpad_recovery_section(&mut lines, scratchpad, "pending_waits", "Waiting");
     append_scratchpad_recovery_section(&mut lines, scratchpad, "blocked", "Blocked");
     lines.join("\n")
+}
+
+fn append_scratchpad_action_policy_section(
+    lines: &mut Vec<String>,
+    scratchpad: &serde_json::Value,
+) {
+    let Some(policy) = scratchpad
+        .get("action_policy")
+        .filter(|policy| !policy.as_object().is_none_or(serde_json::Map::is_empty))
+    else {
+        return;
+    };
+    let Ok(policy_json) = serde_json::to_string_pretty(policy) else {
+        return;
+    };
+    lines.push("Action policy:".to_string());
+    lines.push("```json".to_string());
+    lines.push(policy_json);
+    lines.push("```".to_string());
 }
 
 fn append_scratchpad_recovery_section(
@@ -888,24 +908,29 @@ mod thread_control_tests {
 
     #[test]
     fn continuous_run_block_message_points_back_to_scratchpad_policy() {
-        assert_eq!(
-            build_continuous_run_block_message(&serde_json::json!({
-                "scratchpad_id": "thread-123",
-                "next_steps": ["finish registry"],
-                "pending_waits": [{
-                    "id": "keepalive",
-                    "description": "Stop keepalive",
-                    "details": "session_id=abc"
-                }]
-            })),
-            "Scratchpad continuous run policy is enabled for this thread.\n\
-Scratchpad: thread-123\n\
-You are not allowed to stop, finalize, or hand off a completed answer yet.\n\
-Continue working from the scratchpad until every actionable next_steps item is complete. As items finish, record them in completed and keep next_steps for remaining active work. Move external waits to pending_waits and true blockers to blocked before ending the continuous session; pending_waits and blocked alone are not active work.\n\
-Next up:\n\
-- finish registry\n\
-Waiting:\n\
-- Stop keepalive (id: keepalive; details: session_id=abc)"
+        let message = build_continuous_run_block_message(&serde_json::json!({
+            "scratchpad_id": "thread-123",
+            "action_policy": {
+                "repos": {
+                    "persona-api": {
+                        "forbidden_base_branches": ["main"]
+                    }
+                }
+            },
+            "next_steps": ["finish registry"],
+            "pending_waits": [{
+                "id": "keepalive",
+                "description": "Stop keepalive",
+                "details": "session_id=abc"
+            }]
+        }));
+        assert!(message.contains("Scratchpad: thread-123"));
+        assert!(message.contains("Action policy:\n```json\n"));
+        assert!(message.contains("\"persona-api\""));
+        assert!(message.contains("\"forbidden_base_branches\""));
+        assert!(message.contains("Next up:\n- finish registry"));
+        assert!(
+            message.contains("Waiting:\n- Stop keepalive (id: keepalive; details: session_id=abc)")
         );
     }
 

@@ -422,6 +422,13 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   recovery context and do not keep the loop alive on their own. Use
   `wait_type = "user_confirmation"` for waits that need the user to grant
   access, confirm a decision, or merge/unblock something.
+- `action_policy` is the session-scoped guardrail surface for user-stated PR,
+  merge, deploy, benchmark, and AWS-write rules. Scratchpad guidance tells
+  agents to persist those rules with `set_action_policy`, and active
+  scratchpad recovery carries the policy back into context so agents can run
+  `check_action_allowed` before taking guarded actions. It supports repo-level
+  PR/merge deny flags, base-branch allow/deny lists, deployment environment
+  allow/deny lists, and AWS-write default-deny behavior.
 - The current thread scratchpad objective can be renamed through
   `update_scratchpad.objective`. `open_scratchpad` still refuses to rebind an
   existing thread-owned scratchpad to a different objective.
