@@ -4232,6 +4232,7 @@ fn compact_active_scratchpad_summary(value: &Value) -> Value {
         "next_steps",
         "pending_waits",
         "blocked",
+        "action_policy",
         "run_policy",
         "communication_policy",
         "outcomes",

@@ -8217,6 +8217,13 @@ async fn build_initial_context_injects_active_scratchpad_when_uncompleted_work_e
             "completed": ["found root cause"],
             "next_steps": ["ship fix"],
             "pending_waits": [],
+            "action_policy": {
+                "repos": {
+                    "persona-api": {
+                        "forbidden_base_branches": ["main"]
+                    }
+                }
+            },
             "created_at": "2026-04-29T00:00:00Z",
             "updated_at": "2026-04-29T00:00:00Z",
             "archived_at": null
@@ -8230,6 +8237,9 @@ async fn build_initial_context_injects_active_scratchpad_when_uncompleted_work_e
     assert!(developer_texts.contains("recover active work"));
     assert!(developer_texts.contains("found root cause"));
     assert!(developer_texts.contains("ship fix"));
+    assert!(developer_texts.contains("\"action_policy\""));
+    assert!(developer_texts.contains("persona-api"));
+    assert!(developer_texts.contains("\"forbidden_base_branches\""));
 }
 
 #[tokio::test]

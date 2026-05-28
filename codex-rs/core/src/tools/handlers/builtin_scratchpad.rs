@@ -1883,6 +1883,31 @@ fn schema_payload() -> Value {
         "thread_id_default": "Built-in scratchpad tools are bound to the current Codex thread/session id. open_scratchpad defaults scratchpad_id to that id when omitted, and model-visible tools reject custom or other-thread scratchpad ids. Archived pads remain readable/editable by the owning thread until lifecycle deletion.",
         "objective_updates": "Use update_scratchpad with objective to rename the current working objective. open_scratchpad still rejects rebinding an existing thread scratchpad to a different objective.",
         "continuous_work_policy": "Keep next_steps limited to actionable work. Move external waits to pending_waits and true blockers to blocked. A wait can use wait_type='user_confirmation' when the user must confirm or grant access. Continuous mode only loops for actionable next_steps; pending_waits and blocked alone are recovery context, not active work.",
+        "action_policy_usage": "When the user gives session-scoped rules for PRs, merges, deployments, benchmark launches, or AWS writes, persist them immediately with set_action_policy. Before taking those actions, call check_action_allowed with action plus repo, target_branch, env, or bypass_pr_requirements as applicable. If denied, stop before acting and record the denial in blocked or pending_waits.",
+        "action_policy_shape": {
+            "defaults": {
+                "forbidden_base_branches": ["main"],
+                "allowed_base_branches": ["staging", "main"],
+                "forbid_pr_actions": false,
+                "forbid_merges": false,
+                "forbid_pull_requests": false,
+                "allow_pr_requirement_bypass": false,
+                "allow_aws_writes": false,
+                "forbidden_deploy_envs": ["prod"],
+                "allowed_deploy_envs": ["dev", "staging"],
+                "forbidden_benchmark_envs": ["prod"],
+                "allowed_benchmark_envs": ["dev"]
+            },
+            "repos": {
+                "repo-name-or-path-suffix": {
+                    "forbidden_base_branches": ["main"],
+                    "allowed_base_branches": ["staging"],
+                    "forbid_merges": true,
+                    "forbidden_deploy_envs": ["prod"],
+                    "allowed_deploy_envs": ["dev"]
+                }
+            }
+        },
         "pending_wait_shape": {
             "wait_id": "stable optional id",
             "target": "thing being waited on, such as aws-role/Admin or PR #123",
@@ -2130,7 +2155,30 @@ fn evaluate_action_policy(
     }
 
     if reason.is_none() && matches!(action, "merge" | "pull_request") {
-        if bool_arg(args, "bypass_pr_requirements")
+        if policy_bool(
+            &effective_policy,
+            "forbid_pr_actions",
+            /*default*/ false,
+        ) {
+            reason = Some("pr_action_forbidden".to_string());
+            message = Some("PR and merge actions are forbidden by action policy".to_string());
+        } else if action == "merge"
+            && policy_bool(&effective_policy, "forbid_merges", /*default*/ false)
+        {
+            reason = Some("merge_forbidden".to_string());
+            message = Some("merge actions are forbidden by action policy".to_string());
+        } else if action == "pull_request"
+            && policy_bool(
+                &effective_policy,
+                "forbid_pull_requests",
+                /*default*/ false,
+            )
+        {
+            reason = Some("pull_request_forbidden".to_string());
+            message = Some("pull request actions are forbidden by action policy".to_string());
+        }
+        if reason.is_none()
+            && bool_arg(args, "bypass_pr_requirements")
             && !policy_bool(
                 &effective_policy,
                 "allow_pr_requirement_bypass",
@@ -4134,6 +4182,9 @@ mod tests {
                     "repos": {
                         "codex": {
                             "allowed_deploy_envs": ["dev"]
+                        },
+                        "persona-api": {
+                            "forbid_merges": true
                         }
                     }
                 }
@@ -4163,6 +4214,17 @@ mod tests {
             "thread-123",
         )
         .unwrap();
+        let repo_merge_decision = check_action_allowed(
+            &store,
+            &serde_json::json!({
+                "scratchpad_id": "thread-123",
+                "action": "merge",
+                "repo": "/Users/example/persona-api",
+                "target_branch": "staging"
+            }),
+            "thread-123",
+        )
+        .unwrap();
 
         assert_eq!(merge_decision["allowed"], serde_json::json!(false));
         assert_eq!(
@@ -4173,6 +4235,11 @@ mod tests {
         assert_eq!(
             deploy_decision["reason"],
             serde_json::json!("env_not_allowed")
+        );
+        assert_eq!(repo_merge_decision["allowed"], serde_json::json!(false));
+        assert_eq!(
+            repo_merge_decision["reason"],
+            serde_json::json!("merge_forbidden")
         );
     }
 
