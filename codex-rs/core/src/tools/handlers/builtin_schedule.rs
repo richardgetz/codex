@@ -113,8 +113,8 @@ impl ToolExecutor<ToolInvocation> for BuiltinScheduleHandler {
         ToolName::namespaced(SCHEDULE_NAMESPACE, TOOL_CREATE)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(schedule_namespace_spec())
+    fn spec(&self) -> ToolSpec {
+        schedule_namespace_spec()
     }
 
     async fn handle(

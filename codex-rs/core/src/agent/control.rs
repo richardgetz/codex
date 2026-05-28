@@ -24,6 +24,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
@@ -131,9 +132,7 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other,
         ) => false,
-        // A forked child gets its own runtime config, including spawned-agent
-        // instructions, so it must establish a fresh context diff baseline.
-        RolloutItem::TurnContext(_) => false,
+        RolloutItem::TurnContext(_) => true,
         RolloutItem::Compacted(_) | RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => true,
     }
 }
@@ -452,6 +451,7 @@ impl AgentControl {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
+        let preserve_turn_context = matches!(fork_mode, SpawnAgentForkMode::FullHistory);
         if initial_collaboration_mode.is_none() {
             initial_collaboration_mode = latest_collaboration_mode_from_rollout_items(
                 &forked_rollout_items,
@@ -492,7 +492,30 @@ impl AgentControl {
             } else {
                 Vec::new()
             };
+        for item in &mut forked_rollout_items {
+            if let RolloutItem::Compacted(CompactedItem {
+                replacement_history: Some(replacement_history),
+                ..
+            }) = item
+            {
+                replacement_history.retain(|item| {
+                    if let ResponseItem::Message { role, content, .. } = item
+                        && role == "developer"
+                        && let [ContentItem::InputText { text }] = content.as_slice()
+                    {
+                        return !multi_agent_v2_usage_hint_texts_to_filter
+                            .iter()
+                            .any(|usage_hint_text| usage_hint_text == text);
+                    }
+
+                    true
+                });
+            }
+        }
         forked_rollout_items.retain(|item| {
+            if matches!(item, RolloutItem::TurnContext(_)) && !preserve_turn_context {
+                return false;
+            }
             if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = item
                 && role == "developer"
                 && let [ContentItem::InputText { text }] = content.as_slice()
@@ -505,6 +528,19 @@ impl AgentControl {
 
             keep_forked_rollout_item(item)
         });
+        if config.features.enabled(Feature::MultiAgentV2)
+            && matches!(
+                session_source,
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+            )
+            && let Some(usage_hint_text) = config.multi_agent_v2.subagent_usage_hint_text.as_ref()
+            && let Some(usage_hint_message) =
+                crate::context_manager::updates::build_developer_update_item(vec![
+                    usage_hint_text.clone(),
+                ])
+        {
+            forked_rollout_items.push(RolloutItem::ResponseItem(usage_hint_message));
+        }
 
         state
             .fork_thread_with_source(
@@ -1359,24 +1395,16 @@ impl AgentControl {
         let state = self.upgrade()?;
         let mut children_by_parent = HashMap::<ThreadId, Vec<(ThreadId, AgentMetadata)>>::new();
 
-        for thread_id in state.list_thread_ids().await {
-            let Ok(thread) = state.get_thread(thread_id).await else {
-                continue;
-            };
-            let snapshot = thread.config_snapshot().await;
-            let Some(parent_thread_id) = thread_spawn_parent_thread_id(&snapshot.session_source)
-            else {
-                continue;
-            };
+        for (parent_thread_id, child_thread_id) in state.list_live_thread_spawn_edges().await {
             children_by_parent
                 .entry(parent_thread_id)
                 .or_default()
                 .push((
-                    thread_id,
+                    child_thread_id,
                     self.state
-                        .agent_metadata_for_thread(thread_id)
+                        .agent_metadata_for_thread(child_thread_id)
                         .unwrap_or(AgentMetadata {
-                            agent_id: Some(thread_id),
+                            agent_id: Some(child_thread_id),
                             ..Default::default()
                         }),
                 ));

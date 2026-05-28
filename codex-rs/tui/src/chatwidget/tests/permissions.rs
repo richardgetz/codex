@@ -5,6 +5,7 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_utils_approval_presets::builtin_permission_profile_for_active_permission_profile;
 use pretty_assertions::assert_eq;
 
 fn app_server_workspace_write_profile(extra_root: AbsolutePathBuf) -> PermissionProfile {
@@ -166,7 +167,9 @@ async fn full_access_confirmation_popup_snapshot() {
         .into_iter()
         .find(|preset| preset.id == "full-access")
         .expect("full access preset");
-    chat.open_full_access_confirmation(preset, /*return_to_permissions*/ false);
+    chat.open_full_access_confirmation(
+        preset, /*return_to_permissions*/ false, /*profile_selection*/ None,
+    );
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("full_access_confirmation_popup", popup);
@@ -181,7 +184,7 @@ async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
         .into_iter()
         .find(|preset| preset.id == "auto")
         .expect("auto preset");
-    chat.open_windows_sandbox_enable_prompt(preset);
+    chat.open_windows_sandbox_enable_prompt(preset, /*profile_selection*/ None);
 
     let popup = render_bottom_popup(&chat, /*width*/ 120);
     assert!(
@@ -889,10 +892,15 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             cwd: None,
             approval_policy: Some(AskForApproval::OnRequest),
             approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-            permission_profile: None,
             active_permission_profile: Some(ActivePermissionProfile::new(
                 BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
             )),
+            permission_profile: Some(
+                builtin_permission_profile_for_active_permission_profile(
+                    &ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE),
+                )
+                .expect("workspace permission profile should resolve"),
+            ),
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -945,8 +953,9 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
             AppEvent::OpenFullAccessConfirmation {
                 preset,
                 return_to_permissions,
+                profile_selection,
             } => {
-                open_confirmation_event = Some((preset, return_to_permissions));
+                open_confirmation_event = Some((preset, return_to_permissions, profile_selection));
             }
             _ => {}
         }
@@ -957,9 +966,9 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
             "did not expect history cell before confirming full access"
         );
     }
-    let (preset, return_to_permissions) =
+    let (preset, return_to_permissions, profile_selection) =
         open_confirmation_event.expect("expected full access confirmation event");
-    chat.open_full_access_confirmation(preset, return_to_permissions);
+    chat.open_full_access_confirmation(preset, return_to_permissions, profile_selection);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(

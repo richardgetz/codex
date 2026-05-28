@@ -142,10 +142,8 @@ fn build_model_visible_specs_and_registry(
             continue;
         }
         let exposure = executor.exposure();
-        if exposure.is_direct()
-            && !is_hidden_by_code_mode_only(config, &tool_name, exposure)
-            && let Some(spec) = executor.spec()
-        {
+        if exposure.is_direct() && !is_hidden_by_code_mode_only(config, &tool_name, exposure) {
+            let spec = executor.spec();
             specs.push(spec_for_model_request(config, exposure, spec));
         }
     }
@@ -248,13 +246,8 @@ fn build_code_mode_executors(
 
     let code_mode_nested_tool_specs = executors
         .iter()
-        .filter_map(|executor| {
-            if executor.exposure() == ToolExposure::DirectModelOnly {
-                return None;
-            }
-
-            executor.spec()
-        })
+        .filter(|executor| executor.exposure() != ToolExposure::DirectModelOnly)
+        .map(|executor| executor.spec())
         .collect::<Vec<_>>();
     let namespace_descriptions = code_mode_namespace_descriptions(&code_mode_nested_tool_specs);
     let mut enabled_tools =
@@ -385,9 +378,10 @@ fn collect_tool_executors(
     {
         match &config.shell_type {
             ConfigShellToolType::UnifiedExec => {
-                executors.push(Arc::new(ShellCommandHandler::from(
-                    config.shell_command_backend,
-                )));
+                executors.push(override_tool_exposure(
+                    Arc::new(ShellCommandHandler::from(config.shell_command_backend)),
+                    ToolExposure::Hidden,
+                ));
             }
             ConfigShellToolType::Default
             | ConfigShellToolType::Local
@@ -541,16 +535,30 @@ fn collect_tool_executors(
 
     if let Some(mcp_tools) = params.mcp_tools {
         for tool in mcp_tools {
-            executors.push(Arc::new(McpHandler::new(tool.clone())));
+            match McpHandler::new(tool.clone()) {
+                Ok(handler) => executors.push(Arc::new(handler)),
+                Err(err) => warn!(
+                    "Skipping MCP tool `{}`: failed to build tool spec: {err}",
+                    tool.canonical_tool_name()
+                ),
+            }
         }
     }
 
     if let Some(deferred_mcp_tools) = params.deferred_mcp_tools {
         for tool in deferred_mcp_tools {
-            executors.push(Arc::new(McpHandler::with_exposure(
-                tool.clone(),
-                ToolExposure::Deferred,
-            )));
+            match McpHandler::new(tool.clone()) {
+                Ok(handler) => {
+                    executors.push(override_tool_exposure(
+                        Arc::new(handler),
+                        ToolExposure::Deferred,
+                    ));
+                }
+                Err(err) => warn!(
+                    "Skipping deferred MCP tool `{}`: failed to build tool spec: {err}",
+                    tool.canonical_tool_name()
+                ),
+            }
         }
     }
 
@@ -666,14 +674,14 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2NamespaceOverride {
         ToolName::namespaced(self.namespace.clone(), self.handler.tool_name().name)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        match self.handler.spec()? {
-            ToolSpec::Function(tool) => Some(ToolSpec::Namespace(ResponsesApiNamespace {
+    fn spec(&self) -> ToolSpec {
+        match self.handler.spec() {
+            ToolSpec::Function(tool) => ToolSpec::Namespace(ResponsesApiNamespace {
                 name: self.namespace.clone(),
                 description: MULTI_AGENT_V2_NAMESPACE_DESCRIPTION.to_string(),
                 tools: vec![ResponsesApiNamespaceTool::Function(tool)],
-            })),
-            spec => Some(spec),
+            }),
+            spec => spec,
         }
     }
 

@@ -89,8 +89,8 @@ impl ToolExecutor<ToolInvocation> for SessionOverwatchHandler {
         ToolName::namespaced(SESSION_OVERWATCH_NAMESPACE, TOOL_LIST)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(session_overwatch_namespace_spec())
+    fn spec(&self) -> ToolSpec {
+        session_overwatch_namespace_spec()
     }
 
     async fn handle(

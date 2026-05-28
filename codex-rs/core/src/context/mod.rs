@@ -51,7 +51,7 @@ pub use fragment::ContextualUserFragment;
 pub(crate) use fragment::FragmentRegistration;
 pub(crate) use fragment::FragmentRegistrationProxy;
 pub(crate) use git_intent_notes_instructions::GitIntentNotesInstructions;
-pub(crate) use goal_context::GoalContext;
+pub use goal_context::GoalContext;
 pub(crate) use guardian_followup_review_reminder::GuardianFollowupReviewReminder;
 pub(crate) use hook_additional_context::HookAdditionalContext;
 pub(crate) use image_generation_instructions::ImageGenerationInstructions;

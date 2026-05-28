@@ -74,7 +74,7 @@ use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
-use codex_mcp::McpRuntimeEnvironment;
+use codex_mcp::McpRuntimeContext;
 use codex_mcp::codex_apps_tools_cache_key;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
@@ -94,6 +94,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::MemoryAccessPolicy;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -290,6 +291,12 @@ impl SteerInputError {
 pub(crate) struct PreviousTurnSettings {
     pub(crate) model: String,
     pub(crate) realtime_active: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum TurnInput {
+    UserInput(Vec<UserInput>),
+    ResponseInputItem(ResponseInputItem),
 }
 
 #[cfg(test)]
@@ -629,7 +636,8 @@ impl Codex {
             config.notices.fast_default_opt_out.unwrap_or(false),
             account_plan_type,
             config.features.enabled(Feature::FastMode),
-        );
+        )
+        .filter(|service_tier| service_tier_supported_by_model(service_tier, &model_info));
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
@@ -891,6 +899,11 @@ fn get_service_tier(
     account_plan_type
         .is_some_and(is_enterprise_default_service_tier_plan)
         .then_some(ServiceTier::Fast.request_value().to_string())
+}
+
+fn service_tier_supported_by_model(service_tier: &str, model_info: &ModelInfo) -> bool {
+    service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE
+        || model_info.supports_service_tier(service_tier)
 }
 
 fn session_permission_profile_state_from_config(
@@ -4118,9 +4131,7 @@ impl Session {
         }
         // Even without an active task, interrupt handling pauses any active goal.
         self.abort_all_tasks(TurnAbortReason::Interrupted).await;
-        if !had_active_turn {
-            self.cancel_mcp_startup().await;
-        }
+        self.cancel_mcp_startup().await;
     }
 
     pub(crate) fn hooks(&self) -> Arc<Hooks> {
@@ -4348,17 +4359,10 @@ async fn build_hooks_for_config(
     let mut hook_shell_argv = user_shell.derive_exec_args("", /*use_login_shell*/ false);
     let hook_shell_program = hook_shell_argv.remove(0);
     let _ = hook_shell_argv.pop();
-    let plugin_hooks_enabled = config.features.enabled(Feature::PluginHooks);
-    let (plugin_hook_sources, plugin_hook_load_warnings) = if plugin_hooks_enabled {
-        let plugins_input = config.plugins_config_input();
-        let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
-        (
-            plugin_outcome.effective_plugin_hook_sources(),
-            plugin_outcome.effective_plugin_hook_warnings(),
-        )
-    } else {
-        (Vec::new(), Vec::new())
-    };
+    let plugins_input = config.plugins_config_input();
+    let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
+    let plugin_hook_sources = plugin_outcome.effective_plugin_hook_sources();
+    let plugin_hook_load_warnings = plugin_outcome.effective_plugin_hook_warnings();
     Hooks::new(HooksConfig {
         legacy_notify_argv: config.notify.clone(),
         feature_enabled: config.features.enabled(Feature::CodexHooks),

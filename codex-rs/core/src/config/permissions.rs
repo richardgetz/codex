@@ -453,7 +453,13 @@ fn compile_filesystem_permission(
                     Some(FileSystemSpecialPath::ProjectRoots { .. }) | None => true,
                     Some(_) => false,
                 };
-                if has_glob && *access == FileSystemAccessMode::Deny && can_compile_as_pattern {
+                if has_glob
+                    && matches!(
+                        access,
+                        FileSystemAccessMode::Deny | FileSystemAccessMode::None
+                    )
+                    && can_compile_as_pattern
+                {
                     // Scoped glob syntax is a first-class filesystem policy
                     // pattern entry. Literal scoped paths continue through the
                     // exact-path parser so existing path semantics stay intact.
@@ -488,7 +494,10 @@ fn compile_filesystem_access_path(
         return compile_filesystem_path(path, startup_warnings);
     }
 
-    if access == FileSystemAccessMode::Deny {
+    if matches!(
+        access,
+        FileSystemAccessMode::Deny | FileSystemAccessMode::None
+    ) {
         // At this point `path` is an unscoped filesystem table key. Top-level
         // glob deny entries still go through the absolute-path parser before
         // becoming policy patterns; relative project-root glob syntax is
@@ -556,13 +565,16 @@ fn compile_scoped_filesystem_pattern(
     access: FileSystemAccessMode,
     _policy_cwd: &Path,
 ) -> io::Result<String> {
-    // Pattern entries currently mean deny-read only. Supporting broader access
+    // Pattern entries currently mean deny/none only. Supporting broader access
     // modes here would imply glob-based read/write allow semantics that the
     // sandbox policy does not express yet.
-    if access != FileSystemAccessMode::Deny {
+    if matches!(
+        access,
+        FileSystemAccessMode::Read | FileSystemAccessMode::Write
+    ) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("filesystem glob subpath `{subpath}` only supports `deny` access"),
+            format!("filesystem glob subpath `{subpath}` only supports `deny` or `none` access"),
         ));
     }
     let subpath = parse_relative_subpath(subpath)?;
@@ -598,7 +610,7 @@ fn compile_read_write_glob_path(path: &str, access: FileSystemAccessMode) -> io:
     Err(io::Error::new(
         io::ErrorKind::InvalidInput,
         format!(
-            "filesystem glob path `{path}` only supports `deny` access; use an exact path or trailing `/**` for `{access}` subtree access"
+            "filesystem glob path `{path}` only supports `deny` or `none` access; use an exact path or trailing `/**` for `{access}` subtree access"
         ),
     ))
 }
@@ -608,16 +620,20 @@ fn unsupported_read_write_glob_paths(filesystem: &FilesystemPermissionsToml) -> 
     for (path, permission) in &filesystem.entries {
         match permission {
             FilesystemPermissionToml::Access(access) => {
-                if *access != FileSystemAccessMode::Deny
-                    && contains_glob_chars(remove_trailing_glob_suffix(path))
+                if matches!(
+                    access,
+                    FileSystemAccessMode::Read | FileSystemAccessMode::Write
+                ) && contains_glob_chars(remove_trailing_glob_suffix(path))
                 {
                     patterns.push(path.clone());
                 }
             }
             FilesystemPermissionToml::Scoped(scoped_entries) => {
                 for (subpath, access) in scoped_entries {
-                    if *access != FileSystemAccessMode::Deny
-                        && contains_glob_chars(remove_trailing_glob_suffix(subpath))
+                    if matches!(
+                        access,
+                        FileSystemAccessMode::Read | FileSystemAccessMode::Write
+                    ) && contains_glob_chars(remove_trailing_glob_suffix(subpath))
                     {
                         patterns.push(format!("{path}/{subpath}"));
                     }
@@ -636,7 +652,9 @@ fn unbounded_unreadable_globstar_paths(filesystem: &FilesystemPermissionsToml) -
     let mut patterns = Vec::new();
     for (path, permission) in &filesystem.entries {
         match permission {
-            FilesystemPermissionToml::Access(FileSystemAccessMode::Deny) => {
+            FilesystemPermissionToml::Access(
+                FileSystemAccessMode::Deny | FileSystemAccessMode::None,
+            ) => {
                 if path.contains("**") {
                     patterns.push(path.clone());
                 }
@@ -644,7 +662,11 @@ fn unbounded_unreadable_globstar_paths(filesystem: &FilesystemPermissionsToml) -
             FilesystemPermissionToml::Access(_) => {}
             FilesystemPermissionToml::Scoped(scoped_entries) => {
                 for (subpath, access) in scoped_entries {
-                    if *access == FileSystemAccessMode::Deny && subpath.contains("**") {
+                    if matches!(
+                        access,
+                        FileSystemAccessMode::Deny | FileSystemAccessMode::None
+                    ) && subpath.contains("**")
+                    {
                         patterns.push(format!("{path}/{subpath}"));
                     }
                 }

@@ -90,8 +90,8 @@ fn extension_tool_executor(
             ToolName::plain(self.name.as_str())
         }
 
-        fn spec(&self) -> Option<ToolSpec> {
-            Some(ToolSpec::Function(ResponsesApiTool {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec::Function(ResponsesApiTool {
                 name: self.name.clone(),
                 description: self.description.clone(),
                 strict: true,
@@ -105,7 +105,7 @@ fn extension_tool_executor(
                 ),
                 output_schema: None,
                 defer_loading: None,
-            }))
+            })
         }
 
         async fn handle(
@@ -224,8 +224,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         expected.insert(spec.name().to_string(), spec);
     }
     if config.builtin_scratchpad_enabled {
-        let spec = CodexToolExecutor::spec(&BuiltinScratchpadHandler)
-            .expect("scratchpad should expose a namespace spec");
+        let spec = CodexToolExecutor::spec(&BuiltinScratchpadHandler);
         let spec = merge_into_namespaces(vec![spec])
             .into_iter()
             .next()
@@ -241,7 +240,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             expected.insert(spec.name().to_string(), spec);
         }
     }
-    let collab_specs = if config.multi_agent_v2 {
+    let mut collab_specs = if config.multi_agent_v2 {
         vec![
             create_spawn_agent_tool_v2(spawn_agent_tool_options(&config)),
             create_send_message_tool(),
@@ -256,11 +255,10 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             create_close_agent_tool_v1(),
         ]
     };
-    for spec in collab_specs {
-        expected.insert(spec.name().to_string(), spec);
-    }
     if !config.multi_agent_v2 {
-        let spec = create_resume_agent_tool();
+        collab_specs.push(create_resume_agent_tool());
+    }
+    for spec in merge_into_namespaces(collab_specs) {
         expected.insert(spec.name().to_string(), spec);
     }
 
@@ -384,17 +382,15 @@ fn test_build_specs_collab_tools_enabled() {
         &[],
     );
 
-    assert_contains_tool_names(
-        &tools,
-        &["spawn_agent", "send_input", "wait_agent", "close_agent"],
-    );
+    assert_contains_tool_names(&tools, &["multi_agent_v1"]);
+    for name in ["spawn_agent", "send_input", "wait_agent", "close_agent"] {
+        assert_namespace_contains_function(&tools, "multi_agent_v1", name);
+    }
     assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
     assert_lacks_tool_name(&tools, "list_agents");
 
-    let spawn_agent = find_tool(&tools, "spawn_agent");
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = spawn_agent else {
-        panic!("spawn_agent should be a function tool");
-    };
+    let ResponsesApiTool { parameters, .. } =
+        find_namespace_function_tool(&tools, "multi_agent_v1", "spawn_agent");
     let (properties, _) = expect_object_schema(parameters);
     assert!(properties.contains_key("fork_context"));
     assert!(!properties.contains_key("fork_turns"));
@@ -723,16 +719,10 @@ fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
         &[],
     );
 
-    assert_contains_tool_names(
-        &tools,
-        &[
-            "spawn_agent",
-            "send_input",
-            "wait_agent",
-            "close_agent",
-            "spawn_agents_on_csv",
-        ],
-    );
+    assert_contains_tool_names(&tools, &["multi_agent_v1", "spawn_agents_on_csv"]);
+    for name in ["spawn_agent", "send_input", "wait_agent", "close_agent"] {
+        assert_namespace_contains_function(&tools, "multi_agent_v1", name);
+    }
 }
 
 #[test]
@@ -905,16 +895,21 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
     assert_contains_tool_names(
         &tools,
         &[
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
+            "multi_agent_v1",
             "spawn_agents_on_csv",
             "report_agent_job_result",
             REQUEST_USER_INPUT_TOOL_NAME,
         ],
     );
+    for name in [
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+    ] {
+        assert_namespace_contains_function(&tools, "multi_agent_v1", name);
+    }
 }
 
 #[test]

@@ -29,6 +29,7 @@ use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::orchestrator_memory::maybe_learn_from_completed_turn;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
@@ -216,7 +217,7 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Option<String>> + Send;
 
@@ -247,7 +248,7 @@ pub(crate) trait AnySessionTask: Send + Sync + 'static {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> BoxFuture<'static, Option<String>>;
 
@@ -278,7 +279,7 @@ where
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> BoxFuture<'static, Option<String>> {
         Box::pin(SessionTask::run(
@@ -380,6 +381,11 @@ impl Session {
         ));
         let ctx = Arc::clone(&turn_context);
         let task_for_run = Arc::clone(&task);
+        let task_input = if input.is_empty() {
+            Vec::new()
+        } else {
+            vec![TurnInput::UserInput(input)]
+        };
         let task_cancellation_token = cancellation_token.child_token();
         // Task-owned turn spans keep a core-owned span open for the
         // full task lifecycle after the submission dispatch span ends.
@@ -405,7 +411,7 @@ impl Session {
                     .run(
                         Arc::clone(&session_ctx),
                         ctx,
-                        input,
+                        task_input,
                         task_cancellation_token.child_token(),
                     )
                     .await;
@@ -620,7 +626,13 @@ impl Session {
         }
         if !pending_input.is_empty() {
             for pending_input_item in pending_input {
-                match inspect_pending_input(self, &turn_context, pending_input_item).await {
+                match inspect_pending_input(
+                    self,
+                    &turn_context,
+                    TurnInput::ResponseInputItem(pending_input_item),
+                )
+                .await
+                {
                     PendingInputHookDisposition::Accepted(pending_input) => {
                         record_pending_input(self, &turn_context, *pending_input).await;
                     }

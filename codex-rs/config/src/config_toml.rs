@@ -42,6 +42,7 @@ use crate::types::UserPreferencesMemoryToml;
 use crate::types::WindowsToml;
 use codex_app_server_protocol::ForcedChatgptWorkspaceIds as ApiForcedChatgptWorkspaceIds;
 use codex_app_server_protocol::OrchestratorThreadControlConfigV1;
+use codex_app_server_protocol::Profile;
 use codex_app_server_protocol::ThreadControlConfigV1;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
@@ -358,7 +359,8 @@ pub struct ConfigToml {
     /// Defaults to `$CODEX_SQLITE_HOME` when set. Otherwise uses `$CODEX_HOME`.
     pub sqlite_home: Option<AbsolutePathBuf>,
 
-    /// Directory where Codex writes log files, for example `codex-tui.log`.
+    /// Directory where Codex writes log files. Setting this value explicitly
+    /// also enables the TUI text log in this directory.
     /// Defaults to `$CODEX_HOME/log`.
     pub log_dir: Option<AbsolutePathBuf>,
 
@@ -648,6 +650,20 @@ impl From<ConfigToml> for UserSavedConfig {
     }
 }
 
+impl From<ConfigProfile> for Profile {
+    fn from(profile: ConfigProfile) -> Self {
+        Self {
+            model: profile.model,
+            model_provider: profile.model_provider,
+            approval_policy: profile.approval_policy,
+            model_reasoning_effort: profile.model_reasoning_effort,
+            model_reasoning_summary: profile.model_reasoning_summary,
+            model_verbosity: profile.model_verbosity,
+            chatgpt_base_url: profile.chatgpt_base_url,
+        }
+    }
+}
+
 impl From<ThreadControlToml> for ThreadControlConfigV1 {
     fn from(toml: ThreadControlToml) -> Self {
         Self {
@@ -740,6 +756,14 @@ pub struct ToolsToml {
     pub web_search: Option<WebSearchToolConfig>,
 }
 
+impl From<ToolsToml> for Tools {
+    fn from(tools_toml: ToolsToml) -> Self {
+        Self {
+            web_search: tools_toml.web_search.is_some().then_some(true),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum WebSearchToolConfigInput {
@@ -809,14 +833,6 @@ pub struct AgentRoleToml {
 
     /// Candidate nicknames for agents spawned with this role.
     pub nickname_candidates: Option<Vec<String>>,
-}
-
-impl From<ToolsToml> for Tools {
-    fn from(tools_toml: ToolsToml) -> Self {
-        Self {
-            web_search: tools_toml.web_search.is_some().then_some(true),
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
