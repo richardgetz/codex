@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-05-28/stable-refresh-argument-comment-lint#b4063eb4c4df"
+  change_type: "fix"
+  scope: "stable-refresh/rust-v0.135.0"
+  summary: "Fix argument-comment-lint CI failures after the stable refresh."
+  decision: "Add explicit CLI source categorization for memory-extraction subagents and align the TUI test argument comment with its callee parameter."
+  constraints:
+    - "Must keep the fix scoped to the failing argument-comment-lint job."
+    - "Must preserve exhaustive SessionSource matching instead of adding wildcard arms."
+    - "Must not change runtime TUI behavior for a test-only comment fix."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/cli/src/doctor/thread_inventory.rs"
+    - "codex-rs/tui/src/lib.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "Codex"
+    model: "gpt-5"
