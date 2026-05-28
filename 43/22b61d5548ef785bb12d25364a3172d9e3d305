@@ -1,0 +1,23 @@
+intent:
+  id: stable-refresh-rust-v0.135.0
+change_type: release-refresh
+scope: /Users/rick/Github/codex
+summary: Merge upstream rust-v0.135.0 into fork stable while preserving fork-only behavior.
+decision: Preserve fork features, adapt upstream state/app-server/release changes, and add upgrade/release safety fixes found by post-change-review.
+constraints:
+  - Keep fork-only app-server, memory, account, scratchpad, and orchestration behavior intact.
+  - Preserve existing stable state migration checksums and append the memory table drop as 0037.
+  - Use a temporary git index because the sandbox cannot create .git/index.lock.
+intent_priority: must
+code_locations:
+  - codex-rs/state/src/runtime.rs
+  - codex-rs/core/src/tasks/mod.rs
+  - codex-rs/core/src/session/handlers.rs
+  - codex-rs/app-server/src/request_processors/turn_processor.rs
+  - .github/workflows/fork-release.yml
+  - scripts/install/install.sh
+  - scripts/install/install.ps1
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: gpt-5
