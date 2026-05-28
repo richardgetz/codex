@@ -4,6 +4,8 @@ pub async fn clear_memory_roots_contents(codex_home: &Path) -> std::io::Result<(
     for memory_root in [
         codex_home.join("memories"),
         codex_home.join("memories_extensions"),
+        codex_home.join("user_preferences_memory"),
+        codex_home.join("orchestrator_memory"),
     ] {
         clear_memory_root_contents(memory_root.as_path()).await?;
     }
@@ -84,6 +86,55 @@ mod tests {
                 .is_none(),
             "memory root should be empty after clearing contents"
         );
+    }
+
+    #[tokio::test]
+    async fn clear_memory_roots_contents_clears_legacy_memory_roots() {
+        let dir = tempdir().expect("tempdir");
+        for root_name in [
+            "memories",
+            "memories_extensions",
+            "user_preferences_memory",
+            "orchestrator_memory",
+        ] {
+            let root = dir.path().join(root_name);
+            tokio::fs::create_dir_all(root.join("nested"))
+                .await
+                .expect("create memory root");
+            tokio::fs::write(root.join("nested").join("stale.md"), "stale\n")
+                .await
+                .expect("write stale memory");
+        }
+
+        clear_memory_roots_contents(dir.path())
+            .await
+            .expect("clear all memory roots");
+
+        for root_name in [
+            "memories",
+            "memories_extensions",
+            "user_preferences_memory",
+            "orchestrator_memory",
+        ] {
+            let root = dir.path().join(root_name);
+            assert!(
+                tokio::fs::try_exists(&root)
+                    .await
+                    .expect("check root exists"),
+                "{root_name} should still exist after clearing"
+            );
+            let mut entries = tokio::fs::read_dir(&root)
+                .await
+                .expect("read root after clear");
+            assert!(
+                entries
+                    .next_entry()
+                    .await
+                    .expect("read next entry")
+                    .is_none(),
+                "{root_name} should be empty after clearing"
+            );
+        }
     }
 
     #[cfg(unix)]

@@ -72,7 +72,7 @@ jobs:
             fork-release-cargo-${{ runner.os }}-${{ matrix.target }}-
 
       - name: "[30%] Install Rust toolchain"
-        uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           targets: ${{ matrix.target }}
 
@@ -240,6 +240,19 @@ jobs:
         with:
           path: dist
 
+      - name: "[82%] Generate package checksums"
+        shell: bash
+        run: |
+          set -euo pipefail
+          checksum_path="dist/codex-package_SHA256SUMS"
+          find dist -type f -name 'codex-package-*.tar.gz' -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            | while read -r digest path; do
+                printf '%s  %s\n' "$digest" "$(basename "$path")"
+              done > "$checksum_path"
+          test -s "$checksum_path"
+
       - name: "[84%] Create release tag"
         if: ${{ needs.compute-release.outputs.tag_exists != 'true' }}
         env:
@@ -303,6 +316,7 @@ jobs:
           tag_name: ${{ needs.compute-release.outputs.tag }}
           body_path: ${{ steps.release-notes.outputs.path }}
           files: |
+            dist/codex-package_SHA256SUMS
             dist/**/*.tgz
             dist/**/*.tar.gz
             dist/**/*.zst

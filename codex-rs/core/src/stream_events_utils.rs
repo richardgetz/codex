@@ -181,12 +181,17 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
 }
 
 fn response_item_may_include_external_context(item: &ResponseItem) -> bool {
-    matches!(
-        item,
+    match item {
         ResponseItem::ToolSearchCall { .. }
-            | ResponseItem::ToolSearchOutput { .. }
-            | ResponseItem::WebSearchCall { .. }
-    )
+        | ResponseItem::ToolSearchOutput { .. }
+        | ResponseItem::WebSearchCall { .. } => true,
+        ResponseItem::FunctionCall {
+            namespace: Some(namespace),
+            name,
+            ..
+        } => namespace == "web" && name == "run",
+        _ => false,
+    }
 }
 
 pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
@@ -232,7 +237,7 @@ async fn record_stage1_output_usage_for_memory_citation(
     }
 
     if let Some(db) = state_db_ctx {
-        let _ = db.record_stage1_output_usage(&thread_ids).await;
+        let _ = db.memories().record_stage1_output_usage(&thread_ids).await;
     }
     true
 }

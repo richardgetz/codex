@@ -66,6 +66,13 @@ fn external_context_pollution_items_include_web_search_and_tool_search() {
             execution: "client".to_string(),
             tools: Vec::new(),
         },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "run".to_string(),
+            namespace: Some("web".to_string()),
+            arguments: "{}".to_string(),
+            call_id: "web-run-1".to_string(),
+        },
     ];
 
     assert!(

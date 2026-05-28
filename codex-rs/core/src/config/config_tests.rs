@@ -334,6 +334,7 @@ disable_on_external_context = true
 generate_memories = false
 use_memories = false
 scope = "orchestrator"
+dedicated_tools = true
 max_raw_memories_for_consolidation = 512
 max_unused_days = 21
 max_rollout_age_days = 42
@@ -353,6 +354,7 @@ consolidation_reasoning_effort = "high"
             generate_memories: Some(false),
             use_memories: Some(false),
             scope: Some(MemoriesScope::Orchestrator),
+            dedicated_tools: Some(true),
             max_raw_memories_for_consolidation: Some(512),
             max_unused_days: Some(21),
             max_rollout_age_days: Some(42),
@@ -381,6 +383,7 @@ consolidation_reasoning_effort = "high"
             generate_memories: false,
             use_memories: false,
             scope: MemoriesScope::Orchestrator,
+            dedicated_tools: true,
             max_raw_memories_for_consolidation: 512,
             max_unused_days: 21,
             max_rollout_age_days: 42,
@@ -2701,6 +2704,8 @@ async fn default_permissions_can_select_builtin_profile_without_permissions_tabl
     )
     .await?;
 
+    assert!(config.explicit_permission_profile_mode);
+    assert!(config.custom_permission_profiles.is_empty());
     let policy = config.permissions.file_system_sandbox_policy();
     assert_eq!(
         config
@@ -3236,7 +3241,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
                 entries: BTreeMap::from([(
                     "workspace".to_string(),
                     PermissionProfileToml {
-                        description: None,
+                        description: Some("Workspace access.".to_string()),
                         extends: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
@@ -3260,6 +3265,13 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     )
     .await?;
 
+    assert_eq!(
+        config.custom_permission_profiles,
+        vec![CustomPermissionProfileSummary {
+            id: "workspace".to_string(),
+            description: Some("Workspace access.".to_string()),
+        }]
+    );
     let memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
         codex_home.path().join("memories"),
     )?)?;
@@ -4938,6 +4950,25 @@ async fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<
 }
 
 #[tokio::test]
+async fn default_zsh_path_sets_runtime_zsh_path() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let default_zsh_path = codex_home.path().join("packaged-zsh");
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            default_zsh_path: Some(default_zsh_path.abs()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    assert_eq!(config.zsh_path, Some(default_zsh_path));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(
@@ -5909,6 +5940,27 @@ async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<(
     let _ = config.features.enable(Feature::Apps);
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(mcp_config.apps_enabled);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_mcp_config_flows_mcp_tool_prefix_from_feature() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    assert!(mcp_config.prefix_mcp_tool_names);
+
+    let _ = config.features.enable(Feature::NonPrefixedMcpToolNames);
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    assert!(!mcp_config.prefix_mcp_tool_names);
 
     Ok(())
 }

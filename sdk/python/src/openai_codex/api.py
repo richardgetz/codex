@@ -37,6 +37,7 @@ from ._run import (
     _collect_async_turn_result,
     _collect_turn_result,
 )
+from ._sandbox import Sandbox as Sandbox, _sandbox_mode, _sandbox_policy
 from .async_client import AsyncAppServerClient
 from .client import AppServerClient, AppServerConfig
 from .generated.v2_all import (
@@ -48,8 +49,6 @@ from .generated.v2_all import (
     Personality,
     ReasoningEffort,
     ReasoningSummary,
-    SandboxMode,
-    SandboxPolicy,
     SortDirection,
     ThreadArchiveResponse,
     ThreadCompactStartResponse,
@@ -139,7 +138,7 @@ class Codex:
         model: str | None = None,
         model_provider: str | None = None,
         personality: Personality | None = None,
-        sandbox: SandboxMode | None = None,
+        sandbox: Sandbox | None = None,
         service_name: str | None = None,
         service_tier: str | None = None,
         session_start_source: ThreadStartSource | None = None,
@@ -159,7 +158,7 @@ class Codex:
             model=model,
             model_provider=model_provider,
             personality=personality,
-            sandbox=sandbox,
+            sandbox=_sandbox_mode(sandbox),
             service_name=service_name,
             service_tier=service_tier,
             session_start_source=session_start_source,
@@ -210,7 +209,7 @@ class Codex:
         model: str | None = None,
         model_provider: str | None = None,
         personality: Personality | None = None,
-        sandbox: SandboxMode | None = None,
+        sandbox: Sandbox | None = None,
         service_tier: str | None = None,
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None,
     ) -> Thread:
@@ -227,7 +226,7 @@ class Codex:
             model=model,
             model_provider=model_provider,
             personality=personality,
-            sandbox=sandbox,
+            sandbox=_sandbox_mode(sandbox),
             service_tier=service_tier,
             user_preferences_memory_policy=user_preferences_memory_policy,
         )
@@ -247,7 +246,7 @@ class Codex:
         memory_policy: MemoryAccessPolicy | None = None,
         model: str | None = None,
         model_provider: str | None = None,
-        sandbox: SandboxMode | None = None,
+        sandbox: Sandbox | None = None,
         service_tier: str | None = None,
         thread_source: ThreadSource | None = None,
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None,
@@ -265,7 +264,7 @@ class Codex:
             memory_policy=memory_policy,
             model=model,
             model_provider=model_provider,
-            sandbox=sandbox,
+            sandbox=_sandbox_mode(sandbox),
             service_tier=service_tier,
             thread_source=thread_source,
             user_preferences_memory_policy=user_preferences_memory_policy,
@@ -384,7 +383,7 @@ class AsyncCodex:
         model: str | None = None,
         model_provider: str | None = None,
         personality: Personality | None = None,
-        sandbox: SandboxMode | None = None,
+        sandbox: Sandbox | None = None,
         service_name: str | None = None,
         service_tier: str | None = None,
         session_start_source: ThreadStartSource | None = None,
@@ -405,7 +404,7 @@ class AsyncCodex:
             model=model,
             model_provider=model_provider,
             personality=personality,
-            sandbox=sandbox,
+            sandbox=_sandbox_mode(sandbox),
             service_name=service_name,
             service_tier=service_tier,
             session_start_source=session_start_source,
@@ -457,7 +456,7 @@ class AsyncCodex:
         model: str | None = None,
         model_provider: str | None = None,
         personality: Personality | None = None,
-        sandbox: SandboxMode | None = None,
+        sandbox: Sandbox | None = None,
         service_tier: str | None = None,
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None,
     ) -> AsyncThread:
@@ -475,7 +474,7 @@ class AsyncCodex:
             model=model,
             model_provider=model_provider,
             personality=personality,
-            sandbox=sandbox,
+            sandbox=_sandbox_mode(sandbox),
             service_tier=service_tier,
             user_preferences_memory_policy=user_preferences_memory_policy,
         )
@@ -495,7 +494,7 @@ class AsyncCodex:
         memory_policy: MemoryAccessPolicy | None = None,
         model: str | None = None,
         model_provider: str | None = None,
-        sandbox: SandboxMode | None = None,
+        sandbox: Sandbox | None = None,
         service_tier: str | None = None,
         thread_source: ThreadSource | None = None,
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None,
@@ -514,7 +513,7 @@ class AsyncCodex:
             memory_policy=memory_policy,
             model=model,
             model_provider=model_provider,
-            sandbox=sandbox,
+            sandbox=_sandbox_mode(sandbox),
             service_tier=service_tier,
             thread_source=thread_source,
             user_preferences_memory_policy=user_preferences_memory_policy,
@@ -553,7 +552,7 @@ class Thread:
         model: str | None = None,
         output_schema: JsonObject | None = None,
         personality: Personality | None = None,
-        sandbox_policy: SandboxPolicy | None = None,
+        sandbox: Sandbox | None = None,
         service_tier: str | None = None,
         summary: ReasoningSummary | None = None,
     ) -> TurnResult:
@@ -565,7 +564,7 @@ class Thread:
             model=model,
             output_schema=output_schema,
             personality=personality,
-            sandbox_policy=sandbox_policy,
+            sandbox=sandbox,
             service_tier=service_tier,
             summary=summary,
         )
@@ -586,7 +585,7 @@ class Thread:
         model: str | None = None,
         output_schema: JsonObject | None = None,
         personality: Personality | None = None,
-        sandbox_policy: SandboxPolicy | None = None,
+        sandbox: Sandbox | None = None,
         service_tier: str | None = None,
         summary: ReasoningSummary | None = None,
     ) -> TurnHandle:
@@ -602,7 +601,7 @@ class Thread:
             model=model,
             output_schema=output_schema,
             personality=personality,
-            sandbox_policy=sandbox_policy,
+            sandbox_policy=_sandbox_policy(sandbox),
             service_tier=service_tier,
             summary=summary,
         )
@@ -636,7 +635,7 @@ class AsyncThread:
         model: str | None = None,
         output_schema: JsonObject | None = None,
         personality: Personality | None = None,
-        sandbox_policy: SandboxPolicy | None = None,
+        sandbox: Sandbox | None = None,
         service_tier: str | None = None,
         summary: ReasoningSummary | None = None,
     ) -> TurnResult:
@@ -648,7 +647,7 @@ class AsyncThread:
             model=model,
             output_schema=output_schema,
             personality=personality,
-            sandbox_policy=sandbox_policy,
+            sandbox=sandbox,
             service_tier=service_tier,
             summary=summary,
         )
@@ -669,7 +668,7 @@ class AsyncThread:
         model: str | None = None,
         output_schema: JsonObject | None = None,
         personality: Personality | None = None,
-        sandbox_policy: SandboxPolicy | None = None,
+        sandbox: Sandbox | None = None,
         service_tier: str | None = None,
         summary: ReasoningSummary | None = None,
     ) -> AsyncTurnHandle:
@@ -686,7 +685,7 @@ class AsyncThread:
             model=model,
             output_schema=output_schema,
             personality=personality,
-            sandbox_policy=sandbox_policy,
+            sandbox_policy=_sandbox_policy(sandbox),
             service_tier=service_tier,
             summary=summary,
         )

@@ -614,6 +614,7 @@ impl Session {
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             host_owned_codex_apps_enabled,
+            mcp_config.prefix_mcp_tool_names,
             mcp_config.client_elicitation_capability,
             tool_plugin_provenance,
             auth.as_ref(),
@@ -740,17 +741,18 @@ fn should_refresh_mcp_manager_after_resource_error(error: &anyhow::Error) -> boo
 fn parse_non_app_mcp_tool_name(tool_name: &ToolName) -> Option<(String, String)> {
     let (callable_namespace, tool) = match tool_name.namespace.as_deref() {
         Some(namespace) => {
-            namespace.strip_prefix("mcp__")?.strip_suffix("__")?;
+            let namespace = namespace.strip_suffix("__").unwrap_or(namespace);
             (namespace.to_string(), tool_name.name.clone())
         }
         None => {
             let raw = tool_name.name.strip_prefix("mcp__")?;
             let (server, tool) = raw.split_once("__")?;
-            (format!("mcp__{server}__"), tool.to_string())
+            (format!("mcp__{server}"), tool.to_string())
         }
     };
 
-    if callable_namespace == format!("mcp__{}__", codex_mcp::CODEX_APPS_MCP_SERVER_NAME)
+    if callable_namespace == codex_mcp::CODEX_APPS_MCP_SERVER_NAME
+        || callable_namespace == format!("mcp__{}", codex_mcp::CODEX_APPS_MCP_SERVER_NAME)
         || callable_namespace == "mcp____"
         || tool.is_empty()
     {

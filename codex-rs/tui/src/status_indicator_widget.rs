@@ -19,6 +19,7 @@ use ratatui::widgets::WidgetRef;
 use unicode_width::UnicodeWidthStr;
 
 use crate::key_hint;
+use crate::key_hint::KeyBinding;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
@@ -48,6 +49,7 @@ pub(crate) struct StatusIndicatorWidget {
     /// Optional suffix rendered after the elapsed/interrupt segment.
     inline_message: Option<String>,
     show_interrupt_hint: bool,
+    interrupt_binding: Option<KeyBinding>,
 
     elapsed_running: Duration,
     last_resume_at: Instant,
@@ -81,6 +83,7 @@ impl StatusIndicatorWidget {
             details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
             inline_message: None,
             show_interrupt_hint: true,
+            interrupt_binding: Some(key_hint::plain(KeyCode::Esc)),
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
             is_paused: false,
@@ -114,7 +117,7 @@ impl StatusIndicatorWidget {
             });
     }
 
-    /// Update the inline suffix text shown after `({elapsed} • esc to interrupt)`.
+    /// Update the inline suffix text shown after the elapsed/interrupt hint.
     ///
     /// Callers should provide plain, already-contextualized text. Passing
     /// verbose status prose here can cause frequent width truncation and hide
@@ -142,6 +145,10 @@ impl StatusIndicatorWidget {
     #[cfg(test)]
     pub(crate) fn interrupt_hint_visible(&self) -> bool {
         self.show_interrupt_hint
+    }
+
+    pub(crate) fn set_interrupt_binding(&mut self, binding: Option<KeyBinding>) {
+        self.interrupt_binding = binding;
     }
 
     pub(crate) fn pause_timer(&mut self) {
@@ -251,10 +258,12 @@ impl Renderable for StatusIndicatorWidget {
         if !spans.is_empty() {
             spans.push(" ".into());
         }
-        if self.show_interrupt_hint {
+        if self.show_interrupt_hint
+            && let Some(interrupt_binding) = self.interrupt_binding
+        {
             spans.extend(vec![
                 format!("({pretty_elapsed} • ").dim(),
-                key_hint::plain(KeyCode::Esc).into(),
+                interrupt_binding.into(),
                 " to interrupt)".dim(),
             ]);
         } else {
@@ -382,6 +391,23 @@ mod tests {
             .collect::<String>();
 
         assert!(line.starts_with("Working (0s • esc to interrupt)"));
+    }
+
+    #[test]
+    fn renders_remapped_interrupt_hint() {
+        let mut w = StatusIndicatorWidget::new(
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ false,
+        );
+        w.set_interrupt_binding(Some(key_hint::plain(KeyCode::F(12))));
+        w.is_paused = true;
+        w.elapsed_running = Duration::ZERO;
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 1)).expect("terminal");
+        terminal
+            .draw(|f| w.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        insta::assert_snapshot!(terminal.backend());
     }
 
     #[test]

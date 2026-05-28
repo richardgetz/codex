@@ -126,7 +126,10 @@ fn build_tool_specs_and_registry(
     );
     append_tool_search_executor(config, &mut executors);
     prepend_code_mode_executors(config, &mut executors);
-    build_model_visible_specs_and_registry(config, executors, hosted_model_tool_specs(config))
+    let standalone_web_search_can_be_shown =
+        config.namespace_tools && standalone_web_search_available(&executors);
+    let hosted_specs = hosted_model_tool_specs(config, standalone_web_search_can_be_shown);
+    build_model_visible_specs_and_registry(config, executors, hosted_specs)
 }
 
 fn build_model_visible_specs_and_registry(
@@ -178,19 +181,31 @@ fn spec_for_model_request(
     }
 }
 
-pub(crate) fn hosted_model_tool_specs(config: &ToolsConfig) -> Vec<ToolSpec> {
+pub(crate) fn hosted_model_tool_specs(
+    config: &ToolsConfig,
+    standalone_web_search_available: bool,
+) -> Vec<ToolSpec> {
     let mut specs = Vec::new();
-    if let Some(web_search_tool) = create_web_search_tool(WebSearchToolOptions {
-        web_search_mode: config.web_search_mode,
-        web_search_config: config.web_search_config.as_ref(),
-        web_search_tool_type: config.web_search_tool_type,
-    }) {
+    if !standalone_web_search_available
+        && let Some(web_search_tool) = create_web_search_tool(WebSearchToolOptions {
+            web_search_mode: config.web_search_mode,
+            web_search_config: config.web_search_config.as_ref(),
+            web_search_tool_type: config.web_search_tool_type,
+        })
+    {
         specs.push(web_search_tool);
     }
     if config.image_gen_tool {
         specs.push(create_image_generation_tool("png"));
     }
     specs
+}
+
+fn standalone_web_search_available(executors: &[Arc<dyn CoreToolRuntime>]) -> bool {
+    executors.iter().any(|executor| {
+        executor.exposure().is_direct()
+            && executor.tool_name() == ToolName::namespaced("web", "run")
+    })
 }
 
 fn wait_agent_timeout_options(config: &ToolsConfig) -> WaitAgentTimeoutOptions {
@@ -511,18 +526,35 @@ fn collect_tool_executors(
         } else {
             let agent_type_description =
                 agent_type_description(config, params.default_agent_type_description);
-            executors.push(Arc::new(SpawnAgentHandler::new(SpawnAgentToolOptions {
-                available_models: config.available_models.clone(),
-                agent_type_description,
-                hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
-                include_usage_hint: config.spawn_agent_usage_hint,
-                usage_hint_text: config.spawn_agent_usage_hint_text.clone(),
-                max_concurrent_threads_per_session: config.max_concurrent_threads_per_session,
-            })));
-            executors.push(Arc::new(SendInputHandler));
-            executors.push(Arc::new(ResumeAgentHandler));
-            executors.push(Arc::new(WaitAgentHandler::new(params.wait_agent_timeouts)));
-            executors.push(Arc::new(CloseAgentHandler));
+            let exposure = if config.search_tool && config.namespace_tools {
+                ToolExposure::Deferred
+            } else {
+                ToolExposure::Direct
+            };
+            executors.push(override_tool_exposure(
+                Arc::new(SpawnAgentHandler::new(SpawnAgentToolOptions {
+                    available_models: config.available_models.clone(),
+                    agent_type_description,
+                    hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
+                    include_usage_hint: config.spawn_agent_usage_hint,
+                    usage_hint_text: config.spawn_agent_usage_hint_text.clone(),
+                    max_concurrent_threads_per_session: config.max_concurrent_threads_per_session,
+                })),
+                exposure,
+            ));
+            executors.push(override_tool_exposure(Arc::new(SendInputHandler), exposure));
+            executors.push(override_tool_exposure(
+                Arc::new(ResumeAgentHandler),
+                exposure,
+            ));
+            executors.push(override_tool_exposure(
+                Arc::new(WaitAgentHandler::new(params.wait_agent_timeouts)),
+                exposure,
+            ));
+            executors.push(override_tool_exposure(
+                Arc::new(CloseAgentHandler),
+                exposure,
+            ));
         }
     }
 

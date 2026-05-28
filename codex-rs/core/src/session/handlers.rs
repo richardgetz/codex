@@ -10,6 +10,7 @@ use tracing::debug_span;
 use tracing::info_span;
 
 use crate::session::SteerInputError;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
 use crate::tools::handlers::builtin_scratchpad::ScratchpadCheckpointRestore;
@@ -52,6 +53,8 @@ use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -234,7 +237,13 @@ pub(super) async fn user_input_or_turn_inner(
     op: Op,
     mirror_user_text_to_realtime: Option<()>,
 ) {
-    let (items, updates, responsesapi_client_metadata, emit_thread_settings_applied) = match op {
+    let (
+        items,
+        updates,
+        responsesapi_client_metadata,
+        additional_context,
+        emit_thread_settings_applied,
+    ) = match op {
         Op::UserTurn {
             cwd,
             approval_policy,
@@ -285,6 +294,7 @@ pub(super) async fn user_input_or_turn_inner(
                     user_preferences_memory_policy: None,
                 },
                 None,
+                Default::default(),
                 true,
             )
         }
@@ -305,60 +315,41 @@ pub(super) async fn user_input_or_turn_inner(
             final_output_json_schema,
             items,
             responsesapi_client_metadata,
+            additional_context,
             collaboration_mode,
             personality,
             environments,
         } => {
-            let emit_thread_settings_applied = cwd.is_some()
-                || workspace_roots.is_some()
-                || profile_workspace_roots.is_some()
-                || approval_policy.is_some()
-                || approvals_reviewer.is_some()
-                || sandbox_policy.is_some()
-                || permission_profile.is_some()
-                || active_permission_profile.is_some()
-                || windows_sandbox_level.is_some()
-                || model.is_some()
-                || effort.is_some()
-                || summary.is_some()
-                || service_tier.is_some()
-                || collaboration_mode.is_some()
-                || personality.is_some();
-            let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
-                Some(collab_mode)
-            } else {
-                let state = sess.state.lock().await;
-                Some(
-                    state
-                        .session_configuration
-                        .collaboration_mode
-                        .with_updates(model, effort, /*developer_instructions*/ None),
-                )
+            let thread_settings = ThreadSettingsOverrides {
+                cwd,
+                workspace_roots,
+                profile_workspace_roots,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                permission_profile,
+                active_permission_profile,
+                windows_sandbox_level,
+                model,
+                effort,
+                summary,
+                service_tier,
+                collaboration_mode,
+                personality,
             };
+            let emit_thread_settings_applied =
+                thread_settings_overrides_include_settings(&thread_settings);
             (
                 items,
-                SessionSettingsUpdate {
-                    cwd,
-                    workspace_roots,
-                    profile_workspace_roots,
-                    approval_policy,
-                    approvals_reviewer,
-                    sandbox_policy,
-                    permission_profile,
-                    active_permission_profile,
-                    windows_sandbox_level,
-                    collaboration_mode,
-                    reasoning_summary: summary,
-                    service_tier,
-                    final_output_json_schema: Some(final_output_json_schema),
+                settings_update_from_overrides(
+                    sess,
+                    thread_settings,
+                    Some(final_output_json_schema),
                     environments,
-                    personality,
-                    app_server_client_name: None,
-                    app_server_client_version: None,
-                    memory_policy: None,
-                    user_preferences_memory_policy: None,
-                },
+                )
+                .await,
                 responsesapi_client_metadata,
+                additional_context,
                 emit_thread_settings_applied,
             )
         }
@@ -367,6 +358,7 @@ pub(super) async fn user_input_or_turn_inner(
             environments,
             final_output_json_schema,
             responsesapi_client_metadata,
+            additional_context,
             thread_settings,
         } => {
             let emit_thread_settings_applied =
@@ -381,6 +373,7 @@ pub(super) async fn user_input_or_turn_inner(
                 )
                 .await,
                 responsesapi_client_metadata,
+                additional_context,
                 emit_thread_settings_applied,
             )
         }
@@ -404,68 +397,90 @@ pub(super) async fn user_input_or_turn_inner(
         .await;
     sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
         .await;
-    let accepted_items = if items.is_empty() {
-        if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
-            current_context
-                .turn_metadata_state
-                .set_responsesapi_client_metadata(responsesapi_client_metadata);
+    let accepted_items = match sess
+        .steer_input(
+            items.clone(),
+            additional_context.clone(),
+            /*expected_turn_id*/ None,
+            responsesapi_client_metadata.clone(),
+        )
+        .await
+    {
+        Ok(_) => {
+            current_context.session_telemetry.user_prompt(&items);
+            Some(items)
         }
-        current_context.session_telemetry.user_prompt(&items);
-        sess.refresh_mcp_servers_if_requested(
-            &current_context,
-            Some(sess.mcp_elicitation_reviewer()),
-        )
-        .await;
-        let accepted_items = items.clone();
-        sess.spawn_task(
-            Arc::clone(&current_context),
-            items,
-            crate::tasks::RegularTask::new(),
-        )
-        .await;
-        Some(accepted_items)
-    } else {
-        match sess
-            .steer_input(
-                items.clone(),
-                /*expected_turn_id*/ None,
-                responsesapi_client_metadata.clone(),
+        Err(SteerInputError::NoActiveTurn(items)) => {
+            if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
+                current_context
+                    .turn_metadata_state
+                    .set_responsesapi_client_metadata(responsesapi_client_metadata);
+            }
+            current_context.session_telemetry.user_prompt(&items);
+            sess.refresh_mcp_servers_if_requested(
+                &current_context,
+                Some(sess.mcp_elicitation_reviewer()),
             )
-            .await
-        {
-            Ok(_) => {
-                current_context.session_telemetry.user_prompt(&items);
-                Some(items)
+            .await;
+            let accepted_items = items.clone();
+            let additional_context_input = {
+                let mut state = sess.state.lock().await;
+                state.additional_context.merge(additional_context)
+            };
+            let mut task_input = additional_context_input
+                .into_iter()
+                .map(TurnInput::ResponseInputItem)
+                .collect::<Vec<_>>();
+            if !items.is_empty() {
+                task_input.push(TurnInput::UserInput(items));
             }
-            Err(SteerInputError::NoActiveTurn(items)) => {
-                if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
-                    current_context
-                        .turn_metadata_state
-                        .set_responsesapi_client_metadata(responsesapi_client_metadata);
-                }
-                current_context.session_telemetry.user_prompt(&items);
-                sess.refresh_mcp_servers_if_requested(
-                    &current_context,
-                    Some(sess.mcp_elicitation_reviewer()),
+            if task_input.is_empty() {
+                sess.send_event(
+                    current_context.as_ref(),
+                    EventMsg::TurnStarted(TurnStartedEvent {
+                        turn_id: current_context.sub_id.clone(),
+                        trace_id: current_context.trace_id.clone(),
+                        started_at: current_context
+                            .turn_timing_state
+                            .started_at_unix_secs()
+                            .await,
+                        model_context_window: current_context.model_context_window(),
+                        collaboration_mode_kind: current_context.collaboration_mode.mode,
+                    }),
                 )
                 .await;
-                let accepted_items = items.clone();
-                sess.spawn_task(
-                    Arc::clone(&current_context),
-                    items,
-                    crate::tasks::RegularTask::new(),
+                let (completed_at, duration_ms) = current_context
+                    .turn_timing_state
+                    .completed_at_and_duration_ms()
+                    .await;
+                sess.send_event(
+                    current_context.as_ref(),
+                    EventMsg::TurnComplete(TurnCompleteEvent {
+                        turn_id: current_context.sub_id.clone(),
+                        last_agent_message: None,
+                        completed_at,
+                        duration_ms,
+                        time_to_first_token_ms: None,
+                    }),
                 )
                 .await;
-                Some(accepted_items)
+                return;
             }
-            Err(err) => {
-                sess.send_event_raw(Event {
-                    id: sub_id,
-                    msg: EventMsg::Error(err.to_error_event()),
-                })
-                .await;
-                None
-            }
+            sess.spawn_task(
+                Arc::clone(&current_context),
+                task_input,
+                crate::tasks::RegularTask::new(),
+            )
+            .await;
+            Some(accepted_items)
+        }
+        Err(err) => {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(err.to_error_event()),
+            })
+            .await;
+            None
         }
     };
     if let (Some(items), Some(())) = (accepted_items, mirror_user_text_to_realtime) {
@@ -681,6 +696,8 @@ pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: St
     for memory_root in [
         config.codex_home.join("memories"),
         config.codex_home.join("memories_extensions"),
+        config.codex_home.join("user_preferences_memory"),
+        config.codex_home.join("orchestrator_memory"),
     ] {
         if let Err(err) = clear_memory_root_contents(&memory_root).await {
             errors.push(format!(
@@ -896,7 +913,13 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         return;
     }
 
-    let has_active_turn = { sess.active_turn.lock().await.is_some() };
+    let has_active_turn = {
+        sess.active_turn
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|active_turn| active_turn.task.is_some())
+    };
     if has_active_turn {
         sess.send_event_raw(Event {
             id: sub_id,

@@ -32,16 +32,23 @@ pub(crate) fn build_mcp_tool_exposure(
         ));
     }
 
+    let always_defer = config
+        .features
+        .enabled(Feature::ToolSearchAlwaysDeferMcpTools);
     let should_defer = tools_config.search_tool
-        && (config
-            .features
-            .enabled(Feature::ToolSearchAlwaysDeferMcpTools)
-            || deferred_tools.len() >= DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
+        && (always_defer || deferred_tools.len() >= DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
 
     if !should_defer {
         return McpToolExposure {
             direct_tools: deferred_tools,
             deferred_tools: None,
+        };
+    }
+
+    if always_defer {
+        return McpToolExposure {
+            direct_tools: Vec::new(),
+            deferred_tools: (!deferred_tools.is_empty()).then_some(deferred_tools),
         };
     }
 

@@ -262,12 +262,14 @@ impl AgentControl {
                         &options,
                     )
                     .await?;
+                let forked_from_thread_id = thread_spawn_parent_thread_id(&session_source);
                 state
                     .spawn_new_thread_with_source(
                         config.clone(),
                         self.clone(),
                         session_source,
                         initial_collaboration_mode,
+                        forked_from_thread_id,
                         /*thread_source*/ Some(ThreadSource::Subagent),
                         /*persist_extended_history*/ false,
                         /*metrics_service_name*/ None,
@@ -317,6 +319,7 @@ impl AgentControl {
                     .services
                     .analytics_events_client,
                 client_metadata,
+                new_thread.thread.codex.session.session_id(),
                 new_thread.thread_id,
                 /*parent_thread_id*/ None,
                 thread_config,
@@ -550,6 +553,7 @@ impl AgentControl {
                 session_source,
                 initial_collaboration_mode,
                 /*thread_source*/ Some(ThreadSource::Subagent),
+                /*forked_from_thread_id*/ Some(parent_thread_id),
                 /*persist_extended_history*/ false,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
@@ -775,6 +779,7 @@ impl AgentControl {
                 thread_id,
                 Op::UserInput {
                     items: input,
+                    additional_context: Default::default(),
                     environments: None,
                     final_output_json_schema: None,
                     responsesapi_client_metadata: None,
@@ -1079,7 +1084,7 @@ impl AgentControl {
     ) -> CodexResult<PruneIdleAgentsReport> {
         let mut children_by_parent = self.live_thread_spawn_children().await?;
         for children in children_by_parent.values_mut() {
-            children.sort_by(|left, right| left.0.to_string().cmp(&right.0.to_string()));
+            children.sort_by_key(|left| left.0.to_string());
         }
         let mut parent_by_child = HashMap::new();
         for (parent_thread_id, children) in &children_by_parent {

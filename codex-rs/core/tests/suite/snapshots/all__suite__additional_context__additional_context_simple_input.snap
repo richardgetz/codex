@@ -1,0 +1,16 @@
+---
+source: core/tests/suite/additional_context.rs
+expression: "context_snapshot::format_labeled_requests_snapshot(\"additional context is inserted before the user turn input.\",\n&[(\"Request\", &request)],\n&ContextSnapshotOptions::default().strip_capability_instructions().render_mode(ContextSnapshotRenderMode::KindWithTextPrefix\n{ max_chars: 160 }),)"
+---
+Scenario: additional context is inserted before the user turn input.
+
+## Request
+00:message/developer[5]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <conventional_commits>\n## Conventional Commits\nWhen creating or reviewing git commit messages, use Conventional Commits.\n- Use `type(scope): short imperative...
+    [03] <git_intent_notes>\n## Git Intent Notes\nFor code changes, preserve the why in git notes under `refs/notes/intention` instead of overloading commit messages.\n-...
+    [04] <scratchpad_instructions>\n## Built-in Scratchpad\nThe built-in `scratchpad` tool namespace is available in this mode and is the canonical recovery ledger for n...
+    [05] <fork_help>\n## Rick Fork Guidance\nThis build includes fork-only behavior beyond upstream/mainline Codex.\nUse the inventory below as the source of truth when ...
+01:message/developer:<automation_info>run one</automation_info>
+02:message/user:<external_browser_info>tab one</external_browser_info>
+03:message/user:inspect the active tab

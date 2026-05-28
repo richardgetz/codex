@@ -42,7 +42,6 @@ pub use thread_metadata::ThreadsPage;
 
 pub(crate) use agent_job::AgentJobItemRow;
 pub(crate) use agent_job::AgentJobRow;
-pub(crate) use memories::Stage1OutputRow;
 pub(crate) use thread_control::ThreadControlRow;
 pub(crate) use thread_goal::ThreadGoalRow;
 pub(crate) use thread_inbound_message::ThreadInboundMessageRow;

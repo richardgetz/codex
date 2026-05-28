@@ -2323,6 +2323,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2387,6 +2388,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -3290,6 +3292,7 @@ async fn set_rate_limits_retains_previous_credits() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -3399,6 +3402,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -4553,6 +4557,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -5139,7 +5144,7 @@ async fn absolute_cwd_update_with_turn_environment_is_allowed() {
 }
 
 #[tokio::test]
-async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
+async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
     config
@@ -5193,6 +5198,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -5245,7 +5251,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         Err(err) => err,
     };
     let msg = format!("{err:#}");
-    assert!(msg.contains("zsh fork feature enabled, but `zsh_path` is not configured"));
+    assert!(msg.contains("zsh fork feature enabled, but no packaged zsh fork is available"));
 }
 
 // todo: use online model info
@@ -5307,6 +5313,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -5349,6 +5356,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             McpConnectionManager::new_uninitialized_with_permission_profile(
                 &config.permissions.approval_policy,
                 config.permissions.permission_profile(),
+                config.prefix_mcp_tool_names(),
             ),
         )),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -5556,6 +5564,7 @@ async fn make_session_with_config_and_rx(
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -5664,6 +5673,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: session_source.clone(),
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -6299,6 +6309,7 @@ fn op_kind_distinguishes_turn_ops() {
             items: vec![],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         }
         .kind(),
@@ -6310,6 +6321,7 @@ fn op_kind_distinguishes_turn_ops() {
             items: vec![],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             cwd: None,
             workspace_roots: None,
             profile_workspace_roots: None,
@@ -6661,10 +6673,10 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
     async {
         sess.spawn_task(
             Arc::clone(&tc),
-            vec![UserInput::Text {
+            vec![TurnInput::UserInput(vec![UserInput::Text {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
-            }],
+            }])],
             TraceCaptureTask {
                 captured_trace: Arc::clone(&captured_trace),
             },
@@ -7192,6 +7204,7 @@ where
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools,
         persist_extended_history: false,
@@ -7234,6 +7247,7 @@ where
             McpConnectionManager::new_uninitialized_with_permission_profile(
                 &config.permissions.approval_policy,
                 config.permissions.permission_profile(),
+                config.prefix_mcp_tool_names(),
             ),
         )),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -7487,10 +7501,10 @@ async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_task
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     sess.set_previous_turn_settings(/*previous_turn_settings*/ None)
         .await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
 
     sess.spawn_task(
         Arc::clone(&tc),
@@ -9364,7 +9378,7 @@ async fn unavailable_mcp_placeholder_routes_to_configured_mcp_server_when_tools_
         .expect("configured placeholder should resolve");
     assert_eq!(
         resolved_tool_name,
-        ToolName::namespaced("mcp__imessage__", "imessage_get_config")
+        ToolName::namespaced("mcp__imessage", "imessage_get_config")
     );
     assert_eq!(server, "imessage");
     assert_eq!(tool, "imessage_get_config");
@@ -9412,7 +9426,55 @@ async fn unavailable_mcp_placeholder_routes_to_hyphenated_configured_server() {
         .expect("hyphenated configured placeholder should resolve");
     assert_eq!(
         resolved_tool_name,
-        ToolName::namespaced("mcp__aws_auth_guard__", "auth_guard_status")
+        ToolName::namespaced("mcp__aws_auth_guard", "auth_guard_status")
+    );
+    assert_eq!(server, "aws-auth-guard");
+    assert_eq!(tool, "auth_guard_status");
+}
+
+#[tokio::test]
+async fn unavailable_mcp_placeholder_routes_to_non_prefixed_configured_server() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::UnavailableDummyTools)
+                .expect("enable unavailable dummy tools");
+        },
+    )
+    .await;
+    refresh_test_mcp_servers(
+        &session,
+        turn_context.as_ref(),
+        serde_json::json!({
+            "aws-auth-guard": {
+                "command": "__codex_missing_aws_auth_guard_test__",
+                "startup": "eager",
+                "startup_timeout_sec": 1
+            }
+        }),
+    )
+    .await;
+
+    let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+        id: None,
+        name: "auth_guard_status".to_string(),
+        namespace: Some("aws_auth_guard".to_string()),
+        arguments: "{}".to_string(),
+        call_id: "call-auth-guard-status".to_string(),
+    })
+    .expect("build tool call")
+    .expect("tool call present");
+
+    let (resolved_tool_name, server, tool) = session
+        .resolve_configured_mcp_tool_call(turn_context.as_ref(), &call.tool_name)
+        .await
+        .expect("non-prefixed configured placeholder should resolve");
+    assert_eq!(
+        resolved_tool_name,
+        ToolName::namespaced("aws_auth_guard", "auth_guard_status")
     );
     assert_eq!(server, "aws-auth-guard");
     assert_eq!(tool, "auth_guard_status");
@@ -10087,10 +10149,10 @@ impl SessionTask for GuardianDeniedApprovalTask {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_auto_review_interrupts_after_three_consecutive_denials() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "trigger guardian denials".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(Arc::clone(&tc), input, GuardianDeniedApprovalTask)
         .await;
 
@@ -10118,10 +10180,10 @@ async fn guardian_auto_review_interrupts_after_three_consecutive_denials() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_helper_review_interrupts_after_three_consecutive_denials() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "keep turn active for helper reviews".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -10178,10 +10240,10 @@ async fn guardian_helper_review_interrupts_after_three_consecutive_denials() {
 #[test_log::test]
 async fn abort_regular_task_emits_turn_aborted_only() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -10211,10 +10273,10 @@ async fn abort_regular_task_emits_turn_aborted_only() {
 #[tokio::test]
 async fn abort_gracefully_emits_turn_aborted_only() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -10244,10 +10306,10 @@ async fn abort_gracefully_emits_turn_aborted_only() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -10260,13 +10322,20 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
 
     while rx.try_recv().is_ok() {}
 
-    sess.inject_response_items(vec![ResponseInputItem::Message {
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "late pending input".to_string(),
-        }],
-        phase: None,
-    }])
+    let text_element = codex_protocol::user_input::TextElement::new(
+        codex_protocol::user_input::ByteRange { start: 5, end: 12 },
+        Some("pending marker".to_string()),
+    );
+    let pending_user_input = vec![UserInput::Text {
+        text: "late pending input".to_string(),
+        text_elements: vec![text_element.clone()],
+    }];
+    sess.steer_input(
+        pending_user_input.clone(),
+        /*additional_context*/ Default::default(),
+        Some(&tc.sub_id),
+        /*responsesapi_client_metadata*/ None,
+    )
     .await
     .expect("inject pending input into active turn");
 
@@ -10322,20 +10391,14 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         EventMsg::ItemStarted(ItemStartedEvent {
             item: TurnItem::UserMessage(UserMessageItem { content, .. }),
             ..
-        }) if *content == vec![UserInput::Text {
-            text: "late pending input".to_string(),
-            text_elements: Vec::new(),
-        }]
+        }) if content == &pending_user_input
     )));
     assert!(events.iter().any(|event| matches!(
         event,
         EventMsg::ItemCompleted(ItemCompletedEvent {
             item: TurnItem::UserMessage(UserMessageItem { content, .. }),
             ..
-        }) if *content == vec![UserInput::Text {
-            text: "late pending input".to_string(),
-            text_elements: Vec::new(),
-        }]
+        }) if content == &pending_user_input
     )));
     assert!(events.iter().any(|event| matches!(
         event,
@@ -10347,7 +10410,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
             ..
         }) if message == "late pending input"
             && *images == Some(Vec::new())
-            && text_elements.is_empty()
+            && *text_elements == vec![text_element.clone()]
             && local_images.is_empty()
     )));
     assert!(events.iter().any(|event| matches!(
@@ -10371,7 +10434,10 @@ async fn steer_input_requires_active_turn() {
 
     let err = sess
         .steer_input(
-            input, /*expected_turn_id*/ None, /*responsesapi_client_metadata*/ None,
+            input,
+            /*additional_context*/ Default::default(),
+            /*expected_turn_id*/ None,
+            /*responsesapi_client_metadata*/ None,
         )
         .await
         .expect_err("steering without active turn should fail");
@@ -10382,10 +10448,10 @@ async fn steer_input_requires_active_turn() {
 #[tokio::test]
 async fn steer_input_enforces_expected_turn_id() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -10403,6 +10469,7 @@ async fn steer_input_enforces_expected_turn_id() {
     let err = sess
         .steer_input(
             steer_input,
+            /*additional_context*/ Default::default(),
             Some("different-turn-id"),
             /*responsesapi_client_metadata*/ None,
         )
@@ -10427,10 +10494,10 @@ async fn steer_input_rejects_non_regular_turns() {
         (TaskKind::Compact, NonSteerableTurnKind::Compact),
     ] {
         let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
-        let input = vec![UserInput::Text {
+        let input = vec![TurnInput::UserInput(vec![UserInput::Text {
             text: "hello".to_string(),
             text_elements: Vec::new(),
-        }];
+        }])];
         let turn_context = sess.new_default_turn_with_sub_id("turn".to_string()).await;
         sess.spawn_task(
             turn_context,
@@ -10449,6 +10516,7 @@ async fn steer_input_rejects_non_regular_turns() {
         let err = sess
             .steer_input(
                 steer_input,
+                /*additional_context*/ Default::default(),
                 /*expected_turn_id*/ None,
                 /*responsesapi_client_metadata*/ None,
             )
@@ -10464,10 +10532,10 @@ async fn steer_input_rejects_non_regular_turns() {
 #[tokio::test]
 async fn steer_input_returns_active_turn_id() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -10485,6 +10553,7 @@ async fn steer_input_returns_active_turn_id() {
     let turn_id = sess
         .steer_input(
             steer_input,
+            /*additional_context*/ Default::default(),
             Some(&tc.sub_id),
             /*responsesapi_client_metadata*/ None,
         )
@@ -10504,7 +10573,7 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
     }];
     sess.spawn_task(
         Arc::clone(&tc),
-        input,
+        vec![TurnInput::UserInput(input)],
         NeverEndingTask {
             kind: TaskKind::Regular,
             listen_to_cancellation_token: false,
@@ -10539,7 +10608,13 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
         .expect("inject initial pending input into active turn");
 
     let drained = sess.get_pending_input().await;
-    assert_eq!(drained, vec![blocked, later.clone()]);
+    assert_eq!(
+        drained,
+        vec![
+            TurnInput::ResponseInputItem(blocked),
+            TurnInput::ResponseInputItem(later.clone())
+        ]
+    );
 
     sess.inject_response_items(vec![newer.clone()])
         .await
@@ -10551,7 +10626,13 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
         .await
         .expect("requeue later pending input at the front of the queue");
 
-    assert_eq!(sess.get_pending_input().await, vec![later, newer]);
+    assert_eq!(
+        sess.get_pending_input().await,
+        vec![
+            TurnInput::ResponseInputItem(later),
+            TurnInput::ResponseInputItem(newer)
+        ]
+    );
 }
 
 #[tokio::test]
@@ -10578,7 +10659,10 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
     )
     .await;
 
-    assert_eq!(sess.get_pending_input().await, vec![queued_item]);
+    assert_eq!(
+        sess.get_pending_input().await,
+        vec![TurnInput::ResponseInputItem(queued_item)]
+    );
 }
 
 #[tokio::test]
@@ -10619,14 +10703,14 @@ async fn abort_empty_active_turn_preserves_pending_input() {
     turn_state
         .lock()
         .await
-        .push_pending_input(pending_item.clone());
+        .push_pending_input(TurnInput::ResponseInputItem(pending_item.clone()));
 
     sess.abort_all_tasks(TurnAbortReason::Replaced).await;
 
     assert!(sess.active_turn.lock().await.is_none());
     assert_eq!(
         turn_state.lock().await.take_pending_input(),
-        vec![pending_item]
+        vec![TurnInput::ResponseInputItem(pending_item)]
     );
 }
 
@@ -10755,6 +10839,7 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -10860,6 +10945,7 @@ async fn pending_request_user_input_does_not_spawn_extra_goal_continuation() -> 
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -10990,7 +11076,9 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     .await?;
 
     let pending_input = sess.get_pending_input().await;
-    let [ResponseInputItem::Message { role, content, .. }] = pending_input.as_slice() else {
+    let [TurnInput::ResponseInputItem(ResponseInputItem::Message { role, content, .. })] =
+        pending_input.as_slice()
+    else {
         panic!("expected one budget-limit steering message, got {pending_input:#?}");
     };
     assert_eq!("user", role);
@@ -11215,7 +11303,7 @@ async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
         pending_input.iter().any(|item| {
             matches!(
                 item,
-                ResponseInputItem::Message { role, content, .. }
+                TurnInput::ResponseInputItem(ResponseInputItem::Message { role, content, .. })
                     if role == "user"
                         && content.iter().any(|content| matches!(
                             content,
@@ -11345,6 +11433,7 @@ async fn completed_goal_accounts_current_turn_tokens_before_tool_response() -> a
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -11431,7 +11520,9 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
 
     assert_eq!(
         sess.get_pending_input().await,
-        vec![communication.to_response_input_item()],
+        vec![TurnInput::ResponseInputItem(
+            communication.to_response_input_item()
+        )],
     );
 }
 
@@ -11494,6 +11585,7 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
             text: "follow up".to_string(),
             text_elements: Vec::new(),
         }],
+        /*additional_context*/ Default::default(),
         Some(&tc.sub_id),
         /*responsesapi_client_metadata*/ None,
     )
@@ -11503,11 +11595,11 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
     assert_eq!(
         sess.get_pending_input().await,
         vec![
-            ResponseInputItem::from(vec![UserInput::Text {
+            TurnInput::UserInput(vec![UserInput::Text {
                 text: "follow up".to_string(),
                 text_elements: Vec::new(),
             }]),
-            communication.to_response_input_item(),
+            TurnInput::ResponseInputItem(communication.to_response_input_item()),
         ],
     );
 }
@@ -11539,6 +11631,7 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
             text: "follow up".to_string(),
             text_elements: Vec::new(),
         }],
+        /*additional_context*/ Default::default(),
         Some(&tc.sub_id),
         /*responsesapi_client_metadata*/ None,
     )
@@ -11550,11 +11643,11 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
     assert_eq!(
         sess.get_pending_input().await,
         vec![
-            ResponseInputItem::from(vec![UserInput::Text {
+            TurnInput::UserInput(vec![UserInput::Text {
                 text: "follow up".to_string(),
                 text_elements: Vec::new(),
             }]),
-            communication.to_response_input_item(),
+            TurnInput::ResponseInputItem(communication.to_response_input_item()),
         ],
     );
 }
@@ -11605,17 +11698,19 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
     assert!(output.tool_future.is_some());
     assert_eq!(
         sess.get_pending_input().await,
-        vec![communication.to_response_input_item()],
+        vec![TurnInput::ResponseInputItem(
+            communication.to_response_input_item()
+        )],
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "start review".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
         .await;
 

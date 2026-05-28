@@ -318,15 +318,18 @@ async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Res
     assert_eq!(requests.len(), 2);
     let first_request_tools = tool_names(&requests[0].body_json());
     assert!(
-        first_request_tools
+        !first_request_tools
             .iter()
             .any(|name| name == unavailable_tool_display_name),
-        "historical unavailable MCP call should add a placeholder tool; got {first_request_tools:?}"
+        "historical unavailable MCP calls route through fallback handling instead of the legacy flat placeholder tool; got {first_request_tools:?}"
     );
     let output_text = requests[1]
         .function_call_output_text(retry_call_id)
         .context("placeholder tool output present")?;
-    assert!(output_text.contains("not currently available"));
+    assert!(
+        output_text.contains("not currently available"),
+        "expected unavailable MCP message, got {output_text:?}"
+    );
     assert!(
         !output_text.contains("unsupported call"),
         "placeholder handler should answer instead of falling back to unsupported call: {output_text}"
