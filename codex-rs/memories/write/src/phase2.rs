@@ -91,6 +91,7 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
 
     // 4. Load current DB-backed Phase 2 inputs.
     let raw_memories = match db
+        .memories()
         .get_phase2_input_selection(max_raw_memories, max_unused_days)
         .await
     {
@@ -218,6 +219,7 @@ mod job {
         db: &StateRuntime,
     ) -> Result<Claim, &'static str> {
         let claim = db
+            .memories()
             .try_claim_global_phase2_job(context.thread_id(), crate::stage_two::JOB_LEASE_SECONDS)
             .await
             .map_err(|e| {
@@ -256,15 +258,17 @@ mod job {
     ) {
         context.counter(MEMORY_PHASE_TWO_JOBS, /*inc*/ 1, &[("status", reason)]);
         if matches!(
-            db.mark_global_phase2_job_failed(
-                &claim.token,
-                reason,
-                crate::stage_two::JOB_RETRY_DELAY_SECONDS,
-            )
-            .await,
+            db.memories()
+                .mark_global_phase2_job_failed(
+                    &claim.token,
+                    reason,
+                    crate::stage_two::JOB_RETRY_DELAY_SECONDS,
+                )
+                .await,
             Ok(false)
         ) {
             let _ = db
+                .memories()
                 .mark_global_phase2_job_failed_if_unowned(
                     &claim.token,
                     reason,
@@ -283,7 +287,8 @@ mod job {
         reason: &'static str,
     ) -> bool {
         context.counter(MEMORY_PHASE_TWO_JOBS, /*inc*/ 1, &[("status", reason)]);
-        db.mark_global_phase2_job_succeeded(&claim.token, completion_watermark, selected_outputs)
+        db.memories()
+            .mark_global_phase2_job_succeeded(&claim.token, completion_watermark, selected_outputs)
             .await
             .unwrap_or(false)
     }
@@ -386,6 +391,7 @@ mod agent {
             }
             // Do not reset the workspace baseline if we lost the lock.
             let still_owns_lock = match db
+                .memories()
                 .heartbeat_global_phase2_job(&claim.token, crate::stage_two::JOB_LEASE_SECONDS)
                 .await
                 .inspect_err(|err| {
@@ -476,6 +482,7 @@ mod agent {
                 }
                 _ = heartbeat_interval.tick() => {
                     match db
+                        .memories()
                         .heartbeat_global_phase2_job(
                             &token,
                             crate::stage_two::JOB_LEASE_SECONDS,

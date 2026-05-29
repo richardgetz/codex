@@ -713,7 +713,6 @@ impl App {
             }
             AppCommand::ReloadUserConfig => {
                 app_server.reload_user_config().await?;
-                self.refresh_in_memory_config_from_disk().await?;
                 Ok(true)
             }
             AppCommand::ConsolidateOrchestratorMemory => {

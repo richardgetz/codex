@@ -155,10 +155,10 @@ async fn request_plugin_install_is_available_without_search_tool_after_discovery
     let description =
         function_tool_description(&body, REQUEST_PLUGIN_INSTALL_TOOL_NAME).expect("description");
     assert!(description.contains(
-        "Use this tool only after `list_available_plugins_to_install` returns a plugin or connector that exactly matches the user's explicit request."
+        "Use this tool only to ask the user to install one known plugin or connector from the list below."
     ));
     assert!(description.contains("IMPORTANT: DO NOT call this tool in parallel with other tools."));
-    assert!(!description.contains(DISCOVERABLE_GMAIL_ID));
+    assert!(description.contains(DISCOVERABLE_GMAIL_ID));
     assert!(!description.contains("tool_search fails to find a good match"));
 
     Ok(())

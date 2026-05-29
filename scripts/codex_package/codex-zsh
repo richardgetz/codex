@@ -1,0 +1,55 @@
+#!/usr/bin/env dotslash
+
+{
+  "name": "codex-zsh",
+  "platforms": {
+    "macos-aarch64": {
+      "size": 358777,
+      "hash": "sha256",
+      "digest": "3cceac7424057441515f602b13538cbf9cae0a431245139a1cc320e261ff15eb",
+      "format": "tar.gz",
+      "path": "codex-zsh/bin/zsh",
+      "providers": [
+        {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.135.0/codex-zsh-aarch64-apple-darwin.tar.gz"
+        }
+      ]
+    },
+    "macos-x86_64": {
+      "size": 391165,
+      "hash": "sha256",
+      "digest": "259019b03b0ed708ed9a4346e87f0f6b433a1a7b362476e5219a6afe243d3a1e",
+      "format": "tar.gz",
+      "path": "codex-zsh/bin/zsh",
+      "providers": [
+        {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.135.0/codex-zsh-x86_64-apple-darwin.tar.gz"
+        }
+      ]
+    },
+    "linux-x86_64": {
+      "size": 433407,
+      "hash": "sha256",
+      "digest": "f695faa3ec434f9e847c651a286225115921811cef57cd0af444df9d599855e9",
+      "format": "tar.gz",
+      "path": "codex-zsh/bin/zsh",
+      "providers": [
+        {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.135.0/codex-zsh-x86_64-unknown-linux-musl.tar.gz"
+        }
+      ]
+    },
+    "linux-aarch64": {
+      "size": 411651,
+      "hash": "sha256",
+      "digest": "f8072459f50318acbd628fae42e09a6a6376a04c19419a687df7d4bf23e06eb5",
+      "format": "tar.gz",
+      "path": "codex-zsh/bin/zsh",
+      "providers": [
+        {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.135.0/codex-zsh-aarch64-unknown-linux-musl.tar.gz"
+        }
+      ]
+    }
+  }
+}

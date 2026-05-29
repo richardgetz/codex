@@ -79,20 +79,27 @@ fn extension_tool_executor(
     name: &str,
     description: &str,
 ) -> Arc<dyn ToolExecutor<ExtensionToolCall>> {
+    extension_tool_executor_with_name(ToolName::plain(name), description)
+}
+
+fn extension_tool_executor_with_name(
+    tool_name: ToolName,
+    description: &str,
+) -> Arc<dyn ToolExecutor<ExtensionToolCall>> {
     struct SpecOnlyExtensionExecutor {
-        name: String,
+        tool_name: ToolName,
         description: String,
     }
 
     #[async_trait::async_trait]
     impl ToolExecutor<ExtensionToolCall> for SpecOnlyExtensionExecutor {
         fn tool_name(&self) -> ToolName {
-            ToolName::plain(self.name.as_str())
+            self.tool_name.clone()
         }
 
         fn spec(&self) -> ToolSpec {
-            ToolSpec::Function(ResponsesApiTool {
-                name: self.name.clone(),
+            let function = ResponsesApiTool {
+                name: self.tool_name.name.clone(),
                 description: self.description.clone(),
                 strict: true,
                 parameters: JsonSchema::object(
@@ -105,7 +112,15 @@ fn extension_tool_executor(
                 ),
                 output_schema: None,
                 defer_loading: None,
-            })
+            };
+            match &self.tool_name.namespace {
+                Some(namespace) => ToolSpec::Namespace(ResponsesApiNamespace {
+                    name: namespace.clone(),
+                    description: default_namespace_description(namespace),
+                    tools: vec![ResponsesApiNamespaceTool::Function(function)],
+                }),
+                None => ToolSpec::Function(function),
+            }
         }
 
         async fn handle(
@@ -117,7 +132,7 @@ fn extension_tool_executor(
     }
 
     Arc::new(SpecOnlyExtensionExecutor {
-        name: name.to_string(),
+        tool_name,
         description: description.to_string(),
     })
 }
@@ -160,6 +175,69 @@ fn extension_tools_do_not_replace_builtin_tools() {
             .count(),
         1
     );
+}
+
+#[test]
+fn standalone_web_search_extension_replaces_hosted_web_search() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &Features::with_defaults(),
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let extension_tool_executors = vec![extension_tool_executor_with_name(
+        ToolName::namespaced("web", "run"),
+        "Standalone web search.",
+    )];
+    let (tools, _) = build_specs_with_inputs_for_test(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        /*discoverable_tools*/ None,
+        &extension_tool_executors,
+        &[],
+    );
+
+    assert!(find_tool_opt(&tools, "web_search").is_none());
+    assert!(find_namespace_tool(&tools, "web", "run").is_some());
+}
+
+#[test]
+fn hosted_web_search_remains_when_standalone_web_search_is_hidden() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &Features::with_defaults(),
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    tools_config.namespace_tools = false;
+    let extension_tool_executors = vec![extension_tool_executor_with_name(
+        ToolName::namespaced("web", "run"),
+        "Standalone web search.",
+    )];
+    let (tools, _) = build_specs_with_inputs_for_test(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        /*discoverable_tools*/ None,
+        &extension_tool_executors,
+        &[],
+    );
+
+    assert!(find_tool_opt(&tools, "web_search").is_some());
+    assert!(find_namespace_tool(&tools, "web", "run").is_none());
 }
 
 #[test]
@@ -2317,7 +2395,7 @@ fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
 
     assert_eq!(
         description,
-        "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: {\n  // Local filesystem path to an image file\n  path: string;\n}): Promise<{\n  // Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved.\n  detail: \"high\" | \"original\";\n  // Data URL for the loaded image.\n  image_url: string;\n}>; };\n```"
+        "View a local image file from the filesystem when visual inspection is needed. Use this for images already available on disk.\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: {\n  // Local filesystem path to an image file\n  path: string;\n}): Promise<{\n  // Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved.\n  detail: \"high\" | \"original\";\n  // Data URL for the loaded image.\n  image_url: string;\n}>; };\n```"
     );
 }
 
@@ -2513,7 +2591,10 @@ fn build_specs_with_inputs_for_test(
     let mut executors = collect_tool_executors(config, params);
     append_tool_search_executor(config, &mut executors);
     prepend_code_mode_executors(config, &mut executors);
-    build_model_visible_specs_and_registry(config, executors, hosted_model_tool_specs(config))
+    let standalone_web_search_can_be_shown =
+        config.namespace_tools && standalone_web_search_available(&executors);
+    let hosted_specs = hosted_model_tool_specs(config, standalone_web_search_can_be_shown);
+    build_model_visible_specs_and_registry(config, executors, hosted_specs)
 }
 
 fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> rmcp::model::Tool {
@@ -2728,10 +2809,24 @@ fn wait_agent_timeout_options() -> WaitAgentTimeoutOptions {
 }
 
 fn find_tool<'a>(tools: &'a [ToolSpec], expected_name: &str) -> &'a ToolSpec {
-    tools
-        .iter()
-        .find(|tool| tool.name() == expected_name)
-        .unwrap_or_else(|| panic!("expected tool {expected_name}"))
+    find_tool_opt(tools, expected_name).unwrap_or_else(|| panic!("expected tool {expected_name}"))
+}
+
+fn find_tool_opt<'a>(tools: &'a [ToolSpec], expected_name: &str) -> Option<&'a ToolSpec> {
+    tools.iter().find(|tool| tool.name() == expected_name)
+}
+
+fn find_namespace_tool<'a>(
+    tools: &'a [ToolSpec],
+    expected_namespace: &str,
+    expected_name: &str,
+) -> Option<&'a ResponsesApiNamespaceTool> {
+    let ToolSpec::Namespace(namespace) = find_tool_opt(tools, expected_namespace)? else {
+        return None;
+    };
+    namespace.tools.iter().find(|tool| {
+        matches!(tool, ResponsesApiNamespaceTool::Function(tool) if tool.name == expected_name)
+    })
 }
 
 fn assert_namespace_contains_function(

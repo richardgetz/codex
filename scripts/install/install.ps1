@@ -1,10 +1,17 @@
+[CmdletBinding()]
 param(
-    [string]$Release = "latest"
+    [string]$Release = $env:CODEX_RELEASE
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+
+if ([string]::IsNullOrWhiteSpace($Release)) {
+    $Release = "latest"
+}
+
+$NonInteractive = $env:CODEX_NON_INTERACTIVE -match "^(?i:1|true|yes)$"
 
 function Write-Step {
     param(
@@ -27,6 +34,10 @@ function Prompt-YesNo {
         [string]$Prompt
     )
 
+    if ($NonInteractive) {
+        return $false
+    }
+
     if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
         return $false
     }
@@ -48,11 +59,57 @@ function Normalize-Version {
         return $RawVersion.Substring(6)
     }
 
+    if ($RawVersion.StartsWith("rick-v")) {
+        return $RawVersion.Substring(6)
+    }
+
     if ($RawVersion.StartsWith("v")) {
         return $RawVersion.Substring(1)
     }
 
     return $RawVersion
+}
+
+function Assert-ValidReleaseVersion {
+    param(
+        [string]$Version
+    )
+
+    if ($Version -cne "latest" -and $Version -cnotmatch "^[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)(?:\.[0-9]+)?)?(?:-rick\.[0-9]+)?$") {
+        throw "Invalid Codex release version: $Version. Expected latest or x.y.z[-alpha[.N]|-beta[.N]][-rick.N]."
+    }
+}
+
+function Test-ForkReleaseVersion {
+    param(
+        [string]$Version
+    )
+
+    return $Version -match "-rick\.[0-9]+$"
+}
+
+function Get-ReleaseRepository {
+    param(
+        [string]$ResolvedVersion
+    )
+
+    if (Test-ForkReleaseVersion -Version $ResolvedVersion) {
+        return "richardgetz/codex"
+    }
+
+    return "openai/codex"
+}
+
+function Get-ReleaseTag {
+    param(
+        [string]$ResolvedVersion
+    )
+
+    if (Test-ForkReleaseVersion -Version $ResolvedVersion) {
+        return "rick-v$ResolvedVersion"
+    }
+
+    return "rust-v$ResolvedVersion"
 }
 
 function Find-ReleaseAssetMetadata {
@@ -61,7 +118,9 @@ function Find-ReleaseAssetMetadata {
         [string]$ResolvedVersion
     )
 
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/openai/codex/releases/tags/rust-v$ResolvedVersion"
+    $repo = Get-ReleaseRepository -ResolvedVersion $ResolvedVersion
+    $tag = Get-ReleaseTag -ResolvedVersion $ResolvedVersion
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/tags/$tag"
     $asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
     if ($null -eq $asset) {
         return $null
@@ -141,6 +200,22 @@ function Path-Contains {
     return $false
 }
 
+function Prepend-PathEntry {
+    param(
+        [string]$PathValue,
+        [string]$Entry
+    )
+
+    $needle = $Entry.TrimEnd("\")
+    $segments = @($Entry)
+    if (-not [string]::IsNullOrWhiteSpace($PathValue)) {
+        $segments += $PathValue.Split(";", [System.StringSplitOptions]::RemoveEmptyEntries) |
+            Where-Object { $_.TrimEnd("\") -ine $needle }
+    }
+
+    return ($segments -join ";")
+}
+
 function Invoke-WithInstallLock {
     param(
         [string]$LockPath,
@@ -181,6 +256,7 @@ function Remove-StaleInstallArtifacts {
 
 function Resolve-Version {
     $normalizedVersion = Normalize-Version -RawVersion $Release
+    Assert-ValidReleaseVersion -Version $normalizedVersion
     if ($normalizedVersion -ne "latest") {
         return $normalizedVersion
     }
@@ -191,7 +267,9 @@ function Resolve-Version {
         exit 1
     }
 
-    return (Normalize-Version -RawVersion $release.tag_name)
+    $resolvedVersion = Normalize-Version -RawVersion $release.tag_name
+    Assert-ValidReleaseVersion -Version $resolvedVersion
+    return $resolvedVersion
 }
 
 function Get-VersionFromBinary {
@@ -839,7 +917,16 @@ try {
 Maybe-HandleConflictingInstall -Conflict $conflictingInstall
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if (-not (Path-Contains -PathValue $userPath -Entry $visibleBinDir)) {
+$prioritizeVisibleBin = $null -ne $conflictingInstall
+if ($prioritizeVisibleBin) {
+    $newUserPath = Prepend-PathEntry -PathValue $userPath -Entry $visibleBinDir
+    if ($newUserPath -cne $userPath) {
+        [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+        Write-Step "PATH updated for future PowerShell sessions."
+    } else {
+        Write-Step "$visibleBinDir is already first on PATH."
+    }
+} elseif (-not (Path-Contains -PathValue $userPath -Entry $visibleBinDir)) {
     if ([string]::IsNullOrWhiteSpace($userPath)) {
         $newUserPath = $visibleBinDir
     } else {
@@ -854,7 +941,9 @@ if (-not (Path-Contains -PathValue $userPath -Entry $visibleBinDir)) {
     Write-Step "PATH is already configured for future PowerShell sessions."
 }
 
-if (-not (Path-Contains -PathValue $env:Path -Entry $visibleBinDir)) {
+if ($prioritizeVisibleBin) {
+    $env:Path = Prepend-PathEntry -PathValue $env:Path -Entry $visibleBinDir
+} elseif (-not (Path-Contains -PathValue $env:Path -Entry $visibleBinDir)) {
     if ([string]::IsNullOrWhiteSpace($env:Path)) {
         $env:Path = $visibleBinDir
     } else {

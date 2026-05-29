@@ -125,6 +125,7 @@ impl ChatWidget {
             initial_user_message,
             status_account_display,
             runtime_model_provider_base_url,
+            remote_connection: None,
             token_info: None,
             account_generation: 0,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),

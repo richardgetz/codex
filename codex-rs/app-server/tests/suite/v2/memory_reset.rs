@@ -33,6 +33,22 @@ async fn memory_reset_clears_memory_files_and_rows_preserves_threads() -> Result
         "stale rollout summary\n",
     )
     .await?;
+    let legacy_user_preferences_root = codex_home.path().join("user_preferences_memory");
+    tokio::fs::create_dir_all(legacy_user_preferences_root.join("buckets")).await?;
+    tokio::fs::write(
+        legacy_user_preferences_root
+            .join("buckets")
+            .join("durable_preference.jsonl"),
+        "stale legacy user preferences\n",
+    )
+    .await?;
+    let legacy_orchestrator_root = codex_home.path().join("orchestrator_memory");
+    tokio::fs::create_dir_all(&legacy_orchestrator_root).await?;
+    tokio::fs::write(
+        legacy_orchestrator_root.join("summary.md"),
+        "stale legacy orchestrator memory\n",
+    )
+    .await?;
 
     let thread_id = seed_stage1_output(&state_db, codex_home.path()).await?;
 
@@ -49,7 +65,10 @@ async fn memory_reset_clears_memory_files_and_rows_preserves_threads() -> Result
     .await??;
     let _: MemoryResetResponse = to_response::<MemoryResetResponse>(response)?;
 
-    let stage1_outputs = state_db.list_stage1_outputs_for_global(/*n*/ 10).await?;
+    let stage1_outputs = state_db
+        .memories()
+        .list_stage1_outputs_for_global(/*n*/ 10)
+        .await?;
     assert_eq!(stage1_outputs, Vec::new());
     assert_eq!(
         state_db.get_thread_memory_mode(thread_id).await?.as_deref(),
@@ -60,6 +79,16 @@ async fn memory_reset_clears_memory_files_and_rows_preserves_threads() -> Result
     assert!(
         remaining_entries.next_entry().await?.is_none(),
         "memory root should be empty after reset"
+    );
+    let mut remaining_entries = tokio::fs::read_dir(&legacy_user_preferences_root).await?;
+    assert!(
+        remaining_entries.next_entry().await?.is_none(),
+        "legacy user preferences memory root should be empty after reset"
+    );
+    let mut remaining_entries = tokio::fs::read_dir(&legacy_orchestrator_root).await?;
+    assert!(
+        remaining_entries.next_entry().await?.is_none(),
+        "legacy orchestrator memory root should be empty after reset"
     );
 
     Ok(())
@@ -81,6 +110,7 @@ async fn seed_stage1_output(state_db: &Arc<StateRuntime>, codex_home: &Path) -> 
     state_db.upsert_thread(&metadata).await?;
 
     let claim = state_db
+        .memories()
         .try_claim_stage1_job(
             thread_id,
             worker_id,
@@ -94,6 +124,7 @@ async fn seed_stage1_output(state_db: &Arc<StateRuntime>, codex_home: &Path) -> 
     };
     assert!(
         state_db
+            .memories()
             .mark_stage1_job_succeeded(
                 thread_id,
                 ownership_token.as_str(),
@@ -106,6 +137,7 @@ async fn seed_stage1_output(state_db: &Arc<StateRuntime>, codex_home: &Path) -> 
         "stage1 success should be recorded"
     );
     state_db
+        .memories()
         .enqueue_global_consolidation(now.timestamp())
         .await?;
 

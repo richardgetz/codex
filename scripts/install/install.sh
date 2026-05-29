@@ -2,7 +2,8 @@
 
 set -eu
 
-RELEASE="latest"
+RELEASE="${CODEX_RELEASE:-latest}"
+NON_INTERACTIVE="${CODEX_NON_INTERACTIVE:-false}"
 
 BIN_DIR="${CODEX_INSTALL_DIR:-$HOME/.local/bin}"
 BIN_PATH="$BIN_DIR/codex"
@@ -37,6 +38,9 @@ normalize_version() {
     rust-v*)
       printf '%s\n' "${1#rust-v}"
       ;;
+    rick-v*)
+      printf '%s\n' "${1#rick-v}"
+      ;;
     v*)
       printf '%s\n' "${1#v}"
       ;;
@@ -44,6 +48,19 @@ normalize_version() {
       printf '%s\n' "$1"
       ;;
   esac
+}
+
+validate_version() {
+  version="$1"
+
+  if [ "$version" = "latest" ]; then
+    return
+  fi
+
+  if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?(-rick\.[0-9]+)?$'; then
+    echo "Invalid Codex release version: $version. Expected latest or x.y.z[-alpha[.N]|-beta[.N]][-rick.N]." >&2
+    exit 1
+  fi
 }
 
 parse_args() {
@@ -60,6 +77,10 @@ parse_args() {
       --help | -h)
         cat <<EOF
 Usage: install.sh [--release VERSION]
+
+Environment:
+  CODEX_RELEASE          Version to install; overridden by --release.
+  CODEX_NON_INTERACTIVE  Set to 1, true, or yes to skip prompts.
 EOF
         exit 0
         ;;
@@ -107,17 +128,45 @@ download_text() {
   exit 1
 }
 
+is_fork_release_version() {
+  printf '%s\n' "$1" | grep -Eq -- '-rick\.[0-9]+$'
+}
+
+release_repo_for_version() {
+  resolved_version="$1"
+
+  if is_fork_release_version "$resolved_version"; then
+    printf 'richardgetz/codex\n'
+  else
+    printf 'openai/codex\n'
+  fi
+}
+
+release_tag_for_version() {
+  resolved_version="$1"
+
+  if is_fork_release_version "$resolved_version"; then
+    printf 'rick-v%s\n' "$resolved_version"
+  else
+    printf 'rust-v%s\n' "$resolved_version"
+  fi
+}
+
 release_url_for_asset() {
   asset="$1"
   resolved_version="$2"
+  repo="$(release_repo_for_version "$resolved_version")"
+  tag="$(release_tag_for_version "$resolved_version")"
 
-  printf 'https://github.com/openai/codex/releases/download/rust-v%s/%s\n' "$resolved_version" "$asset"
+  printf 'https://github.com/%s/releases/download/%s/%s\n' "$repo" "$tag" "$asset"
 }
 
 release_metadata_url() {
   resolved_version="$1"
+  repo="$(release_repo_for_version "$resolved_version")"
+  tag="$(release_tag_for_version "$resolved_version")"
 
-  printf 'https://api.github.com/repos/openai/codex/releases/tags/rust-v%s\n' "$resolved_version"
+  printf 'https://api.github.com/repos/%s/releases/tags/%s\n' "$repo" "$tag"
 }
 
 release_asset_digest_or_empty() {
@@ -259,6 +308,7 @@ require_command() {
 
 resolve_version() {
   normalized_version="$(normalize_version "$RELEASE")"
+  validate_version "$normalized_version"
 
   if [ "$normalized_version" != "latest" ]; then
     printf '%s\n' "$normalized_version"
@@ -273,6 +323,7 @@ resolve_version() {
     exit 1
   fi
 
+  validate_version "$resolved"
   printf '%s\n' "$resolved"
 }
 
@@ -304,7 +355,9 @@ add_to_path() {
 
   case ":$PATH:" in
     *":$BIN_DIR:"*)
-      return
+      if [ -z "$conflict_manager" ]; then
+        return
+      fi
       ;;
   esac
 
@@ -543,6 +596,12 @@ classify_existing_codex() {
 
 prompt_yes_no() {
   prompt="$1"
+
+  case "$NON_INTERACTIVE" in
+    1 | [Tt][Rr][Uu][Ee] | [Yy][Ee][Ss])
+      return 1
+      ;;
+  esac
 
   if ( : </dev/tty ) 2>/dev/null; then
     printf '%s [y/N] ' "$prompt" >/dev/tty

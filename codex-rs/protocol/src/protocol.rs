@@ -3,6 +3,7 @@
 //! Uses a SQ (Submission Queue) / EQ (Event Queue) pattern to asynchronously communicate
 //! between user and agent.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::Mul;
@@ -438,6 +439,21 @@ impl ThreadSettingsOverrides {
     }
 }
 
+/// Source classification for client-supplied context.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdditionalContextKind {
+    Untrusted,
+    Application,
+}
+
+/// Client-supplied context keyed by an opaque source identifier.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+pub struct AdditionalContextEntry {
+    pub value: String,
+    pub kind: AdditionalContextKind,
+}
+
 /// Submission operation
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -488,8 +504,12 @@ pub enum Op {
         /// Optional turn-scoped Responses API `client_metadata`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         responsesapi_client_metadata: Option<HashMap<String, String>>,
-        /// Persistent thread settings to apply before starting this turn.
-        #[serde(default, skip_serializing_if = "ThreadSettingsOverrides::is_empty")]
+        /// Client-supplied context fragments keyed by an opaque source identifier.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        additional_context: BTreeMap<String, AdditionalContextEntry>,
+
+        /// Persistent thread-settings overrides to apply before the input.
+        #[serde(default, flatten)]
         thread_settings: ThreadSettingsOverrides,
     },
 
@@ -508,6 +528,9 @@ pub enum Op {
         /// Optional turn-scoped Responses API `client_metadata`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         responsesapi_client_metadata: Option<HashMap<String, String>>,
+        /// Client-supplied context fragments keyed by an opaque source identifier.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        additional_context: BTreeMap<String, AdditionalContextEntry>,
 
         /// Updated `cwd` for sandbox/tool calls.
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -887,6 +910,7 @@ impl From<Vec<UserInput>> for Op {
             items: value,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: ThreadSettingsOverrides::default(),
         }
     }
@@ -5251,6 +5275,7 @@ mod tests {
             items: Vec::new(),
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         };
 
@@ -5271,6 +5296,7 @@ mod tests {
                 items: Vec::new(),
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                additional_context: Default::default(),
                 thread_settings: Default::default(),
             }
         );
@@ -5293,6 +5319,7 @@ mod tests {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         };
 
@@ -5319,6 +5346,7 @@ mod tests {
                 "fiber_run_id".to_string(),
                 "fiber-123".to_string(),
             )])),
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         };
 

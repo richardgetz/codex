@@ -1132,7 +1132,9 @@ mod tests {
             websocket,
             JSONRPCMessage::Response(JSONRPCResponse {
                 id: request.id,
-                result: serde_json::json!({}),
+                result: serde_json::json!({
+                    "userAgent": "codex_cli_rs/9.8.7-test (Test OS; x86_64) rust",
+                }),
             }),
         )
         .await;
@@ -1467,6 +1469,7 @@ mod tests {
             .await
             .expect("remote client should connect");
 
+        assert_eq!(client.server_version(), Some("9.8.7-test"));
         let response: GetAccountResponse = client
             .request_typed(ClientRequest::GetAccount {
                 request_id: RequestId::Integer(1),

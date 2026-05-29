@@ -1203,7 +1203,7 @@ async fn unavailable_slash_command_from_popup_reports_once() {
         "expected exactly one disabled-command message, got: {rendered:?}"
     );
     assert!(rx.try_recv().is_err(), "expected no follow-up events");
-    assert_eq!(chat.bottom_pane.composer_text(), "/model");
+    assert_eq!(chat.bottom_pane.composer_text(), "");
     assert_eq!(recall_latest_after_clearing(&mut chat), "/model");
 }
 
@@ -1798,6 +1798,8 @@ async fn slash_memory_drop_reports_stubbed_feature() {
 #[tokio::test]
 async fn slash_mcp_requests_inventory_via_app_server() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
 
     chat.dispatch_command(SlashCommand::Mcp);
 
@@ -1805,8 +1807,9 @@ async fn slash_mcp_requests_inventory_via_app_server() {
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::FetchMcpInventory {
-            detail: McpServerStatusDetail::ToolsAndAuthOnly
-        })
+            detail: McpServerStatusDetail::ToolsAndAuthOnly,
+            thread_id: Some(actual_thread_id)
+        }) if actual_thread_id == thread_id
     );
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }
@@ -1814,6 +1817,8 @@ async fn slash_mcp_requests_inventory_via_app_server() {
 #[tokio::test]
 async fn slash_mcp_verbose_requests_full_inventory_via_app_server() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
 
     submit_composer_text(&mut chat, "/mcp verbose");
 
@@ -1821,8 +1826,9 @@ async fn slash_mcp_verbose_requests_full_inventory_via_app_server() {
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::FetchMcpInventory {
-            detail: McpServerStatusDetail::Full
-        })
+            detail: McpServerStatusDetail::Full,
+            thread_id: Some(actual_thread_id)
+        }) if actual_thread_id == thread_id
     );
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }

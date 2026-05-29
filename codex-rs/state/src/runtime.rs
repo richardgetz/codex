@@ -10,6 +10,7 @@ use crate::LOGS_DB_FILENAME;
 use crate::LogEntry;
 use crate::LogQuery;
 use crate::LogRow;
+use crate::MEMORIES_DB_FILENAME;
 use crate::STATE_DB_FILENAME;
 use crate::SortKey;
 use crate::ThreadMetadata;
@@ -18,6 +19,7 @@ use crate::ThreadsPage;
 use crate::apply_rollout_item;
 use crate::migrations::runtime_goals_migrator;
 use crate::migrations::runtime_logs_migrator;
+use crate::migrations::runtime_memories_migrator;
 use crate::migrations::runtime_state_migrator;
 use crate::model::AgentJobRow;
 use crate::model::ThreadRow;
@@ -72,6 +74,7 @@ pub use goals::GoalAccountingMode;
 pub use goals::GoalAccountingOutcome;
 pub use goals::GoalStore;
 pub use goals::GoalUpdate;
+pub use memories::MemoryStore;
 pub use remote_control::RemoteControlEnrollmentRecord;
 pub use threads::ThreadFilterOptions;
 
@@ -123,7 +126,15 @@ const GOALS_DB: RuntimeDbSpec = RuntimeDbSpec {
     migrate_phase: "migrate_goals",
 };
 
-const RUNTIME_DBS: [RuntimeDbSpec; 3] = [STATE_DB, LOGS_DB, GOALS_DB];
+const MEMORIES_DB: RuntimeDbSpec = RuntimeDbSpec {
+    label: "memories DB",
+    filename: MEMORIES_DB_FILENAME,
+    kind: DbKind::Memories,
+    open_phase: "open_memories",
+    migrate_phase: "migrate_memories",
+};
+
+const RUNTIME_DBS: [RuntimeDbSpec; 4] = [STATE_DB, LOGS_DB, GOALS_DB, MEMORIES_DB];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeDbPath {
@@ -138,6 +149,7 @@ pub struct StateRuntime {
     pool: Arc<sqlx::SqlitePool>,
     logs_pool: Arc<sqlx::SqlitePool>,
     thread_goals: GoalStore,
+    memories: MemoryStore,
     thread_updated_at_millis: Arc<AtomicI64>,
 }
 
@@ -174,9 +186,11 @@ impl StateRuntime {
         let state_migrator = runtime_state_migrator();
         let logs_migrator = runtime_logs_migrator();
         let goals_migrator = runtime_goals_migrator();
+        let memories_migrator = runtime_memories_migrator();
         let state_path = STATE_DB.path(codex_home.as_path());
         let logs_path = LOGS_DB.path(codex_home.as_path());
         let goals_path = GOALS_DB.path(codex_home.as_path());
+        let memories_path = MEMORIES_DB.path(codex_home.as_path());
         let goals_pool =
             match open_goals_sqlite(&goals_path, &goals_migrator, telemetry_override).await {
                 Ok(db) => Arc::new(db),
@@ -190,6 +204,30 @@ impl StateRuntime {
                 "failed to backfill thread goals from {} to {}: {err}",
                 state_path.display(),
                 goals_path.display(),
+            );
+            return Err(err);
+        }
+        let memories_pool = match open_memories_sqlite(
+            &memories_path,
+            &memories_migrator,
+            telemetry_override,
+        )
+        .await
+        {
+            Ok(db) => Arc::new(db),
+            Err(err) => {
+                warn!(
+                    "failed to open memories db at {}: {err}",
+                    memories_path.display()
+                );
+                return Err(err);
+            }
+        };
+        if let Err(err) = backfill_legacy_memory_tables(&state_path, &memories_path).await {
+            warn!(
+                "failed to backfill memory data from {} to {}: {err}",
+                state_path.display(),
+                memories_path.display(),
             );
             return Err(err);
         }
@@ -235,6 +273,7 @@ impl StateRuntime {
         let thread_updated_at_millis = thread_updated_at_millis.unwrap_or(0);
         let runtime = Arc::new(Self {
             thread_goals: GoalStore::new(Arc::clone(&goals_pool)),
+            memories: MemoryStore::new(Arc::clone(&memories_pool), Arc::clone(&pool)),
             pool,
             logs_pool,
             codex_home,
@@ -257,6 +296,37 @@ impl StateRuntime {
 
     pub fn thread_goals(&self) -> &GoalStore {
         &self.thread_goals
+    }
+
+    pub fn memories(&self) -> &MemoryStore {
+        &self.memories
+    }
+
+    pub async fn clear_memory_data(&self) -> anyhow::Result<()> {
+        self.memories.clear_memory_data().await?;
+        let state_path = STATE_DB.path(self.codex_home.as_path());
+        clear_legacy_memory_data_in_state_db(&state_path).await?;
+        Ok(())
+    }
+
+    pub async fn clear_memory_data_in_sqlite_home(sqlite_home: &Path) -> anyhow::Result<bool> {
+        let memories_path = MEMORIES_DB.path(sqlite_home);
+        let state_path = STATE_DB.path(sqlite_home);
+        if !tokio::fs::try_exists(&memories_path).await? {
+            return clear_legacy_memory_data_in_state_db(&state_path).await;
+        }
+
+        let memories_migrator = runtime_memories_migrator();
+        let pool = open_memories_sqlite(
+            &memories_path,
+            &memories_migrator,
+            /*telemetry_override*/ None,
+        )
+        .await?;
+        memories::clear_memory_data_in_pool(&pool).await?;
+        pool.close().await;
+        clear_legacy_memory_data_in_state_db(&state_path).await?;
+        Ok(true)
     }
 }
 
@@ -306,7 +376,9 @@ async fn backfill_legacy_thread_goals(state_path: &Path, goals_path: &Path) -> a
     let mut goals_conn = goals_options.connect().await?;
     let state_path = state_path.to_string_lossy().replace('\'', "''");
     let attach_sql = format!("ATTACH DATABASE '{state_path}' AS legacy_state");
-    sqlx::query(&attach_sql).execute(&mut goals_conn).await?;
+    sqlx::query(sqlx::AssertSqlSafe(attach_sql))
+        .execute(&mut goals_conn)
+        .await?;
 
     let backfill_result = async {
         let legacy_table_exists = sqlx::query_scalar::<_, i64>(
@@ -366,6 +438,226 @@ FROM legacy_state.thread_goals
     backfill_result?;
     detach_result?;
     Ok(())
+}
+
+async fn backfill_legacy_memory_tables(
+    state_path: &Path,
+    memories_path: &Path,
+) -> anyhow::Result<()> {
+    if !state_path.exists() {
+        return Ok(());
+    }
+
+    let memories_options = base_sqlite_options(memories_path);
+    let mut memories_conn = memories_options.connect().await?;
+    let state_path = state_path.to_string_lossy().replace('\'', "''");
+    let attach_sql = format!("ATTACH DATABASE '{state_path}' AS legacy_state");
+    sqlx::query(sqlx::AssertSqlSafe(attach_sql))
+        .execute(&mut memories_conn)
+        .await?;
+
+    let backfill_result = async {
+        let legacy_stage1_exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM legacy_state.sqlite_master WHERE type = 'table' AND name = 'stage1_outputs'",
+        )
+        .fetch_one(&mut memories_conn)
+        .await?
+            > 0;
+        if legacy_stage1_exists {
+            let stage1_columns =
+                legacy_table_columns(&mut memories_conn, "stage1_outputs").await?;
+            let rollout_slug = optional_legacy_column(&stage1_columns, "rollout_slug", "NULL");
+            let usage_count = optional_legacy_column(&stage1_columns, "usage_count", "NULL");
+            let last_usage = optional_legacy_column(&stage1_columns, "last_usage", "NULL");
+            let selected_for_phase2 =
+                optional_legacy_column(&stage1_columns, "selected_for_phase2", "0");
+            let selected_for_phase2_source_updated_at = optional_legacy_column(
+                &stage1_columns,
+                "selected_for_phase2_source_updated_at",
+                "NULL",
+            );
+            let backfill_stage1_sql = format!(
+                r#"
+INSERT OR IGNORE INTO stage1_outputs (
+    thread_id,
+    source_updated_at,
+    raw_memory,
+    rollout_summary,
+    rollout_slug,
+    generated_at,
+    usage_count,
+    last_usage,
+    selected_for_phase2,
+    selected_for_phase2_source_updated_at
+)
+SELECT
+    thread_id,
+    source_updated_at,
+    raw_memory,
+    rollout_summary,
+    {rollout_slug},
+    generated_at,
+    {usage_count},
+    {last_usage},
+    {selected_for_phase2},
+    {selected_for_phase2_source_updated_at}
+FROM legacy_state.stage1_outputs
+                "#
+            );
+            sqlx::query(sqlx::AssertSqlSafe(backfill_stage1_sql))
+            .execute(&mut memories_conn)
+            .await?;
+        }
+
+        let legacy_jobs_exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM legacy_state.sqlite_master WHERE type = 'table' AND name = 'jobs'",
+        )
+        .fetch_one(&mut memories_conn)
+        .await?
+            > 0;
+        if legacy_jobs_exists {
+            let job_columns = legacy_table_columns(&mut memories_conn, "jobs").await?;
+            let worker_id = optional_legacy_column(&job_columns, "worker_id", "NULL");
+            let ownership_token = optional_legacy_column(&job_columns, "ownership_token", "NULL");
+            let started_at = optional_legacy_column(&job_columns, "started_at", "NULL");
+            let finished_at = optional_legacy_column(&job_columns, "finished_at", "NULL");
+            let lease_until = optional_legacy_column(&job_columns, "lease_until", "NULL");
+            let retry_at = optional_legacy_column(&job_columns, "retry_at", "NULL");
+            let retry_remaining = optional_legacy_column(&job_columns, "retry_remaining", "0");
+            let last_error = optional_legacy_column(&job_columns, "last_error", "NULL");
+            let input_watermark = optional_legacy_column(&job_columns, "input_watermark", "NULL");
+            let last_success_watermark =
+                optional_legacy_column(&job_columns, "last_success_watermark", "NULL");
+            let backfill_jobs_sql = format!(
+                r#"
+INSERT OR IGNORE INTO jobs (
+    kind,
+    job_key,
+    status,
+    worker_id,
+    ownership_token,
+    started_at,
+    finished_at,
+    lease_until,
+    retry_at,
+    retry_remaining,
+    last_error,
+    input_watermark,
+    last_success_watermark
+)
+SELECT
+    kind,
+    job_key,
+    status,
+    {worker_id},
+    {ownership_token},
+    {started_at},
+    {finished_at},
+    {lease_until},
+    {retry_at},
+    {retry_remaining},
+    {last_error},
+    {input_watermark},
+    {last_success_watermark}
+FROM legacy_state.jobs
+                "#
+            );
+            sqlx::query(sqlx::AssertSqlSafe(backfill_jobs_sql))
+            .execute(&mut memories_conn)
+            .await?;
+        }
+
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    let detach_result = sqlx::query("DETACH DATABASE legacy_state")
+        .execute(&mut memories_conn)
+        .await;
+    backfill_result?;
+    detach_result?;
+    Ok(())
+}
+
+async fn clear_legacy_memory_data_in_state_db(state_path: &Path) -> anyhow::Result<bool> {
+    if !state_path.exists() {
+        return Ok(false);
+    }
+
+    let state_options = base_sqlite_options(state_path);
+    let mut state_conn = state_options.connect().await?;
+    let mut found_legacy_memory_tables = false;
+
+    if sqlite_table_exists(&mut state_conn, "stage1_outputs").await? {
+        found_legacy_memory_tables = true;
+        sqlx::query("DELETE FROM stage1_outputs")
+            .execute(&mut state_conn)
+            .await?;
+    }
+
+    if sqlite_table_exists(&mut state_conn, "jobs").await? {
+        found_legacy_memory_tables = true;
+        sqlx::query(
+            r#"
+DELETE FROM jobs
+WHERE kind = ? OR kind = ?
+            "#,
+        )
+        .bind("memory_stage1")
+        .bind("memory_consolidate_global")
+        .execute(&mut state_conn)
+        .await?;
+    }
+
+    Ok(found_legacy_memory_tables)
+}
+
+async fn legacy_table_columns(
+    conn: &mut SqliteConnection,
+    table_name: &str,
+) -> anyhow::Result<BTreeSet<String>> {
+    let table_name = table_name.replace('\'', "''");
+    let pragma_sql = format!("PRAGMA legacy_state.table_info('{table_name}')");
+    let rows = sqlx::query(sqlx::AssertSqlSafe(pragma_sql))
+        .fetch_all(conn)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect())
+}
+
+async fn sqlite_table_exists(
+    conn: &mut SqliteConnection,
+    table_name: &str,
+) -> anyhow::Result<bool> {
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+    )
+    .bind(table_name)
+    .fetch_one(conn)
+    .await?;
+    Ok(count > 0)
+}
+
+fn optional_legacy_column<'a>(
+    columns: &'a BTreeSet<String>,
+    column: &'a str,
+    fallback: &'a str,
+) -> &'a str {
+    if columns.contains(column) {
+        column
+    } else {
+        fallback
+    }
+}
+
+async fn open_memories_sqlite(
+    path: &Path,
+    migrator: &Migrator,
+    telemetry_override: Option<&dyn DbTelemetry>,
+) -> anyhow::Result<SqlitePool> {
+    open_sqlite(path, migrator, MEMORIES_DB, telemetry_override).await
 }
 
 async fn open_sqlite(
@@ -444,6 +736,14 @@ pub fn goals_db_path(codex_home: &Path) -> PathBuf {
     GOALS_DB.path(codex_home)
 }
 
+pub fn memories_db_filename() -> String {
+    MEMORIES_DB.filename.to_string()
+}
+
+pub fn memories_db_path(codex_home: &Path) -> PathBuf {
+    MEMORIES_DB.path(codex_home)
+}
+
 pub fn runtime_db_paths(codex_home: &Path) -> Vec<RuntimeDbPath> {
     RUNTIME_DBS
         .iter()
@@ -475,11 +775,15 @@ pub async fn sqlite_integrity_check(path: &Path) -> anyhow::Result<Vec<String>> 
 #[cfg(test)]
 mod tests {
     use super::StateRuntime;
+    use super::backfill_legacy_memory_tables;
     use super::backfill_legacy_thread_goals;
     use super::goals_db_path;
+    use super::memories_db_path;
     use super::open_goals_sqlite;
+    use super::open_memories_sqlite;
     use super::open_state_sqlite;
     use super::runtime_goals_migrator;
+    use super::runtime_memories_migrator;
     use super::runtime_state_migrator;
     use super::sqlite_integrity_check;
     use super::state_db_path;
@@ -496,6 +800,23 @@ mod tests {
     use std::collections::BTreeSet;
     use std::path::Path;
     use std::sync::Mutex;
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct JobSnapshot {
+        kind: String,
+        job_key: String,
+        status: String,
+        worker_id: Option<String>,
+        ownership_token: Option<String>,
+        started_at: Option<i64>,
+        finished_at: Option<i64>,
+        lease_until: Option<i64>,
+        retry_at: Option<i64>,
+        retry_remaining: i64,
+        last_error: Option<String>,
+        input_watermark: Option<i64>,
+        last_success_watermark: Option<i64>,
+    }
 
     #[derive(Default)]
     struct TestTelemetry {
@@ -762,6 +1083,305 @@ FROM thread_goals
     }
 
     #[tokio::test]
+    async fn backfills_legacy_memory_tables_into_split_memories_db() {
+        let codex_home = unique_temp_dir();
+        tokio::fs::create_dir_all(&codex_home)
+            .await
+            .expect("create codex home");
+        let state_path = state_db_path(codex_home.as_path());
+        let memories_path = memories_db_path(codex_home.as_path());
+
+        let state_pool = SqlitePool::connect_with(
+            SqliteConnectOptions::new()
+                .filename(&state_path)
+                .create_if_missing(true),
+        )
+        .await
+        .expect("open legacy state db");
+        sqlx::query(
+            r#"
+CREATE TABLE stage1_outputs (
+    thread_id TEXT PRIMARY KEY,
+    source_updated_at INTEGER NOT NULL,
+    raw_memory TEXT NOT NULL,
+    rollout_summary TEXT NOT NULL,
+    generated_at INTEGER NOT NULL
+);
+            "#,
+        )
+        .execute(&state_pool)
+        .await
+        .expect("create legacy stage1_outputs");
+        sqlx::query(
+            r#"
+CREATE TABLE jobs (
+    kind TEXT NOT NULL,
+    job_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    retry_remaining INTEGER NOT NULL,
+    PRIMARY KEY (kind, job_key)
+);
+            "#,
+        )
+        .execute(&state_pool)
+        .await
+        .expect("create legacy jobs");
+        sqlx::query(
+            r#"
+INSERT INTO stage1_outputs (
+    thread_id,
+    source_updated_at,
+    raw_memory,
+    rollout_summary,
+    generated_at
+) VALUES (?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind("thread-memory")
+        .bind(10_i64)
+        .bind("raw memory")
+        .bind("rollout summary")
+        .bind(11_i64)
+        .execute(&state_pool)
+        .await
+        .expect("insert legacy stage1 output");
+        sqlx::query(
+            r#"
+INSERT INTO jobs (
+    kind,
+    job_key,
+    status,
+    retry_remaining
+) VALUES (?, ?, ?, ?)
+            "#,
+        )
+        .bind("memory")
+        .bind("thread-memory")
+        .bind("done")
+        .bind(3_i64)
+        .execute(&state_pool)
+        .await
+        .expect("insert legacy job");
+        state_pool.close().await;
+
+        let memories_pool = open_memories_sqlite(
+            memories_path.as_path(),
+            &runtime_memories_migrator(),
+            /*telemetry_override*/ None,
+        )
+        .await
+        .expect("migrate memories db");
+        memories_pool.close().await;
+
+        backfill_legacy_memory_tables(state_path.as_path(), memories_path.as_path())
+            .await
+            .expect("backfill legacy memories");
+
+        let memories_pool = open_db_pool(memories_path.as_path()).await;
+        let stage1 = sqlx::query(
+            r#"
+SELECT
+    thread_id,
+    source_updated_at,
+    raw_memory,
+    rollout_summary,
+    rollout_slug,
+    generated_at,
+    usage_count,
+    last_usage,
+    selected_for_phase2,
+    selected_for_phase2_source_updated_at
+FROM stage1_outputs
+            "#,
+        )
+        .fetch_one(&memories_pool)
+        .await
+        .expect("fetch copied stage1 output");
+        assert_eq!(
+            (
+                stage1.get::<String, _>("thread_id"),
+                stage1.get::<i64, _>("source_updated_at"),
+                stage1.get::<String, _>("raw_memory"),
+                stage1.get::<String, _>("rollout_summary"),
+                stage1.get::<Option<String>, _>("rollout_slug"),
+                stage1.get::<i64, _>("generated_at"),
+                stage1.get::<Option<i64>, _>("usage_count"),
+                stage1.get::<Option<i64>, _>("last_usage"),
+                stage1.get::<i64, _>("selected_for_phase2"),
+                stage1.get::<Option<i64>, _>("selected_for_phase2_source_updated_at"),
+            ),
+            (
+                "thread-memory".to_string(),
+                10,
+                "raw memory".to_string(),
+                "rollout summary".to_string(),
+                None,
+                11,
+                None,
+                None,
+                0,
+                None,
+            )
+        );
+
+        let job = sqlx::query(
+            r#"
+SELECT
+    kind,
+    job_key,
+    status,
+    worker_id,
+    ownership_token,
+    started_at,
+    finished_at,
+    lease_until,
+    retry_at,
+    retry_remaining,
+    last_error,
+    input_watermark,
+    last_success_watermark
+FROM jobs
+            "#,
+        )
+        .fetch_one(&memories_pool)
+        .await
+        .expect("fetch copied job");
+        assert_eq!(
+            JobSnapshot {
+                kind: job.get("kind"),
+                job_key: job.get("job_key"),
+                status: job.get("status"),
+                worker_id: job.get("worker_id"),
+                ownership_token: job.get("ownership_token"),
+                started_at: job.get("started_at"),
+                finished_at: job.get("finished_at"),
+                lease_until: job.get("lease_until"),
+                retry_at: job.get("retry_at"),
+                retry_remaining: job.get("retry_remaining"),
+                last_error: job.get("last_error"),
+                input_watermark: job.get("input_watermark"),
+                last_success_watermark: job.get("last_success_watermark"),
+            },
+            JobSnapshot {
+                kind: "memory".to_string(),
+                job_key: "thread-memory".to_string(),
+                status: "done".to_string(),
+                worker_id: None,
+                ownership_token: None,
+                started_at: None,
+                finished_at: None,
+                lease_until: None,
+                retry_at: None,
+                retry_remaining: 3,
+                last_error: None,
+                input_watermark: None,
+                last_success_watermark: None,
+            }
+        );
+        memories_pool.close().await;
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn clear_memory_data_removes_legacy_state_memory_rows_before_split_db_exists() {
+        let codex_home = unique_temp_dir();
+        tokio::fs::create_dir_all(&codex_home)
+            .await
+            .expect("create codex home");
+        let state_path = state_db_path(codex_home.as_path());
+
+        let state_pool = SqlitePool::connect_with(
+            SqliteConnectOptions::new()
+                .filename(&state_path)
+                .create_if_missing(true),
+        )
+        .await
+        .expect("open legacy state db");
+        sqlx::query(
+            r#"
+CREATE TABLE stage1_outputs (
+    thread_id TEXT PRIMARY KEY,
+    source_updated_at INTEGER NOT NULL,
+    raw_memory TEXT NOT NULL,
+    rollout_summary TEXT NOT NULL,
+    generated_at INTEGER NOT NULL
+);
+            "#,
+        )
+        .execute(&state_pool)
+        .await
+        .expect("create legacy stage1_outputs");
+        sqlx::query(
+            r#"
+CREATE TABLE jobs (
+    kind TEXT NOT NULL,
+    job_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    retry_remaining INTEGER NOT NULL,
+    PRIMARY KEY (kind, job_key)
+);
+            "#,
+        )
+        .execute(&state_pool)
+        .await
+        .expect("create legacy jobs");
+        sqlx::query(
+            "INSERT INTO stage1_outputs (thread_id, source_updated_at, raw_memory, rollout_summary, generated_at) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind("thread-memory")
+        .bind(10_i64)
+        .bind("raw memory")
+        .bind("rollout summary")
+        .bind(11_i64)
+        .execute(&state_pool)
+        .await
+        .expect("insert legacy stage1 output");
+        sqlx::query(
+            "INSERT INTO jobs (kind, job_key, status, retry_remaining) VALUES (?, ?, ?, ?), (?, ?, ?, ?)",
+        )
+        .bind("memory_stage1")
+        .bind("memory-job")
+        .bind("done")
+        .bind(0_i64)
+        .bind("other")
+        .bind("other-job")
+        .bind("done")
+        .bind(0_i64)
+        .execute(&state_pool)
+        .await
+        .expect("insert legacy jobs");
+        state_pool.close().await;
+
+        let cleared = StateRuntime::clear_memory_data_in_sqlite_home(codex_home.as_path())
+            .await
+            .expect("clear legacy memory data");
+        assert!(cleared);
+
+        let state_pool = open_db_pool(state_path.as_path()).await;
+        let counts = sqlx::query(
+            r#"
+SELECT
+    (SELECT COUNT(*) FROM stage1_outputs) AS stage1_count,
+    (SELECT COUNT(*) FROM jobs WHERE kind = 'memory_stage1') AS memory_job_count,
+    (SELECT COUNT(*) FROM jobs WHERE kind = 'other') AS other_job_count
+            "#,
+        )
+        .fetch_one(&state_pool)
+        .await
+        .expect("fetch legacy memory counts");
+        assert_eq!(
+            (
+                counts.get::<i64, _>("stage1_count"),
+                counts.get::<i64, _>("memory_job_count"),
+                counts.get::<i64, _>("other_job_count"),
+            ),
+            (0, 0, 1)
+        );
+        state_pool.close().await;
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn init_records_successful_sqlite_init_phases_to_explicit_telemetry() {
         let codex_home = unique_temp_dir();
         let telemetry = TestTelemetry::default();
@@ -788,6 +1408,8 @@ FROM thread_goals
             "migrate_logs",
             "open_goals",
             "migrate_goals",
+            "open_memories",
+            "migrate_memories",
             "ensure_backfill_state",
             "post_init_query",
         ]

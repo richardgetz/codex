@@ -419,6 +419,8 @@ pub struct MemoriesToml {
     pub use_memories: Option<bool>,
     /// Which collaboration modes may read from and generate memories.
     pub scope: Option<MemoriesScope>,
+    /// When `true`, expose dedicated memory tools through the extension tool surface.
+    pub dedicated_tools: Option<bool>,
     /// Maximum number of recent raw memories retained for global consolidation.
     #[schemars(range(min = 1, max = 4096))]
     pub max_raw_memories_for_consolidation: Option<usize>,
@@ -459,6 +461,7 @@ pub struct MemoriesConfig {
     pub generate_memories: bool,
     pub use_memories: bool,
     pub scope: MemoriesScope,
+    pub dedicated_tools: bool,
     pub max_raw_memories_for_consolidation: usize,
     pub max_unused_days: i64,
     pub max_rollout_age_days: i64,
@@ -478,6 +481,7 @@ impl Default for MemoriesConfig {
             generate_memories: true,
             use_memories: true,
             scope: MemoriesScope::All,
+            dedicated_tools: false,
             max_raw_memories_for_consolidation: DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
             max_unused_days: DEFAULT_MEMORIES_MAX_UNUSED_DAYS,
             max_rollout_age_days: DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS,
@@ -502,6 +506,7 @@ impl From<MemoriesToml> for MemoriesConfig {
             generate_memories: toml.generate_memories.unwrap_or(defaults.generate_memories),
             use_memories: toml.use_memories.unwrap_or(defaults.use_memories),
             scope: toml.scope.unwrap_or(defaults.scope),
+            dedicated_tools: toml.dedicated_tools.unwrap_or(defaults.dedicated_tools),
             max_raw_memories_for_consolidation: toml
                 .max_raw_memories_for_consolidation
                 .unwrap_or(defaults.max_raw_memories_for_consolidation)
