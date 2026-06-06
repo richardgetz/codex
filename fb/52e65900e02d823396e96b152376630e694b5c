@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-06-06/context-fragments-cargo-shear#fb52e65900e0"
+  change_type: "fix"
+  scope: "ci"
+  summary: "Satisfy cargo-shear for the context-fragments crate after the stable refresh."
+  decision: "Remove the explicit lib test=false flag because the crate intentionally contains unit tests and cargo-shear treats that mismatch as a deny-warnings failure."
+  constraints:
+    - "Must keep the fix scoped to the failing cargo-shear finding."
+    - "Must not change runtime behavior or dependency resolution."
+    - "Must keep the stable refresh merge commit as the base PR work."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/context-fragments/Cargo.toml"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
