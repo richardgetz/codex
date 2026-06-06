@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-06-06/fork-argument-lint-runners#a8f65e5c2276"
+  change_type: "ci"
+  scope: "rust-ci"
+  summary: "Keep the fork PR argument-comment lint gate on available runners."
+  decision: "Run the prebuilt argument-comment lint gate on Linux in the fork PR workflow while retaining the linter package validation, because the refreshed macOS and Windows Bazel lint paths require upstream/private platform toolchain setup that the fork public PR runners cannot satisfy."
+  constraints:
+    - "Must not hide real argument-comment lint findings on the available Linux path."
+    - "Must keep the argument-comment lint package tests running when lint tooling changes."
+    - "Must keep fork CI green without depending on upstream-only/private runner infrastructure."
+  intent_priority: "must"
+  code_locations:
+    - ".github/workflows/rust-ci.yml"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
