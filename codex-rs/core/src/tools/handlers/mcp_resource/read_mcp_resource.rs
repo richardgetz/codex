@@ -81,10 +81,7 @@ impl ToolExecutor<ToolInvocation> for ReadMcpResourceHandler {
                 .read_resource_with_reconnect(
                     turn.as_ref(),
                     &server,
-                    ReadResourceRequestParams {
-                        meta: None,
-                        uri: uri.clone(),
-                    },
+                    ReadResourceRequestParams::new(uri.clone()),
                 )
                 .await
                 .map_err(|err| {

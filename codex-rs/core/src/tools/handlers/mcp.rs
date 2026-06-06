@@ -5,6 +5,7 @@ use crate::function_tool::FunctionCallError;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::tools::context::McpToolOutput;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
@@ -15,11 +16,12 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolTelemetryTags;
-use crate::tools::tool_search_entry::ToolSearchInfo;
 use codex_mcp::ToolInfo;
+use codex_mcp::tool_is_model_visible;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
+use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
 use codex_tools::mcp_tool_to_responses_api_tool;
@@ -28,6 +30,8 @@ use serde_json::Value;
 
 const LEGACY_MCP_TOOL_NAME_PREFIX: &str = "mcp__";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
+const CONFIGURED_PLACEHOLDER_DESCRIPTION: &str =
+    "Configured MCP tool placeholder recovered after tool listing was unavailable.";
 
 pub struct McpHandler {
     tool_info: ToolInfo,
@@ -87,6 +91,32 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
                 .unwrap_or(false)
     }
 
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        let source_name = self
+            .tool_info
+            .connector_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|connector_name| !connector_name.is_empty())
+            .unwrap_or_else(|| self.tool_info.server_name.trim());
+        let source_info = (!source_name.is_empty()).then(|| ToolSearchSourceInfo {
+            name: source_name.to_string(),
+            description: self
+                .tool_info
+                .namespace_description
+                .as_deref()
+                .map(str::trim)
+                .filter(|description| !description.is_empty())
+                .map(str::to_string),
+        });
+
+        ToolSearchInfo::from_spec(
+            build_mcp_search_text(&self.tool_info),
+            self.spec(),
+            source_info,
+        )
+    }
+
     async fn handle(
         &self,
         invocation: ToolInvocation,
@@ -95,9 +125,21 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
             session,
             turn,
             call_id,
+            tool_name,
+            source,
             payload,
             ..
         } = invocation;
+        if matches!(source, ToolCallSource::Direct) && tool_name != self.tool_name() {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "unsupported call: {tool_name}"
+            )));
+        }
+        if matches!(source, ToolCallSource::Direct) && !tool_is_model_visible(&self.tool_info) {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "unsupported call: {tool_name}"
+            )));
+        }
 
         let payload = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -131,32 +173,6 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
 }
 
 impl CoreToolRuntime for McpHandler {
-    fn search_info(&self) -> Option<ToolSearchInfo> {
-        let source_name = self
-            .tool_info
-            .connector_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|connector_name| !connector_name.is_empty())
-            .unwrap_or_else(|| self.tool_info.server_name.trim());
-        let source_info = (!source_name.is_empty()).then(|| ToolSearchSourceInfo {
-            name: source_name.to_string(),
-            description: self
-                .tool_info
-                .namespace_description
-                .as_deref()
-                .map(str::trim)
-                .filter(|description| !description.is_empty())
-                .map(str::to_string),
-        });
-
-        ToolSearchInfo::from_spec(
-            build_mcp_search_text(&self.tool_info),
-            self.spec(),
-            source_info,
-        )
-    }
-
     fn telemetry_tags<'a>(
         &'a self,
         _invocation: &'a ToolInvocation,
@@ -226,6 +242,7 @@ impl CoreToolRuntime for McpHandler {
 fn create_tool_spec(tool_info: &ToolInfo) -> Result<ToolSpec, serde_json::Error> {
     let tool_name = tool_info.canonical_tool_name();
     let tool = mcp_tool_to_responses_api_tool(&tool_name, &tool_info.tool)?;
+    let namespace_name = visible_namespace_for_tool_spec(tool_info);
     let description = tool_info
         .namespace_description
         .as_deref()
@@ -243,10 +260,29 @@ fn create_tool_spec(tool_info: &ToolInfo) -> Result<ToolSpec, serde_json::Error>
         .unwrap_or_default();
 
     Ok(ToolSpec::Namespace(ResponsesApiNamespace {
-        name: tool_info.callable_namespace.clone(),
+        name: namespace_name,
         description,
         tools: vec![ResponsesApiNamespaceTool::Function(tool)],
     }))
+}
+
+fn visible_namespace_for_tool_spec(tool_info: &ToolInfo) -> String {
+    if tool_info
+        .tool
+        .description
+        .as_deref()
+        .is_some_and(|description| description == CONFIGURED_PLACEHOLDER_DESCRIPTION)
+        && tool_info
+            .callable_namespace
+            .starts_with(LEGACY_MCP_TOOL_NAME_PREFIX)
+        && !tool_info
+            .callable_namespace
+            .ends_with(MCP_TOOL_NAME_DELIMITER)
+    {
+        format!("{}{MCP_TOOL_NAME_DELIMITER}", tool_info.callable_namespace)
+    } else {
+        tool_info.callable_namespace.clone()
+    }
 }
 
 fn mcp_hook_tool_input(raw_arguments: &str) -> Value {
@@ -522,19 +558,13 @@ mod tests {
             callable_name: tool_name.to_string(),
             callable_namespace: callable_namespace.to_string(),
             namespace_description: None,
-            tool: rmcp::model::Tool {
-                name: tool_name.to_string().into(),
-                title: None,
-                description: None,
-                input_schema: Arc::new(rmcp::model::object(serde_json::json!({
+            tool: rmcp::model::Tool::new_with_raw(
+                tool_name.to_string(),
+                None,
+                Arc::new(rmcp::model::object(serde_json::json!({
                     "type": "object",
                 }))),
-                output_schema: None,
-                annotations: None,
-                execution: None,
-                icons: None,
-                meta: None,
-            },
+            ),
             connector_id: None,
             connector_name: None,
             plugin_display_names: Vec::new(),

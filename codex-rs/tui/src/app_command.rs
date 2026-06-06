@@ -29,7 +29,9 @@ use serde_json::Value;
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) enum AppCommand {
-    Interrupt,
+    Interrupt {
+        behavior: InterruptBehavior,
+    },
     CleanBackgroundTerminals,
     RealtimeConversationStart {
         transport: Option<ThreadRealtimeStartTransport>,
@@ -128,9 +130,23 @@ pub(crate) enum AppCommand {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) enum InterruptBehavior {
+    Default,
+    RestorePromptIfNoOutput,
+}
+
 impl AppCommand {
     pub(crate) fn interrupt() -> Self {
-        Self::Interrupt
+        Self::Interrupt {
+            behavior: InterruptBehavior::Default,
+        }
+    }
+
+    pub(crate) fn interrupt_and_restore_prompt_if_no_output() -> Self {
+        Self::Interrupt {
+            behavior: InterruptBehavior::RestorePromptIfNoOutput,
+        }
     }
 
     pub(crate) fn clean_background_terminals() -> Self {

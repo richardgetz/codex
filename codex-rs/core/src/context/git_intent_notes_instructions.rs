@@ -13,7 +13,7 @@ impl GitIntentNotesInstructions {
 }
 
 impl ContextualUserFragment for GitIntentNotesInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

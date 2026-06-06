@@ -25,7 +25,6 @@ use crate::tools::hook_names::HookToolName;
 use crate::tools::lifecycle::notify_tool_finish;
 use crate::tools::lifecycle::notify_tool_start;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
-use crate::tools::tool_search_entry::ToolSearchInfo;
 use crate::util::error_or_panic;
 use codex_extension_api::ToolCallOutcome;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -33,6 +32,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
+use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -48,15 +48,17 @@ pub use codex_tools::ToolExposure;
 /// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
-    fn search_info(&self) -> Option<ToolSearchInfo> {
-        None
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(
             payload,
             ToolPayload::Function { .. } | ToolPayload::ToolSearch { .. }
         )
+    }
+
+    /// Whether cancellation should let the handler finish teardown before the
+    /// host returns an aborted tool response.
+    fn waits_for_runtime_cancellation(&self) -> bool {
+        false
     }
 
     fn telemetry_tags<'a>(
@@ -269,6 +271,10 @@ impl ToolExecutor<ToolInvocation> for ExposureOverride {
         self.exposure != ToolExposure::Hidden && self.handler.supports_parallel_tool_calls()
     }
 
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        self.handler.search_info()
+    }
+
     async fn handle(
         &self,
         invocation: ToolInvocation,
@@ -278,12 +284,12 @@ impl ToolExecutor<ToolInvocation> for ExposureOverride {
 }
 
 impl CoreToolRuntime for ExposureOverride {
-    fn search_info(&self) -> Option<ToolSearchInfo> {
-        self.handler.search_info()
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         self.handler.matches_kind(payload)
+    }
+
+    fn waits_for_runtime_cancellation(&self) -> bool {
+        self.handler.waits_for_runtime_cancellation()
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
@@ -372,20 +378,8 @@ impl ToolRegistry {
     }
 
     #[cfg(test)]
-    pub(crate) fn tool_names_for_test(&self) -> Vec<ToolName> {
-        let mut names = self.tools.keys().cloned().collect::<Vec<_>>();
-        names.sort();
-        names
-    }
-
-    #[cfg(test)]
     pub(crate) fn has_tool(&self, name: &ToolName) -> bool {
         self.tools.contains_key(name)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn tool_exposure(&self, name: &ToolName) -> Option<ToolExposure> {
-        self.tools.get(name).map(|tool| tool.exposure())
     }
 
     pub(crate) fn create_diff_consumer(
@@ -398,6 +392,11 @@ impl ToolRegistry {
     pub(crate) fn supports_parallel_tool_calls(&self, name: &ToolName) -> Option<bool> {
         let tool = self.tool(name)?;
         Some(tool.supports_parallel_tool_calls())
+    }
+
+    pub(crate) fn waits_for_runtime_cancellation(&self, name: &ToolName) -> Option<bool> {
+        let tool = self.tool(name)?;
+        Some(tool.waits_for_runtime_cancellation())
     }
 
     #[allow(dead_code)]
@@ -541,10 +540,12 @@ impl ToolRegistry {
                 PreToolUseHookResult::Blocked(message) => {
                     let err = FunctionCallError::RespondToModel(message);
                     dispatch_trace.record_failed(&err);
-                    if let Some(terminal_outcome_reached) = &terminal_outcome_reached {
-                        terminal_outcome_reached.store(true, Ordering::Release);
-                    }
-                    notify_tool_finish(&invocation, ToolCallOutcome::Blocked).await;
+                    notify_tool_finish_if_unclaimed(
+                        &invocation,
+                        terminal_outcome_reached.as_deref(),
+                        ToolCallOutcome::Blocked,
+                    )
+                    .await;
                     return Err(err);
                 }
                 PreToolUseHookResult::Continue {
@@ -555,11 +556,9 @@ impl ToolRegistry {
                     }
                     Err(err) => {
                         dispatch_trace.record_failed(&err);
-                        if let Some(terminal_outcome_reached) = &terminal_outcome_reached {
-                            terminal_outcome_reached.store(true, Ordering::Release);
-                        }
-                        notify_tool_finish(
+                        notify_tool_finish_if_unclaimed(
                             &invocation,
+                            terminal_outcome_reached.as_deref(),
                             ToolCallOutcome::Failed {
                                 handler_executed: false,
                             },
@@ -682,18 +681,21 @@ impl ToolRegistry {
                 handler_executed: true,
             },
         };
-        if let Some(terminal_outcome_reached) = &terminal_outcome_reached {
-            terminal_outcome_reached.store(true, Ordering::Release);
-        }
-        notify_tool_finish(&invocation, lifecycle_outcome).await;
+        let finished = notify_tool_finish_if_unclaimed(
+            &invocation,
+            terminal_outcome_reached.as_deref(),
+            lifecycle_outcome,
+        )
+        .await;
 
-        if let Err(err) = invocation
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::ToolCompleted {
-                turn_context: invocation.turn.as_ref(),
-                tool_name: tool_name.name.as_str(),
-            })
-            .await
+        if finished
+            && let Err(err) = invocation
+                .session
+                .goal_runtime_apply(GoalRuntimeEvent::ToolCompleted {
+                    turn_context: invocation.turn.as_ref(),
+                    tool_name: tool_name.name.as_str(),
+                })
+                .await
         {
             warn!("failed to account thread goal progress after tool call: {err}");
         }
@@ -718,6 +720,19 @@ impl ToolRegistry {
             }
         }
     }
+}
+
+async fn notify_tool_finish_if_unclaimed(
+    invocation: &ToolInvocation,
+    terminal_outcome_reached: Option<&AtomicBool>,
+    outcome: ToolCallOutcome,
+) -> bool {
+    if terminal_outcome_reached.is_some_and(|reached| reached.swap(true, Ordering::AcqRel)) {
+        return false;
+    }
+
+    notify_tool_finish(invocation, outcome).await;
+    true
 }
 
 async fn handle_any_tool(
@@ -759,6 +774,12 @@ fn function_hook_tool_input(arguments: &str) -> Value {
 }
 
 fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &ToolName) -> String {
+    if is_codex_apps_tool_name(tool_name) {
+        return match payload {
+            ToolPayload::Custom { .. } => format!("unsupported custom tool call: {tool_name}"),
+            _ => format!("unsupported call: {tool_name}"),
+        };
+    }
     if is_mcp_tool_name(tool_name) {
         return format!("MCP tool `{tool_name}` is not currently available.");
     }
@@ -775,6 +796,14 @@ fn is_mcp_tool_name(tool_name: &ToolName) -> bool {
         .as_deref()
         .is_some_and(|namespace| namespace.starts_with("mcp__"))
         || tool_name.name.starts_with("mcp__")
+}
+
+fn is_codex_apps_tool_name(tool_name: &ToolName) -> bool {
+    tool_name
+        .namespace
+        .as_deref()
+        .is_some_and(|namespace| namespace.starts_with("mcp__codex_apps"))
+        || tool_name.name.starts_with("mcp__codex_apps")
 }
 #[cfg(test)]
 #[path = "registry_tests.rs"]

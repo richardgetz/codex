@@ -55,7 +55,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
+use core_test_support::wait_for_mcp_server;
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde_json::Value;
@@ -266,44 +266,6 @@ fn copy_binary_to_remote_env(
     );
 
     Ok(remote_path)
-}
-
-async fn wait_for_mcp_server(fixture: &TestCodex, server_name: &str) -> anyhow::Result<()> {
-    let startup_event = wait_for_event_with_timeout(
-        &fixture.codex,
-        |ev| match ev {
-            EventMsg::McpStartupComplete(summary) => {
-                summary.ready.iter().any(|server| server == server_name)
-                    || summary
-                        .failed
-                        .iter()
-                        .any(|failure| failure.server == server_name)
-                    || summary.cancelled.iter().any(|server| server == server_name)
-            }
-            _ => false,
-        },
-        Duration::from_secs(70),
-    )
-    .await;
-    let EventMsg::McpStartupComplete(summary) = startup_event else {
-        unreachable!("event guard guarantees McpStartupComplete");
-    };
-    if let Some(failure) = summary
-        .failed
-        .iter()
-        .find(|failure| failure.server == server_name)
-    {
-        let error = &failure.error;
-        anyhow::bail!("MCP server {server_name} failed to start: {error}");
-    }
-    if summary.cancelled.iter().any(|server| server == server_name) {
-        anyhow::bail!("MCP server {server_name} startup was cancelled");
-    }
-    ensure!(
-        summary.ready.iter().any(|server| server == server_name),
-        "expected MCP server {server_name} to be ready; startup summary: {summary:?}"
-    );
-    Ok(())
 }
 
 struct TestMcpServerOptions {
@@ -519,6 +481,8 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
     fixture
         .codex
         .submit(read_only_user_turn(&fixture, "call the rmcp echo tool"))
@@ -642,6 +606,7 @@ async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::R
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     let expected_cwd = expected_cwd
         .lock()
@@ -704,6 +669,7 @@ async fn local_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() ->
         })
         .build(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     let expected_cwd = expected_cwd
         .lock()
@@ -762,7 +728,7 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
         .build_with_remote_env(&server)
         .await?;
 
-    wait_for_mcp_server(&fixture, server_name).await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     fixture
         .submit_turn_with_permission_profile(
@@ -859,6 +825,8 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
     fixture
         .codex
         // Keep this baseline on the mutable sync tool so read-only hints do not
@@ -993,6 +961,8 @@ async fn stdio_mcp_read_only_tool_calls_run_concurrently_without_server_opt_in()
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
     fixture
         .codex
         .submit(read_only_user_turn(
@@ -1075,6 +1045,8 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
     fixture
         .codex
         // Exercise the server opt-in with the mutable sync tool rather than the
@@ -1159,7 +1131,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
         })
         .build_with_remote_env(&server)
         .await?;
-    wait_for_mcp_server(&fixture, server_name).await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     fixture
         .codex
@@ -1292,7 +1264,7 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
         })
         .build_with_remote_env(&server)
         .await?;
-    wait_for_mcp_server(&fixture, server_name).await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     fixture
         .codex
@@ -1379,6 +1351,9 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 input_modalities: vec![InputModality::Text],
                 used_fallback_model_metadata: false,
                 supports_search_tool: false,
+                auto_review_model_override: None,
+                tool_mode: None,
+                multi_agent_version: None,
             }],
         },
     )
@@ -1428,6 +1403,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     fixture
         .thread_manager
@@ -1530,6 +1506,8 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
     fixture
         .codex
         .submit(read_only_user_turn(&fixture, "call the rmcp echo tool"))
@@ -1648,6 +1626,7 @@ async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Resu
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     fixture
         .codex
@@ -1740,6 +1719,7 @@ async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     fixture
         .codex
@@ -1923,6 +1903,8 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
     // Phase 4: submit the user turn that should trigger the MCP tool call.
     fixture
         .codex
@@ -2111,7 +2093,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         .await?;
     // Phase 5: wait for MCP startup before the turn is submitted, which keeps
     // failures tied to server startup/discovery.
-    wait_for_mcp_server(&fixture, server_name).await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     // Phase 6: submit the user turn that should invoke the OAuth-backed tool.
     fixture

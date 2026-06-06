@@ -42,17 +42,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> rmcp::model::Tool {
-    rmcp::model::Tool {
-        name: name.to_string().into(),
-        title: None,
-        description: Some(description.to_string().into()),
-        input_schema: std::sync::Arc::new(rmcp::model::object(input_schema)),
-        output_schema: None,
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    }
+    rmcp::model::Tool::new(
+        name.to_string(),
+        description.to_string(),
+        std::sync::Arc::new(rmcp::model::object(input_schema)),
+    )
 }
 
 fn mcp_tool_info_with_display_name(display_name: &str, tool: rmcp::model::Tool) -> ToolInfo {
@@ -385,7 +379,7 @@ async fn test_build_specs_gpt5_codex_default() {
             "apply_patch",
             "scratchpad",
             "view_image",
-            "multi_agent_v1",
+            "tool_search",
             "web_search",
             "image_generation",
         ],
@@ -407,7 +401,7 @@ async fn test_build_specs_gpt51_codex_default() {
             "apply_patch",
             "scratchpad",
             "view_image",
-            "multi_agent_v1",
+            "tool_search",
             "web_search",
             "image_generation",
         ],
@@ -431,7 +425,7 @@ async fn test_build_specs_gpt5_codex_unified_exec_web_search() {
             "apply_patch",
             "scratchpad",
             "view_image",
-            "multi_agent_v1",
+            "tool_search",
             "web_search",
             "image_generation",
         ],
@@ -455,7 +449,7 @@ async fn test_build_specs_gpt51_codex_unified_exec_web_search() {
             "apply_patch",
             "scratchpad",
             "view_image",
-            "multi_agent_v1",
+            "tool_search",
             "web_search",
             "image_generation",
         ],
@@ -477,7 +471,7 @@ async fn test_gpt_5_1_codex_max_defaults() {
             "apply_patch",
             "scratchpad",
             "view_image",
-            "multi_agent_v1",
+            "tool_search",
             "web_search",
             "image_generation",
         ],
@@ -499,7 +493,7 @@ async fn test_codex_5_1_mini_defaults() {
             "apply_patch",
             "scratchpad",
             "view_image",
-            "multi_agent_v1",
+            "tool_search",
             "web_search",
             "image_generation",
         ],
@@ -521,7 +515,7 @@ async fn test_gpt_5_defaults() {
             "apply_patch",
             "scratchpad",
             "view_image",
-            "multi_agent_v1",
+            "tool_search",
             "web_search",
             "image_generation",
         ],
@@ -543,7 +537,7 @@ async fn test_gpt_5_1_defaults() {
             "apply_patch",
             "scratchpad",
             "view_image",
-            "multi_agent_v1",
+            "tool_search",
             "web_search",
             "image_generation",
         ],
@@ -567,7 +561,7 @@ async fn test_gpt_5_1_codex_max_unified_exec_web_search() {
             "apply_patch",
             "scratchpad",
             "view_image",
-            "multi_agent_v1",
+            "tool_search",
             "web_search",
             "image_generation",
         ],
@@ -803,7 +797,7 @@ async fn request_plugin_install_requires_apps_and_plugins_features() {
 }
 
 #[tokio::test]
-async fn search_tool_is_hidden_without_deferred_tools() {
+async fn search_tool_is_visible_for_deferred_v1_multi_agent_tools() {
     let model_info = search_capable_model_info().await;
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
@@ -827,7 +821,7 @@ async fn search_tool_is_hidden_without_deferred_tools() {
         &[],
     );
     assert!(
-        !tools
+        tools
             .iter()
             .any(|tool| tool.name() == TOOL_SEARCH_TOOL_NAME)
     );
@@ -1243,7 +1237,7 @@ async fn code_mode_only_restricts_model_tools_to_exec_tools() {
         "gpt-5.4",
         &features,
         Some(WebSearchMode::Live),
-        &["exec", "wait"],
+        &["exec", "wait", "web_search", "image_generation"],
     )
     .await;
 }
@@ -1295,6 +1289,8 @@ async fn code_mode_only_can_expose_multi_agent_v2_as_normal_tools() {
             "wait_agent",
             "close_agent",
             "list_agents",
+            "web_search",
+            "image_generation",
         ]
     );
 
@@ -1354,7 +1350,10 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
         .map(ToolSpec::name)
         .collect::<Vec<_>>();
 
-    assert_eq!(tool_names, vec!["exec", "wait", "agents"]);
+    assert_eq!(
+        tool_names,
+        vec!["exec", "wait", "agents", "web_search", "image_generation"]
+    );
 
     let exec = find_tool(&model_visible_specs, "exec");
     let ToolSpec::Freeform(exec) = exec else {

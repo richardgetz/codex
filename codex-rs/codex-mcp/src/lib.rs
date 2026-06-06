@@ -1,6 +1,7 @@
 pub use connection_manager::LazyMcpServerInfo;
 pub use connection_manager::McpConnectionManager;
 pub use connection_manager::should_start_server_on_session_start;
+pub use connection_manager::tool_is_model_visible;
 pub use elicitation::ElicitationReviewRequest;
 pub use elicitation::ElicitationReviewer;
 pub use elicitation::ElicitationReviewerHandle;

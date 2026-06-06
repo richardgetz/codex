@@ -1,5 +1,6 @@
 use super::turn_context::image_generation_tool_auth_allowed;
 use super::*;
+use codex_protocol::openai_models::ToolMode;
 use std::sync::atomic::AtomicBool;
 
 /// Spawn a review thread using the given prompt.
@@ -23,16 +24,24 @@ pub(super) async fn spawn_review_thread(
     let mut review_features = sess.features.clone();
     let _ = review_features.disable(Feature::WebSearchRequest);
     let _ = review_features.disable(Feature::WebSearchCached);
+    let _ = review_features.disable(Feature::Goals);
     let review_web_search_mode = WebSearchMode::Disabled;
     let goal_tools_supported = !config.ephemeral && parent_turn_context.tools_config.goal_tools;
     let provider_capabilities = parent_turn_context.provider.capabilities();
+    let available_models = sess
+        .services
+        .models_manager
+        .list_models(RefreshStrategy::OnlineIfUncached)
+        .await;
+    let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
+        codex_tools::unified_exec_feature_mode_for_features(review_features.get()),
+        crate::tools::tool_user_shell_type(sess.services.user_shell.as_ref()),
+        sess.services.shell_zsh_path.as_ref(),
+        sess.services.main_execve_wrapper_exe.as_ref(),
+    );
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
-        available_models: &sess
-            .services
-            .models_manager
-            .list_models(RefreshStrategy::OnlineIfUncached)
-            .await,
+        available_models: &available_models,
         features: &review_features,
         image_generation_tool_auth_allowed: image_generation_tool_auth_allowed(Some(
             sess.services.auth_manager.as_ref(),
@@ -45,11 +54,7 @@ pub(super) async fn spawn_review_thread(
     .with_namespace_tools_capability(provider_capabilities.namespace_tools)
     .with_image_generation_capability(provider_capabilities.image_generation)
     .with_web_search_capability(provider_capabilities.web_search)
-    .with_unified_exec_shell_mode_for_session(
-        crate::tools::tool_user_shell_type(sess.services.user_shell.as_ref()),
-        sess.services.shell_zsh_path.as_ref(),
-        sess.services.main_execve_wrapper_exe.as_ref(),
-    )
+    .with_unified_exec_shell_mode(unified_exec_shell_mode)
     .with_web_search_config(/*web_search_config*/ None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_environment_mode(parent_turn_context.tools_config.environment_mode)
@@ -88,6 +93,15 @@ pub(super) async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
+    let tool_mode = model_info.tool_mode.unwrap_or_else(|| {
+        if per_turn_config.features.enabled(Feature::CodeModeOnly) {
+            ToolMode::CodeModeOnly
+        } else if per_turn_config.features.enabled(Feature::CodeMode) {
+            ToolMode::CodeMode
+        } else {
+            ToolMode::Direct
+        }
+    });
     if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
         let fallback_value = per_turn_config.web_search_mode.value();
         tracing::warn!(
@@ -121,6 +135,8 @@ pub(super) async fn spawn_review_thread(
         sess.session_id().to_string(),
         sess.thread_id().to_string(),
         forked_from_thread_id,
+        parent_turn_context.parent_thread_id,
+        &session_source,
         parent_turn_context.thread_source,
         review_turn_id.clone(),
         #[allow(deprecated)]
@@ -137,11 +153,13 @@ pub(super) async fn spawn_review_thread(
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
+        tool_mode,
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
         reasoning_effort,
         reasoning_summary,
         session_source,
+        parent_thread_id: parent_turn_context.parent_thread_id,
         thread_source: parent_turn_context.thread_source,
         environments: parent_turn_context.environments.clone(),
         tools_config,
@@ -154,6 +172,7 @@ pub(super) async fn spawn_review_thread(
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),
+        multi_agent_version: MultiAgentVersion::Disabled,
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy.clone(),
         permission_profile: parent_turn_context.permission_profile(),
@@ -176,11 +195,14 @@ pub(super) async fn spawn_review_thread(
     };
 
     // Seed the child task with the review prompt as the initial user message.
-    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
-        text: review_prompt,
-        // Review prompt is synthesized; no UI element ranges to preserve.
-        text_elements: Vec::new(),
-    }])];
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: review_prompt,
+            // Review prompt is synthesized; no UI element ranges to preserve.
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    }];
     let tc = Arc::new(review_turn_context);
     tc.turn_metadata_state.spawn_git_enrichment_task();
     // TODO(ccunningham): Review turns currently rely on `spawn_task` for TurnComplete but do not

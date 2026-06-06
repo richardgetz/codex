@@ -15,7 +15,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKSPACE_MANIFEST = REPO_ROOT / "codex-rs" / "Cargo.toml"
 DEFAULT_RELEASE_CONFIG_PATH = REPO_ROOT / ".github" / "fork-release-config.json"
 SEMVER_BASE_PATTERN = re.compile(r"(\d+\.\d+\.\d+)")
-FORK_TAG_PATTERN = re.compile(r"^(?P<prefix>.+?)(?P<base>\d+\.\d+\.\d+)-rick\.(?P<counter>\d+)$")
+FORK_TAG_PATTERN = re.compile(
+    r"^(?P<prefix>.+?)(?P<base>\d+\.\d+\.\d+)-rick\.(?P<counter>\d+)$"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,7 +59,9 @@ def workspace_version() -> str:
         contents,
     )
     if not match:
-        raise RuntimeError(f"Could not resolve [workspace.package] version from {WORKSPACE_MANIFEST}.")
+        raise RuntimeError(
+            f"Could not resolve [workspace.package] version from {WORKSPACE_MANIFEST}."
+        )
     return match.group(1)
 
 
@@ -92,12 +96,16 @@ def next_counter(prefix: str, base_version: str) -> int:
 
 def parse_existing_release(prefix: str, tag: str) -> dict:
     if not tag.startswith(prefix):
-        raise RuntimeError(f"Existing tag '{tag}' does not start with expected prefix '{prefix}'.")
+        raise RuntimeError(
+            f"Existing tag '{tag}' does not start with expected prefix '{prefix}'."
+        )
 
     version = tag.removeprefix(prefix)
     match = re.match(rf"^{re.escape(semver_base(version))}-rick\.(\d+)$", version)
     if not match:
-        raise RuntimeError(f"Existing tag '{tag}' does not match expected fork release version format.")
+        raise RuntimeError(
+            f"Existing tag '{tag}' does not match expected fork release version format."
+        )
 
     return {
         "base_version": semver_base(version),

@@ -251,7 +251,7 @@ impl ToolExecutor<ToolInvocation> for BuiltinScratchpadHandler {
             args.get("state_home").and_then(Value::as_str),
             config.codex_home.as_path(),
         )?;
-        let default_scratchpad_id = session.conversation_id.to_string();
+        let default_scratchpad_id = session.thread_id.to_string();
         let default_continuous = config
             .scratchpad
             .for_mode(turn.collaboration_mode.mode)

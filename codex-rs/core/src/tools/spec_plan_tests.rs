@@ -241,6 +241,39 @@ fn hosted_web_search_remains_when_standalone_web_search_is_hidden() {
 }
 
 #[test]
+fn standalone_image_generation_extension_replaces_hosted_image_generation() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ImageGeneration);
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let extension_tool_executors = vec![extension_tool_executor_with_name(
+        ToolName::namespaced("image_gen", "imagegen"),
+        "Standalone image generation.",
+    )];
+    let (tools, _) = build_specs_with_inputs_for_test(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        /*discoverable_tools*/ None,
+        &extension_tool_executors,
+        &[],
+    );
+
+    assert!(find_tool_opt(&tools, "image_generation").is_none());
+    assert!(find_namespace_tool(&tools, "image_gen", "imagegen").is_some());
+}
+
+#[test]
 fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
@@ -2593,22 +2626,22 @@ fn build_specs_with_inputs_for_test(
     prepend_code_mode_executors(config, &mut executors);
     let standalone_web_search_can_be_shown =
         config.namespace_tools && standalone_web_search_available(&executors);
-    let hosted_specs = hosted_model_tool_specs(config, standalone_web_search_can_be_shown);
+    let standalone_image_generation_can_be_shown =
+        config.namespace_tools && standalone_image_generation_available(&executors);
+    let hosted_specs = hosted_model_tool_specs(
+        config,
+        standalone_web_search_can_be_shown,
+        standalone_image_generation_can_be_shown,
+    );
     build_model_visible_specs_and_registry(config, executors, hosted_specs)
 }
 
 fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> rmcp::model::Tool {
-    rmcp::model::Tool {
-        name: name.to_string().into(),
-        title: None,
-        description: Some(description.to_string().into()),
-        input_schema: std::sync::Arc::new(rmcp::model::object(input_schema)),
-        output_schema: None,
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    }
+    rmcp::model::Tool::new(
+        name.to_string(),
+        description.to_string(),
+        std::sync::Arc::new(rmcp::model::object(input_schema)),
+    )
 }
 
 fn tool_info_from_parts(name: &ToolName, tool: rmcp::model::Tool) -> ToolInfo {
