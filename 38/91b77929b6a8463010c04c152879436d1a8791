@@ -1,0 +1,26 @@
+intent:
+  id: "intent/2026-06-06/stable-rust-v0.137.0#3891b77929b6"
+  change_type: "chore"
+  scope: "stable-release"
+  summary: "Merge upstream rust-v0.137.0 into the fork stable branch."
+  decision: "Use a stable-based merge of upstream rust-v0.137.0 and resolve conflicts by preserving fork-only release, account, orchestrator, memory, scratchpad, MCP visibility, app-server, Python SDK, config/schema, TUI, CI, and generated artifact surfaces while adopting upstream 0.136/0.137 code changes."
+  constraints:
+    - "Must preserve fork-only runtime features, slash commands, and app-server policy controls."
+    - "Must keep generated config, app-server schema, Python SDK, Bazel, and Cargo lock artifacts aligned with resolved sources."
+    - "Must keep 0.136.0 code/features/fixes included through rust-v0.137.0 while noting the 0.136.0 release-note commit is not an ancestor."
+    - "Must preserve MCP model-visibility filtering, deferred v1 multi-agent exposure, and hosted/standalone image generation de-duplication."
+    - "Must not touch sandbox network environment variable behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core"
+    - "codex-rs/tools"
+    - "codex-rs/app-server"
+    - "codex-rs/app-server-protocol"
+    - "codex-rs/config"
+    - "codex-rs/tui"
+    - "sdk/python"
+    - ".github/workflows"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
