@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-06-06/mcp-approvals-disabled-regression#041d7006cc5a"
+  change_type: "test"
+  scope: "mcp"
+  summary: "Restore direct regression coverage for disabling MCP approvals."
+  decision: "Add a focused test proving enable_mcp_approvals=false short-circuits MCP tool approval prompting before prompt-mode waits, Guardian review, permission hooks, or elicitation transport."
+  constraints:
+    - "Must preserve the fork-owned enable_mcp_approvals feature."
+    - "Must keep default MCP approval behavior unchanged when the feature is enabled."
+    - "Must avoid changing upstream approval, requirements, or sandbox behavior while adding coverage."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/mcp_tool_call_tests.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
