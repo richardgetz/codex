@@ -165,7 +165,7 @@ jobs:
         include:
           - name: Linux
             runner: ubuntu-24.04
-            timeout_minutes: 30
+            timeout_minutes: 75
           # The fork's public PR runners do not have the upstream private
           # platform toolchain setup needed by the refreshed macOS/Windows
           # Bazel lint paths. Keep this fast gate on Linux; the lint package
