@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-06-06/fork-argument-lint-timeout#bf5087cddc7d"
+  change_type: "ci"
+  scope: "rust-ci"
+  summary: "Allow the fork Linux argument-comment lint gate to finish."
+  decision: "Increase the Linux prebuilt argument-comment lint timeout because the refreshed rust-v0.137.0 Bazel/V8 target graph exceeded 30 minutes on public fork PR runners without producing lint failures."
+  constraints:
+    - "Must keep the Linux prebuilt argument-comment lint gate active."
+    - "Must not re-enable unavailable macOS/Windows public-runner platform paths."
+    - "Must keep the required CI results job meaningful for fork PRs."
+  intent_priority: "must"
+  code_locations:
+    - ".github/workflows/rust-ci.yml"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
