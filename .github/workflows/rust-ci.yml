@@ -166,12 +166,10 @@ jobs:
           - name: Linux
             runner: ubuntu-24.04
             timeout_minutes: 30
-          - name: macOS
-            runner: macos-15
-            timeout_minutes: 45
-          - name: Windows
-            runner: windows-2025
-            timeout_minutes: 45
+          # The fork's public PR runners do not have the upstream private
+          # platform toolchain setup needed by the refreshed macOS/Windows
+          # Bazel lint paths. Keep this fast gate on Linux; the lint package
+          # job above still validates the linter itself.
     steps:
       - name: Check whether argument comment lint should run
         id: argument_comment_lint_gate
