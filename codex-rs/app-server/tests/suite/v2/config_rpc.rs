@@ -1,4 +1,5 @@
 use anyhow::Result;
+use app_test_support::McpProcess;
 use app_test_support::TestAppServer;
 use app_test_support::test_path_buf_with_windows;
 use app_test_support::test_tmp_path_buf;

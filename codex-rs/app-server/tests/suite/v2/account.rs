@@ -1,5 +1,6 @@
 use anyhow::Result;
 use anyhow::bail;
+use app_test_support::McpProcess;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 
@@ -130,6 +131,7 @@ sandbox_mode = "danger-full-access"
 model_provider = "{model_provider_id}"
 
 [features]
+apps = false
 shell_snapshot = false
 
 {provider_section}

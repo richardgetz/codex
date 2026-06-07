@@ -389,6 +389,7 @@ Check supervised sessions directly for new progress, blockers, or operator instr
             reasoning_effort: Some(ReasoningEffort::High),
             personality: Some(Personality::Friendly),
             session_source: SessionSource::default(),
+            parent_thread_id: None,
             thread_source: None,
             memory_policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
             user_preferences_memory_policy:

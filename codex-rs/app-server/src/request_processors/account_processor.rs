@@ -171,7 +171,7 @@ impl AccountRequestProcessor {
                 auth_credentials_store_mode,
             )
             .await;
-        self.config_manager.replace_cloud_requirements_loader(
+        self.config_manager.replace_cloud_config_bundle_loader(
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),
         );
