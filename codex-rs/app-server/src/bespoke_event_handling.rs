@@ -7,7 +7,6 @@ use crate::request_processors::thread_from_stored_thread;
 use crate::request_processors::thread_settings_from_core_snapshot;
 use crate::server_request_error::is_turn_transition_server_request_error;
 use crate::thread_control_runtime::clear_router_tick;
-use crate::thread_control_runtime::refresh_router_tick;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
 use crate::thread_state::resolve_server_request_on_thread_listener;
@@ -198,14 +197,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &thread_state,
             )
             .await;
-            if let Some(state_db) = conversation.state_db() {
-                refresh_router_tick(
-                    Arc::clone(&conversation),
-                    Arc::clone(&thread_state),
-                    state_db,
-                )
-                .await;
-            }
+            clear_router_tick(&thread_state).await;
         }
         EventMsg::McpStartupUpdate(update) => {
             send_mcp_startup_status_notification(
@@ -1130,14 +1122,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &thread_state,
             )
             .await;
-            if let Some(state_db) = conversation.state_db() {
-                refresh_router_tick(
-                    Arc::clone(&conversation),
-                    Arc::clone(&thread_state),
-                    state_db,
-                )
-                .await;
-            }
+            clear_router_tick(&thread_state).await;
         }
         EventMsg::ThreadRolledBack(_rollback_event) => {
             let pending = {

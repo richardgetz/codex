@@ -7,8 +7,6 @@ use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
-use crate::config::DEFAULT_ORCHESTRATOR_FALLBACK_MODEL;
-use crate::config::DEFAULT_ORCHESTRATOR_MODEL;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
@@ -307,13 +305,9 @@ async fn run_remote_compact_task_inner_impl(
 
 pub(crate) fn resolve_remote_compact_model_slug(
     current_model_slug: &str,
-    is_chatgpt_auth: bool,
+    _is_chatgpt_auth: bool,
 ) -> String {
-    if is_chatgpt_auth && current_model_slug == DEFAULT_ORCHESTRATOR_MODEL {
-        DEFAULT_ORCHESTRATOR_FALLBACK_MODEL.to_string()
-    } else {
-        current_model_slug.to_string()
-    }
+    current_model_slug.to_string()
 }
 
 pub(crate) async fn process_compacted_history(

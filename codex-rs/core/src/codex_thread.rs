@@ -528,15 +528,6 @@ impl CodexThread {
         self.codex.session.collaboration_mode().await
     }
 
-    pub async fn orchestrator_active_agent_checkin_seconds(&self) -> u32 {
-        self.codex
-            .session
-            .get_config()
-            .await
-            .orchestrator
-            .active_agent_checkin_seconds
-    }
-
     #[doc(hidden)]
     pub async fn resolve_router_turn_settings(
         &self,

@@ -33,7 +33,6 @@ pub(super) enum TerminalTitleStatusKind {
     Working,
     WaitingForBackgroundTerminal,
     WaitingForAgents,
-    WaitingForPrimaryContact,
     Undoing,
     #[default]
     Thinking,

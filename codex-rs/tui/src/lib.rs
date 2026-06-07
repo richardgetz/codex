@@ -1120,12 +1120,8 @@ pub async fn run_main(
         .as_table()
         .is_some_and(|table| table.contains_key("log_dir"));
 
-    config = crate::app::config_for_startup_session(
-        &config,
-        cli.startup_account_alias.as_deref(),
-        cli.startup_collaboration_mode,
-        cli.startup_primary_contact_mcp.as_deref(),
-    );
+    config =
+        crate::app::config_for_startup_account_alias(&config, cli.startup_account_alias.as_deref());
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
@@ -1703,19 +1699,13 @@ async fn run_ratatui_app(
         prompt,
         shared,
         no_alt_screen,
-        startup_collaboration_mode,
         startup_account_alias,
-        startup_primary_contact_mcp,
         ..
     } = cli;
     let images = shared.into_inner().images;
 
-    config = crate::app::config_for_startup_session(
-        &config,
-        startup_account_alias.as_deref(),
-        startup_collaboration_mode,
-        startup_primary_contact_mcp.as_deref(),
-    );
+    config =
+        crate::app::config_for_startup_account_alias(&config, startup_account_alias.as_deref());
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
@@ -1776,7 +1766,7 @@ async fn run_ratatui_app(
         loader_overrides.clone(),
         prompt,
         images,
-        startup_collaboration_mode,
+        /*initial_collaboration_mode*/ None,
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
@@ -2665,12 +2655,7 @@ mod tests {
 
             let mut base_config = build_config(&temp_dir).await?;
             base_config.accounts.active = Some("personal".to_string());
-            let config = crate::app::config_for_startup_session(
-                &base_config,
-                Some("work"),
-                /*mode*/ None,
-                /*primary_contact_mcp*/ None,
-            );
+            let config = crate::app::config_for_startup_account_alias(&base_config, Some("work"));
             let mut app_server =
                 AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
                     start_test_embedded_app_server(config.clone()).await?,

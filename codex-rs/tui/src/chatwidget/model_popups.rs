@@ -6,57 +6,6 @@
 use super::*;
 
 impl ChatWidget {
-    pub(crate) fn open_collaboration_modes_popup(&mut self) {
-        let presets = collaboration_modes::presets_for_tui_with_config(
-            self.model_catalog.as_ref(),
-            self.config.collaboration_modes_config(),
-        );
-        if presets.is_empty() {
-            self.add_info_message(
-                "No collaboration modes are available right now.".to_string(),
-                /*hint*/ None,
-            );
-            return;
-        }
-
-        let current_kind = self
-            .active_collaboration_mask
-            .as_ref()
-            .and_then(|mask| mask.mode)
-            .or_else(|| {
-                collaboration_modes::default_mask_with_config(
-                    self.model_catalog.as_ref(),
-                    self.config.collaboration_modes_config(),
-                )
-                .and_then(|mask| mask.mode)
-            });
-        let items: Vec<SelectionItem> = presets
-            .into_iter()
-            .map(|mask| {
-                let name = mask.name.clone();
-                let is_current = current_kind == mask.mode;
-                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::UpdateCollaborationMode(mask.clone()));
-                })];
-                SelectionItem {
-                    name,
-                    is_current,
-                    actions,
-                    dismiss_on_select: true,
-                    ..Default::default()
-                }
-            })
-            .collect();
-
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Collaboration Mode".to_string()),
-            subtitle: Some("Pick a collaboration preset.".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            ..Default::default()
-        });
-    }
-
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {

@@ -451,16 +451,7 @@ impl ChatWidget {
         {
             mask.reasoning_effort = Some(Some(effort));
         }
-        if mask.mode == Some(ModeKind::Orchestrator) {
-            if mask.model.is_none() {
-                mask.model = Some(config.effective_orchestrator_model().to_string());
-            }
-            if mask.reasoning_effort.is_none() {
-                mask.reasoning_effort = Some(config.effective_orchestrator_reasoning_effort());
-            }
-        }
-        let should_apply_model_override = initial_mode != Some(ModeKind::Orchestrator);
-        if should_apply_model_override && let Some(model_override) = model_override {
+        if let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
         }
         Some(mask)
@@ -563,10 +554,7 @@ impl ChatWidget {
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
-            ModeKind::Default
-            | ModeKind::Orchestrator
-            | ModeKind::PairProgramming
-            | ModeKind::Execute => None,
+            ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => None,
         }
     }
 
@@ -653,14 +641,6 @@ impl ChatWidget {
             && let Some(effort) = self.config.plan_mode_reasoning_effort
         {
             mask.reasoning_effort = Some(Some(effort));
-        }
-        if mask.mode == Some(ModeKind::Orchestrator) {
-            if mask.model.is_none() {
-                mask.model = Some(self.config.effective_orchestrator_model().to_string());
-            }
-            if mask.reasoning_effort.is_none() {
-                mask.reasoning_effort = Some(self.config.effective_orchestrator_reasoning_effort());
-            }
         }
         if mask.mode == Some(ModeKind::Plan) {
             self.dismissed_plan_mode_nudge_scopes

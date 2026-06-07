@@ -7,7 +7,6 @@ use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
 use crate::function_tool::FunctionCallError;
 use crate::orchestrator_memory::user_preferences_root;
-use crate::session::turn::build_prompt;
 use crate::session::turn::built_tools;
 use crate::shell::default_user_shell;
 use crate::skills::SkillRenderSideEffects;
@@ -29,7 +28,6 @@ use codex_core_skills::SkillMetadata;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_login::CodexAuth;
-use codex_mcp::ToolInfo as McpToolInfo;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
@@ -151,7 +149,6 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationAction;
-use codex_tools::ToolSpec;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::context_snapshot;
@@ -178,8 +175,6 @@ use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::Metric;
 use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
-use rmcp::model::JsonObject;
-use rmcp::model::Tool;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
@@ -3916,31 +3911,6 @@ async fn resolve_router_turn_settings_remaps_unsupported_explicit_effort() {
 }
 
 #[tokio::test]
-async fn resolve_router_turn_settings_applies_implicit_orchestrator_defaults() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let mut orchestrator_mode = session.collaboration_mode().await;
-    orchestrator_mode.mode = ModeKind::Orchestrator;
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(orchestrator_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("orchestrator mode update should succeed");
-    let thread = test_codex_thread(session);
-
-    let (model, reasoning_effort, collaboration_mode) = thread.resolve_router_turn_settings().await;
-
-    assert_eq!(model, "gpt-5.3-codex-spark");
-    assert_eq!(reasoning_effort, Some(ReasoningEffortConfig::Low));
-    assert_eq!(collaboration_mode.model(), "gpt-5.3-codex-spark");
-    assert_eq!(
-        collaboration_mode.reasoning_effort(),
-        Some(ReasoningEffortConfig::Low)
-    );
-}
-
-#[tokio::test]
 async fn resolve_router_turn_settings_preserves_absent_effort() {
     let (session, _turn_context) = make_session_and_context().await;
     {
@@ -4010,250 +3980,6 @@ async fn resolve_router_turn_settings_applies_configured_reasoning_effort() {
                 developer_instructions: Some("Stay in routing mode.".to_string()),
             },
         }
-    );
-}
-
-#[tokio::test]
-async fn session_update_settings_syncs_orchestrator_collaboration_mode_control() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let mut orchestrator_mode = session.collaboration_mode().await;
-    orchestrator_mode.mode = ModeKind::Orchestrator;
-
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(orchestrator_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("orchestrator mode update should succeed");
-
-    let active_control = session
-        .active_thread_control()
-        .await
-        .expect("orchestrator control should be active");
-    assert_eq!(
-        active_control,
-        codex_state::ThreadControlRecord {
-            thread_id: session.thread_id,
-            mode: codex_state::ThreadControlMode::Router,
-            reason: Session::ORCHESTRATOR_MODE_CONTROL_REASON.to_string(),
-            release_channel: None,
-            watch_interval_seconds: Some(60),
-            released_at: None,
-            updated_at: active_control.updated_at,
-            target_thread_ids: Vec::new(),
-        }
-    );
-
-    let mut default_mode = session.collaboration_mode().await;
-    default_mode.mode = ModeKind::Default;
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(default_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("default mode update should succeed");
-
-    assert_eq!(session.active_thread_control().await, None);
-}
-
-#[tokio::test]
-async fn session_update_settings_applies_orchestrator_overrides_immediately() {
-    let (session, _turn_context) = make_session_and_context().await;
-
-    let mut orchestrator_mode = session.collaboration_mode().await;
-    orchestrator_mode.mode = ModeKind::Orchestrator;
-
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(orchestrator_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("orchestrator mode update should succeed");
-
-    let updated = session.collaboration_mode().await;
-    assert_eq!(updated.mode, ModeKind::Orchestrator);
-    assert_eq!(updated.model(), "gpt-5.3-codex-spark");
-    assert_eq!(updated.reasoning_effort(), Some(ReasoningEffortConfig::Low));
-}
-
-#[tokio::test]
-async fn session_update_settings_preserves_manual_orchestrator_model_adjustments() {
-    let (session, _turn_context) = make_session_and_context().await;
-    {
-        let mut state = session.state.lock().await;
-        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
-        config.thread_control.orchestrator.model = Some("gpt-5.4".to_string());
-        config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
-        state.session_configuration.original_config_do_not_use = Arc::new(config);
-    }
-
-    let mut orchestrator_mode = session.collaboration_mode().await;
-    orchestrator_mode.mode = ModeKind::Orchestrator;
-
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(orchestrator_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("orchestrator mode update should succeed");
-
-    let mut adjusted_mode = session.collaboration_mode().await;
-    adjusted_mode.settings.model = "gpt-5.3-codex".to_string();
-    adjusted_mode.settings.reasoning_effort = Some(ReasoningEffortConfig::High);
-
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(adjusted_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("manual model adjustment in orchestrator mode should succeed");
-
-    let updated = session.collaboration_mode().await;
-    assert_eq!(updated.mode, ModeKind::Orchestrator);
-    assert_eq!(updated.model(), "gpt-5.3-codex");
-    assert_eq!(
-        updated.reasoning_effort(),
-        Some(ReasoningEffortConfig::High)
-    );
-}
-
-#[tokio::test]
-async fn session_update_settings_applies_orchestrator_defaults_to_unspecified_entry_fields() {
-    let (session, _turn_context) = make_session_and_context().await;
-    {
-        let mut state = session.state.lock().await;
-        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
-        config.thread_control.orchestrator.model = Some("gpt-5.4".to_string());
-        config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
-        state.session_configuration.original_config_do_not_use = Arc::new(config);
-    }
-
-    let mut orchestrator_mode = session.collaboration_mode().await;
-    orchestrator_mode.mode = ModeKind::Orchestrator;
-    orchestrator_mode.settings.model = "gpt-5.4-mini".to_string();
-
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(orchestrator_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("orchestrator mode update should succeed");
-
-    let updated = session.collaboration_mode().await;
-    assert_eq!(updated.mode, ModeKind::Orchestrator);
-    assert_eq!(updated.model(), "gpt-5.4-mini");
-    assert_eq!(updated.reasoning_effort(), Some(ReasoningEffortConfig::Low));
-}
-
-#[tokio::test]
-async fn interrupt_task_releases_orchestrator_collaboration_mode_control() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let session = Arc::new(session);
-    let mut orchestrator_mode = session.collaboration_mode().await;
-    orchestrator_mode.mode = ModeKind::Orchestrator;
-
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(orchestrator_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("orchestrator mode update should succeed");
-
-    assert!(
-        session.active_thread_control().await.is_some(),
-        "expected orchestrator mode to install router control"
-    );
-
-    *session.active_turn.lock().await = Some(ActiveTurn::default());
-
-    session.interrupt_task().await;
-
-    assert_eq!(session.active_thread_control().await, None);
-}
-
-#[tokio::test]
-async fn interrupt_task_without_active_turn_keeps_orchestrator_collaboration_mode_control() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let session = Arc::new(session);
-    let mut orchestrator_mode = session.collaboration_mode().await;
-    orchestrator_mode.mode = ModeKind::Orchestrator;
-
-    session
-        .update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(orchestrator_mode),
-            ..Default::default()
-        })
-        .await
-        .expect("orchestrator mode update should succeed");
-
-    assert!(
-        session.active_thread_control().await.is_some(),
-        "expected orchestrator mode to install router control"
-    );
-
-    session.interrupt_task().await;
-
-    assert!(
-        session.active_thread_control().await.is_some(),
-        "interrupt without an active turn should not release orchestrator control"
-    );
-}
-
-#[tokio::test]
-async fn new_turn_with_sub_id_applies_orchestrator_overrides_only_when_entering_mode() {
-    let (session, _turn_context) = make_session_and_context().await;
-    {
-        let mut state = session.state.lock().await;
-        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
-        config.thread_control.orchestrator.model = Some("gpt-5.4".to_string());
-        config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffortConfig::Low);
-        state.session_configuration.original_config_do_not_use = Arc::new(config);
-    }
-
-    let mut orchestrator_mode = session.collaboration_mode().await;
-    orchestrator_mode.mode = ModeKind::Orchestrator;
-
-    let entered = session
-        .new_turn_with_sub_id(
-            "orchestrator-enter".to_string(),
-            SessionSettingsUpdate {
-                collaboration_mode: Some(orchestrator_mode),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("turn should enter orchestrator mode");
-    assert_eq!(entered.collaboration_mode.model(), "gpt-5.4");
-    assert_eq!(
-        entered.collaboration_mode.reasoning_effort(),
-        Some(ReasoningEffortConfig::Low)
-    );
-
-    let mut adjusted_mode = session.collaboration_mode().await;
-    adjusted_mode.settings.model = "gpt-5.3-codex".to_string();
-    adjusted_mode.settings.reasoning_effort = Some(ReasoningEffortConfig::High);
-
-    let adjusted = session
-        .new_turn_with_sub_id(
-            "orchestrator-adjust".to_string(),
-            SessionSettingsUpdate {
-                collaboration_mode: Some(adjusted_mode),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("turn should preserve manual orchestrator adjustments");
-    assert_eq!(adjusted.collaboration_mode.model(), "gpt-5.3-codex");
-    assert_eq!(
-        adjusted.collaboration_mode.reasoning_effort(),
-        Some(ReasoningEffortConfig::High)
     );
 }
 
@@ -8673,7 +8399,7 @@ async fn build_initial_context_filters_skills_by_collaboration_mode() {
         Vec::new(),
         |config| {
             config.skills.modes.insert(
-                ModeKind::Orchestrator,
+                ModeKind::Plan,
                 SkillModeFilterConfig {
                     mode: SkillModeFilterMode::Include,
                     skills: vec!["agent-state".to_string()],
@@ -8684,7 +8410,7 @@ async fn build_initial_context_filters_skills_by_collaboration_mode() {
     .await;
     let mut turn_context = Arc::try_unwrap(turn_context)
         .expect("turn context should not have additional strong references");
-    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
+    turn_context.collaboration_mode.mode = ModeKind::Plan;
 
     let mut outcome = SkillLoadOutcome::default();
     outcome.skills = vec![
@@ -8727,7 +8453,7 @@ async fn build_initial_context_filters_skills_by_unified_mode_enablement() {
         Vec::new(),
         |config| {
             config.enablement.modes.insert(
-                ModeKind::Orchestrator,
+                ModeKind::Plan,
                 codex_config::ModeEnablementConfig {
                     skills: Some(codex_config::EnablementFilterConfig {
                         mode: codex_config::EnablementFilterMode::Include,
@@ -8741,7 +8467,7 @@ async fn build_initial_context_filters_skills_by_unified_mode_enablement() {
     .await;
     let mut turn_context = Arc::try_unwrap(turn_context)
         .expect("turn context should not have additional strong references");
-    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
+    turn_context.collaboration_mode.mode = ModeKind::Plan;
 
     let mut outcome = SkillLoadOutcome::default();
     outcome.skills = vec![
@@ -8789,12 +8515,12 @@ async fn build_initial_context_injects_builtin_scratchpad_in_enabled_modes() {
         "expected scratchpad guidance in default mode, got {default_developer_texts:?}"
     );
 
-    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
-    let orchestrator_context = session.build_initial_context(&turn_context).await;
-    let orchestrator_developer_texts = developer_input_texts(&orchestrator_context).join("\n");
+    turn_context.collaboration_mode.mode = ModeKind::Plan;
+    let plan_context = session.build_initial_context(&turn_context).await;
+    let plan_developer_texts = developer_input_texts(&plan_context).join("\n");
     assert!(
-        orchestrator_developer_texts.contains("Built-in Scratchpad"),
-        "expected scratchpad guidance in orchestrator mode, got {orchestrator_developer_texts:?}"
+        !plan_developer_texts.contains("Built-in Scratchpad"),
+        "did not expect scratchpad guidance in plan mode, got {plan_developer_texts:?}"
     );
 }
 
@@ -9196,14 +8922,6 @@ async fn build_initial_context_injects_builtin_schedule_only_when_enabled() {
     assert!(
         !default_developer_texts.contains("Built-in Schedule"),
         "did not expect schedule guidance in default mode, got {default_developer_texts:?}"
-    );
-
-    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
-    let orchestrator_context = session.build_initial_context(&turn_context).await;
-    let orchestrator_developer_texts = developer_input_texts(&orchestrator_context).join("\n");
-    assert!(
-        orchestrator_developer_texts.contains("Built-in Schedule"),
-        "expected schedule guidance in orchestrator mode, got {orchestrator_developer_texts:?}"
     );
 
     turn_context.collaboration_mode.mode = ModeKind::Plan;
@@ -10192,53 +9910,6 @@ async fn unavailable_mcp_placeholder_respects_server_disabled_tools_filter() {
             .resolve_configured_mcp_tool_call(turn_context.as_ref(), &call.tool_name)
             .await
             .is_none()
-    );
-}
-
-#[tokio::test]
-async fn build_initial_context_injects_orchestrator_supervision_in_orchestrator_mode() {
-    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
-        CodexAuth::from_api_key("Test API Key"),
-        Vec::new(),
-        |_config| {},
-    )
-    .await;
-    session
-        .services
-        .orchestrator_supervision
-        .register_worker(
-            session.thread_id,
-            ThreadId::from_string("019dbfd0-6c49-7623-bcd3-6d43a46d5916").expect("thread id"),
-            Some("Arendt".to_string()),
-            Some("worker".to_string()),
-            "Patch the target repo".to_string(),
-            Some(ModeKind::Default),
-        )
-        .await
-        .expect("register supervised worker");
-
-    let mut turn_context = Arc::try_unwrap(turn_context)
-        .expect("turn context should not have additional strong references");
-    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
-
-    let initial_context = session.build_initial_context(&turn_context).await;
-    let developer_texts = developer_input_texts(&initial_context);
-
-    assert!(
-        developer_texts
-            .iter()
-            .any(|text| text.contains("<orchestrator_supervision>")),
-        "expected orchestrator supervision developer instructions, got {developer_texts:?}"
-    );
-    assert!(
-        developer_texts.iter().any(|text| text.contains("Arendt")),
-        "expected supervised worker summary in developer instructions, got {developer_texts:?}"
-    );
-    assert!(
-        developer_texts
-            .iter()
-            .any(|text| text.contains("mode: inline")),
-        "expected escalation mode in developer instructions, got {developer_texts:?}"
     );
 }
 
@@ -12664,106 +12335,6 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         }
         other => panic!("expected FunctionCallError::Fatal, got {other:?}"),
     }
-}
-
-#[tokio::test]
-async fn build_prompt_limits_orchestrator_to_coordination_tools() {
-    let (session, mut turn_context) = make_session_and_context().await;
-    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
-
-    let router = ToolRouter::from_config(
-        &turn_context.tools_config,
-        crate::tools::router::ToolRouterParams {
-            deferred_mcp_tools: None,
-            mcp_tools: None,
-            discoverable_tools: None,
-            extension_tool_executors: Vec::new(),
-            dynamic_tools: turn_context.dynamic_tools.as_slice(),
-        },
-    );
-
-    let prompt = build_prompt(
-        Vec::new(),
-        &router,
-        &turn_context,
-        session.get_base_instructions().await,
-    );
-    let tool_names = prompt.tools.iter().map(ToolSpec::name).collect::<Vec<_>>();
-
-    assert!(tool_names.contains(&"multi_agent_v1"));
-    assert!(tool_names.contains(&"update_plan"));
-    assert!(!tool_names.contains(&"shell"));
-    assert!(!tool_names.contains(&"exec_command"));
-    assert!(!tool_names.contains(&"apply_patch"));
-    assert!(!tool_names.contains(&"view_image"));
-    assert!(!tool_names.contains(&"web_search"));
-}
-
-fn test_mcp_tool_info(server_name: &str, tool_name: &str) -> McpToolInfo {
-    McpToolInfo {
-        server_name: server_name.to_string(),
-        supports_parallel_tool_calls: false,
-        server_origin: None,
-        callable_name: tool_name.to_string(),
-        callable_namespace: format!("mcp__{server_name}__"),
-        namespace_description: None,
-        tool: Tool::new(
-            tool_name.to_string(),
-            "Test tool",
-            Arc::new(JsonObject::default()),
-        ),
-        connector_id: None,
-        connector_name: None,
-        plugin_display_names: Vec::new(),
-    }
-}
-
-#[tokio::test]
-async fn build_prompt_allows_explicitly_enabled_orchestrator_mcp_tools() {
-    let (session, mut turn_context) = make_session_and_context().await;
-    turn_context.collaboration_mode.mode = ModeKind::Orchestrator;
-    Arc::make_mut(&mut turn_context.config)
-        .enablement
-        .modes
-        .insert(
-            ModeKind::Orchestrator,
-            codex_config::ModeEnablementConfig {
-                skills: None,
-                mcps: Some(codex_config::EnablementFilterConfig {
-                    mode: codex_config::EnablementFilterMode::Include,
-                    items: vec!["imessage".to_string()],
-                }),
-                plugins: None,
-            },
-        );
-
-    let mcp_tools = vec![test_mcp_tool_info("imessage", "imessage_send_message")];
-
-    let router = ToolRouter::from_config(
-        &turn_context.tools_config,
-        crate::tools::router::ToolRouterParams {
-            deferred_mcp_tools: None,
-            mcp_tools: Some(mcp_tools),
-            discoverable_tools: None,
-            extension_tool_executors: Vec::new(),
-            dynamic_tools: turn_context.dynamic_tools.as_slice(),
-        },
-    );
-
-    let prompt = build_prompt(
-        Vec::new(),
-        &router,
-        &turn_context,
-        session.get_base_instructions().await,
-    );
-    let tool_names = prompt.tools.iter().map(ToolSpec::name).collect::<Vec<_>>();
-
-    assert!(
-        tool_names
-            .iter()
-            .any(|tool_name| tool_name.starts_with("mcp__imessage__")),
-        "expected an imessage MCP namespace in orchestrator tools, got {tool_names:?}"
-    );
 }
 
 async fn sample_rollout(

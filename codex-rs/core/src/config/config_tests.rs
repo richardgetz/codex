@@ -53,16 +53,11 @@ use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
 
-use codex_config::types::OrchestratorEscalationMode;
-use codex_config::types::OrchestratorEscalationToml;
 use codex_config::types::OrchestratorMemoryCleanupConfig;
 use codex_config::types::OrchestratorMemoryCleanupToml;
 use codex_config::types::OrchestratorMemoryConfig;
 use codex_config::types::OrchestratorMemoryToml;
-use codex_config::types::OrchestratorPrimaryContactScheduleToml;
-use codex_config::types::OrchestratorPrimaryContactToml;
 use codex_config::types::OrchestratorThreadControlToml;
-use codex_config::types::OrchestratorToml;
 
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
@@ -706,7 +701,7 @@ enabled = false
 fn parses_mode_scoped_skills_config() {
     let cfg: ConfigToml = toml::from_str(
         r#"
-[skills.modes.orchestrator]
+[skills.modes.plan]
 mode = "include"
 skills = ["agent-state", "scratchpad"]
 
@@ -725,7 +720,7 @@ skills = ["skill-recorder"]
             config: Vec::new(),
             modes: [
                 (
-                    ModeKind::Orchestrator,
+                    ModeKind::Plan,
                     SkillModeFilterConfig {
                         mode: SkillModeFilterMode::Include,
                         skills: vec!["agent-state".to_string(), "scratchpad".to_string()],
@@ -749,11 +744,11 @@ skills = ["skill-recorder"]
 fn parses_unified_mode_enablement_config() {
     let cfg: ConfigToml = toml::from_str(
         r#"
-[enablement.modes.orchestrator.skills]
+[enablement.modes.plan.skills]
 mode = "include"
 items = ["agent-state", "scratchpad"]
 
-[enablement.modes.orchestrator.mcps]
+[enablement.modes.plan.mcps]
 mode = "include"
 items = ["scratchpad", "imessage"]
 
@@ -769,7 +764,7 @@ items = ["canva@openai-curated"]
         Some(EnablementConfig {
             modes: [
                 (
-                    ModeKind::Orchestrator,
+                    ModeKind::Plan,
                     ModeEnablementConfig {
                         skills: Some(EnablementFilterConfig {
                             mode: EnablementFilterMode::Include,
@@ -796,82 +791,6 @@ items = ["canva@openai-curated"]
             ]
             .into_iter()
             .collect(),
-        })
-    );
-}
-
-#[test]
-fn parses_orchestrator_escalation_config() {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[orchestrator.escalation]
-mode = "mcp"
-channel = "imessage"
-tool = "imessage_send_message"
-
-[orchestrator]
-active_agent_checkin_seconds = 900
-allowed_spawn_modes = ["default", "orchestrator"]
-recover_scratchpad_after_compaction = false
-
-[orchestrator.primary_contact]
-enabled = true
-mcp = "imessage"
-check_messages_every_seconds = 300
-
-[[orchestrator.primary_contact.schedule]]
-days = ["mon", "tue", "wed", "thu", "fri"]
-start = "07:00"
-end = "22:00"
-check_messages_every_seconds = 300
-
-[[orchestrator.primary_contact.schedule]]
-start = "22:00"
-end = "07:00"
-check_messages_every_seconds = 1800
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.orchestrator,
-        Some(OrchestratorToml {
-            escalation: Some(OrchestratorEscalationToml {
-                mode: Some(OrchestratorEscalationMode::Mcp),
-                channel: Some("imessage".to_string()),
-                tool: Some("imessage_send_message".to_string()),
-            }),
-            primary_contact: Some(OrchestratorPrimaryContactToml {
-                enabled: Some(true),
-                mcp: Some("imessage".to_string()),
-                tool: None,
-                check_tool: None,
-                check_messages_every_seconds: Some(300),
-                schedule: Some(vec![
-                    OrchestratorPrimaryContactScheduleToml {
-                        days: Some(vec![
-                            "mon".to_string(),
-                            "tue".to_string(),
-                            "wed".to_string(),
-                            "thu".to_string(),
-                            "fri".to_string(),
-                        ]),
-                        start: Some("07:00".to_string()),
-                        end: Some("22:00".to_string()),
-                        check_messages_every_seconds: Some(300),
-                    },
-                    OrchestratorPrimaryContactScheduleToml {
-                        days: None,
-                        start: Some("22:00".to_string()),
-                        end: Some("07:00".to_string()),
-                        check_messages_every_seconds: Some(1800),
-                    },
-                ]),
-                startup_prompt: None,
-            }),
-            recover_scratchpad_after_compaction: Some(false),
-            active_agent_checkin_seconds: Some(900),
-            allowed_spawn_modes: Some(vec![ModeKind::Default, ModeKind::Orchestrator]),
         })
     );
 }
@@ -908,7 +827,7 @@ enabled = false
 default_continuous = false
 recover_after_compaction = false
 
-[scratchpad.modes.orchestrator]
+[scratchpad.modes.default]
 default_continuous = false
 recover_after_compaction = false
 "#,
@@ -949,7 +868,7 @@ recover_after_compaction = false
                     },
                 ),
                 (
-                    ModeKind::Orchestrator,
+                    ModeKind::Default,
                     ScratchpadModeToml {
                         enabled: None,
                         default_continuous: Some(false),
@@ -973,7 +892,7 @@ enabled = false
 [schedule.modes.default]
 enabled = true
 
-[schedule.modes.orchestrator]
+[schedule.modes.plan]
 enabled = true
 "#,
     )
@@ -991,7 +910,7 @@ enabled = true
                     },
                 ),
                 (
-                    ModeKind::Orchestrator,
+                    ModeKind::Plan,
                     ScheduleModeToml {
                         enabled: Some(true),
                     },
@@ -1099,13 +1018,6 @@ max_user_turn_checkpoints = 11
     .await?;
 
     assert!(!config.scratchpad.for_mode(ModeKind::Default).enabled);
-    assert!(config.scratchpad.for_mode(ModeKind::Orchestrator).enabled);
-    assert!(
-        config
-            .scratchpad
-            .for_mode(ModeKind::Orchestrator)
-            .default_continuous
-    );
     assert!(config.scratchpad.for_mode(ModeKind::Plan).enabled);
     assert!(
         config
@@ -1155,8 +1067,7 @@ max_user_turn_checkpoints = 11
 }
 
 #[tokio::test]
-async fn schedule_defaults_to_orchestrator_only_and_supports_mode_overrides() -> std::io::Result<()>
-{
+async fn schedule_defaults_disabled_and_supports_mode_overrides() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(
         toml::from_str::<ConfigToml>(
@@ -1164,7 +1075,7 @@ async fn schedule_defaults_to_orchestrator_only_and_supports_mode_overrides() ->
 [schedule.modes.default]
 enabled = true
 
-[schedule.modes.orchestrator]
+[schedule.modes.plan]
 enabled = false
 "#,
         )
@@ -1175,40 +1086,7 @@ enabled = false
     .await?;
 
     assert!(config.schedule.for_mode(ModeKind::Default).enabled);
-    assert!(!config.schedule.for_mode(ModeKind::Orchestrator).enabled);
     assert!(!config.schedule.for_mode(ModeKind::Plan).enabled);
-    Ok(())
-}
-
-#[tokio::test]
-async fn legacy_orchestrator_scratchpad_recovery_config_maps_to_orchestrator_mode()
--> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        toml::from_str::<ConfigToml>(
-            r#"
-[orchestrator]
-recover_scratchpad_after_compaction = false
-"#,
-        )
-        .expect("TOML deserialization should succeed"),
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert!(
-        config
-            .scratchpad
-            .for_mode(ModeKind::Default)
-            .recover_after_compaction
-    );
-    assert!(
-        !config
-            .scratchpad
-            .for_mode(ModeKind::Orchestrator)
-            .recover_after_compaction
-    );
     Ok(())
 }
 

@@ -158,23 +158,6 @@ async fn plan_implementation_popup_no_selected_snapshot() {
 }
 
 #[tokio::test]
-async fn collaboration_modes_popup_snapshot_includes_orchestrator() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.open_collaboration_modes_popup();
-
-    let popup = render_bottom_popup(&chat, /*width*/ 80);
-    assert!(
-        !popup.contains("Continuous"),
-        "unexpected Continuous mode in popup:\n{popup}"
-    );
-    assert!(
-        popup.contains("Orchestrator"),
-        "expected Orchestrator mode in popup:\n{popup}"
-    );
-    assert_chatwidget_snapshot!("collaboration_modes_popup", popup);
-}
-
-#[tokio::test]
 async fn plan_implementation_popup_yes_emits_submit_message_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.open_plan_implementation_prompt();
@@ -1319,14 +1302,11 @@ async fn collab_mode_shift_tab_cycles_only_when_idle() {
     assert_eq!(chat.current_collaboration_mode(), &initial);
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    assert_eq!(
-        chat.active_collaboration_mode_kind(),
-        ModeKind::Orchestrator
-    );
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 
     chat.on_task_started();
@@ -1591,55 +1571,6 @@ async fn default_mode_startup_uses_feature_aware_request_user_input_guidance() {
 }
 
 #[tokio::test]
-async fn collaboration_modes_can_start_in_orchestrator_mode() {
-    let codex_home = tempdir().expect("tempdir");
-    let cfg = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .cli_overrides(vec![(
-            "features.collaboration_modes".to_string(),
-            TomlValue::Boolean(true),
-        )])
-        .build()
-        .await
-        .expect("config");
-    let resolved_model = crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref());
-    let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
-    let init = ChatWidgetInit {
-        config: cfg.clone(),
-        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        frame_requester: FrameRequester::test_dummy(),
-        app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
-        workspace_command_runner: None,
-        initial_user_message: None,
-        enhanced_keys_supported: false,
-        has_chatgpt_account: false,
-        model_catalog: test_model_catalog(&cfg),
-        feedback: codex_feedback::CodexFeedback::new(),
-        is_first_run: true,
-        status_account_display: None,
-        runtime_model_provider_base_url: None,
-        initial_plan_type: None,
-        initial_collaboration_mode: Some(ModeKind::Orchestrator),
-        model: Some(resolved_model),
-        startup_tooltip_override: None,
-        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
-        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
-        session_telemetry,
-    };
-
-    let chat = ChatWidget::new_with_app_event(init);
-    assert_eq!(
-        chat.active_collaboration_mode_kind(),
-        ModeKind::Orchestrator
-    );
-    assert_eq!(chat.current_model(), "gpt-5.3-codex-spark");
-    assert_eq!(
-        chat.current_reasoning_effort(),
-        Some(ReasoningEffortConfig::Low)
-    );
-}
-
-#[tokio::test]
 async fn set_model_updates_active_collaboration_mask() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
@@ -1686,52 +1617,6 @@ async fn set_reasoning_effort_does_not_override_active_plan_override() {
         Some(ReasoningEffortConfig::High)
     );
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
-}
-
-#[tokio::test]
-async fn orchestrator_mask_applies_configured_thread_control_defaults() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
-    chat.thread_id = Some(ThreadId::new());
-
-    let orchestrator_mask =
-        collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Orchestrator)
-            .expect("expected orchestrator collaboration mask");
-    chat.set_collaboration_mask(orchestrator_mask);
-
-    assert_eq!(
-        chat.active_collaboration_mode_kind(),
-        ModeKind::Orchestrator
-    );
-    assert_eq!(chat.current_model(), "gpt-5.3-codex-spark");
-    assert_eq!(
-        chat.current_reasoning_effort(),
-        Some(ReasoningEffortConfig::Low)
-    );
-
-    chat.bottom_pane
-        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            model,
-            effort,
-            collaboration_mode:
-                Some(CollaborationMode {
-                    mode: ModeKind::Orchestrator,
-                    settings,
-                }),
-            ..
-        } => {
-            assert_eq!(model, "gpt-5.3-codex-spark");
-            assert_eq!(effort, Some(ReasoningEffortConfig::Low));
-            assert_eq!(settings.model, "gpt-5.3-codex-spark");
-            assert_eq!(settings.reasoning_effort, Some(ReasoningEffortConfig::Low));
-        }
-        other => {
-            panic!("expected Op::UserTurn with orchestrator collaboration_mode, got {other:?}")
-        }
-    }
 }
 
 #[tokio::test]
