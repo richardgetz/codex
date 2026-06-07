@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-06-07/app-server-cloud-config-loader#372299e2cf7d"
+  change_type: "fix"
+  scope: "codex-rs/app-server"
+  summary: "Fix stable fork-release app-server compile failures after the cloud config bundle refactor."
+  decision: "Replace the stale account-switch cloud requirements loader call with the current cloud config bundle loader refresh API, and align app-server/core debug-test helpers with upstream ThreadConfigSnapshot and UserInputWithTurnContext changes so focused app-server tests compile and run."
+  constraints:
+    - "Preserve account alias switching behavior and cloud config/requirements reload after auth storage changes."
+    - "Keep hosted apps disabled only in account tests that exercise invalid external auth refresh paths."
+    - "Do not alter manual deployment behavior."
+    - "Do not touch MCP approval feature flags or sandbox network environment variable behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server/src/request_processors/account_processor.rs"
+    - "codex-rs/core/src/session/mod.rs"
+    - "codex-rs/app-server/tests/common/lib.rs"
+    - "codex-rs/app-server/tests/suite/v2/account.rs"
+    - "codex-rs/app-server/tests/suite/v2/remote_thread_store.rs"
+    - "codex-rs/app-server/tests/suite/v2/turn_start.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
