@@ -1,5 +1,6 @@
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
+use app_test_support::McpProcess;
 use app_test_support::PathBufExt;
 use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;

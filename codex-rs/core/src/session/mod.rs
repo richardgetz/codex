@@ -759,7 +759,10 @@ impl Codex {
         trace: Option<W3cTraceContext>,
         client_user_message_id: Option<String>,
     ) -> CodexResult<String> {
-        debug_assert!(matches!(op, Op::UserInput { .. }));
+        debug_assert!(matches!(
+            op,
+            Op::UserInput { .. } | Op::UserInputWithTurnContext { .. }
+        ));
         let id = Uuid::now_v7().to_string();
         let sub = Submission {
             id: id.clone(),

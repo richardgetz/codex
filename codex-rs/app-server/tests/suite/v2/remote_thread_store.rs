@@ -239,6 +239,7 @@ fn assert_no_local_persistence_artifacts(codex_home: &Path) -> Result<()> {
     entries.remove("schedule");
     entries.remove("scratchpad");
     entries.remove("accounts");
+    entries.remove("memories");
     assert_eq!(
         entries,
         BTreeSet::from([

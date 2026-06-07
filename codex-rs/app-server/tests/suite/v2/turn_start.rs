@@ -1057,14 +1057,14 @@ async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() 
     assert!(
         err.error
             .message
-            .contains("Configured value for `permission_profile` is disallowed by requirements"),
+            .contains("cannot be used because requirements do not allow"),
         "unexpected error message: {}",
         err.error.message
     );
     assert!(
         err.error
             .message
-            .contains("invalid value for `sandbox_mode`: `DangerFullAccess`"),
+            .contains("sandbox_mode = \"danger-full-access\""),
         "unexpected error message: {}",
         err.error.message
     );

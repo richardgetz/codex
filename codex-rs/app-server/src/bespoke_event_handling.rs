@@ -2254,7 +2254,6 @@ mod tests {
     use codex_protocol::protocol::RateLimitSnapshot;
     use codex_protocol::protocol::RateLimitWindow;
     use codex_protocol::protocol::RolloutItem;
-    use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::ScratchpadUpdateEvent;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::TokenUsage;
