@@ -1,0 +1,16 @@
+intent:
+  id: stable-release-imagegen-encrypted-content
+change_type: fix
+scope: codex-rs/ext/image-generation
+summary: Fix fork-release compile failure by handling encrypted content in image generation extension input extraction.
+decision: Treat ContentItem::EncryptedContent like text-only content and ignore it when collecting image inputs.
+constraints:
+  - Preserve image generation behavior for image input variants.
+  - Do not expose or inspect encrypted content payloads.
+  - Keep stable release deployment fix scoped.
+intent_priority: must
+code_locations:
+  - codex-rs/ext/image-generation/src/tool.rs
+  - codex-rs/ext/image-generation/src/tests.rs
+requested_by: Rick
+recorded_by: Codex
