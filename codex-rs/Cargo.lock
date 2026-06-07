@@ -3873,6 +3873,7 @@ dependencies = [
  "codex-app-server-client",
  "codex-app-server-protocol",
  "codex-arg0",
+ "codex-build-info",
  "codex-cli",
  "codex-cloud-config",
  "codex-config",

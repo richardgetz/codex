@@ -1371,6 +1371,7 @@ async fn run_ratatui_app(
     let mut app_server = Some(app_server_session);
 
     let should_show_trust_screen_flag = !remote_mode && should_show_trust_screen(&initial_config);
+    #[cfg(target_os = "windows")]
     let mut trust_decision_was_made = false;
     let login_status = if initial_config.model_provider.requires_openai_auth {
         let Some(app_server) = app_server.as_mut() else {

@@ -352,6 +352,7 @@ pub(crate) struct ChatComposer {
     attachments: AttachmentState,
     placeholder_text: String,
     is_task_running: bool,
+    queue_submissions: bool,
     /// Slash-command availability ignores background status work such as MCP startup.
     slash_command_task_running: bool,
     /// When false, the composer is temporarily read-only (e.g. during sandbox setup).
@@ -544,6 +545,7 @@ impl ChatComposer {
             attachments: AttachmentState::default(),
             placeholder_text,
             is_task_running: false,
+            queue_submissions: false,
             slash_command_task_running: false,
             input_enabled: true,
             input_disabled_placeholder: None,
@@ -731,6 +733,10 @@ impl ChatComposer {
 
     pub fn set_side_conversation_active(&mut self, active: bool) {
         self.side_conversation_active = active;
+    }
+
+    pub fn set_queue_submissions(&mut self, queue_submissions: bool) {
+        self.queue_submissions = queue_submissions;
     }
 
     /// Compatibility shim for tests that still toggle the removed steer mode flag.
