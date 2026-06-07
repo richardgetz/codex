@@ -168,8 +168,9 @@ jobs:
             timeout_minutes: 75
           # The fork's public PR runners do not have the upstream private
           # platform toolchain setup needed by the refreshed macOS/Windows
-          # Bazel lint paths. Keep this fast gate on Linux; the lint package
-          # job above still validates the linter itself.
+          # Bazel lint paths, and the Linux Bazel path compiles the refreshed
+          # V8 graph too slowly for PR gating. Fork PRs skip this prebuilt path
+          # below; the lint package job above still validates the linter itself.
     steps:
       - name: Check whether argument comment lint should run
         id: argument_comment_lint_gate
@@ -178,6 +179,12 @@ jobs:
           ARGUMENT_COMMENT_LINT: ${{ needs.changed.outputs.argument_comment_lint }}
           WORKFLOWS: ${{ needs.changed.outputs.workflows }}
         run: |
+          if [[ "$GITHUB_REPOSITORY" == "richardgetz/codex" && "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            echo "Skipping prebuilt argument-comment lint on fork pull-request runners."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if [[ "$ARGUMENT_COMMENT_LINT" == "true" || "$WORKFLOWS" == "true" ]]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
