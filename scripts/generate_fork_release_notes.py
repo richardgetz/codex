@@ -14,7 +14,9 @@ WORKSPACE_MANIFEST = "codex-rs/Cargo.toml"
 TAG_URL_BASE = "https://github.com/richardgetz/codex/releases/tag"
 UPSTREAM_RELEASE_URL_BASE = "https://github.com/openai/codex/releases/tag"
 FORK_TAG_PATTERN = re.compile(r"^rick-v\d+\.\d+\.\d+-rick\.\d+$")
-MERGE_PR_PATTERN = re.compile(r"^Merge pull request #(?P<number>\d+) from (?P<branch>.+)$")
+MERGE_PR_PATTERN = re.compile(
+    r"^Merge pull request #(?P<number>\d+) from (?P<branch>.+)$"
+)
 VERSION_PATTERN = re.compile(
     r'(?ms)^\[workspace\.package\]\n(?:.+\n)*?^version = "([^"]+)"'
 )
@@ -138,8 +140,12 @@ def release_notes(
     previous_base_version: str | None,
     commits: list[dict[str, str]],
 ) -> str:
-    fork_changes = [pr_label(commit) for commit in commits if not is_mainline_refresh(commit)]
-    mainline_changes = [pr_label(commit) for commit in commits if is_mainline_refresh(commit)]
+    fork_changes = [
+        pr_label(commit) for commit in commits if not is_mainline_refresh(commit)
+    ]
+    mainline_changes = [
+        pr_label(commit) for commit in commits if is_mainline_refresh(commit)
+    ]
 
     lines = [
         f"# {release_version}",
@@ -161,10 +167,14 @@ def release_notes(
 
     lines.extend(["## Mainline Codex", ""])
     if previous_base_version and previous_base_version != base_version:
-        lines.append(f"- Upstream base changed from `{previous_base_version}` to `{base_version}`.")
+        lines.append(
+            f"- Upstream base changed from `{previous_base_version}` to `{base_version}`."
+        )
     else:
         lines.append(f"- Upstream base remains `{base_version}`.")
-    lines.append(f"- Upstream release notes: {UPSTREAM_RELEASE_URL_BASE}/rust-v{base_version}")
+    lines.append(
+        f"- Upstream release notes: {UPSTREAM_RELEASE_URL_BASE}/rust-v{base_version}"
+    )
     lines.extend(
         bullet_list(
             mainline_changes,
@@ -173,7 +183,9 @@ def release_notes(
     )
     lines.append("")
 
-    lines.extend(["## Install", "", "```bash", "npm install -g @rickgetz/codex", "```", ""])
+    lines.extend(
+        ["## Install", "", "```bash", "npm install -g @rickgetz/codex", "```", ""]
+    )
     lines.append(f"Tag: `{release_tag}`")
     lines.append("")
 
@@ -183,7 +195,9 @@ def release_notes(
 def main() -> int:
     args = parse_args()
     previous_tag = previous_fork_tag(args.release_tag, args.head)
-    previous_base_version = semver_base(workspace_version_at(previous_tag)) if previous_tag else None
+    previous_base_version = (
+        semver_base(workspace_version_at(previous_tag)) if previous_tag else None
+    )
     notes = release_notes(
         args.release_version,
         args.release_tag,

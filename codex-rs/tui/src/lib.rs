@@ -11,6 +11,7 @@ use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
 use crate::legacy_core::format_exec_policy_error_with_source;
+#[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::session_resume::ResolveCwdOutcome;
 use crate::session_resume::resolve_cwd_for_resume_or_fork;
@@ -37,8 +38,8 @@ use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
-use codex_cloud_requirements::cloud_requirements_loader_for_storage;
-use codex_config::CloudRequirementsLoader;
+use codex_cloud_config::cloud_config_bundle_loader_for_storage;
+use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLoadError;
 use codex_config::LoaderOverrides;
 use codex_config::format_config_error_with_source;
@@ -51,6 +52,7 @@ use codex_login::enforce_login_restrictions;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
+#[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_rollout::StateDbHandle;
 use codex_rollout::state_db;
@@ -62,6 +64,9 @@ use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use color_eyre::eyre::WrapErr;
 use cwd_prompt::CwdPromptAction;
+pub use session_archive_commands::SessionArchiveAction;
+pub use session_archive_commands::SessionArchiveCommandOptions;
+pub use session_archive_commands::run_session_archive_command;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
@@ -166,6 +171,7 @@ mod resize_reflow_cap;
 mod resume_picker;
 mod selection_list;
 mod service_tier_resolution;
+mod session_archive_commands;
 mod session_log;
 mod session_resume;
 mod session_state;
@@ -178,6 +184,7 @@ mod status;
 mod status_indicator_widget;
 mod streaming;
 mod style;
+mod terminal_hyperlinks;
 mod terminal_palette;
 mod terminal_probe;
 mod terminal_title;
@@ -292,7 +299,7 @@ async fn start_embedded_app_server(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
     strict_config: bool,
-    cloud_requirements: CloudRequirementsLoader,
+    cloud_config_bundle: CloudConfigBundleLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
     state_db: Option<StateDbHandle>,
@@ -304,7 +311,7 @@ async fn start_embedded_app_server(
         cli_kv_overrides,
         loader_overrides,
         strict_config,
-        cloud_requirements,
+        cloud_config_bundle,
         feedback,
         log_db,
         state_db,
@@ -518,7 +525,7 @@ async fn start_app_server(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
     strict_config: bool,
-    cloud_requirements: CloudRequirementsLoader,
+    cloud_config_bundle: CloudConfigBundleLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
     state_db: Option<StateDbHandle>,
@@ -531,7 +538,7 @@ async fn start_app_server(
             cli_kv_overrides,
             loader_overrides,
             strict_config,
-            cloud_requirements,
+            cloud_config_bundle,
             feedback,
             log_db,
             state_db,
@@ -558,7 +565,7 @@ pub(crate) async fn start_app_server_for_picker(
         Vec::new(),
         LoaderOverrides::default(),
         /*strict_config*/ false,
-        CloudRequirementsLoader::default(),
+        CloudConfigBundleLoader::default(),
         codex_feedback::CodexFeedback::new(),
         /*log_db*/ None,
         state_db,
@@ -589,7 +596,7 @@ async fn start_embedded_app_server_with<F, Fut>(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
     strict_config: bool,
-    cloud_requirements: CloudRequirementsLoader,
+    cloud_config_bundle: CloudConfigBundleLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
     state_db: Option<StateDbHandle>,
@@ -616,7 +623,7 @@ where
         cli_overrides: cli_kv_overrides,
         loader_overrides,
         strict_config,
-        cloud_requirements,
+        cloud_config_bundle,
         feedback,
         log_db,
         state_db,
@@ -925,51 +932,58 @@ pub async fn run_main(
         loader_overrides.user_config_profile = Some(profile_v2.clone());
     }
 
-    #[allow(clippy::print_stderr)]
-    let config_toml = match load_config_as_toml_with_cli_and_load_options(
+    let bootstrap_config_toml = load_config_toml_or_exit(
         &codex_home,
         config_cwd.as_ref(),
         cli_kv_overrides.clone(),
-        codex_config::ConfigLoadOptions {
-            loader_overrides: loader_overrides.clone(),
-            strict_config,
-        },
+        loader_overrides.clone(),
+        strict_config,
+        CloudConfigBundleLoader::default(),
     )
-    .await
-    {
-        Ok(config_toml) => config_toml,
-        Err(err) => {
-            let config_error = err
-                .get_ref()
-                .and_then(|err| err.downcast_ref::<ConfigLoadError>())
-                .map(ConfigLoadError::config_error);
-            if let Some(config_error) = config_error {
-                eprintln!(
-                    "Error loading config.toml:\n{}",
-                    format_config_error_with_source(config_error)
-                );
-            } else {
-                eprintln!("Error loading config.toml: {err}");
-            }
-            std::process::exit(1);
-        }
-    };
+    .await;
 
-    let chatgpt_base_url = config_toml
+    let chatgpt_base_url = bootstrap_config_toml
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let cloud_requirements = cloud_requirements_loader_for_storage(
+    let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
-        config_toml.cli_auth_credentials_store.unwrap_or_default(),
+        bootstrap_config_toml
+            .cli_auth_credentials_store
+            .unwrap_or_default(),
         chatgpt_base_url,
     )
     .await;
 
+    let cwd_override = if app_server_target.uses_remote_workspace() {
+        None
+    } else {
+        cwd.clone()
+    };
+
     let mut manually_selected_oss_provider = None;
     let model_provider_override = if cli.oss {
-        let resolved = resolve_oss_provider(cli.oss_provider.as_deref(), &config_toml);
+        let config_toml_with_cloud_config;
+        let config_toml_for_oss = if cli.oss_provider.is_none() {
+            // The first load intentionally skips cloud config so we can read
+            // auth/base-url settings needed to fetch the bundle. If OSS mode
+            // needs a default provider from config, reload with the bundle.
+            config_toml_with_cloud_config = load_config_toml_or_exit(
+                &codex_home,
+                config_cwd.as_ref(),
+                cli_kv_overrides.clone(),
+                loader_overrides.clone(),
+                strict_config,
+                cloud_config_bundle.clone(),
+            )
+            .await;
+            &config_toml_with_cloud_config
+        } else {
+            &bootstrap_config_toml
+        };
+
+        let resolved = resolve_oss_provider(cli.oss_provider.as_deref(), config_toml_for_oss);
 
         if let Some(provider) = resolved {
             Some(provider)
@@ -1010,11 +1024,7 @@ pub async fn run_main(
         model,
         approval_policy,
         sandbox_mode,
-        cwd: if matches!(app_server_target, AppServerTarget::Remote { .. }) {
-            None
-        } else {
-            cwd
-        },
+        cwd: cwd_override,
         model_provider: model_provider_override.clone(),
         codex_self_exe: arg0_paths.codex_self_exe.clone(),
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
@@ -1029,7 +1039,7 @@ pub async fn run_main(
         cli_kv_overrides.clone(),
         overrides.clone(),
         loader_overrides.clone(),
-        cloud_requirements.clone(),
+        cloud_config_bundle.clone(),
         strict_config,
     )
     .await;
@@ -1085,7 +1095,7 @@ pub async fn run_main(
                         cli_kv_overrides.clone(),
                         overrides.clone(),
                         loader_overrides.clone(),
-                        cloud_requirements.clone(),
+                        cloud_config_bundle.clone(),
                         strict_config,
                     )
                     .await;
@@ -1104,6 +1114,11 @@ pub async fn run_main(
             tracing::warn!(error = %err, "failed to deserialize config for personality migration");
         }
     }
+    let config_toml_log_dir_configured = config
+        .config_layer_stack
+        .effective_config()
+        .as_table()
+        .is_some_and(|table| table.contains_key("log_dir"));
 
     config = crate::app::config_for_startup_session(
         &config,
@@ -1155,7 +1170,7 @@ pub async fn run_main(
         }
     }
 
-    let (tui_file_layer, _tui_file_log_guard) = if config_toml.log_dir.is_some() {
+    let (tui_file_layer, _tui_file_log_guard) = if config_toml_log_dir_configured {
         let log_dir = config.log_dir.clone();
         std::fs::create_dir_all(&log_dir)?;
         let mut log_file_opts = OpenOptions::new();
@@ -1237,7 +1252,7 @@ pub async fn run_main(
         manually_selected_oss_provider,
         overrides,
         cli_kv_overrides,
-        cloud_requirements,
+        cloud_config_bundle,
         feedback,
         log_db,
         state_db,
@@ -1260,7 +1275,7 @@ async fn run_ratatui_app(
     manually_selected_oss_provider: Option<String>,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
-    mut cloud_requirements: CloudRequirementsLoader,
+    mut cloud_config_bundle: CloudConfigBundleLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
     state_db: Option<StateDbHandle>,
@@ -1323,7 +1338,7 @@ async fn run_ratatui_app(
         cli_kv_overrides.clone(),
         loader_overrides.clone(),
         strict_config,
-        cloud_requirements.clone(),
+        cloud_config_bundle.clone(),
         feedback.clone(),
         log_db.clone(),
         state_db.clone(),
@@ -1403,13 +1418,16 @@ async fn run_ratatui_app(
                 exit_reason: ExitReason::UserRequested,
             });
         }
-        trust_decision_was_made = onboarding_result.directory_trust_persisted;
-        // If this onboarding run included the login step, always refresh cloud requirements and
-        // rebuild config. This avoids missing newly available cloud requirements due to login
+        #[cfg(target_os = "windows")]
+        {
+            trust_decision_was_made = onboarding_result.directory_trust_persisted;
+        }
+        // If this onboarding run included the login step, always refresh the cloud config bundle
+        // and rebuild config. This avoids missing newly available cloud-managed policy due to login
         // status detection edge cases.
         if show_login_screen && !remote_mode {
-            cloud_requirements = cloud_requirements_loader_for_storage(
-                initial_config.auth_storage_home(),
+            cloud_config_bundle = cloud_config_bundle_loader_for_storage(
+                initial_config.codex_home.to_path_buf(),
                 /*enable_codex_api_key_env*/ false,
                 initial_config.effective_cli_auth_credentials_store_mode(),
                 initial_config.chatgpt_base_url.clone(),
@@ -1424,7 +1442,7 @@ async fn run_ratatui_app(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
                 loader_overrides.clone(),
-                cloud_requirements.clone(),
+                cloud_config_bundle.clone(),
                 strict_config,
             )
             .await
@@ -1628,7 +1646,7 @@ async fn run_ratatui_app(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
                 loader_overrides.clone(),
-                cloud_requirements.clone(),
+                cloud_config_bundle.clone(),
                 strict_config,
                 fallback_cwd,
             )
@@ -1639,7 +1657,7 @@ async fn run_ratatui_app(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
                 loader_overrides.clone(),
-                cloud_requirements.clone(),
+                cloud_config_bundle.clone(),
                 strict_config,
             )
             .await
@@ -1659,9 +1677,26 @@ async fn run_ratatui_app(
 
     set_default_client_residency_requirement(config.enforce_residency.value());
     let should_show_trust_screen = should_show_trust_screen(&config);
-    let should_prompt_windows_sandbox_nux_at_startup = cfg!(target_os = "windows")
-        && trust_decision_was_made
-        && WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
+    #[cfg(target_os = "windows")]
+    let windows_sandbox_level = WindowsSandboxLevel::from_config(&config);
+    #[cfg(target_os = "windows")]
+    let required_elevated_sandbox_needs_setup = windows_sandbox_level
+        == WindowsSandboxLevel::Elevated
+        && config
+            .config_layer_stack
+            .requirements()
+            .windows_sandbox_mode
+            .source
+            .is_some()
+        && !crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
+            config.codex_home.as_path(),
+        );
+    #[cfg(target_os = "windows")]
+    let should_prompt_windows_sandbox_nux_at_startup = (trust_decision_was_made
+        && windows_sandbox_level == WindowsSandboxLevel::Disabled)
+        || required_elevated_sandbox_needs_setup;
+    #[cfg(not(target_os = "windows"))]
+    let should_prompt_windows_sandbox_nux_at_startup = false;
 
     let Cli {
         prompt,
@@ -1692,7 +1727,7 @@ async fn run_ratatui_app(
             cli_kv_overrides.clone(),
             loader_overrides.clone(),
             strict_config,
-            cloud_requirements.clone(),
+            cloud_config_bundle.clone(),
             feedback.clone(),
             log_db.clone(),
             state_db.clone(),
@@ -1852,14 +1887,14 @@ async fn load_config_or_exit(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
     loader_overrides: LoaderOverrides,
-    cloud_requirements: CloudRequirementsLoader,
+    cloud_config_bundle: CloudConfigBundleLoader,
     strict_config: bool,
 ) -> Config {
     load_config_or_exit_with_fallback_cwd(
         cli_kv_overrides,
         overrides,
         loader_overrides,
-        cloud_requirements,
+        cloud_config_bundle,
         strict_config,
         /*fallback_cwd*/ None,
     )
@@ -1870,7 +1905,7 @@ async fn load_config_or_exit_with_fallback_cwd(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
     loader_overrides: LoaderOverrides,
-    cloud_requirements: CloudRequirementsLoader,
+    cloud_config_bundle: CloudConfigBundleLoader,
     strict_config: bool,
     fallback_cwd: Option<PathBuf>,
 ) -> Config {
@@ -1880,7 +1915,7 @@ async fn load_config_or_exit_with_fallback_cwd(
         .harness_overrides(overrides)
         .loader_overrides(loader_overrides)
         .strict_config(strict_config)
-        .cloud_requirements(cloud_requirements)
+        .cloud_config_bundle(cloud_config_bundle)
         .fallback_cwd(fallback_cwd)
         .build()
         .await
@@ -1888,6 +1923,46 @@ async fn load_config_or_exit_with_fallback_cwd(
         Ok(config) => config,
         Err(err) => {
             eprintln!("Error loading configuration: {err}");
+            std::process::exit(1);
+        }
+    }
+}
+
+#[allow(clippy::print_stderr)]
+async fn load_config_toml_or_exit(
+    codex_home: &Path,
+    cwd: Option<&AbsolutePathBuf>,
+    cli_kv_overrides: Vec<(String, codex_config::TomlValue)>,
+    loader_overrides: LoaderOverrides,
+    strict_config: bool,
+    cloud_config_bundle: CloudConfigBundleLoader,
+) -> codex_config::config_toml::ConfigToml {
+    match load_config_as_toml_with_cli_and_load_options(
+        codex_home,
+        cwd,
+        cli_kv_overrides,
+        codex_config::ConfigLoadOptions {
+            loader_overrides,
+            strict_config,
+            cloud_config_bundle,
+        },
+    )
+    .await
+    {
+        Ok(config_toml) => config_toml,
+        Err(err) => {
+            let config_error = err
+                .get_ref()
+                .and_then(|err| err.downcast_ref::<ConfigLoadError>())
+                .map(ConfigLoadError::config_error);
+            if let Some(config_error) = config_error {
+                eprintln!(
+                    "Error loading config.toml:\n{}",
+                    format_config_error_with_source(config_error)
+                );
+            } else {
+                eprintln!("Error loading config.toml: {err}");
+            }
             std::process::exit(1);
         }
     }
@@ -1969,7 +2044,7 @@ mod tests {
             Vec::new(),
             LoaderOverrides::default(),
             /*strict_config*/ false,
-            CloudRequirementsLoader::default(),
+            CloudConfigBundleLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
             state_db,
@@ -2712,7 +2787,7 @@ mod tests {
             Vec::new(),
             LoaderOverrides::default(),
             /*strict_config*/ false,
-            CloudRequirementsLoader::default(),
+            CloudConfigBundleLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
             /*state_db*/ None,

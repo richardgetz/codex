@@ -234,7 +234,7 @@ async fn build_arc_monitor_request(
         ));
     }
 
-    let conversation_id = sess.conversation_id.to_string();
+    let conversation_id = sess.thread_id.to_string();
     ArcMonitorRequest {
         metadata: ArcMonitorMetadata {
             codex_thread_id: conversation_id.clone(),

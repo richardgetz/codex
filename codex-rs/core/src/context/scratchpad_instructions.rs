@@ -16,7 +16,7 @@ impl ScratchpadInstructions {
 }
 
 impl ContextualUserFragment for ScratchpadInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

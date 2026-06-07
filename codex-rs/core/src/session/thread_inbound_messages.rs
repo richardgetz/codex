@@ -46,6 +46,7 @@ pub(super) fn start_thread_inbound_message_poller(
                 };
                 let submission = Submission {
                     id: message.id,
+                    client_user_message_id: None,
                     op: Op::UserInput {
                         items,
                         additional_context: Default::default(),

@@ -51,6 +51,8 @@ use codex_app_server_protocol::ThreadAgentsPruneParams;
 use codex_app_server_protocol::ThreadAgentsPruneResponse;
 use codex_app_server_protocol::ThreadApproveGuardianDeniedActionParams;
 use codex_app_server_protocol::ThreadApproveGuardianDeniedActionResponse;
+use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
@@ -108,6 +110,8 @@ use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
+use codex_app_server_protocol::ThreadUnarchiveParams;
+use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUserPreferencesMemoryMigrateParams;
@@ -584,6 +588,36 @@ impl AppServerSession {
         Ok(response.thread)
     }
 
+    pub(crate) async fn thread_archive(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadArchiveResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadArchive {
+                request_id,
+                params: ThreadArchiveParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("failed to archive session")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_unarchive(&mut self, thread_id: ThreadId) -> Result<Thread> {
+        let request_id = self.next_request_id();
+        let response: ThreadUnarchiveResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadUnarchive {
+                request_id,
+                params: ThreadUnarchiveParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("failed to unarchive session")?;
+        Ok(response.thread)
+    }
+
     pub(crate) async fn thread_metadata_update_branch(
         &mut self,
         thread_id: ThreadId,
@@ -655,6 +689,7 @@ impl AppServerSession {
                 request_id,
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
+                    client_user_message_id: None,
                     input: items,
                     responsesapi_client_metadata: None,
                     additional_context: None,
@@ -719,6 +754,7 @@ impl AppServerSession {
                 request_id,
                 params: TurnSteerParams {
                     thread_id: thread_id.to_string(),
+                    client_user_message_id: None,
                     input: items,
                     responsesapi_client_metadata: None,
                     additional_context: None,
@@ -1545,7 +1581,6 @@ fn thread_start_params_from_config(
             config.memories.use_memories,
             config.memories.generate_memories,
         )),
-        persist_extended_history: false,
         ..ThreadStartParams::default()
     }
 }
@@ -1589,7 +1624,6 @@ fn thread_resume_params_from_config(
             config.memories.use_memories,
             config.memories.generate_memories,
         )),
-        persist_extended_history: false,
         ..ThreadResumeParams::default()
     }
 }
@@ -1637,7 +1671,6 @@ fn thread_fork_params_from_config(
             config.memories.use_memories,
             config.memories.generate_memories,
         )),
-        persist_extended_history: false,
         ..ThreadForkParams::default()
     }
 }
@@ -1922,6 +1955,75 @@ mod tests {
             .build()
             .await
             .expect("config should build")
+    }
+
+    fn rate_limit_snapshot(limit_id: &str) -> RateLimitSnapshot {
+        RateLimitSnapshot {
+            limit_id: Some(limit_id.to_string()),
+            limit_name: None,
+            primary: Some(codex_app_server_protocol::RateLimitWindow {
+                used_percent: 0,
+                window_duration_mins: Some(10_080),
+                resets_at: None,
+            }),
+            secondary: None,
+            credits: None,
+            individual_limit: None,
+            plan_type: None,
+            rate_limit_reached_type: None,
+        }
+    }
+
+    #[test]
+    fn app_server_rate_limit_snapshots_deduplicates_top_level_limit_from_map() {
+        let response = GetAccountRateLimitsResponse {
+            rate_limits: rate_limit_snapshot("codex"),
+            rate_limits_by_limit_id: Some(HashMap::from([
+                ("codex".to_string(), rate_limit_snapshot("codex")),
+                ("other".to_string(), rate_limit_snapshot("other")),
+            ])),
+        };
+
+        let snapshots = app_server_rate_limit_snapshots(response);
+
+        assert_eq!(
+            snapshots
+                .iter()
+                .map(|snapshot| snapshot.limit_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("codex"), Some("other")]
+        );
+    }
+
+    #[test]
+    fn thread_settings_update_compat_detects_unsupported_errors() {
+        let cases = [
+            (JSONRPC_METHOD_NOT_FOUND, "method not found", true),
+            (
+                JSONRPC_INVALID_REQUEST,
+                "thread/settings/update requires experimentalApi capability",
+                true,
+            ),
+            (
+                JSONRPC_INVALID_REQUEST,
+                "Invalid request: unknown variant `thread/settings/update`",
+                true,
+            ),
+            (JSONRPC_INVALID_REQUEST, "invalid thread id", false),
+        ];
+
+        for (code, message, expected) in cases {
+            let source = JSONRPCErrorError {
+                code,
+                data: None,
+                message: message.to_string(),
+            };
+            assert_eq!(
+                is_thread_settings_update_unsupported(&source),
+                expected,
+                "{message}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2436,6 +2538,7 @@ mod tests {
                 id: thread_id.to_string(),
                 session_id: ThreadId::new().to_string(),
                 forked_from_id: Some(forked_from_id.to_string()),
+                parent_thread_id: None,
                 preview: "hello".to_string(),
                 ephemeral: false,
                 model_provider: "openai".to_string(),
@@ -2457,6 +2560,7 @@ mod tests {
                     items: vec![
                         codex_app_server_protocol::ThreadItem::UserMessage {
                             id: "user-1".to_string(),
+                            client_id: None,
                             content: vec![codex_app_server_protocol::UserInput::Text {
                                 text: "hello from history".to_string(),
                                 text_elements: Vec::new(),
@@ -2496,6 +2600,7 @@ mod tests {
             memory_policy: Default::default(),
             user_preferences_memory_policy:
                 codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
+            initial_turns_page: None,
         };
 
         let started = started_thread_from_resume_response(

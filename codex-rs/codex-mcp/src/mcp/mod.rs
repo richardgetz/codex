@@ -23,10 +23,10 @@ use codex_config::McpServerSharingMode;
 use codex_config::McpServerStartupMode;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AppToolApproval;
-use codex_config::types::ApprovalsReviewer;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_plugin::PluginCapabilitySummary;
+use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::mcp::Tool;
@@ -92,7 +92,6 @@ pub fn mcp_permission_prompt_is_auto_approved(
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct McpPermissionPromptAutoApproveContext {
-    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub tool_approval_mode: Option<AppToolApproval>,
 }
 
@@ -302,13 +301,7 @@ pub async fn read_mcp_resource(
     .await;
 
     let result = manager
-        .read_resource(
-            server,
-            ReadResourceRequestParams {
-                meta: None,
-                uri: uri.to_string(),
-            },
-        )
+        .read_resource(server, ReadResourceRequestParams::new(uri))
         .await;
     cancel_token.cancel();
     result
@@ -316,6 +309,7 @@ pub async fn read_mcp_resource(
 
 #[derive(Debug, Clone)]
 pub struct McpServerStatusSnapshot {
+    pub server_infos: HashMap<String, McpServerInfo>,
     pub tools_by_server: HashMap<String, HashMap<String, Tool>>,
     pub resources: HashMap<String, Vec<Resource>>,
     pub resource_templates: HashMap<String, Vec<ResourceTemplate>>,
@@ -335,6 +329,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let tool_plugin_provenance = tool_plugin_provenance(config);
     if mcp_servers.is_empty() {
         return McpServerStatusSnapshot {
+            server_infos: HashMap::new(),
             tools_by_server: HashMap::new(),
             resources: HashMap::new(),
             resource_templates: HashMap::new(),
@@ -609,6 +604,7 @@ async fn collect_mcp_server_status_snapshot_from_manager(
             }
         },
     );
+    let server_infos = mcp_connection_manager.list_available_server_infos().await;
 
     let mut tools_by_server = HashMap::<String, HashMap<String, Tool>>::new();
     for tool_info in tools {
@@ -624,6 +620,7 @@ async fn collect_mcp_server_status_snapshot_from_manager(
     }
 
     McpServerStatusSnapshot {
+        server_infos,
         tools_by_server,
         resources: convert_mcp_resources(resources),
         resource_templates: convert_mcp_resource_templates(resource_templates),

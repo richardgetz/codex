@@ -1,6 +1,7 @@
 use crate::config::DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS;
 use crate::config::DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS;
 use crate::config::DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
+use crate::session::turn_context::TurnContext;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
 use crate::tools::context::ToolInvocation;
 use crate::tools::handlers::ApplyPatchHandler;
@@ -59,6 +60,7 @@ use crate::tools::registry::ToolRegistry;
 use crate::tools::registry::override_tool_exposure;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
+use codex_features::Feature;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -128,7 +130,13 @@ fn build_tool_specs_and_registry(
     prepend_code_mode_executors(config, &mut executors);
     let standalone_web_search_can_be_shown =
         config.namespace_tools && standalone_web_search_available(&executors);
-    let hosted_specs = hosted_model_tool_specs(config, standalone_web_search_can_be_shown);
+    let standalone_image_generation_can_be_shown =
+        config.namespace_tools && standalone_image_generation_available(&executors);
+    let hosted_specs = hosted_model_tool_specs(
+        config,
+        standalone_web_search_can_be_shown,
+        standalone_image_generation_can_be_shown,
+    );
     build_model_visible_specs_and_registry(config, executors, hosted_specs)
 }
 
@@ -151,8 +159,11 @@ fn build_model_visible_specs_and_registry(
         }
     }
     for spec in hosted_specs {
-        if !is_hidden_by_code_mode_only(config, &ToolName::plain(spec.name()), ToolExposure::Direct)
-        {
+        if !is_hidden_by_code_mode_only(
+            config,
+            &ToolName::plain(spec.name()),
+            ToolExposure::DirectModelOnly,
+        ) {
             specs.push(spec);
         }
     }
@@ -184,6 +195,7 @@ fn spec_for_model_request(
 pub(crate) fn hosted_model_tool_specs(
     config: &ToolsConfig,
     standalone_web_search_available: bool,
+    standalone_image_generation_available: bool,
 ) -> Vec<ToolSpec> {
     let mut specs = Vec::new();
     if !standalone_web_search_available
@@ -195,7 +207,7 @@ pub(crate) fn hosted_model_tool_specs(
     {
         specs.push(web_search_tool);
     }
-    if config.image_gen_tool {
+    if config.image_gen_tool && !standalone_image_generation_available {
         specs.push(create_image_generation_tool("png"));
     }
     specs
@@ -206,6 +218,25 @@ fn standalone_web_search_available(executors: &[Arc<dyn CoreToolRuntime>]) -> bo
         executor.exposure().is_direct()
             && executor.tool_name() == ToolName::namespaced("web", "run")
     })
+}
+
+fn standalone_image_generation_available(executors: &[Arc<dyn CoreToolRuntime>]) -> bool {
+    executors.iter().any(|executor| {
+        executor.exposure().is_direct()
+            && executor.tool_name() == ToolName::namespaced("image_gen", "imagegen")
+    })
+}
+
+pub(crate) fn search_tool_enabled(turn_context: &TurnContext) -> bool {
+    turn_context.tools_config.search_tool
+}
+
+pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
+    let features = turn_context.features.get();
+    turn_context.tools_config.tool_suggest
+        && features.enabled(Feature::ToolSuggest)
+        && features.enabled(Feature::Apps)
+        && features.enabled(Feature::Plugins)
 }
 
 fn wait_agent_timeout_options(config: &ToolsConfig) -> WaitAgentTimeoutOptions {
@@ -264,9 +295,19 @@ fn build_code_mode_executors(
         .filter(|executor| executor.exposure() != ToolExposure::DirectModelOnly)
         .map(|executor| executor.spec())
         .collect::<Vec<_>>();
-    let namespace_descriptions = code_mode_namespace_descriptions(&code_mode_nested_tool_specs);
+    let code_mode_prompt_tool_specs = executors
+        .iter()
+        .filter(|executor| {
+            !matches!(
+                executor.exposure(),
+                ToolExposure::Deferred | ToolExposure::DirectModelOnly
+            )
+        })
+        .map(|executor| executor.spec())
+        .collect::<Vec<_>>();
+    let namespace_descriptions = code_mode_namespace_descriptions(&code_mode_prompt_tool_specs);
     let mut enabled_tools =
-        collect_code_mode_exec_prompt_tool_definitions(code_mode_nested_tool_specs.iter());
+        collect_code_mode_exec_prompt_tool_definitions(code_mode_prompt_tool_specs.iter());
     enabled_tools
         .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
 
@@ -369,6 +410,7 @@ fn collect_tool_executors(
                         allow_login_shell: config.allow_login_shell,
                         exec_permission_approvals_enabled,
                         include_environment_id,
+                        include_shell_parameter: true,
                     },
                 )));
                 executors.push(Arc::new(WriteStdinHandler));
@@ -736,10 +778,6 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2NamespaceOverride {
 impl CoreToolRuntime for MultiAgentV2NamespaceOverride {
     fn matches_kind(&self, payload: &crate::tools::context::ToolPayload) -> bool {
         self.handler.matches_kind(payload)
-    }
-
-    fn search_info(&self) -> Option<crate::tools::tool_search_entry::ToolSearchInfo> {
-        self.handler.search_info()
     }
 
     fn create_diff_consumer(

@@ -16,6 +16,7 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerToolConfig;
+use codex_features::Feature;
 use codex_features::Features;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
@@ -56,13 +57,13 @@ fn annotations(
     destructive: Option<bool>,
     open_world: Option<bool>,
 ) -> ToolAnnotations {
-    ToolAnnotations {
-        destructive_hint: destructive,
-        idempotent_hint: None,
-        open_world_hint: open_world,
-        read_only_hint: read_only,
-        title: None,
-    }
+    ToolAnnotations::from_raw(
+        /*title*/ None,
+        read_only,
+        destructive,
+        /*idempotent_hint*/ None,
+        open_world,
+    )
 }
 
 fn approval_metadata(
@@ -138,7 +139,7 @@ async fn execute_mcp_tool_call_records_replayable_correlation() -> anyhow::Resul
         .rollout_thread_trace
         .start_tool_dispatch_trace(|| {
             Some(ToolDispatchInvocation {
-                thread_id: session.conversation_id.to_string(),
+                thread_id: session.thread_id.to_string(),
                 codex_turn_id: turn_context.sub_id.clone(),
                 tool_call_id: "mcp-call".to_string(),
                 tool_name: "search".to_string(),
@@ -280,7 +281,7 @@ fn attach_trace_bundle(
         codex_rollout_trace::ThreadTraceContext::start_root_in_root_for_test(
             root,
             ThreadStartedTraceMetadata {
-                thread_id: session.conversation_id.to_string(),
+                thread_id: session.thread_id.to_string(),
                 agent_path: "/root".to_string(),
                 task_name: None,
                 nickname: None,
@@ -646,7 +647,7 @@ async fn approval_elicitation_request_uses_message_override_and_preserves_tool_p
     assert_eq!(
         request,
         McpServerElicitationRequestParams {
-            thread_id: session.conversation_id.to_string(),
+            thread_id: session.thread_id.to_string(),
             turn_id: Some(turn_context.sub_id),
             server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
             request: McpServerElicitationRequest::Form {
@@ -1974,6 +1975,7 @@ async fn persist_codex_app_tool_approval_writes_tool_override() {
                 "calendar".to_string(),
                 AppConfig {
                     enabled: true,
+                    approvals_reviewer: None,
                     destructive_enabled: None,
                     open_world_enabled: None,
                     default_tools_approval_mode: None,
@@ -2810,6 +2812,52 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
         "prompt mode should wait for approval instead of auto-allowing"
     );
     approval_task.abort();
+}
+
+#[tokio::test]
+async fn prompt_mode_skips_waiting_when_mcp_approvals_are_disabled() {
+    let (session, mut turn_context, _rx_event) = make_session_and_context_with_rx().await;
+    {
+        let mut active_turn = session.active_turn.lock().await;
+        *active_turn = Some(ActiveTurn::default());
+    }
+
+    let mut config = (*turn_context.config).clone();
+    let _ = config.features.disable(Feature::EnableMcpApprovals);
+    Arc::get_mut(&mut turn_context)
+        .expect("single turn context ref")
+        .config = Arc::new(config);
+
+    let invocation = McpInvocation {
+        server: "custom_server".to_string(),
+        tool: "dangerous_tool".to_string(),
+        arguments: None,
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(Some(false), Some(true), Some(true))),
+        connector_id: None,
+        connector_name: None,
+        connector_description: None,
+        plugin_id: None,
+        tool_title: Some("Dangerous Tool".to_string()),
+        tool_description: None,
+        mcp_app_resource_uri: None,
+        codex_apps_meta: None,
+        openai_file_input_params: None,
+    };
+
+    let decision = maybe_request_mcp_tool_approval(
+        &session,
+        &turn_context,
+        "call-disabled",
+        &invocation,
+        &HookToolName::new("mcp__test__tool"),
+        Some(&metadata),
+        AppToolApproval::Prompt,
+    )
+    .await;
+
+    assert_eq!(decision, None);
 }
 
 #[tokio::test]

@@ -20,7 +20,7 @@ impl SituationalRequirementsInstructions {
 }
 
 impl ContextualUserFragment for SituationalRequirementsInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

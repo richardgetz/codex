@@ -28,7 +28,6 @@ use crate::enablement::filter_mcp_tools_for_mode;
 use crate::enablement::filter_plugins_for_mode;
 use crate::feedback_tags;
 use crate::goals::GoalRuntimeEvent;
-use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
@@ -73,6 +72,7 @@ use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolRouterParams;
 use crate::tools::router::extension_tool_executors;
+use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::util::error_or_panic;
@@ -83,6 +83,8 @@ use codex_analytics::InvocationType;
 use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
+use codex_extension_api::TurnInputContext;
+use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_git_repo_root_with_fs;
@@ -166,7 +168,10 @@ pub(crate) async fn run_turn(
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
     if let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
-        if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+        let error = err.to_codex_protocol_error();
+        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
+            .await;
+        if error == CodexErrorInfo::UsageLimitExceeded
             && let Err(err) = sess
                 .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
                     turn_context: turn_context.as_ref(),
@@ -279,7 +284,7 @@ pub(crate) async fn run_turn(
     .await;
 
     let session_telemetry = turn_context.session_telemetry.clone();
-    let thread_id = sess.conversation_id.to_string();
+    let thread_id = sess.thread_id.to_string();
     let tracking = build_track_events_context(
         turn_context.model_info.slug.clone(),
         thread_id,
@@ -309,6 +314,9 @@ pub(crate) async fn run_turn(
 
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
+    let extension_injection_items =
+        build_extension_turn_input_items(&sess, &turn_context, &user_input, &cancellation_token)
+            .await?;
     let mentioned_plugin_metadata = mentioned_plugins
         .iter()
         .filter_map(crate::plugins::PluginCapabilitySummary::telemetry_metadata)
@@ -370,6 +378,10 @@ pub(crate) async fn run_turn(
         sess.record_conversation_items(&turn_context, &plugin_items)
             .await;
     }
+    if !extension_injection_items.is_empty() {
+        sess.record_conversation_items(&turn_context, &extension_injection_items)
+            .await;
+    }
 
     track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;
 
@@ -424,29 +436,27 @@ pub(crate) async fn run_turn(
         if !pending_input.is_empty() {
             let mut pending_input_iter = pending_input.into_iter();
             while let Some(pending_input_item) = pending_input_iter.next() {
-                match inspect_pending_input(&sess, &turn_context, pending_input_item).await {
-                    PendingInputHookDisposition::Accepted(pending_input) => {
-                        accepted_pending_input.push(*pending_input);
+                let hook_outcome =
+                    inspect_pending_input(&sess, &turn_context, &pending_input_item).await;
+                if hook_outcome.should_stop {
+                    let remaining_pending_input = pending_input_iter.collect::<Vec<_>>();
+                    if !remaining_pending_input.is_empty() {
+                        let _ = sess.prepend_pending_input(remaining_pending_input).await;
+                        requeued_pending_input = true;
                     }
-                    PendingInputHookDisposition::Blocked {
-                        additional_contexts,
-                    } => {
-                        let remaining_pending_input = pending_input_iter.collect::<Vec<_>>();
-                        if !remaining_pending_input.is_empty() {
-                            let _ = sess.prepend_pending_input(remaining_pending_input).await;
-                            requeued_pending_input = true;
-                        }
-                        blocked_pending_input_contexts = additional_contexts;
-                        blocked_pending_input = true;
-                        break;
-                    }
+                    blocked_pending_input_contexts = hook_outcome.additional_contexts;
+                    blocked_pending_input = true;
+                    break;
+                } else {
+                    accepted_pending_input
+                        .push((pending_input_item, hook_outcome.additional_contexts));
                 }
             }
         }
 
         let has_accepted_pending_input = !accepted_pending_input.is_empty();
-        for pending_input in accepted_pending_input {
-            record_pending_input(&sess, &turn_context, pending_input).await;
+        for (pending_input, additional_contexts) in accepted_pending_input {
+            record_pending_input(&sess, &turn_context, pending_input, additional_contexts).await;
         }
         record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await;
 
@@ -527,7 +537,10 @@ pub(crate) async fn run_turn(
                     )
                     .await
                     {
-                        if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+                        let error = err.to_codex_protocol_error();
+                        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
+                            .await;
+                        if error == CodexErrorInfo::UsageLimitExceeded
                             && let Err(err) = sess
                                 .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
                                     turn_context: turn_context.as_ref(),
@@ -546,14 +559,13 @@ pub(crate) async fn run_turn(
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
-                    if let Some(scratchpad) = active_thread_scratchpad(
-                        &turn_context.config.codex_home,
-                        sess.conversation_id,
-                    )
-                    .filter(|scratchpad| {
-                        continuous_run_policy_enabled(scratchpad)
-                            && scratchpad_has_continuous_work(scratchpad)
-                    }) {
+                    if let Some(scratchpad) =
+                        active_thread_scratchpad(&turn_context.config.codex_home, sess.thread_id)
+                            .filter(|scratchpad| {
+                                continuous_run_policy_enabled(scratchpad)
+                                    && scratchpad_has_continuous_work(scratchpad)
+                            })
+                    {
                         let message = ResponseItem::Message {
                             id: None,
                             role: "user".to_string(),
@@ -618,7 +630,7 @@ pub(crate) async fn run_turn(
                 // Aborted turn is reported via a different event.
                 break;
             }
-            Err(CodexErr::InvalidImageRequest()) => {
+            Err(codex_error @ CodexErr::InvalidImageRequest()) => {
                 {
                     let mut state = sess.state.lock().await;
                     error_or_panic(
@@ -629,10 +641,14 @@ pub(crate) async fn run_turn(
                     }
                 }
 
+                sess.track_turn_codex_error(turn_context.as_ref(), &codex_error);
+                let error = CodexErrorInfo::BadRequest;
+                sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
+                    .await;
                 let event = EventMsg::Error(ErrorEvent {
                     message: "Invalid image in your last message. Please remove it and try again."
                         .to_string(),
-                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                    codex_error_info: Some(error),
                 });
                 sess.send_event(&turn_context, event).await;
                 break;
@@ -652,7 +668,10 @@ pub(crate) async fn run_turn(
                     continue;
                 }
                 info!("Turn error: {e:#}");
-                if e.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+                let error = e.to_codex_protocol_error();
+                sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
+                    .await;
+                if error == CodexErrorInfo::UsageLimitExceeded
                     && let Err(err) = sess
                         .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
                             turn_context: turn_context.as_ref(),
@@ -661,6 +680,7 @@ pub(crate) async fn run_turn(
                 {
                     warn!("failed to usage-limit active goal after usage-limit error: {err}");
                 }
+                sess.track_turn_codex_error(turn_context.as_ref(), &e);
                 let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
                 sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation
@@ -789,30 +809,34 @@ async fn run_hooks_and_record_inputs(
     input: &[TurnInput],
 ) -> bool {
     let mut blocked_input = false;
-    let mut accepted_input = false;
+    let mut accepted_user_input = false;
     for input_item in input {
-        match inspect_pending_input(sess, turn_context, input_item.clone()).await {
-            PendingInputHookDisposition::Accepted(pending_input) => {
-                accepted_input = true;
-                record_pending_input(sess, turn_context, *pending_input).await;
+        let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
+        if hook_outcome.should_stop {
+            blocked_input = true;
+            record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
+        } else {
+            if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty()) {
+                accepted_user_input = true;
             }
-            PendingInputHookDisposition::Blocked {
-                additional_contexts,
-            } => {
-                blocked_input = true;
-                record_additional_contexts(sess, turn_context, additional_contexts).await;
-            }
+            record_pending_input(
+                sess,
+                turn_context,
+                input_item.clone(),
+                hook_outcome.additional_contexts,
+            )
+            .await;
         }
     }
-    blocked_input && !accepted_input
+    blocked_input && !accepted_user_input
 }
 
 fn turn_input_user_items(input: &[TurnInput]) -> Vec<UserInput> {
     input
         .iter()
         .filter_map(|item| match item {
-            TurnInput::UserInput(content) => Some(content.as_slice()),
-            TurnInput::ResponseInputItem(_) => None,
+            TurnInput::UserInput { content, .. } => Some(content.as_slice()),
+            TurnInput::ResponseItem(_) => None,
         })
         .flatten()
         .cloned()
@@ -1006,6 +1030,57 @@ mod thread_control_tests {
     }
 }
 
+async fn build_extension_turn_input_items(
+    sess: &Arc<Session>,
+    turn_context: &TurnContext,
+    user_input: &[UserInput],
+    cancellation_token: &CancellationToken,
+) -> Option<Vec<ResponseItem>> {
+    let contributors = sess.services.extensions.turn_input_contributors().to_vec();
+    if contributors.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let environments = turn_context
+        .environments
+        .turn_environments
+        .iter()
+        .enumerate()
+        .map(|(index, environment)| TurnInputEnvironment {
+            environment_id: environment.environment_id.clone(),
+            cwd: environment.cwd.as_path().to_path_buf(),
+            is_primary: index == 0,
+        })
+        .collect::<Vec<_>>();
+
+    let input = TurnInputContext {
+        turn_id: turn_context.sub_id.to_string(),
+        user_input: user_input.to_vec(),
+        environments,
+    };
+
+    let mut items = Vec::new();
+    for contributor in contributors {
+        let contributed_fragments = contributor
+            .contribute(
+                input.clone(),
+                &sess.services.session_extension_data,
+                &sess.services.thread_extension_data,
+                turn_context.extension_data.as_ref(),
+            )
+            .or_cancel(cancellation_token)
+            .await
+            .ok()?;
+        items.extend(
+            contributed_fragments
+                .into_iter()
+                .map(ContextualUserFragment::into_boxed_response_item),
+        );
+    }
+
+    Some(items)
+}
+
 async fn track_turn_resolved_config_analytics(
     sess: &Session,
     turn_context: &TurnContext,
@@ -1023,12 +1098,12 @@ async fn track_turn_resolved_config_analytics(
         .analytics_events_client
         .track_turn_resolved_config(TurnResolvedConfigFact {
             turn_id: turn_context.sub_id.clone(),
-            thread_id: sess.conversation_id.to_string(),
+            thread_id: sess.thread_id.to_string(),
             num_input_images: input
                 .iter()
                 .filter_map(|item| match item {
-                    TurnInput::UserInput(content) => Some(content.as_slice()),
-                    TurnInput::ResponseInputItem(_) => None,
+                    TurnInput::UserInput { content, .. } => Some(content.as_slice()),
+                    TurnInput::ResponseItem(_) => None,
                 })
                 .flatten()
                 .filter(|item| {
@@ -1055,6 +1130,7 @@ async fn track_turn_resolved_config_analytics(
             sandbox_network_access: turn_context.network_sandbox_policy().is_enabled(),
             collaboration_mode: turn_context.collaboration_mode.mode,
             personality: turn_context.personality,
+            workspace_kind: turn_context.turn_metadata_state.workspace_kind(),
             is_first_turn,
         });
 }
@@ -1649,16 +1725,12 @@ async fn run_sampling_request(
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
     );
-    let _code_mode_worker = sess
-        .services
-        .code_mode_service
-        .start_turn_worker(
-            &sess,
-            &turn_context,
-            Arc::clone(&router),
-            Arc::clone(&turn_diff_tracker),
-        )
-        .await;
+    let _code_mode_worker = sess.services.code_mode_service.start_turn_worker(
+        &sess,
+        &turn_context,
+        Arc::clone(&router),
+        Arc::clone(&turn_diff_tracker),
+    );
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
     let mut initial_input = Some(input);
@@ -1823,12 +1895,19 @@ pub(crate) async fn built_tools(
         None
     };
     let auth = sess.services.auth_manager.auth().await;
-    let discoverable_tools = if apps_enabled && turn_context.tools_config.tool_suggest {
+    let loaded_plugin_app_connector_ids = loaded_plugins
+        .effective_apps()
+        .into_iter()
+        .map(|connector_id| connector_id.0)
+        .collect::<Vec<_>>();
+    let discoverable_tools = if apps_enabled && tool_suggest_enabled(turn_context) {
         if let Some(accessible_connectors) = accessible_connectors_with_enabled_state.as_ref() {
             match connectors::list_tool_suggest_discoverable_tools_with_auth(
                 &turn_context.config,
+                sess.services.plugins_manager.as_ref(),
                 auth.as_ref(),
                 accessible_connectors.as_slice(),
+                &loaded_plugin_app_connector_ids,
             )
             .await
             .map(|discoverable_tools| {
@@ -2020,7 +2099,7 @@ impl ProposedPlanItemState {
             return;
         }
         let event = PlanDeltaEvent {
-            thread_id: sess.conversation_id.to_string(),
+            thread_id: sess.thread_id.to_string(),
             turn_id: turn_context.sub_id.clone(),
             item_id: self.item_id.clone(),
             delta: delta.to_string(),
@@ -2198,7 +2277,7 @@ async fn handle_plan_segments(
                 maybe_emit_pending_agent_message_start(sess, turn_context, state, item_id).await;
 
                 let event = AgentMessageContentDeltaEvent {
-                    thread_id: sess.conversation_id.to_string(),
+                    thread_id: sess.thread_id.to_string(),
                     turn_id: turn_context.sub_id.clone(),
                     item_id: item_id.to_string(),
                     delta,
@@ -2252,7 +2331,7 @@ async fn emit_streamed_assistant_text_delta(
         return;
     }
     let event = AgentMessageContentDeltaEvent {
-        thread_id: sess.conversation_id.to_string(),
+        thread_id: sess.thread_id.to_string(),
         turn_id: turn_context.sub_id.clone(),
         item_id: item_id.to_string(),
         delta: parsed.visible_text,
@@ -2659,7 +2738,7 @@ async fn try_run_sampling_request(
                 }
                 needs_follow_up |= output_result.needs_follow_up;
                 // todo: remove before stabilizing multi-agent v2
-                if preempt_for_mailbox_mail && sess.mailbox_rx.lock().await.has_pending() {
+                if preempt_for_mailbox_mail && sess.has_pending_mailbox_items().await {
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         last_agent_message,
@@ -2818,7 +2897,7 @@ async fn try_run_sampling_request(
                         .await;
                     } else {
                         let event = AgentMessageContentDeltaEvent {
-                            thread_id: sess.conversation_id.to_string(),
+                            thread_id: sess.thread_id.to_string(),
                             turn_id: turn_context.sub_id.clone(),
                             item_id,
                             delta,
@@ -2857,7 +2936,7 @@ async fn try_run_sampling_request(
                         continue;
                     }
                     let event = ReasoningContentDeltaEvent {
-                        thread_id: sess.conversation_id.to_string(),
+                        thread_id: sess.thread_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
                         item_id: active.id(),
                         delta,
@@ -2893,7 +2972,7 @@ async fn try_run_sampling_request(
                         continue;
                     }
                     let event = ReasoningRawContentDeltaEvent {
-                        thread_id: sess.conversation_id.to_string(),
+                        thread_id: sess.thread_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
                         item_id: active.id(),
                         delta,

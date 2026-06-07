@@ -3,6 +3,7 @@ use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
 use codex_mcp::ElicitationReviewerHandle;
 use codex_mcp::ToolInfo;
+use codex_mcp::tool_is_model_visible;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY as MCP_ELICITATION_APPROVAL_KIND_KEY;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_MCP_TOOL_CALL as MCP_ELICITATION_APPROVAL_KIND_MCP_TOOL_CALL;
@@ -464,6 +465,9 @@ impl Session {
         let (callable_namespace, tool) = parse_non_app_mcp_tool_name(tool_name)?;
         let resolved_tool_name = ToolName::namespaced(callable_namespace.clone(), tool.clone());
         if let Some(tool_info) = self.resolve_mcp_tool_info(&resolved_tool_name).await {
+            if !tool_is_model_visible(&tool_info) {
+                return None;
+            }
             if !crate::enablement::mcp_tool_parts_allowed_in_mode(
                 &turn_context.config,
                 turn_context.collaboration_mode.mode,
@@ -504,20 +508,11 @@ impl Session {
             callable_name: tool.clone(),
             callable_namespace,
             namespace_description: None,
-            tool: Tool {
-                name: tool.clone().into(),
-                title: None,
-                description: Some(
-                    "Configured MCP tool placeholder recovered after tool listing was unavailable."
-                        .into(),
-                ),
-                input_schema: Arc::new(JsonObject::default()),
-                output_schema: None,
-                annotations: None,
-                execution: None,
-                icons: None,
-                meta: None,
-            },
+            tool: Tool::new(
+                tool.clone(),
+                "Configured MCP tool placeholder recovered after tool listing was unavailable.",
+                Arc::new(JsonObject::default()),
+            ),
             connector_id: None,
             connector_name: None,
             plugin_display_names: Vec::new(),
@@ -753,6 +748,10 @@ fn parse_non_app_mcp_tool_name(tool_name: &ToolName) -> Option<(String, String)>
 
     if callable_namespace == codex_mcp::CODEX_APPS_MCP_SERVER_NAME
         || callable_namespace == format!("mcp__{}", codex_mcp::CODEX_APPS_MCP_SERVER_NAME)
+        || callable_namespace
+            .strip_prefix("mcp__")
+            .is_some_and(|namespace| namespace.starts_with("codex_apps__"))
+        || callable_namespace.starts_with("codex_apps__")
         || callable_namespace == "mcp____"
         || tool.is_empty()
     {
@@ -772,7 +771,15 @@ async fn review_guardian_mcp_elicitation(
         return Ok(None);
     };
 
-    if !crate::guardian::routes_approval_to_guardian(turn_context.as_ref()) {
+    let approvals_reviewer = crate::connectors::mcp_approvals_reviewer(
+        turn_context.config.as_ref(),
+        request.server_name.as_str(),
+        elicitation_connector_id(&request.elicitation),
+    );
+    if !crate::guardian::routes_approval_to_guardian_with_reviewer(
+        turn_context.as_ref(),
+        approvals_reviewer,
+    ) {
         return Ok(None);
     }
 
@@ -882,6 +889,15 @@ fn guardian_elicitation_review_request(
             annotations: None,
         },
     ))
+}
+
+fn elicitation_connector_id(elicitation: &CreateElicitationRequestParams) -> Option<&str> {
+    match elicitation {
+        CreateElicitationRequestParams::FormElicitationParams { meta, .. }
+        | CreateElicitationRequestParams::UrlElicitationParams { meta, .. } => meta
+            .as_ref()
+            .and_then(|meta| metadata_str(&meta.0, MCP_ELICITATION_CONNECTOR_ID_KEY)),
+    }
 }
 
 fn meta_requests_approval_request(meta: &Option<Meta>) -> bool {

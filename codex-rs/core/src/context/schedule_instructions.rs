@@ -10,7 +10,7 @@ impl ScheduleInstructions {
 }
 
 impl ContextualUserFragment for ScheduleInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

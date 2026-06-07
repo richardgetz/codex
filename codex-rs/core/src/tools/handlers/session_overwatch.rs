@@ -230,7 +230,7 @@ async fn handle_watch(
         .active_thread_control()
         .await
         .unwrap_or_else(|| ThreadControlRecord {
-            thread_id: invocation.session.conversation_id,
+            thread_id: invocation.session.thread_id,
             mode: ThreadControlMode::Router,
             reason: "Manual session overwatch".to_string(),
             release_channel: None,
@@ -259,7 +259,7 @@ async fn handle_watch(
         .services
         .orchestrator_supervision
         .register_watched_session(
-            invocation.session.conversation_id,
+            invocation.session.thread_id,
             target_thread_id,
             Some(metadata.title.clone()),
             Some(metadata.cwd.display().to_string()),
@@ -321,7 +321,7 @@ async fn handle_unwatch(
         .session
         .services
         .orchestrator_supervision
-        .remove_watched_session(invocation.session.conversation_id, target_thread_id)
+        .remove_watched_session(invocation.session.thread_id, target_thread_id)
         .await
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to update overwatch ledger: {err}"))
@@ -380,7 +380,7 @@ async fn handle_message(
         let message_id = state_db
             .enqueue_thread_inbound_message(
                 target_thread_id,
-                /*source_thread_id*/ Some(invocation.session.conversation_id),
+                /*source_thread_id*/ Some(invocation.session.thread_id),
                 payload_json,
             )
             .await
@@ -393,7 +393,7 @@ async fn handle_message(
             .session
             .services
             .orchestrator_supervision
-            .note_watched_session_instruction(invocation.session.conversation_id, target_thread_id)
+            .note_watched_session_instruction(invocation.session.thread_id, target_thread_id)
             .await
             .map_err(|err| {
                 FunctionCallError::RespondToModel(format!(
@@ -446,7 +446,7 @@ async fn handle_message(
         .session
         .services
         .orchestrator_supervision
-        .note_watched_session_instruction(invocation.session.conversation_id, target_thread_id)
+        .note_watched_session_instruction(invocation.session.thread_id, target_thread_id)
         .await
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to update overwatch ledger: {err}"))

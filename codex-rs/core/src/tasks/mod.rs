@@ -24,7 +24,6 @@ use tracing::warn;
 use crate::config::Config;
 use crate::context::ContextualUserFragment;
 use crate::goals::GoalRuntimeEvent;
-use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
@@ -47,7 +46,7 @@ use codex_otel::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::TURN_TOOL_CALL_METRIC;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
@@ -74,11 +73,14 @@ pub(crate) enum InterruptedTurnHistoryMarker {
 }
 
 impl InterruptedTurnHistoryMarker {
-    pub(crate) fn from_config(config: &Config) -> Self {
+    pub(crate) fn from_config_and_version(
+        config: &Config,
+        multi_agent_version: MultiAgentVersion,
+    ) -> Self {
         if !config.agent_interrupt_message_enabled {
             return Self::Disabled;
         }
-        if config.features.enabled(Feature::MultiAgentV2) {
+        if multi_agent_version == MultiAgentVersion::V2 {
             Self::Developer
         } else {
             Self::ContextualUser
@@ -367,7 +369,7 @@ impl Session {
             .await
             .clear_turn(&turn_context.sub_id);
 
-        let turn_state = {
+        {
             let mut active = self.active_turn.lock().await;
             let turn = match active_turn_mode {
                 ActiveTurnStartMode::CreateIfMissing => {
@@ -384,8 +386,7 @@ impl Session {
             if turn.task.is_some() {
                 return;
             }
-            Arc::clone(&turn.turn_state)
-        };
+        }
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TurnStarted {
                 turn_context: turn_context.as_ref(),
@@ -395,19 +396,25 @@ impl Session {
         {
             warn!("failed to apply goal runtime turn-start event: {err}");
         }
-        let queued_response_items = self.take_queued_response_items_for_next_turn().await;
-        let mailbox_items = self.get_pending_input().await;
-        {
-            let mut turn_state = turn_state.lock().await;
-            turn_state.token_usage_at_turn_start = token_usage_at_turn_start.clone();
-            for item in queued_response_items {
-                turn_state.push_pending_input(TurnInput::ResponseInputItem(item));
-            }
-            for item in mailbox_items {
-                turn_state.push_pending_input(item);
-            }
-        }
-        self.emit_turn_start_lifecycle(&turn_context, &token_usage_at_turn_start)
+        let mut pending_items = self.input_queue.get_pending_input(&self.active_turn).await;
+        pending_items.extend(
+            self.take_queued_response_items_for_next_turn()
+                .await
+                .into_iter()
+                .map(ResponseItem::from)
+                .map(TurnInput::ResponseItem),
+        );
+        let turn_state = {
+            let mut active = self.active_turn.lock().await;
+            let turn = active.get_or_insert_with(ActiveTurn::default);
+            debug_assert!(turn.task.is_none());
+            Arc::clone(&turn.turn_state)
+        };
+        turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start.clone();
+        self.input_queue
+            .extend_pending_input_for_turn_state(turn_state.as_ref(), pending_items)
+            .await;
+        self.emit_turn_start_lifecycle(turn_context.as_ref(), &token_usage_at_turn_start)
             .await;
 
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
@@ -445,7 +452,7 @@ impl Session {
         let task_span = info_span!(
             "turn",
             otel.name = span_name,
-            thread.id = %self.conversation_id,
+            thread.id = %self.thread_id,
             turn.id = %turn_context.sub_id,
             model = %turn_context.model_info.slug,
             codex.turn.reasoning_effort = %reasoning_effort,
@@ -518,20 +525,20 @@ impl Session {
         let mut response_items = Vec::new();
         for input in pending_input {
             match input {
-                TurnInput::ResponseInputItem(item) => response_items.push(item),
-                TurnInput::UserInput(_) => {
+                TurnInput::ResponseItem(item) => response_items.push(TurnInput::ResponseItem(item)),
+                TurnInput::UserInput { .. } => {
                     warn!("dropping user input from abandoned pending-work turn");
                 }
             }
         }
-        self.queue_response_items_for_next_turn(response_items)
+        self.input_queue
+            .extend_pending_input_for_turn_state(turn_state.as_ref(), response_items)
             .await;
     }
 
     /// Starts a regular turn when the session is idle and pending work is waiting.
     ///
-    /// Pending work currently includes queued next-turn items and mailbox mail marked with
-    /// `trigger_turn`.
+    /// Pending work currently includes mailbox mail marked with `trigger_turn`.
     ///
     /// This helper generates a fresh sub-id for the synthetic turn before delegating to the
     /// explicit-sub-id variant.
@@ -543,14 +550,14 @@ impl Session {
     /// Starts a regular turn with the provided sub-id when pending work should wake an idle
     /// session.
     ///
-    /// The turn is created only when there are queued next-turn items or mailbox mail marked with
-    /// `trigger_turn`, and only if the session is currently idle.
+    /// The turn is created only when there is mailbox mail marked with `trigger_turn`, and only
+    /// if the session is currently idle.
     pub(crate) async fn maybe_start_turn_for_pending_work_with_sub_id(
         self: &Arc<Self>,
         sub_id: String,
     ) {
         if !self.has_queued_response_items_for_next_turn().await
-            && !self.has_trigger_turn_mailbox_items().await
+            && !self.input_queue.has_trigger_turn_mailbox_items().await
         {
             return;
         }
@@ -701,15 +708,23 @@ impl Session {
         };
         if !pending_input.is_empty() {
             for pending_input_item in pending_input {
-                match inspect_pending_input(self, &turn_context, pending_input_item).await {
-                    PendingInputHookDisposition::Accepted(pending_input) => {
-                        record_pending_input(self, &turn_context, *pending_input).await;
-                    }
-                    PendingInputHookDisposition::Blocked {
-                        additional_contexts,
-                    } => {
-                        record_additional_contexts(self, &turn_context, additional_contexts).await;
-                    }
+                let hook_outcome =
+                    inspect_pending_input(self, &turn_context, &pending_input_item).await;
+                if hook_outcome.should_stop {
+                    record_additional_contexts(
+                        self,
+                        &turn_context,
+                        hook_outcome.additional_contexts,
+                    )
+                    .await;
+                } else {
+                    record_pending_input(
+                        self,
+                        &turn_context,
+                        pending_input_item,
+                        hook_outcome.additional_contexts,
+                    )
+                    .await;
                 }
             }
         }
@@ -795,7 +810,7 @@ impl Session {
                 .analytics_events_client
                 .track_turn_token_usage(TurnTokenUsageFact {
                     turn_id: turn_context.sub_id.clone(),
-                    thread_id: self.conversation_id.to_string(),
+                    thread_id: self.thread_id.to_string(),
                     token_usage: turn_token_usage.clone(),
                 });
             self.services.session_telemetry.histogram(
@@ -886,6 +901,7 @@ impl Session {
         {
             warn!("failed to apply goal runtime maybe-continue event: {err}");
         }
+        self.emit_thread_idle_lifecycle_if_idle().await;
     }
 
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
@@ -933,13 +949,17 @@ impl Session {
 
         if reason == TurnAbortReason::Interrupted
             && let Some(marker) = interrupted_turn_history_marker(
-                InterruptedTurnHistoryMarker::from_config(task.turn_context.config.as_ref()),
+                InterruptedTurnHistoryMarker::from_config_and_version(
+                    task.turn_context.config.as_ref(),
+                    task.turn_context.multi_agent_version,
+                ),
             )
         {
-            self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
-                .await;
-            self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
-                .await;
+            self.record_conversation_items(
+                task.turn_context.as_ref(),
+                std::slice::from_ref(&marker),
+            )
+            .await;
             // Ensure the marker is durably visible before emitting TurnAborted: some clients
             // synchronously re-read the rollout on receipt of the abort event.
             if let Err(err) = self.flush_rollout().await {

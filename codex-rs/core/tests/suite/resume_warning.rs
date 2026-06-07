@@ -33,6 +33,7 @@ fn resume_history(
         final_output_json_schema: None,
         truncation_policy: None,
         cwd: config.cwd.to_path_buf(),
+        workspace_roots: None,
         current_date: None,
         timezone: None,
         approval_policy: config.permissions.approval_policy.value(),
@@ -43,6 +44,7 @@ fn resume_history(
         model: previous_model.to_string(),
         personality: None,
         collaboration_mode: None,
+        multi_agent_version: None,
         realtime_active: None,
         effort: config.model_reasoning_effort,
         summary: config
@@ -61,6 +63,7 @@ fn resume_history(
                 collaboration_mode_kind: ModeKind::Default,
             })),
             RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "seed".to_string(),
                 images: None,
                 local_images: vec![],
@@ -110,7 +113,6 @@ async fn emits_warning_when_resumed_model_differs() {
             config.clone(),
             initial_history,
             auth_manager,
-            /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
         .await

@@ -264,7 +264,7 @@ async fn process_completed_turn(
 
     append_preference_events(
         &turn_context.config.codex_home,
-        session.conversation_id.to_string(),
+        session.thread_id.to_string(),
         turn_context.sub_id.clone(),
         &candidates,
     )

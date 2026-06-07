@@ -14,7 +14,7 @@ impl ForkHelpInstructions {
 }
 
 impl ContextualUserFragment for ForkHelpInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

@@ -25,7 +25,6 @@ use codex_otel::HOOK_RUN_DURATION_METRIC;
 use codex_otel::HOOK_RUN_METRIC;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -498,7 +497,7 @@ pub(crate) async fn run_legacy_after_agent_hook(
             triggered_at: chrono::Utc::now(),
             hook_event: codex_hooks::HookEvent::AfterAgent {
                 event: codex_hooks::HookEventAfterAgent {
-                    thread_id: sess.conversation_id,
+                    thread_id: sess.thread_id,
                     turn_id: turn_context.sub_id.clone(),
                     input_messages,
                     last_assistant_message,
@@ -544,62 +543,59 @@ pub(crate) async fn run_legacy_after_agent_hook(
 pub(crate) async fn inspect_pending_input(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    pending_input_item: TurnInput,
-) -> PendingInputHookDisposition {
+    pending_input_item: &TurnInput,
+) -> HookRuntimeOutcome {
     match pending_input_item {
-        TurnInput::UserInput(content) => {
-            let response_item: ResponseItem = ResponseInputItem::from(content.clone()).into();
-            let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
+        TurnInput::UserInput { content, .. } => {
+            let request = UserPromptSubmitRequest {
+                session_id: sess.session_id().into(),
+                turn_id: turn_context.sub_id.clone(),
+                subagent: thread_spawn_subagent_hook_context(sess, turn_context),
+                #[allow(deprecated)]
+                cwd: turn_context.cwd.clone(),
+                transcript_path: sess.hook_transcript_path().await,
+                model: turn_context.model_info.slug.clone(),
+                permission_mode: hook_permission_mode(turn_context),
+                prompt: UserMessageItem::new(content).message(),
+            };
+            let hooks = sess.hooks();
+            let preview_runs = hooks.preview_user_prompt_submit(&request);
+            run_context_injecting_hook(
                 sess,
                 turn_context,
-                UserMessageItem::new(&content).message(),
+                preview_runs,
+                hooks.run_user_prompt_submit(request),
             )
-            .await;
-            if user_prompt_submit_outcome.should_stop {
-                PendingInputHookDisposition::Blocked {
-                    additional_contexts: user_prompt_submit_outcome.additional_contexts,
-                }
-            } else {
-                PendingInputHookDisposition::Accepted(Box::new(PendingInputRecord::UserMessage {
-                    content,
-                    response_item,
-                    additional_contexts: user_prompt_submit_outcome.additional_contexts,
-                }))
-            }
+            .await
         }
-        TurnInput::ResponseInputItem(pending_input_item) => {
-            let response_item = ResponseItem::from(pending_input_item);
-            PendingInputHookDisposition::Accepted(Box::new(PendingInputRecord::ConversationItem {
-                response_item,
-            }))
-        }
+        TurnInput::ResponseItem(_) => HookRuntimeOutcome {
+            should_stop: false,
+            additional_contexts: Vec::new(),
+        },
     }
 }
 
 pub(crate) async fn record_pending_input(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    pending_input: PendingInputRecord,
+    pending_input: TurnInput,
+    additional_contexts: Vec<String>,
 ) {
     match pending_input {
-        PendingInputRecord::UserMessage {
-            content,
-            response_item,
-            additional_contexts,
-        } => {
+        TurnInput::UserInput { content, client_id } => {
             sess.record_user_prompt_and_emit_turn_item(
                 turn_context.as_ref(),
                 content.as_slice(),
-                response_item,
+                client_id,
             )
             .await;
-            record_additional_contexts(sess, turn_context, additional_contexts).await;
         }
-        PendingInputRecord::ConversationItem { response_item } => {
-            sess.record_response_item_and_emit_turn_item(turn_context.as_ref(), response_item)
+        TurnInput::ResponseItem(item) => {
+            sess.record_conversation_items(turn_context, std::slice::from_ref(&item))
                 .await;
         }
     }
+    record_additional_contexts(sess, turn_context, additional_contexts).await;
 }
 
 async fn run_context_injecting_hook<Fut, Outcome>(
@@ -705,7 +701,7 @@ fn track_hook_completed_analytics(
     completed: &HookCompletedEvent,
 ) {
     let (tracking, hook) =
-        hook_run_analytics_payload(sess.conversation_id.to_string(), turn_context, completed);
+        hook_run_analytics_payload(sess.thread_id.to_string(), turn_context, completed);
     sess.services
         .analytics_events_client
         .track_hook_run(tracking, hook);
@@ -754,6 +750,7 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookSource::SessionFlags => "session_flags",
         HookSource::Plugin => "plugin",
         HookSource::CloudRequirements => "cloud_requirements",
+        HookSource::CloudManagedConfig => "cloud_managed_config",
         HookSource::LegacyManagedConfigFile => "legacy_managed_config_file",
         HookSource::LegacyManagedConfigMdm => "legacy_managed_config_mdm",
         HookSource::Unknown => "unknown",

@@ -37,7 +37,9 @@ _SPEC.loader.exec_module(_BUILD_MODULE)
 PACKAGE_NATIVE_COMPONENTS = getattr(_BUILD_MODULE, "PACKAGE_NATIVE_COMPONENTS", {})
 PACKAGE_EXPANSIONS = getattr(_BUILD_MODULE, "PACKAGE_EXPANSIONS", {})
 CODEX_PLATFORM_PACKAGES = getattr(_BUILD_MODULE, "CODEX_PLATFORM_PACKAGES", {})
-CODEX_PACKAGE_COMPONENT = getattr(_BUILD_MODULE, "CODEX_PACKAGE_COMPONENT", "codex-package")
+CODEX_PACKAGE_COMPONENT = getattr(
+    _BUILD_MODULE, "CODEX_PACKAGE_COMPONENT", "codex-package"
+)
 
 _RELEASE_CONFIG_SPEC = importlib.util.spec_from_file_location(
     "codex_release_config",
@@ -154,7 +156,9 @@ def collect_native_component_sets(packages: list[str]) -> list[tuple[str, ...]]:
     return component_sets
 
 
-def expand_packages(packages: list[str], supported_targets: set[str] | None = None) -> list[str]:
+def expand_packages(
+    packages: list[str], supported_targets: set[str] | None = None
+) -> list[str]:
     expanded: list[str] = []
     for package in packages:
         for expanded_package in PACKAGE_EXPANSIONS.get(package, [package]):
@@ -191,7 +195,9 @@ def resolve_release_workflow(version: str) -> dict:
     )
     workflow = json.loads(stdout or "null")
     if not workflow:
-        raise RuntimeError(f"Unable to find rust-release workflow for version {version}.")
+        raise RuntimeError(
+            f"Unable to find rust-release workflow for version {version}."
+        )
     return workflow
 
 
@@ -240,7 +246,9 @@ def install_from_workflow_artifacts(
     github_repo: str,
     supported_targets: Sequence[str],
 ) -> None:
-    artifacts = select_target_artifacts(workflow_id, components, github_repo, supported_targets)
+    artifacts = select_target_artifacts(
+        workflow_id, components, github_repo, supported_targets
+    )
     download_artifacts(workflow_id, artifacts_dir, artifacts, github_repo)
     if CODEX_PACKAGE_COMPONENT in components:
         install_codex_package_archives(artifacts_dir, vendor_dir, supported_targets)
@@ -265,7 +273,8 @@ def select_target_artifacts(
         return []
 
     artifacts_by_name = {
-        artifact.name: artifact for artifact in list_workflow_artifacts(workflow_id, github_repo)
+        artifact.name: artifact
+        for artifact in list_workflow_artifacts(workflow_id, github_repo)
     }
     selected_artifacts: list[WorkflowArtifact] = []
     for target in supported_targets:
@@ -282,7 +291,9 @@ def select_target_artifacts(
     return selected_artifacts
 
 
-def list_workflow_artifacts(workflow_id: str, github_repo: str) -> list[WorkflowArtifact]:
+def list_workflow_artifacts(
+    workflow_id: str, github_repo: str
+) -> list[WorkflowArtifact]:
     stdout = subprocess.check_output(
         [
             "gh",
@@ -429,13 +440,17 @@ def install_single_binary(
     component: BinaryComponent,
 ) -> Path:
     artifact_subdir = artifact_dir_for_target(artifacts_dir, target)
-    archive_path = binary_archive_path(artifact_subdir, component.artifact_prefix, target)
+    archive_path = binary_archive_path(
+        artifact_subdir, component.artifact_prefix, target
+    )
 
     dest_dir = vendor_dir / target / component.dest_dir
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     binary_name = (
-        f"{component.binary_basename}.exe" if "windows" in target else component.binary_basename
+        f"{component.binary_basename}.exe"
+        if "windows" in target
+        else component.binary_basename
     )
     dest = dest_dir / binary_name
     dest.unlink(missing_ok=True)
@@ -448,14 +463,18 @@ def install_single_binary(
 def binary_archive_path(artifact_dir: Path, artifact_prefix: str, target: str) -> Path:
     archive_names = [archive_name_for_target(artifact_prefix, target)]
     if artifact_dir.name == f"{target}-unsigned":
-        archive_names.append(archive_name_for_target(artifact_prefix, f"{target}-unsigned"))
+        archive_names.append(
+            archive_name_for_target(artifact_prefix, f"{target}-unsigned")
+        )
 
     for archive_name in archive_names:
         archive_path = artifact_dir / archive_name
         if archive_path.exists():
             return archive_path
 
-    raise FileNotFoundError(f"Expected artifact not found: {artifact_dir / archive_names[0]}")
+    raise FileNotFoundError(
+        f"Expected artifact not found: {artifact_dir / archive_names[0]}"
+    )
 
 
 def archive_name_for_target(artifact_prefix: str, target: str) -> str:
@@ -477,7 +496,9 @@ def extract_zstd_archive(archive_path: Path, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     output_path = archive_path.parent / dest.name
-    subprocess.check_call(["zstd", "-f", "-d", str(archive_path), "-o", str(output_path)])
+    subprocess.check_call(
+        ["zstd", "-f", "-d", str(archive_path), "-o", str(output_path)]
+    )
     shutil.move(str(output_path), dest)
 
 
@@ -517,10 +538,16 @@ def main() -> int:
     packages = expand_packages(list(args.packages), set(supported_targets))
     native_component_sets = collect_native_component_sets(packages)
     native_component_sets = [
-        tuple(component for component in components if component not in allow_missing_native_components)
+        tuple(
+            component
+            for component in components
+            if component not in allow_missing_native_components
+        )
         for components in native_component_sets
     ]
-    native_component_sets = [components for components in native_component_sets if components]
+    native_component_sets = [
+        components for components in native_component_sets if components
+    ]
     print("Expanded packages: " + ", ".join(packages), flush=True)
     if native_component_sets:
         component_sets = [
@@ -549,7 +576,9 @@ def main() -> int:
             )
             print(f"Caching downloaded artifacts in {artifacts_temp_root}", flush=True)
             for components in native_component_sets:
-                vendor_temp_root = Path(tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp))
+                vendor_temp_root = Path(
+                    tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp)
+                )
                 vendor_temp_roots.append(vendor_temp_root)
                 print(
                     "Installing native components "
@@ -571,8 +600,12 @@ def main() -> int:
             print(f"should `git checkout {resolved_head_sha}`", flush=True)
 
         for package in packages:
-            staging_dir = Path(tempfile.mkdtemp(prefix=f"npm-stage-{package}-", dir=runner_temp))
-            pack_output = output_dir / tarball_name_for_package(package, args.release_version)
+            staging_dir = Path(
+                tempfile.mkdtemp(prefix=f"npm-stage-{package}-", dir=runner_temp)
+            )
+            pack_output = output_dir / tarball_name_for_package(
+                package, args.release_version
+            )
             print(f"Staging {package} in {staging_dir}", flush=True)
 
             cmd = [
@@ -587,7 +620,9 @@ def main() -> int:
                 str(pack_output),
             ]
 
-            vendor_src = vendor_src_by_components.get(native_components_for_package(package))
+            vendor_src = vendor_src_by_components.get(
+                native_components_for_package(package)
+            )
             if vendor_src is not None:
                 cmd.extend(["--vendor-src", str(vendor_src)])
             if args.release_config is not None:
