@@ -168,9 +168,14 @@ fn edit_uses_latest_user_upload_before_a_text_only_follow_up() {
         ResponseItem::Message {
             id: None,
             role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "edit this image".to_string(),
-            }],
+            content: vec![
+                ContentItem::InputText {
+                    text: "edit this image".to_string(),
+                },
+                ContentItem::EncryptedContent {
+                    encrypted_content: "encrypted".to_string(),
+                },
+            ],
             phase: None,
         },
     ];
