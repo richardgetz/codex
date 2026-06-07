@@ -445,7 +445,10 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn set_queue_submissions(&mut self, _queue_submissions: bool) {}
+    pub(crate) fn set_queue_submissions(&mut self, queue_submissions: bool) {
+        self.composer.set_queue_submissions(queue_submissions);
+        self.request_redraw();
+    }
 
     pub(crate) fn set_placeholder_text(&mut self, placeholder: String) {
         self.composer.set_placeholder_text(placeholder);
@@ -2779,7 +2782,7 @@ mod tests {
         pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
         assert!(
-            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
+            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt { .. }))),
             "expected Esc to send Op::Interrupt while a task is running even when status is hidden"
         );
     }

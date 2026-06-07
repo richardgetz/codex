@@ -1915,9 +1915,23 @@ pub(crate) fn app_server_rate_limit_snapshots(
     response: GetAccountRateLimitsResponse,
 ) -> Vec<RateLimitSnapshot> {
     let mut snapshots = Vec::new();
+    let top_limit_id = response.rate_limits.limit_id.clone();
     snapshots.push(response.rate_limits);
     if let Some(by_limit_id) = response.rate_limits_by_limit_id {
-        snapshots.extend(by_limit_id.into_values());
+        let mut extra_snapshots = by_limit_id.into_iter().collect::<Vec<_>>();
+        extra_snapshots.sort_by(|(left_id, _), (right_id, _)| left_id.cmp(right_id));
+        snapshots.extend(
+            extra_snapshots
+                .into_iter()
+                .filter_map(|(limit_id, snapshot)| {
+                    let duplicates_top_level =
+                        top_limit_id.as_deref().is_some_and(|top_limit_id| {
+                            limit_id == top_limit_id
+                                || snapshot.limit_id.as_deref() == Some(top_limit_id)
+                        });
+                    (!duplicates_top_level).then_some(snapshot)
+                }),
+        );
     }
     snapshots
 }
@@ -1948,6 +1962,24 @@ mod tests {
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
+
+    const JSONRPC_INVALID_REQUEST: i64 = -32600;
+    const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
+
+    fn is_thread_settings_update_unsupported(source: &JSONRPCErrorError) -> bool {
+        match source.code {
+            JSONRPC_METHOD_NOT_FOUND => source.message.contains("method not found"),
+            JSONRPC_INVALID_REQUEST => {
+                source
+                    .message
+                    .contains("requires experimentalApi capability")
+                    || source
+                        .message
+                        .contains("unknown variant `thread/settings/update`")
+            }
+            _ => false,
+        }
+    }
 
     async fn build_config(temp_dir: &TempDir) -> Config {
         ConfigBuilder::default()

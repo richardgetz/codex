@@ -408,7 +408,7 @@ impl App {
 
     pub(super) fn thread_id_for_active_op(&self, op: &AppCommand) -> Option<ThreadId> {
         match op {
-            AppCommand::Interrupt => self.current_displayed_thread_id(),
+            AppCommand::Interrupt { .. } => self.current_displayed_thread_id(),
             _ => self.active_thread_id,
         }
     }
