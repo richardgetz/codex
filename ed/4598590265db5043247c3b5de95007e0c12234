@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-06-07/remove-orchestrator-collab#ed4598590265"
+  change_type: "refactor"
+  scope: "collab"
+  summary: "Remove fork Orchestrator collaboration mode and obsolete collab entry points."
+  decision: "Follow mainline removal of /collab by keeping /plan support while removing fork-only Orchestrator mode, --collab startup selection, primary-contact wiring, session_overwatch tooling, and app-server Orchestrator activation."
+  constraints:
+    - "Must preserve Plan mode through /plan and Shift-tab cycling."
+    - "Must preserve enable_mcp_approvals behavior and config schema entries."
+    - "Must map legacy serialized orchestrator collaboration-mode values to Default for compatibility."
+    - "Must reject new app-server Orchestrator thread/control activation."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/protocol/src/config_types.rs::ModeKind"
+    - "codex-rs/tui/src/cli.rs::Cli"
+    - "codex-rs/core/src/session/mod.rs::ensure_collaboration_mode_control"
+    - "codex-rs/app-server/src/request_processors/thread_control_api.rs::thread_control_set"
+    - "codex-rs/core/src/tools/handlers/session_overwatch.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
