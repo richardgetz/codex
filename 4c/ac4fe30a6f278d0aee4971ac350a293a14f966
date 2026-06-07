@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-06-06/fork-pr-argument-lint-prebuilt-skip#4cac4fe30a6f"
+  change_type: "ci"
+  scope: "rust-ci"
+  summary: "Skip the prebuilt argument-comment Bazel lint path on fork pull requests."
+  decision: "On richardgetz/codex pull requests, keep the argument-comment lint package validation but skip the V8-heavy prebuilt Bazel lint path because public fork runners timed out twice without lint failures after the rust-v0.137.0 refresh."
+  constraints:
+    - "Must keep argument-comment lint package tests active on fork PRs."
+    - "Must not require upstream private platform/toolchain setup on fork PR runners."
+    - "Must leave non-fork or non-PR prebuilt lint behavior available for heavier validation contexts."
+  intent_priority: "must"
+  code_locations:
+    - ".github/workflows/rust-ci.yml"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
