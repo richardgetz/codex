@@ -2448,9 +2448,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         strict_config,
         approval_policy,
         web_search,
-        startup_collaboration_mode,
         startup_account_alias,
-        startup_primary_contact_mcp,
         prompt,
         config_overrides,
         ..
@@ -2464,14 +2462,8 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     if web_search {
         interactive.web_search = true;
     }
-    if let Some(mode) = startup_collaboration_mode {
-        interactive.startup_collaboration_mode = Some(mode);
-    }
     if let Some(alias) = startup_account_alias {
         interactive.startup_account_alias = Some(alias);
-    }
-    if let Some(mcp) = startup_primary_contact_mcp {
-        interactive.startup_primary_contact_mcp = Some(mcp);
     }
     if strict_config {
         interactive.strict_config = true;
@@ -2799,37 +2791,6 @@ mod tests {
     }
 
     #[test]
-    fn interactive_collab_flag_parses_case_insensitively() {
-        let cli =
-            MultitoolCli::try_parse_from(["codex", "--collab", "OrChEsTrAtOr"]).expect("parse");
-
-        assert_eq!(
-            cli.interactive.startup_collaboration_mode,
-            Some(codex_protocol::config_types::ModeKind::Orchestrator)
-        );
-    }
-
-    #[test]
-    fn interactive_collab_flag_accepts_one_letter_shorthand() {
-        let cli = MultitoolCli::try_parse_from(["codex", "--collab", "o"]).expect("parse");
-
-        assert_eq!(
-            cli.interactive.startup_collaboration_mode,
-            Some(codex_protocol::config_types::ModeKind::Orchestrator)
-        );
-    }
-
-    #[test]
-    fn resume_collab_flag_is_merged_into_interactive_cli() {
-        let interactive = finalize_resume_from_args(["codex", "resume", "--collab", "P"].as_ref());
-
-        assert_eq!(
-            interactive.startup_collaboration_mode,
-            Some(codex_protocol::config_types::ModeKind::Plan)
-        );
-    }
-
-    #[test]
     fn interactive_account_flag_parses_alias() {
         let cli = MultitoolCli::try_parse_from(["codex", "--account", "work"]).expect("parse");
 
@@ -2847,28 +2808,6 @@ mod tests {
         assert_eq!(
             interactive.startup_account_alias.as_deref(),
             Some("default")
-        );
-    }
-
-    #[test]
-    fn interactive_primary_contact_flag_parses_mcp() {
-        let cli = MultitoolCli::try_parse_from(["codex", "--primary-contact", "imessage"])
-            .expect("parse");
-
-        assert_eq!(
-            cli.interactive.startup_primary_contact_mcp.as_deref(),
-            Some("imessage")
-        );
-    }
-
-    #[test]
-    fn resume_primary_contact_flag_is_merged_into_interactive_cli() {
-        let interactive =
-            finalize_resume_from_args(["codex", "resume", "--primary-contact", "off"].as_ref());
-
-        assert_eq!(
-            interactive.startup_primary_contact_mcp.as_deref(),
-            Some("off")
         );
     }
 

@@ -481,7 +481,7 @@ fn validate_trigger(trigger: &ScheduledTrigger) -> Result<(), FunctionCallError>
 fn schema_payload() -> Value {
     serde_json::json!({
         "storage": "Built-in scheduled triggers are JSON files under <codex_home>/schedule/triggers unless state_home is provided.",
-        "default_modes": "The built-in schedule namespace is enabled by default only in Orchestrator mode; enable per mode with [schedule.modes.<mode>].enabled = true.",
+        "default_modes": "The built-in schedule namespace is disabled by default; enable it per mode with [schedule.modes.<mode>].enabled = true.",
         "when_to_use": [
             "Use for explicit reminders, recurring routines, and conditional follow-ups the user wants Codex to remember.",
             "Use when a future time, cadence, or conditional check should be tracked alongside scratchpad or orchestrator-memory context.",

@@ -49,7 +49,6 @@ use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHand
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
-use crate::tools::handlers::session_overwatch::SessionOverwatchHandler;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_image_generation_tool;
@@ -492,10 +491,6 @@ fn collect_tool_executors(
 
     if config.builtin_schedule_enabled {
         executors.push(Arc::new(BuiltinScheduleHandler));
-    }
-
-    if config.builtin_session_overwatch_enabled {
-        executors.push(Arc::new(SessionOverwatchHandler));
     }
 
     if config

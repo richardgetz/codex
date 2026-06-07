@@ -9,7 +9,6 @@ use crate::agent::role::apply_role_to_config;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
 use crate::turn_timing::now_unix_timestamp_ms;
-use codex_protocol::config_types::ModeKind;
 use codex_tools::ToolSpec;
 
 #[derive(Default)]
@@ -198,39 +197,6 @@ async fn handle_spawn_agent(
         )
         .await;
     let new_thread_id = result?.thread_id;
-    if turn.collaboration_mode.mode == ModeKind::Orchestrator {
-        if let Err(err) = session
-            .services
-            .orchestrator_supervision
-            .register_worker(
-                session.thread_id,
-                new_thread_id,
-                nickname.clone(),
-                new_agent_role,
-                prompt,
-                Some(turn.collaboration_mode.mode),
-            )
-            .await
-        {
-            tracing::warn!("failed recording orchestrator worker registration: {err}");
-        }
-        match session
-            .services
-            .agent_control
-            .subscribe_status(new_thread_id)
-            .await
-        {
-            Ok(status_rx) => {
-                session
-                    .services
-                    .orchestrator_supervision
-                    .spawn_status_watcher(session.thread_id, new_thread_id, status_rx);
-            }
-            Err(err) => {
-                tracing::warn!("failed subscribing to orchestrator worker status: {err}");
-            }
-        }
-    }
     let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
     turn.session_telemetry.counter(
         "codex.multi_agent.spawn",

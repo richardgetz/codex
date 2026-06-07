@@ -125,96 +125,16 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   allow_git_metadata_writes = false
   ```
 
-### Orchestrator mode defaults
+### Collaboration modes
 
-- Orchestrator mode can be selected at launch with `--collab orchestrator`.
-- One-letter, case-insensitive collaboration-mode shorthands are supported; for
-  example `--collab o` starts Orchestrator mode.
+- Mainline removed the legacy `/collab` command; use `/plan` for Plan mode.
+- The fork-only Orchestrator collaboration mode and `codex --collab <mode>`
+  startup flag are removed.
+- Legacy serialized `orchestrator` collaboration-mode values deserialize as
+  Default mode for compatibility. App-server `thread/control/set` rejects
+  Orchestrator mode.
 - Standalone Continuous collaboration mode is removed. Use `/continuous` inside
   a normal session to enable or disable continuous execution for that thread.
-- Orchestrator mode uses fork-specific model defaults when the config does not
-  specify `[thread_control.orchestrator]`.
-- Child agents launched by Orchestrator mode are restricted by
-  `[orchestrator].allowed_spawn_modes`; the fork default is `["default"]` to
-  avoid recursive orchestrator loops.
-- Orchestrator active-agent check-ins are patient supervision wake-ups. They are
-  intended to clarify, redirect, unblock, or keep waiting; they are not urgency
-  prompts to tell workers to move faster.
-- Spawned child agents send a waking completion notification back to their
-  direct parent when they complete or abort a turn. In Orchestrator mode that
-  notification carries an explicit user-delivery obligation so a child answer is
-  relayed instead of being treated as inert watch state. Memory extraction and
-  consolidation agents are excluded from these hooks to avoid feedback loops.
-
-### Orchestrator session overwatch
-
-- Orchestrator mode exposes a built-in `session_overwatch` namespace for
-  supervising Codex sessions that were not necessarily launched by the current
-  orchestrator thread.
-- The namespace includes `list_sessions`, `watch_session`, `unwatch_session`,
-  and `message_session`.
-- Watches are recorded in the local state database as Router thread-control
-  targets, so already-started sessions can emit durable completion signals back
-  to the watching orchestrator when a turn completes or aborts.
-- Watched sessions also appear in the orchestrator supervision summary so idle
-  check-ins can stay model-light unless a watched session changes state.
-- `message_session` delivers immediately to sessions that are live in the same
-  Codex process. If the target session belongs to another CLI process, the
-  message is queued in the durable session inbox and the target CLI injects it
-  mechanically as normal user input when its inbox poller sees it.
-- Cross-process delivery is not a hard interrupt while the target process is
-  inside a model request. It is a model-less durable inbox handoff that lets
-  separate running CLIs communicate once the target session drains pending
-  input.
-
-### Primary contact channel
-
-- Orchestrator mode can start a configured communication MCP at session boot
-  mechanically, without injecting a startup prompt or spending a model turn:
-
-  ```toml
-  [orchestrator]
-  primary_contact = { enabled = true, mcp = "imessage" }
-  ```
-
-- `--primary-contact <mcp>` overrides the configured primary contact for one
-  launch; `--primary-contact off` disables it for that launch.
-- The primary-contact poller checks for new user messages without calling the
-  model unless a new message is found. When the channel is active, the TUI shows
-  a lightweight monitoring notice:
-
-  ```toml
-  [orchestrator]
-  primary_contact = { enabled = true, mcp = "imessage", check_messages_every_seconds = 900 }
-  ```
-
-- The default interval can be overridden by an optional local-time schedule:
-
-  ```toml
-  [orchestrator.primary_contact]
-  enabled = true
-  mcp = "imessage"
-  check_messages_every_seconds = 900
-
-  [[orchestrator.primary_contact.schedule]]
-  days = ["weekdays"]
-  start = "07:00"
-  end = "22:00"
-  check_messages_every_seconds = 300
-
-  [[orchestrator.primary_contact.schedule]]
-  start = "22:00"
-  end = "07:00"
-  check_messages_every_seconds = 1800
-  ```
-
-- Schedule entries use local `HH:MM` time. `days` may be omitted for every day,
-  or set to day names like `"mon"`/`"monday"`, `"weekdays"`, or `"weekends"`.
-  Overnight windows are supported.
-- `check_messages_every_seconds = 0` disables the harness-level poller.
-- When the poller is armed and no model turn is active, the terminal title uses
-  a static waiting braille marker so a headless or background window still looks
-  alive without spending model calls.
 
 ### Orchestrator memory
 
@@ -377,8 +297,8 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
 ### Built-in scratchpad
 
-- Default and Orchestrator modes treat scratchpad as a first-class
-  recovery ledger. Plan mode does not use built-in scratchpad by default.
+- Default mode treats scratchpad as a first-class recovery ledger. Plan mode
+  does not use built-in scratchpad by default.
 - `/continuous` toggles a scratchpad-backed continuous run policy for the
   current thread. New thread scratchpads default to continuous mode unless
   `[scratchpad].default_continuous = false` or a mode override disables it.
@@ -520,14 +440,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   default_continuous = false
   recover_after_compaction = false
 
-  [scratchpad.modes.orchestrator]
-  enabled = true
-  default_continuous = true
-  recover_after_compaction = true
   ```
 
-- The legacy `[orchestrator].recover_scratchpad_after_compaction` key remains
-  supported as an Orchestrator-only compatibility alias.
+- The legacy top-level `[orchestrator]` mode config is removed after
+  Orchestrator mode removal.
 
 ### Situational requirements
 
@@ -586,23 +502,19 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
 - The fork has a canonical built-in `schedule` tool namespace for durable
   reminders, recurring routines, and conditional future checks.
-- Orchestrator mode exposes it by default. Default mode can opt in. Plan mode
-  is disabled by default.
+- Built-in schedule is disabled by default. Default and Plan mode can opt in.
 - Scheduled triggers are JSON-backed under `<codex_home>/schedule/triggers`
   unless a tool call provides `state_home`.
 - `<codex_home>/schedule` is created and added to workspace-write writable roots
   automatically.
 - Agents receive mode-scoped developer guidance explaining when to use schedule,
   when to prefer scratchpad pending waits instead, and how to link triggers to
-  built-in scratchpad ids or orchestrator memory context.
+  built-in scratchpad ids.
 - Built-in schedule exposure is controlled globally and per mode with:
 
   ```toml
   [schedule]
   enabled = false
-
-  [schedule.modes.orchestrator]
-  enabled = true
 
   [schedule.modes.default]
   enabled = true
@@ -635,8 +547,8 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
 ### MCP visibility and inventory
 
-- `/mcp` includes mode-aware visibility in this fork so Orchestrator mode can
-  distinguish configured/available MCPs from MCPs hidden by the current mode.
+- `/mcp` includes mode-aware visibility in this fork so Codex can distinguish
+  configured/available MCPs from MCPs hidden by the current mode.
 - The prompt includes current MCP availability context so agents can answer
   questions about which MCPs are usable in the exact running harness instead of
   relying on stale docs.

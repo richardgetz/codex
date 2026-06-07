@@ -615,7 +615,6 @@ pub(crate) struct ChatWidget {
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
     status_state: StatusState,
-    primary_contact_waiting: bool,
     review: ReviewState,
     // Active hook runs render in a dedicated live cell so they can run alongside tools.
     active_hook_cell: Option<HookCell>,
@@ -2009,35 +2008,6 @@ impl ChatWidget {
         mcp_servers: HashMap<String, codex_config::McpServerConfig>,
     ) {
         self.config.mcp_servers = Constrained::allow_any(mcp_servers);
-    }
-
-    pub(crate) fn set_primary_contact_waiting(&mut self, waiting: bool) {
-        self.primary_contact_waiting = waiting;
-        if waiting && !self.bottom_pane.is_task_running() {
-            self.status_state.terminal_title_status_kind =
-                TerminalTitleStatusKind::WaitingForPrimaryContact;
-            self.refresh_status_surfaces();
-        } else if !waiting
-            && self.status_state.terminal_title_status_kind
-                == TerminalTitleStatusKind::WaitingForPrimaryContact
-        {
-            self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
-            self.refresh_status_surfaces();
-        }
-        self.refresh_terminal_title();
-    }
-
-    pub(crate) fn submit_external_user_message(&mut self, text: String) {
-        let _ = self.submit_user_message_with_shell_escape_policy(
-            UserMessage {
-                text,
-                local_images: Vec::new(),
-                remote_image_urls: Vec::new(),
-                text_elements: Vec::new(),
-                mention_bindings: Vec::new(),
-            },
-            ShellEscapePolicy::Allow,
-        );
     }
 
     pub(crate) fn remember_custom_permission_selection(

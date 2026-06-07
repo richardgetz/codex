@@ -1,5 +1,4 @@
 use codex_collaboration_mode_templates::DEFAULT as COLLABORATION_MODE_DEFAULT;
-use codex_collaboration_mode_templates::ORCHESTRATOR as COLLABORATION_MODE_ORCHESTRATOR;
 use codex_collaboration_mode_templates::PLAN as COLLABORATION_MODE_PLAN;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
@@ -14,10 +13,6 @@ const ASKING_QUESTIONS_GUIDANCE_TEMPLATE_KEY: &str = "ASKING_QUESTIONS_GUIDANCE"
 static COLLABORATION_MODE_DEFAULT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     Template::parse(COLLABORATION_MODE_DEFAULT)
         .unwrap_or_else(|err| panic!("collaboration mode default template must parse: {err}"))
-});
-static COLLABORATION_MODE_ORCHESTRATOR_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(COLLABORATION_MODE_ORCHESTRATOR)
-        .unwrap_or_else(|err| panic!("collaboration mode orchestrator template must parse: {err}"))
 });
 
 /// Stores feature flags that control collaboration-mode behavior.
@@ -34,11 +29,7 @@ pub struct CollaborationModesConfig {
 pub fn builtin_collaboration_mode_presets(
     collaboration_modes_config: CollaborationModesConfig,
 ) -> Vec<CollaborationModeMask> {
-    vec![
-        default_preset(collaboration_modes_config),
-        plan_preset(),
-        orchestrator_preset(),
-    ]
+    vec![default_preset(collaboration_modes_config), plan_preset()]
 }
 
 fn plan_preset() -> CollaborationModeMask {
@@ -58,16 +49,6 @@ fn default_preset(collaboration_modes_config: CollaborationModesConfig) -> Colla
         model: None,
         reasoning_effort: None,
         developer_instructions: Some(Some(default_mode_instructions(collaboration_modes_config))),
-    }
-}
-
-fn orchestrator_preset() -> CollaborationModeMask {
-    CollaborationModeMask {
-        name: ModeKind::Orchestrator.display_name().to_string(),
-        mode: Some(ModeKind::Orchestrator),
-        model: None,
-        reasoning_effort: None,
-        developer_instructions: Some(Some(orchestrator_mode_instructions())),
     }
 }
 
@@ -93,23 +74,6 @@ fn default_mode_instructions(collaboration_modes_config: CollaborationModesConfi
             ),
         ])
         .unwrap_or_else(|err| panic!("collaboration mode default template must render: {err}"))
-}
-
-fn orchestrator_mode_instructions() -> String {
-    let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
-    let request_user_input_availability = request_user_input_availability_message(
-        ModeKind::Orchestrator,
-        /*default_mode_request_user_input*/ false,
-    );
-    COLLABORATION_MODE_ORCHESTRATOR_TEMPLATE
-        .render([
-            (KNOWN_MODE_NAMES_TEMPLATE_KEY, known_mode_names.as_str()),
-            (
-                REQUEST_USER_INPUT_AVAILABILITY_TEMPLATE_KEY,
-                request_user_input_availability.as_str(),
-            ),
-        ])
-        .unwrap_or_else(|err| panic!("collaboration mode orchestrator template must render: {err}"))
 }
 
 fn format_mode_names(modes: &[ModeKind]) -> String {

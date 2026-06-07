@@ -236,7 +236,7 @@ fn build_classification_agent_config(
     agent_config.model_reasoning_effort = base
         .memories
         .extract_reasoning_effort
-        .or_else(|| base.effective_orchestrator_reasoning_effort());
+        .or(base.model_reasoning_effort);
 
     Ok(agent_config)
 }
@@ -351,8 +351,8 @@ mod tests {
             .build()
             .await
             .expect("test config");
-        config.thread_control.orchestrator.model = Some("gpt-5.3-codex-spark".to_string());
-        config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffort::Low);
+        config.model = Some("gpt-5.3-codex-spark".to_string());
+        config.model_reasoning_effort = Some(ReasoningEffort::Low);
         config.memories.extract_model = Some("gpt-5.5".to_string());
         config.memories.extract_reasoning_effort = Some(ReasoningEffort::Medium);
 

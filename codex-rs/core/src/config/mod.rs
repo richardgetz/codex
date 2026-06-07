@@ -53,9 +53,7 @@ use codex_config::types::MemoryAccessPolicy;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
-use codex_config::types::OrchestratorConfig;
 use codex_config::types::OrchestratorMemoryConfig;
-use codex_config::types::OrchestratorToml;
 use codex_config::types::ResumeConfig;
 use codex_config::types::ScheduleConfig;
 use codex_config::types::ScratchpadConfig;
@@ -101,7 +99,6 @@ use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -1050,9 +1047,6 @@ pub struct Config {
     /// Managed account-alias settings for auth storage selection.
     pub accounts: AccountsConfig,
 
-    /// Orchestrator supervision and escalation settings.
-    pub orchestrator: OrchestratorConfig,
-
     /// Thread-control subsystem settings.
     pub thread_control: ThreadControlConfig,
 
@@ -1247,10 +1241,6 @@ pub struct Config {
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: codex_config::types::OtelConfig,
 }
-
-pub const DEFAULT_ORCHESTRATOR_MODEL: &str = "gpt-5.3-codex-spark";
-pub const DEFAULT_ORCHESTRATOR_FALLBACK_MODEL: &str = "gpt-5.5";
-pub const DEFAULT_ORCHESTRATOR_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MultiAgentV2Config {
@@ -1556,23 +1546,6 @@ impl Config {
             }
             _ => self.codex_home.to_path_buf(),
         }
-    }
-
-    pub fn effective_orchestrator_model(&self) -> &str {
-        self.thread_control
-            .orchestrator
-            .model
-            .as_deref()
-            .unwrap_or(DEFAULT_ORCHESTRATOR_MODEL)
-    }
-
-    pub fn effective_orchestrator_reasoning_effort(&self) -> Option<ReasoningEffort> {
-        Some(
-            self.thread_control
-                .orchestrator
-                .reasoning_effort
-                .unwrap_or(DEFAULT_ORCHESTRATOR_REASONING_EFFORT),
-        )
     }
 
     pub(crate) fn multi_agent_version_from_features(&self) -> MultiAgentVersion {
@@ -2381,22 +2354,8 @@ fn thread_store_config(thread_store: Option<ThreadStoreToml>) -> ThreadStoreConf
     }
 }
 
-fn resolve_scratchpad_config(
-    scratchpad_toml: Option<ScratchpadToml>,
-    orchestrator_toml: Option<&OrchestratorToml>,
-) -> ScratchpadConfig {
-    let mut scratchpad_toml = scratchpad_toml.unwrap_or_default();
-    if let Some(legacy_recover) =
-        orchestrator_toml.and_then(|toml| toml.recover_scratchpad_after_compaction)
-    {
-        scratchpad_toml
-            .modes
-            .entry(ModeKind::Orchestrator)
-            .or_default()
-            .recover_after_compaction
-            .get_or_insert(legacy_recover);
-    }
-    scratchpad_toml.into()
+fn resolve_scratchpad_config(scratchpad_toml: Option<ScratchpadToml>) -> ScratchpadConfig {
+    scratchpad_toml.unwrap_or_default().into()
 }
 
 fn is_session_layer(source: &ConfigLayerSource) -> bool {
@@ -4076,7 +4035,7 @@ impl Config {
         {
             orchestrator_memory.enabled = false;
         }
-        let scratchpad = resolve_scratchpad_config(cfg.scratchpad, cfg.orchestrator.as_ref());
+        let scratchpad = resolve_scratchpad_config(cfg.scratchpad);
         if let Err(err) = run_scratchpad_lifecycle_cleanup(
             codex_home.as_path(),
             scratchpad.auto_archive_after_days,
@@ -4198,7 +4157,6 @@ impl Config {
             schedule: cfg.schedule.unwrap_or_default().into(),
             resume: cfg.resume.unwrap_or_default().into(),
             accounts,
-            orchestrator: cfg.orchestrator.unwrap_or_default().into(),
             thread_control: cfg.thread_control.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,
             agent_interrupt_message_enabled,

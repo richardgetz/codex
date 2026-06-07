@@ -300,18 +300,13 @@ pub(super) fn build_consolidation_agent_config(
     agent_config.model_reasoning_effort = base
         .memories
         .consolidation_reasoning_effort
-        .or_else(|| base.effective_orchestrator_reasoning_effort());
+        .or(base.model_reasoning_effort);
 
     Ok(agent_config)
 }
 
-pub(super) fn resolve_orchestrator_memory_model(base: &Config, is_chatgpt_auth: bool) -> String {
-    let model = base.effective_orchestrator_model();
-    if is_chatgpt_auth && model == crate::config::DEFAULT_ORCHESTRATOR_MODEL {
-        crate::config::DEFAULT_ORCHESTRATOR_FALLBACK_MODEL.to_string()
-    } else {
-        model.to_string()
-    }
+pub(super) fn resolve_orchestrator_memory_model(base: &Config, _is_chatgpt_auth: bool) -> String {
+    base.model.clone().unwrap_or_else(|| "gpt-5".to_string())
 }
 
 pub(super) fn resolve_memory_extract_model(base: &Config, is_chatgpt_auth: bool) -> String {

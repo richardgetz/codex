@@ -31,23 +31,12 @@ stable/mainline is pulled in.
     directories, `[accounts].active`, `[accounts].rotation`, and first alias
     use through `--account` or `/account`, so keychain-only aliases remain
     discoverable for app-server UIs even when no fallback `auth.json` exists.
-- Orchestrator startup mode selection:
-  - CLI: `codex --collab <mode>`
-  - Supports non-case-sensitive values and one-letter shorthands such as `o`
-    for `orchestrator`.
-  - Standalone Continuous collaboration mode is removed; continuous execution is
-    controlled per thread by `/continuous` and the built-in scratchpad
-    `run_policy`.
-- Orchestrator defaults:
-  - Default model/reasoning when no override is set:
-    `gpt-5.3-codex-spark` + `low`
-  - Fallback on ChatGPT-account unsupported-model errors:
-    `gpt-5.5` + `low`
-  - Coding-task subagents should prefer `gpt-5.5`, selecting reasoning effort
-    by task difficulty: `low` for exploration/mechanical work, `medium` for
-    clear implementation and straightforward fixes, `high` for complex or
-    unclear work, and `xhigh` only for extreme or explicitly requested cases
-    after checking with the user unless already instructed.
+- Removed collaboration-mode remnants:
+  - Mainline `/collab` remains absent; use `/plan` for Plan mode.
+  - Fork-only `codex --collab <mode>` startup selection is removed.
+  - Fork-only Orchestrator collaboration mode is removed. Legacy serialized
+    `orchestrator` mode values deserialize as Default for compatibility.
+  - App-server `thread/control/set` rejects Orchestrator mode.
 - Orchestrator memory compatibility:
   - `[orchestrator_memory]`
   - The legacy config and migration helpers remain, but live read/write,
@@ -105,9 +94,6 @@ stable/mainline is pulled in.
   - Supports `skills`, `mcps`, and `plugins`
   - Each filter uses `{ mode = "include"|"exclude", items = [...] }`
   - `items = ["*"]` is supported
-- Orchestrator spawn safety:
-  - `[orchestrator].allowed_spawn_modes`
-  - Default child mode allow-list is `["default"]`
 - Session-scoped agent pruning:
   - Slash command: `/agents-prune`
   - CLI: `codex agents-prune <thread-id> --remote <ws://host:port>`
@@ -117,9 +103,6 @@ stable/mainline is pulled in.
     registry and live thread-spawn tree only.
   - Preserves running and initializing agents, the current thread, and any
     agent subtree that still contains active work.
-- Orchestrator inline MCP usage:
-  - Explicitly enabled Orchestrator MCPs may run in the parent Orchestrator
-    thread for communication/state work instead of forcing a child worker.
 - MCP visibility recovery:
   - Cancelled MCP startups are retried in a bounded way instead of memoizing the
     cancelled startup for the rest of the session.
@@ -131,29 +114,9 @@ stable/mainline is pulled in.
     servers plus unstarted lazy servers, not only successful tool listings, so
     eager MCPs remain visible even when their current tool list is temporarily
     unavailable.
-- Orchestrator session overwatch:
-  - Built-in namespace: `session_overwatch`
-  - Tools: `list_sessions`, `watch_session`, `unwatch_session`,
-    `message_session`
-  - Watches are persisted as Router thread-control targets so already-started
-    sessions can emit durable completion signals back to the watching
-    orchestrator when a turn completes or aborts.
-  - `message_session` delivers immediately to sessions live in the same Codex
-    process and queues durable inbox messages for sessions owned by another
-    local CLI process.
-  - Each running CLI session polls its own durable inbox without model spend and
-    injects queued messages as normal user input when found.
-- Orchestrator primary contact channel:
-  - Config: `[orchestrator].primary_contact`
-  - Startup override: `--primary-contact <mcp>` or `--primary-contact off`
-  - Harness-only polling uses `check_messages_every_seconds`, default `900`,
-    and only calls the model when a new user message is found.
-  - Armed idle polling uses a static terminal-title waiting marker so the
-    window still appears alive without model calls.
 - Built-in scratchpad:
   - Namespace: `scratchpad`
-  - Default and Orchestrator modes expose it by default; Plan mode
-    does not.
+  - Default mode exposes it by default; Plan mode does not.
   - The built-in namespace is canonical; if a configured scratchpad MCP exposes
     the same namespace, the built-in spec remains model-visible and built-in
     handlers take precedence.
@@ -249,8 +212,8 @@ stable/mainline is pulled in.
     back through hidden developer context after compaction. Completed or
     archived scratchpads are not looped back, and the TUI does not synthesize a
     user turn for recovery state.
-  - Legacy `[orchestrator].recover_scratchpad_after_compaction` remains
-    supported as an Orchestrator-only compatibility alias.
+  - Legacy top-level `[orchestrator]` mode config is removed after
+    Orchestrator mode removal.
 - Fast resume:
   - Config: `[resume]`
   - Defaults: `strategy = "latest_compaction"`, `visible_turn_limit = 80`,
@@ -266,21 +229,17 @@ stable/mainline is pulled in.
 
 ## Earlier Fork Deltas
 
-- Orchestrator is coordination-only:
-  - execution work should go to child agents
-  - communication with the user stays in the orchestrator thread
 - Memory helpers have human-readable names:
   - `Memory [extractor]`
   - `Memory [memory builder]`
-- Orchestrator supervision avoids wasteful idle model polling:
-  - `[orchestrator].active_agent_checkin_seconds`
 - Collaboration-mode skill filtering exists and now rolls up under the unified
   enablement model.
 
 ## Merge Checklist
 
-- Verify `codex --collab ...` still applies the intended collaboration mode and
-  Orchestrator thread-control defaults.
+- Verify `/plan` still enters Plan mode and no `/collab` command is exposed.
+- Verify `codex --collab ...` is rejected and legacy serialized `orchestrator`
+  collaboration-mode values map to Default.
 - Verify `codex --account ...` and `/account ...` still switch auth stores
   without breaking the default root auth location.
 - Verify `/orchestrator-memory-forget <needle>` still prunes and reconsolidates
@@ -289,23 +248,14 @@ stable/mainline is pulled in.
   orchestrator-memory cleanup pass.
 - Verify `[enablement.modes.<mode>]` still filters `skills`, `mcps`, and
   `plugins` correctly.
-- Verify Orchestrator child spawns still respect
-  `[orchestrator].allowed_spawn_modes`.
-- Verify explicitly enabled Orchestrator MCPs remain callable inline for
-  communication/state workflows.
 - Verify cancelled MCP startup can retry, a plain unavailable MCP placeholder
   call can recover the configured server namespace instead of permanently
   reporting the tool unavailable, and eager MCP servers remain listed in the
   model-visible inventory even if tool listing is temporarily unavailable.
-- Verify `session_overwatch` lists sessions, can watch/unwatch existing thread
-  ids, records watched sessions in the supervision summary, and can queue
-  cross-process `message_session` input that the target CLI later injects.
-- Verify configured primary contact polling starts in Orchestrator mode and does
-  not wake the model for empty status responses, while the terminal title shows
-  the waiting marker when idle.
-- Verify built-in `scratchpad` remains available in Default and Orchestrator
-  modes, omitted from Plan mode by default, and
-  `open_scratchpad` uses the thread id when no id is provided.
+- Verify app-server `thread/control/set` rejects Orchestrator mode.
+- Verify built-in `scratchpad` remains available in Default mode, omitted from
+  Plan mode by default, and `open_scratchpad` uses the thread id when no id is
+  provided.
 - Verify `/continuous` can be toggled on/off while a model turn is running and
   updates the current thread scratchpad without queuing a core op.
 - Verify built-in `resume_scratchpad` refuses to create a new scratchpad,

@@ -228,7 +228,6 @@ impl TurnContext {
             config.scratchpad.for_mode(collaboration_mode.mode).enabled,
         )
         .with_builtin_schedule_enabled(config.schedule.for_mode(collaboration_mode.mode).enabled)
-        .with_builtin_session_overwatch_enabled(collaboration_mode.mode == ModeKind::Orchestrator)
         .with_multi_agent_v2_tool_namespace(config.multi_agent_v2.tool_namespace.clone())
         .with_multi_agent_v2_non_code_mode_only(config.multi_agent_v2.non_code_mode_only)
         .with_goal_tools_allowed(self.tools_config.goal_tools)
@@ -601,9 +600,6 @@ impl Session {
                 .schedule
                 .for_mode(session_configuration.collaboration_mode.mode)
                 .enabled,
-        )
-        .with_builtin_session_overwatch_enabled(
-            session_configuration.collaboration_mode.mode == ModeKind::Orchestrator,
         )
         .with_multi_agent_v2_tool_namespace(per_turn_config.multi_agent_v2.tool_namespace.clone())
         .with_multi_agent_v2_non_code_mode_only(per_turn_config.multi_agent_v2.non_code_mode_only)

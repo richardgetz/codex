@@ -317,18 +317,6 @@ pub(crate) enum AppEvent {
         result: Result<Vec<RateLimitSnapshot>, String>,
     },
 
-    /// A harness-only primary-contact poll found a new user message.
-    PrimaryContactMessageReceived {
-        text: String,
-    },
-
-    /// Harness-only primary-contact startup completed.
-    PrimaryContactMonitoringStarted {
-        mcp: String,
-        interval_seconds: u32,
-        scheduled: bool,
-    },
-
     /// Send a user-confirmed request to notify the workspace owner.
     SendAddCreditsNudgeEmail {
         credit_type: AddCreditsNudgeCreditType,
@@ -660,9 +648,6 @@ pub(crate) enum AppEvent {
 
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
-
-    /// Update the active collaboration mode in the running app and widget.
-    UpdateCollaborationMode(CollaborationModeMask),
 
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),

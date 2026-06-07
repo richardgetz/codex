@@ -22,9 +22,6 @@ impl ChatWidget {
                 TerminalTitleStatusKind::WaitingForAgents;
         } else if self.bottom_pane.is_task_running() {
             self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Working;
-        } else if self.primary_contact_waiting {
-            self.status_state.terminal_title_status_kind =
-                TerminalTitleStatusKind::WaitingForPrimaryContact;
         }
         self.refresh_plan_mode_nudge();
         self.refresh_status_surfaces();

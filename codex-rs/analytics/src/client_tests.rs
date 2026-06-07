@@ -29,7 +29,6 @@ use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
-use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use std::collections::HashSet;

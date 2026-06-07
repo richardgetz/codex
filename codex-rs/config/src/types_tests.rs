@@ -289,58 +289,6 @@ fn accounts_config_normalizes_rotation_aliases() {
 }
 
 #[test]
-fn orchestrator_primary_contact_config_trims_optional_fields() {
-    let config = OrchestratorPrimaryContactConfig::from(OrchestratorPrimaryContactToml {
-        enabled: Some(true),
-        mcp: Some(" imessage ".to_string()),
-        tool: Some(" imessage_followup_start ".to_string()),
-        check_tool: Some(" imessage_followup_status ".to_string()),
-        check_messages_every_seconds: Some(60),
-        schedule: None,
-        startup_prompt: Some(" start follow-up ".to_string()),
-    });
-
-    assert_eq!(
-        config,
-        OrchestratorPrimaryContactConfig {
-            enabled: true,
-            mcp: Some("imessage".to_string()),
-            tool: Some("imessage_followup_start".to_string()),
-            check_tool: Some("imessage_followup_status".to_string()),
-            check_messages_every_seconds: 60,
-            schedule: Vec::new(),
-            startup_prompt: Some("start follow-up".to_string()),
-        }
-    );
-}
-
-#[test]
-fn orchestrator_primary_contact_config_defaults_check_interval() {
-    let config = OrchestratorPrimaryContactConfig::from(OrchestratorPrimaryContactToml {
-        enabled: Some(true),
-        mcp: Some("imessage".to_string()),
-        tool: None,
-        check_tool: None,
-        check_messages_every_seconds: None,
-        schedule: None,
-        startup_prompt: None,
-    });
-
-    assert_eq!(
-        config,
-        OrchestratorPrimaryContactConfig {
-            enabled: true,
-            mcp: Some("imessage".to_string()),
-            tool: None,
-            check_tool: None,
-            check_messages_every_seconds: 900,
-            schedule: Vec::new(),
-            startup_prompt: None,
-        }
-    );
-}
-
-#[test]
 fn memories_config_clamps_rate_limit_remaining_threshold() {
     let config = MemoriesConfig::from(MemoriesToml {
         min_rate_limit_remaining_percent: Some(101),

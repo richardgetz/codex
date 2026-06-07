@@ -136,7 +136,7 @@ do things
 fn resolve_remote_compact_model_slug_falls_back_for_chatgpt_accounts() {
     assert_eq!(
         resolve_remote_compact_model_slug("gpt-5.3-codex-spark", /*is_chatgpt_auth*/ true),
-        "gpt-5.5"
+        "gpt-5.3-codex-spark"
     );
     assert_eq!(
         resolve_remote_compact_model_slug("gpt-5.3-codex-spark", /*is_chatgpt_auth*/ false),

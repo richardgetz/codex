@@ -149,11 +149,10 @@ pub(crate) async fn ensure_layout(
     Ok(root)
 }
 
-pub(crate) fn should_use(config: &Config, mode: ModeKind) -> bool {
+pub(crate) fn should_use(config: &Config, _mode: ModeKind) -> bool {
     config.user_preferences_memory.enabled
         && config.memories.generate_memories
-        && (config.user_preferences_memory.scope == MemoriesScope::All
-            || mode == ModeKind::Orchestrator)
+        && config.user_preferences_memory.scope == MemoriesScope::All
 }
 
 pub(crate) async fn build_user_preferences_developer_instructions(

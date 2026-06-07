@@ -3,15 +3,11 @@ use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadControlMode;
-use codex_app_server_protocol::ThreadControlReadParams;
-use codex_app_server_protocol::ThreadControlReadResponse;
-use codex_app_server_protocol::ThreadControlReleaseParams;
-use codex_app_server_protocol::ThreadControlReleaseResponse;
 use codex_app_server_protocol::ThreadControlSetParams;
-use codex_app_server_protocol::ThreadControlSetResponse;
 use codex_app_server_protocol::ThreadScratchpadContinuousPolicySetParams;
 use codex_app_server_protocol::ThreadScratchpadContinuousPolicySetResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -26,11 +22,11 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
-async fn thread_control_set_read_and_release_round_trip() -> Result<()> {
+async fn thread_control_set_rejects_orchestrator_mode_for_loaded_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
-    let state_db = init_state_db(codex_home.path()).await?;
+    let _state_db = init_state_db(codex_home.path()).await?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -61,81 +57,15 @@ async fn thread_control_set_read_and_release_round_trip() -> Result<()> {
             ]),
         })
         .await?;
-    let set_resp: JSONRPCResponse = timeout(
+    let set_resp: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(set_id)),
     )
     .await??;
-    let ThreadControlSetResponse { control } = to_response::<ThreadControlSetResponse>(set_resp)?;
-    assert_eq!(control.mode, ThreadControlMode::Orchestrator);
     assert_eq!(
-        control.reason,
-        "Keep supervising the spawned worker threads"
+        set_resp.error.message,
+        "orchestrator mode is no longer available"
     );
-    assert_eq!(control.release_channel.as_deref(), Some("imessage"));
-    assert_eq!(control.watch_interval_seconds, Some(30));
-    assert_eq!(
-        control.target_thread_ids,
-        vec![
-            "00000000-0000-0000-0000-000000000010".to_string(),
-            "00000000-0000-0000-0000-000000000011".to_string()
-        ]
-    );
-    assert_eq!(control.released_at, None);
-
-    let read_id = mcp
-        .send_thread_control_read_request(ThreadControlReadParams {
-            thread_id: thread.id.clone(),
-        })
-        .await?;
-    let read_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
-    )
-    .await??;
-    let ThreadControlReadResponse { control } =
-        to_response::<ThreadControlReadResponse>(read_resp)?;
-    let control = control.expect("control");
-    assert_eq!(control.mode, ThreadControlMode::Orchestrator);
-    assert_eq!(
-        control.reason,
-        "Keep supervising the spawned worker threads"
-    );
-
-    let release_id = mcp
-        .send_thread_control_release_request(ThreadControlReleaseParams {
-            thread_id: thread.id.clone(),
-        })
-        .await?;
-    let release_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(release_id)),
-    )
-    .await??;
-    let ThreadControlReleaseResponse { control } =
-        to_response::<ThreadControlReleaseResponse>(release_resp)?;
-    let control = control.expect("released control");
-    assert!(control.released_at.is_some());
-
-    let read_after_release_id = mcp
-        .send_thread_control_read_request(ThreadControlReadParams {
-            thread_id: thread.id.clone(),
-        })
-        .await?;
-    let read_after_release_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(read_after_release_id)),
-    )
-    .await??;
-    let ThreadControlReadResponse { control } =
-        to_response::<ThreadControlReadResponse>(read_after_release_resp)?;
-    assert_eq!(control, None);
-
-    let stored_control = state_db
-        .get_thread_control(codex_protocol::ThreadId::from_string(&thread.id)?)
-        .await?
-        .expect("stored control");
-    assert!(stored_control.released_at.is_some());
     Ok(())
 }
 
@@ -175,7 +105,7 @@ async fn thread_control_set_rejects_orchestrator_mode_for_stored_thread() -> Res
     .await??;
     assert_eq!(
         error.error.message,
-        "orchestrator mode currently requires a loaded thread"
+        "orchestrator mode is no longer available"
     );
     Ok(())
 }

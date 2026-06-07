@@ -1,27 +1,14 @@
 use crate::agent::AgentStatus;
-use codex_config::types::OrchestratorEscalationConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_template::Template;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fs as std_fs;
 use std::sync::Arc;
-use std::sync::LazyLock;
 use tokio::fs;
 use tokio::sync::Mutex;
-use tokio::sync::watch::Receiver;
 use tracing::warn;
-
-static ORCHESTRATOR_SUPERVISION_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(include_str!(
-        "../templates/orchestrator_supervision/read_path.md"
-    ))
-    .unwrap_or_else(|err| {
-        panic!("embedded template orchestrator_supervision/read_path.md is invalid: {err}")
-    })
-});
 
 pub(crate) fn root(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
     codex_home.join("orchestrator_supervision")
@@ -119,77 +106,6 @@ impl OrchestratorSupervisionStore {
         self.root().join("state.json")
     }
 
-    pub(crate) async fn register_worker(
-        &self,
-        parent_thread_id: ThreadId,
-        worker_thread_id: ThreadId,
-        nickname: Option<String>,
-        role: Option<String>,
-        prompt_preview: String,
-        collaboration_mode: Option<ModeKind>,
-    ) -> std::io::Result<()> {
-        let _guard = self.write_lock.lock().await;
-        let worker_thread_id = worker_thread_id.to_string();
-        self.mutate_ledger_sync(move |ledger| {
-            let now = now_rfc3339();
-            let parent = ensure_thread_entry(ledger, parent_thread_id, &now);
-            if let Some(existing) = parent
-                .workers
-                .iter_mut()
-                .find(|worker| worker.worker_thread_id == worker_thread_id)
-            {
-                existing.nickname = nickname;
-                existing.role = role;
-                existing.prompt_preview = prompt_preview;
-                existing.collaboration_mode = collaboration_mode;
-                existing.updated_at = now.clone();
-            } else {
-                parent.workers.push(SupervisedWorkerState {
-                    worker_thread_id,
-                    nickname,
-                    role,
-                    prompt_preview,
-                    collaboration_mode,
-                    status: SupervisedWorkerStatus::PendingInit,
-                    last_status_summary: None,
-                    created_at: now.clone(),
-                    updated_at: now.clone(),
-                    last_instruction_at: None,
-                    last_checked_at: None,
-                });
-            }
-            parent.updated_at = now;
-        })
-    }
-
-    pub(crate) async fn note_status(
-        &self,
-        parent_thread_id: ThreadId,
-        worker_thread_id: ThreadId,
-        status: &AgentStatus,
-    ) -> std::io::Result<()> {
-        let _guard = self.write_lock.lock().await;
-        let worker_thread_id = worker_thread_id.to_string();
-        let worker_status = SupervisedWorkerStatus::from(status);
-        let summary = status_summary(status);
-        self.mutate_ledger_sync(move |ledger| {
-            let now = now_rfc3339();
-            let parent = ensure_thread_entry(ledger, parent_thread_id, &now);
-            if let Some(worker) = parent
-                .workers
-                .iter_mut()
-                .find(|worker| worker.worker_thread_id == worker_thread_id)
-            {
-                worker.status = worker_status;
-                if let Some(summary) = summary.clone() {
-                    worker.last_status_summary = Some(summary);
-                }
-                worker.updated_at = now.clone();
-            }
-            parent.updated_at = now;
-        })
-    }
-
     pub(crate) async fn note_instruction(
         &self,
         parent_thread_id: ThreadId,
@@ -210,74 +126,6 @@ impl OrchestratorSupervisionStore {
     ) -> std::io::Result<()> {
         self.note_timestamp(parent_thread_id, worker_thread_id, TimestampKind::Check)
             .await
-    }
-
-    pub(crate) async fn register_watched_session(
-        &self,
-        orchestrator_thread_id: ThreadId,
-        target_thread_id: ThreadId,
-        title: Option<String>,
-        cwd: Option<String>,
-    ) -> std::io::Result<()> {
-        let _guard = self.write_lock.lock().await;
-        let target_thread_id = target_thread_id.to_string();
-        self.mutate_ledger_sync(move |ledger| {
-            let now = now_rfc3339();
-            let parent = ensure_thread_entry(ledger, orchestrator_thread_id, &now);
-            if let Some(existing) = parent
-                .watched_sessions
-                .iter_mut()
-                .find(|session| session.thread_id == target_thread_id)
-            {
-                existing.title = title;
-                existing.cwd = cwd;
-                existing.status = WatchedSessionStatus::Watched;
-                existing.updated_at = now.clone();
-            } else {
-                parent.watched_sessions.push(WatchedSessionState {
-                    thread_id: target_thread_id,
-                    title,
-                    cwd,
-                    status: WatchedSessionStatus::Watched,
-                    last_event_summary: None,
-                    created_at: now.clone(),
-                    updated_at: now.clone(),
-                    last_instruction_at: None,
-                    last_checked_at: None,
-                });
-            }
-            parent.updated_at = now;
-        })
-    }
-
-    pub(crate) async fn remove_watched_session(
-        &self,
-        orchestrator_thread_id: ThreadId,
-        target_thread_id: ThreadId,
-    ) -> std::io::Result<()> {
-        let _guard = self.write_lock.lock().await;
-        let target_thread_id = target_thread_id.to_string();
-        self.mutate_ledger_sync(move |ledger| {
-            let now = now_rfc3339();
-            let parent = ensure_thread_entry(ledger, orchestrator_thread_id, &now);
-            parent
-                .watched_sessions
-                .retain(|session| session.thread_id != target_thread_id);
-            parent.updated_at = now;
-        })
-    }
-
-    pub(crate) async fn note_watched_session_instruction(
-        &self,
-        orchestrator_thread_id: ThreadId,
-        target_thread_id: ThreadId,
-    ) -> std::io::Result<()> {
-        self.note_watched_session_timestamp(
-            orchestrator_thread_id,
-            target_thread_id,
-            TimestampKind::Instruction,
-        )
-        .await
     }
 
     pub(crate) async fn note_watched_session_event(
@@ -346,60 +194,6 @@ impl OrchestratorSupervisionStore {
         })
     }
 
-    async fn note_watched_session_timestamp(
-        &self,
-        orchestrator_thread_id: ThreadId,
-        target_thread_id: ThreadId,
-        kind: TimestampKind,
-    ) -> std::io::Result<()> {
-        let _guard = self.write_lock.lock().await;
-        let target_thread_id = target_thread_id.to_string();
-        self.mutate_ledger_sync(move |ledger| {
-            let now = now_rfc3339();
-            let parent = ensure_thread_entry(ledger, orchestrator_thread_id, &now);
-            if let Some(session) = parent
-                .watched_sessions
-                .iter_mut()
-                .find(|session| session.thread_id == target_thread_id)
-            {
-                match kind {
-                    TimestampKind::Instruction => session.last_instruction_at = Some(now.clone()),
-                    TimestampKind::Check => session.last_checked_at = Some(now.clone()),
-                }
-                session.updated_at = now.clone();
-            }
-            parent.updated_at = now;
-        })
-    }
-
-    pub(crate) async fn build_developer_instructions(
-        &self,
-        thread_id: ThreadId,
-        escalation: &OrchestratorEscalationConfig,
-    ) -> Option<String> {
-        let ledger = self.read_ledger().await.ok()?;
-        let thread = ledger
-            .threads
-            .iter()
-            .find(|thread| thread.thread_id == thread_id.to_string())?;
-        let worker_summary = render_worker_summary(thread);
-        let escalation_mode = format!("{:?}", escalation.mode).to_lowercase();
-        let escalation_channel = escalation.channel.clone().unwrap_or_default();
-        let escalation_tool = escalation.tool.clone().unwrap_or_default();
-        ORCHESTRATOR_SUPERVISION_TEMPLATE
-            .render([
-                (
-                    "supervision_root",
-                    self.root().display().to_string().as_str(),
-                ),
-                ("worker_summary", worker_summary.as_str()),
-                ("escalation_mode", escalation_mode.as_str()),
-                ("escalation_channel", escalation_channel.as_str()),
-                ("escalation_tool", escalation_tool.as_str()),
-            ])
-            .ok()
-    }
-
     pub async fn poll_state(
         &self,
         thread_id: ThreadId,
@@ -430,35 +224,6 @@ impl OrchestratorSupervisionStore {
                     .iter()
                     .any(|session| !session.status.is_terminal()),
         })
-    }
-
-    pub(crate) fn spawn_status_watcher(
-        &self,
-        parent_thread_id: ThreadId,
-        worker_thread_id: ThreadId,
-        mut status_rx: Receiver<AgentStatus>,
-    ) {
-        let store = self.clone();
-        tokio::spawn(async move {
-            let mut current_status = status_rx.borrow_and_update().clone();
-            if let Err(err) = store
-                .note_status(parent_thread_id, worker_thread_id, &current_status)
-                .await
-            {
-                warn!("failed recording initial orchestrator supervision status: {err}");
-                return;
-            }
-            while status_rx.changed().await.is_ok() {
-                current_status = status_rx.borrow_and_update().clone();
-                if let Err(err) = store
-                    .note_status(parent_thread_id, worker_thread_id, &current_status)
-                    .await
-                {
-                    warn!("failed recording orchestrator supervision status update: {err}");
-                    return;
-                }
-            }
-        });
     }
 
     async fn read_ledger(&self) -> std::io::Result<SupervisionLedger> {
@@ -553,84 +318,7 @@ fn status_summary(status: &AgentStatus) -> Option<String> {
     }
 }
 
-fn render_worker_summary(thread: &SupervisedThreadState) -> String {
-    let mut lines = Vec::new();
-    if thread.workers.is_empty() && thread.watched_sessions.is_empty() {
-        return "- No supervised workers or watched sessions are currently recorded for this thread.\n"
-                .to_string();
-    }
-
-    if thread.workers.is_empty() {
-        lines.push("- No supervised workers are currently recorded for this thread.".to_string());
-    }
-
-    for worker in &thread.workers {
-        let header = format!(
-            "- {} ({}) status={} updated_at={}",
-            worker
-                .nickname
-                .as_deref()
-                .unwrap_or(worker.worker_thread_id.as_str()),
-            worker.role.as_deref().unwrap_or("worker"),
-            worker.status.as_str(),
-            worker.updated_at
-        );
-        lines.push(header);
-        lines.push(format!("  prompt: {}", worker.prompt_preview));
-        if let Some(summary) = worker.last_status_summary.as_deref() {
-            lines.push(format!("  latest_summary: {summary}"));
-        }
-        if let Some(last_instruction_at) = worker.last_instruction_at.as_deref() {
-            lines.push(format!("  last_instruction_at: {last_instruction_at}"));
-        }
-        if let Some(last_checked_at) = worker.last_checked_at.as_deref() {
-            lines.push(format!("  last_checked_at: {last_checked_at}"));
-        }
-    }
-    if !thread.watched_sessions.is_empty() {
-        lines.push("- Watched sessions:".to_string());
-    }
-    for session in &thread.watched_sessions {
-        let header = format!(
-            "  - {} status={} updated_at={}",
-            session
-                .title
-                .as_deref()
-                .unwrap_or(session.thread_id.as_str()),
-            session.status.as_str(),
-            session.updated_at
-        );
-        lines.push(header);
-        lines.push(format!("    thread_id: {}", session.thread_id));
-        if let Some(cwd) = session.cwd.as_deref() {
-            lines.push(format!("    cwd: {cwd}"));
-        }
-        if let Some(summary) = session.last_event_summary.as_deref() {
-            lines.push(format!("    latest_summary: {summary}"));
-        }
-        if let Some(last_instruction_at) = session.last_instruction_at.as_deref() {
-            lines.push(format!("    last_instruction_at: {last_instruction_at}"));
-        }
-        if let Some(last_checked_at) = session.last_checked_at.as_deref() {
-            lines.push(format!("    last_checked_at: {last_checked_at}"));
-        }
-    }
-    format!("{}\n", lines.join("\n"))
-}
-
 impl SupervisedWorkerStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::PendingInit => "pending_init",
-            Self::Running => "running",
-            Self::Completed => "completed",
-            Self::Interrupted => "interrupted",
-            Self::Errored => "errored",
-            Self::Shutdown => "shutdown",
-            Self::NotFound => "not_found",
-        }
-    }
-
     fn is_terminal(self) -> bool {
         matches!(
             self,
@@ -640,15 +328,6 @@ impl SupervisedWorkerStatus {
 }
 
 impl WatchedSessionStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Watched => "watched",
-            Self::Completed => "completed",
-            Self::Interrupted => "interrupted",
-            Self::Errored => "errored",
-        }
-    }
-
     fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Interrupted | Self::Errored)
     }

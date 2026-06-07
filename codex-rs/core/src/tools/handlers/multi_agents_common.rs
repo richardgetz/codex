@@ -311,32 +311,11 @@ pub(crate) fn inherited_spawn_agent_collaboration_mode(
 }
 
 fn enforce_orchestrator_child_mode_allowlist(
-    parent_mode: ModeKind,
-    config: &Config,
-    requested_mode: ModeKind,
+    _parent_mode: ModeKind,
+    _config: &Config,
+    _requested_mode: ModeKind,
 ) -> Result<(), FunctionCallError> {
-    if parent_mode != ModeKind::Orchestrator {
-        return Ok(());
-    }
-    if config
-        .orchestrator
-        .allowed_spawn_modes
-        .contains(&requested_mode)
-    {
-        return Ok(());
-    }
-
-    let allowed = config
-        .orchestrator
-        .allowed_spawn_modes
-        .iter()
-        .map(|mode| mode.display_name().to_lowercase())
-        .collect::<Vec<_>>()
-        .join(", ");
-    Err(FunctionCallError::RespondToModel(format!(
-        "Orchestrator mode can only spawn child collaboration modes allowed by `orchestrator.allowed_spawn_modes` (currently: {allowed}); `{}` is blocked.",
-        requested_mode.display_name().to_lowercase()
-    )))
+    Ok(())
 }
 
 pub(crate) async fn apply_requested_spawn_agent_model_overrides(

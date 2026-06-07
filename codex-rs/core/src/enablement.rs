@@ -283,7 +283,7 @@ mod tests {
     async fn filters_mcp_tools_by_mode_enablement() {
         let mut config = test_config().await;
         config.enablement.modes.insert(
-            ModeKind::Orchestrator,
+            ModeKind::Plan,
             codex_config::ModeEnablementConfig {
                 mcps: Some(EnablementFilterConfig {
                     mode: EnablementFilterMode::Include,
@@ -303,7 +303,7 @@ mod tests {
             ),
         ];
 
-        let filtered = filter_mcp_tools_for_mode(&config, ModeKind::Orchestrator, &tools);
+        let filtered = filter_mcp_tools_for_mode(&config, ModeKind::Plan, &tools);
         let mut names = filtered
             .iter()
             .map(|tool| tool.canonical_tool_name().to_string())
@@ -322,7 +322,7 @@ mod tests {
     async fn filters_mcp_server_names_by_mode_enablement() {
         let mut config = test_config().await;
         config.enablement.modes.insert(
-            ModeKind::Orchestrator,
+            ModeKind::Plan,
             codex_config::ModeEnablementConfig {
                 mcps: Some(EnablementFilterConfig {
                     mode: EnablementFilterMode::Include,
@@ -334,12 +334,12 @@ mod tests {
 
         assert!(mcp_server_allowed_in_mode(
             &config,
-            ModeKind::Orchestrator,
+            ModeKind::Plan,
             "imessage"
         ));
         assert!(!mcp_server_allowed_in_mode(
             &config,
-            ModeKind::Orchestrator,
+            ModeKind::Plan,
             "playwright"
         ));
     }
@@ -348,7 +348,7 @@ mod tests {
     async fn filters_mcp_tool_parts_by_mode_enablement() {
         let mut config = test_config().await;
         config.enablement.modes.insert(
-            ModeKind::Orchestrator,
+            ModeKind::Plan,
             codex_config::ModeEnablementConfig {
                 mcps: Some(EnablementFilterConfig {
                     mode: EnablementFilterMode::Exclude,
@@ -360,14 +360,14 @@ mod tests {
 
         assert!(!mcp_tool_parts_allowed_in_mode(
             &config,
-            ModeKind::Orchestrator,
+            ModeKind::Plan,
             "imessage",
             "mcp__imessage__",
             "imessage_get_config"
         ));
         assert!(mcp_tool_parts_allowed_in_mode(
             &config,
-            ModeKind::Orchestrator,
+            ModeKind::Plan,
             "imessage",
             "mcp__imessage__",
             "imessage_send_message"
@@ -378,7 +378,7 @@ mod tests {
     async fn app_connector_filter_allows_connector_tools_without_allowing_codex_apps_inventory() {
         let mut config = test_config().await;
         config.enablement.modes.insert(
-            ModeKind::Orchestrator,
+            ModeKind::Plan,
             codex_config::ModeEnablementConfig {
                 mcps: Some(EnablementFilterConfig {
                     mode: EnablementFilterMode::Include,
@@ -396,12 +396,12 @@ mod tests {
 
         assert!(mcp_tool_allowed_in_mode(
             &config,
-            ModeKind::Orchestrator,
+            ModeKind::Plan,
             &calendar_tool
         ));
         assert!(!mcp_server_allowed_in_mode(
             &config,
-            ModeKind::Orchestrator,
+            ModeKind::Plan,
             CODEX_APPS_MCP_SERVER_NAME
         ));
     }
@@ -410,7 +410,7 @@ mod tests {
     async fn include_wildcard_keeps_all_mcp_tools() {
         let mut config = test_config().await;
         config.enablement.modes.insert(
-            ModeKind::Orchestrator,
+            ModeKind::Plan,
             codex_config::ModeEnablementConfig {
                 mcps: Some(EnablementFilterConfig {
                     mode: EnablementFilterMode::Include,
@@ -425,7 +425,7 @@ mod tests {
             make_mcp_tool("other", "run", /*connector_id*/ None),
         ];
 
-        let filtered = filter_mcp_tools_for_mode(&config, ModeKind::Orchestrator, &tools);
+        let filtered = filter_mcp_tools_for_mode(&config, ModeKind::Plan, &tools);
         assert_eq!(filtered.len(), 2);
     }
 
@@ -433,7 +433,7 @@ mod tests {
     async fn exclude_wildcard_hides_all_plugins() {
         let mut config = test_config().await;
         config.enablement.modes.insert(
-            ModeKind::Orchestrator,
+            ModeKind::Plan,
             codex_config::ModeEnablementConfig {
                 plugins: Some(EnablementFilterConfig {
                     mode: EnablementFilterMode::Exclude,
@@ -462,7 +462,7 @@ mod tests {
             },
         ];
 
-        let filtered = filter_plugins_for_mode(&config, ModeKind::Orchestrator, &plugins);
+        let filtered = filter_plugins_for_mode(&config, ModeKind::Plan, &plugins);
         assert!(filtered.is_empty());
     }
 
@@ -470,7 +470,7 @@ mod tests {
     async fn filters_plugins_by_mode_enablement() {
         let mut config = test_config().await;
         config.enablement.modes.insert(
-            ModeKind::Orchestrator,
+            ModeKind::Plan,
             codex_config::ModeEnablementConfig {
                 plugins: Some(EnablementFilterConfig {
                     mode: EnablementFilterMode::Include,
@@ -499,7 +499,7 @@ mod tests {
             },
         ];
 
-        let filtered = filter_plugins_for_mode(&config, ModeKind::Orchestrator, &plugins);
+        let filtered = filter_plugins_for_mode(&config, ModeKind::Plan, &plugins);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].display_name, "Gmail");
     }
@@ -508,7 +508,7 @@ mod tests {
     async fn filters_connectors_by_mode_enablement() {
         let mut config = test_config().await;
         config.enablement.modes.insert(
-            ModeKind::Orchestrator,
+            ModeKind::Plan,
             codex_config::ModeEnablementConfig {
                 mcps: Some(EnablementFilterConfig {
                     mode: EnablementFilterMode::Exclude,
@@ -522,7 +522,7 @@ mod tests {
             make_connector("gmail", "Gmail"),
             make_connector("slack", "Slack"),
         ];
-        let filtered = filter_connectors_for_mode(&config, ModeKind::Orchestrator, &connectors);
+        let filtered = filter_connectors_for_mode(&config, ModeKind::Plan, &connectors);
         assert_eq!(filtered, vec![make_connector("gmail", "Gmail")]);
     }
 }

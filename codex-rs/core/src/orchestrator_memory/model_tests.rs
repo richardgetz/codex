@@ -18,8 +18,8 @@ async fn build_consolidation_agent_config_prefers_memories_model_settings() {
         .expect("test config");
     config.model = Some("gpt-5".to_string());
     config.model_reasoning_effort = Some(ReasoningEffort::High);
-    config.thread_control.orchestrator.model = Some("gpt-5.3-codex-spark".to_string());
-    config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffort::Low);
+    config.model = Some("gpt-5.3-codex-spark".to_string());
+    config.model_reasoning_effort = Some(ReasoningEffort::Low);
     config.memories.consolidation_model = Some("gpt-5.5".to_string());
     config.memories.consolidation_reasoning_effort = Some(ReasoningEffort::Medium);
 
@@ -35,28 +35,7 @@ async fn build_consolidation_agent_config_prefers_memories_model_settings() {
 }
 
 #[tokio::test]
-async fn build_consolidation_agent_config_falls_back_to_orchestrator_model_defaults() {
-    let temp = tempdir().expect("tempdir");
-    let mut config = crate::config::ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(temp.path().to_path_buf())
-        .build()
-        .await
-        .expect("test config");
-    config.model = Some("gpt-5".to_string());
-    config.model_reasoning_effort = Some(ReasoningEffort::High);
-    config.thread_control.orchestrator.model = Some("gpt-5.3-codex-spark".to_string());
-    config.thread_control.orchestrator.reasoning_effort = Some(ReasoningEffort::Low);
-
-    let config = Arc::new(config);
-    let built = build_consolidation_agent_config(&config, /*is_chatgpt_auth*/ false)
-        .expect("build consolidation config");
-
-    assert_eq!(built.model.as_deref(), Some("gpt-5.3-codex-spark"));
-    assert_eq!(built.model_reasoning_effort, Some(ReasoningEffort::Low));
-}
-
-#[tokio::test]
-async fn build_consolidation_agent_config_uses_implicit_orchestrator_defaults() {
+async fn build_consolidation_agent_config_falls_back_to_configured_model_defaults() {
     let temp = tempdir().expect("tempdir");
     let mut config = crate::config::ConfigBuilder::without_managed_config_for_tests()
         .codex_home(temp.path().to_path_buf())
@@ -70,12 +49,31 @@ async fn build_consolidation_agent_config_uses_implicit_orchestrator_defaults() 
     let built = build_consolidation_agent_config(&config, /*is_chatgpt_auth*/ false)
         .expect("build consolidation config");
 
-    assert_eq!(built.model.as_deref(), Some("gpt-5.3-codex-spark"));
-    assert_eq!(built.model_reasoning_effort, Some(ReasoningEffort::Low));
+    assert_eq!(built.model.as_deref(), Some("gpt-5"));
+    assert_eq!(built.model_reasoning_effort, Some(ReasoningEffort::High));
 }
 
 #[tokio::test]
-async fn resolve_orchestrator_memory_model_falls_back_for_chatgpt_accounts() {
+async fn build_consolidation_agent_config_uses_generic_model_defaults() {
+    let temp = tempdir().expect("tempdir");
+    let mut config = crate::config::ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(temp.path().to_path_buf())
+        .build()
+        .await
+        .expect("test config");
+    config.model = Some("gpt-5".to_string());
+    config.model_reasoning_effort = Some(ReasoningEffort::High);
+
+    let config = Arc::new(config);
+    let built = build_consolidation_agent_config(&config, /*is_chatgpt_auth*/ false)
+        .expect("build consolidation config");
+
+    assert_eq!(built.model.as_deref(), Some("gpt-5"));
+    assert_eq!(built.model_reasoning_effort, Some(ReasoningEffort::High));
+}
+
+#[tokio::test]
+async fn resolve_orchestrator_memory_model_uses_configured_or_generic_model() {
     let temp = tempdir().expect("tempdir");
     let config = crate::config::ConfigBuilder::without_managed_config_for_tests()
         .codex_home(temp.path().to_path_buf())
@@ -85,11 +83,11 @@ async fn resolve_orchestrator_memory_model_falls_back_for_chatgpt_accounts() {
 
     assert_eq!(
         super::resolve_orchestrator_memory_model(&config, /*is_chatgpt_auth*/ true),
-        "gpt-5.5"
+        "gpt-5"
     );
     assert_eq!(
         super::resolve_orchestrator_memory_model(&config, /*is_chatgpt_auth*/ false),
-        "gpt-5.3-codex-spark"
+        "gpt-5"
     );
 }
 

@@ -1592,15 +1592,6 @@
       },
       "type": "object"
     },
-    "ModeKind": {
-      "description": "Initial collaboration mode to use when the TUI starts.",
-      "enum": [
-        "plan",
-        "orchestrator",
-        "default"
-      ],
-      "type": "string"
-    },
     "ModelAvailabilityNuxConfig": {
       "additionalProperties": {
         "format": "uint32",
@@ -2202,38 +2193,6 @@
         }
       ]
     },
-    "OrchestratorEscalationMode": {
-      "description": "How Orchestrator mode should raise blockers that need user attention.",
-      "enum": [
-        "inline",
-        "mcp",
-        "both"
-      ],
-      "type": "string"
-    },
-    "OrchestratorEscalationToml": {
-      "additionalProperties": false,
-      "description": "Orchestrator escalation settings loaded from config.toml.",
-      "properties": {
-        "channel": {
-          "description": "Optional MCP server or communication channel name to use when `mode` includes `mcp`.",
-          "type": "string"
-        },
-        "mode": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/OrchestratorEscalationMode"
-            }
-          ],
-          "description": "Where blockers that need the user should be raised."
-        },
-        "tool": {
-          "description": "Optional MCP tool name to use when `mode` includes `mcp`.",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
     "OrchestratorMemoryCleanupToml": {
       "additionalProperties": false,
       "description": "Scheduled cleanup settings for orchestrator memory.",
@@ -2333,74 +2292,6 @@
       },
       "type": "object"
     },
-    "OrchestratorPrimaryContactScheduleToml": {
-      "additionalProperties": false,
-      "description": "Local-time primary-contact polling interval override.",
-      "properties": {
-        "check_messages_every_seconds": {
-          "description": "Polling interval to use when this schedule entry matches.",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "days": {
-          "description": "Optional day names. Omit or leave empty to match every day.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "end": {
-          "description": "Local end time in `HH:MM` 24-hour format.",
-          "type": "string"
-        },
-        "start": {
-          "description": "Local start time in `HH:MM` 24-hour format.",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "OrchestratorPrimaryContactToml": {
-      "additionalProperties": false,
-      "description": "Primary user-contact channel that Orchestrator mode should start on session boot.",
-      "properties": {
-        "check_messages_every_seconds": {
-          "description": "How often the harness should check the primary contact channel for new user messages. Defaults to 900 seconds. `0` disables polling.",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "check_tool": {
-          "description": "Optional MCP tool name used by the harness-only background poller to check for new user messages.",
-          "type": "string"
-        },
-        "enabled": {
-          "description": "When `true`, Orchestrator starts the configured communication MCP at session boot.",
-          "type": "boolean"
-        },
-        "mcp": {
-          "description": "MCP server or communication channel name, for example `\"imessage\"`.",
-          "type": "string"
-        },
-        "schedule": {
-          "description": "Optional local-time schedule that overrides `check_messages_every_seconds` when a rule matches.",
-          "items": {
-            "$ref": "#/definitions/OrchestratorPrimaryContactScheduleToml"
-          },
-          "type": "array"
-        },
-        "startup_prompt": {
-          "description": "Deprecated: ignored. Primary-contact startup is harness-only and no longer injects a model-visible startup prompt.",
-          "type": "string"
-        },
-        "tool": {
-          "description": "Optional MCP tool name that the harness invokes to arm the channel, for example `\"imessage_followup_start\"`.",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
     "OrchestratorThreadControlToml": {
       "additionalProperties": false,
       "description": "Orchestrator-specific thread-control settings loaded from config.toml.",
@@ -2416,46 +2307,6 @@
             }
           ],
           "description": "Reasoning effort to use for orchestrator wake-up turns."
-        }
-      },
-      "type": "object"
-    },
-    "OrchestratorToml": {
-      "additionalProperties": false,
-      "description": "Orchestrator behavior settings loaded from config.toml.",
-      "properties": {
-        "active_agent_checkin_seconds": {
-          "description": "How often Orchestrator mode should proactively re-check active workers when supervision state has not otherwise changed. `0` disables proactive model check-ins and relies only on mechanical state changes.",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "allowed_spawn_modes": {
-          "description": "Collaboration modes Orchestrator mode is allowed to launch for child agents. Defaults to `[\"default\"]`.",
-          "items": {
-            "$ref": "#/definitions/ModeKind"
-          },
-          "type": "array"
-        },
-        "escalation": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/OrchestratorEscalationToml"
-            }
-          ],
-          "default": null
-        },
-        "primary_contact": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/OrchestratorPrimaryContactToml"
-            }
-          ],
-          "default": null
-        },
-        "recover_scratchpad_after_compaction": {
-          "description": "When true, Orchestrator mode schedules a scratchpad recovery prompt after a context compaction item is observed.",
-          "type": "boolean"
         }
       },
       "type": "object"
@@ -6010,15 +5861,6 @@
     "openai_base_url": {
       "description": "Base URL override for the built-in `openai` model provider.",
       "type": "string"
-    },
-    "orchestrator": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/OrchestratorToml"
-        }
-      ],
-      "default": null,
-      "description": "Orchestrator supervision and escalation settings."
     },
     "orchestrator_memory": {
       "allOf": [

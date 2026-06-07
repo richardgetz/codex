@@ -50,33 +50,6 @@ async fn suppressed_interrupted_turn_notice_skips_history_warning() {
 }
 
 #[tokio::test]
-async fn live_orchestrator_compaction_does_not_submit_scratchpad_recovery_prompt() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
-    let orchestrator_mask =
-        collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Orchestrator)
-            .expect("expected orchestrator collaboration mask");
-    chat.set_collaboration_mask(orchestrator_mask);
-
-    chat.handle_thread_item(
-        ThreadItem::ContextCompaction {
-            id: "compaction-1".to_string(),
-        },
-        "turn-1".to_string(),
-        ThreadItemRenderSource::Live,
-    );
-
-    while let Ok(event) = rx.try_recv() {
-        assert!(
-            !matches!(event, AppEvent::CodexOp(AppCommand::UserTurn { .. })),
-            "did not expect live compaction to submit a synthetic user turn"
-        );
-    }
-    assert_no_submit_op(&mut op_rx);
-}
-
-#[tokio::test]
 async fn live_default_compaction_does_not_submit_scratchpad_recovery_prompt() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
     let thread_id = ThreadId::new();
@@ -121,26 +94,6 @@ async fn live_plan_compaction_does_not_submit_scratchpad_recovery_prompt() {
             "did not expect live compaction to submit a synthetic user turn"
         );
     }
-    assert_no_submit_op(&mut op_rx);
-}
-
-#[tokio::test]
-async fn replayed_orchestrator_compaction_does_not_submit_recovery_prompt() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
-    chat.thread_id = Some(ThreadId::new());
-    let orchestrator_mask =
-        collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Orchestrator)
-            .expect("expected orchestrator collaboration mask");
-    chat.set_collaboration_mask(orchestrator_mask);
-
-    chat.replay_thread_item(
-        ThreadItem::ContextCompaction {
-            id: "compaction-1".to_string(),
-        },
-        "turn-1".to_string(),
-        ReplayKind::ResumeInitialMessages,
-    );
-
     assert_no_submit_op(&mut op_rx);
 }
 

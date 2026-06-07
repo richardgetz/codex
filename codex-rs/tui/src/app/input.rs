@@ -254,8 +254,6 @@ impl App {
                 self.chat_widget.handle_key_event(key_event);
             }
         };
-        self.ensure_primary_contact_startup(app_server);
-        self.ensure_primary_contact_polling(app_server);
     }
 
     pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {

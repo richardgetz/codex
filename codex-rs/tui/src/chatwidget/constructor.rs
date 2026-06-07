@@ -172,7 +172,6 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             status_state: StatusState::default(),
-            primary_contact_waiting: false,
             review: ReviewState::default(),
             active_hook_cell: None,
             ambient_pet: None,

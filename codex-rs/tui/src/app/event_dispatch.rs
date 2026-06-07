@@ -894,26 +894,6 @@ impl App {
                     }
                 }
             },
-            AppEvent::PrimaryContactMessageReceived { text } => {
-                self.chat_widget.submit_external_user_message(text);
-            }
-            AppEvent::PrimaryContactMonitoringStarted {
-                mcp,
-                interval_seconds,
-                scheduled,
-            } => {
-                let cadence = if scheduled {
-                    format!("scheduled polling enabled, fallback every {interval_seconds} seconds")
-                } else {
-                    format!("checking every {interval_seconds} seconds")
-                };
-                self.chat_widget.add_info_message(
-                    format!(
-                        "{mcp} monitoring is active for Orchestrator mode; inbound messages will be handled as user input ({cadence})."
-                    ),
-                    Some("Model stays idle until a message arrives.".to_string()),
-                );
-            }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }
@@ -928,11 +908,6 @@ impl App {
                     .await;
                 self.sync_active_thread_service_tier_to_cached_session()
                     .await;
-            }
-            AppEvent::UpdateCollaborationMode(mask) => {
-                self.chat_widget.set_collaboration_mask(mask);
-                self.ensure_primary_contact_startup(app_server);
-                self.ensure_primary_contact_polling(app_server);
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
