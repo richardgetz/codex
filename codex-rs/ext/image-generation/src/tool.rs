@@ -176,7 +176,9 @@ fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
                 ContentItem::InputImage { image_url, .. } => Some(ImageUrl {
                     image_url: image_url.clone(),
                 }),
-                ContentItem::InputText { .. } | ContentItem::OutputText { .. } => None,
+                ContentItem::InputText { .. }
+                | ContentItem::OutputText { .. }
+                | ContentItem::EncryptedContent { .. } => None,
             })
             .collect::<Vec<_>>();
         (!images.is_empty()).then_some((index, images))
