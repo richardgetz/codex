@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-06-08/dependabot-alerts#7a90fc9fa8e2"
+  change_type: "chore"
+  scope: "security-dependencies"
+  summary: "Resolve current Dependabot alerts on the fork stable branch."
+  decision: "Update actionable Rust and pnpm dependency constraints and lockfiles to patched versions, refresh Bazel lock metadata, and dismiss the constrained transitive alerts with documented GitHub reasons."
+  constraints:
+    - "Keep changes scoped to manifests and lockfiles; do not migrate the ratatui fork or rama network-proxy stack in this PR."
+    - "Enable jsonwebtoken 10's rust_crypto provider feature so existing JWT verification paths keep working without global initialization code."
+    - "Preserve fork stable behavior and do not touch sandbox network environment variable behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/Cargo.toml"
+    - "codex-rs/Cargo.lock"
+    - "MODULE.bazel.lock"
+    - "package.json"
+    - "pnpm-lock.yaml"
+    - "tools/argument-comment-lint/Cargo.lock"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
