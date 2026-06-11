@@ -1,0 +1,16 @@
+intent:
+  id: fork-stable-release-ci-fix-pr70
+change_type: fix
+scope: rust-ci release PR validation
+summary: Restore PR validation after the 0.139 stable refresh by removing an orphaned cargo-shear file and allowing the fork PR skip gate to run on hosted Windows.
+decision: Keep the generated release merge intact, remove the unlinked `spec_plan_model_tests.rs` file flagged by cargo-shear, and use `windows-latest` for the PR argument-comment lint matrix row so the existing fork PR skip gate can execute before any private-runner-only work.
+constraints:
+  - Do not reintroduce Orchestrator collaboration mode.
+  - Keep PR checks green without depending on unavailable private fork runners.
+  - Preserve the linter package validation and non-Windows prebuilt lint behavior.
+intent_priority: should
+code_locations:
+  - .github/workflows/rust-ci.yml
+  - codex-rs/core/src/tools/spec_plan_model_tests.rs
+requested_by: user
+recorded_by: codex
