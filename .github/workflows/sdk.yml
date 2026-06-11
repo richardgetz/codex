@@ -9,8 +9,8 @@ jobs:
   python-sdk:
     if: ${{ github.repository == 'openai/codex' }}
     runs-on:
-      group: codex-runners
-      labels: codex-linux-x64
+      group: ${{ github.event.repository.name }}-runners
+      labels: ${{ github.event.repository.name }}-linux-x64
     timeout-minutes: 10
     steps:
       - name: Checkout repository
@@ -45,9 +45,12 @@ jobs:
   sdks:
     if: ${{ github.repository == 'openai/codex' }}
     runs-on:
-      group: codex-runners
-      labels: codex-linux-x64
+      group: ${{ github.event.repository.name }}-runners
+      labels: ${{ github.event.repository.name }}-linux-x64
     timeout-minutes: 10
+    environment:
+      name: bazel
+      deployment: false
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

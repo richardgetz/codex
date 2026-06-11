@@ -75,7 +75,6 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         description
             .contains("Available model overrides (optional; inherited parent model is preferred):")
     );
-    assert!(description.contains("Use collaboration_mode to choose how the child should operate"));
     assert!(description.contains("visible-model"));
     assert!(
         description.contains("Service tiers: priority")
@@ -84,16 +83,18 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
     assert!(!description.contains("hidden-model"));
     assert!(properties.contains_key("task_name"));
     assert!(properties.contains_key("message"));
+    assert_eq!(
+        properties
+            .get("message")
+            .and_then(|schema| schema.encrypted),
+        Some(true)
+    );
     assert!(properties.contains_key("fork_turns"));
     assert_eq!(
         properties
             .get("collaboration_mode")
             .and_then(|schema| schema.enum_values.as_ref()),
-        Some(&vec![
-            json!("default"),
-            json!("plan"),
-            json!("orchestrator")
-        ])
+        Some(&vec![json!("default"), json!("plan")])
     );
     assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
@@ -156,6 +157,12 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
     assert!(!properties.contains_key("fork_turns"));
     assert_eq!(
         properties
+            .get("message")
+            .and_then(|schema| schema.encrypted),
+        None
+    );
+    assert_eq!(
+        properties
             .get("model")
             .and_then(|schema| schema.description.as_deref()),
         Some(SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION)
@@ -197,6 +204,27 @@ fn spawn_agent_tool_caps_visible_model_summaries() {
         );
     }
     assert!(!description.contains("`sixth-model`"));
+}
+
+#[test]
+fn spawn_agent_tool_caps_reasoning_effort_value_length() {
+    let mut model = model_preset("visible", /*show_in_picker*/ true);
+    let custom_effort = ReasoningEffort::Custom(
+        "é".repeat(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION + 1),
+    );
+    model.default_reasoning_effort = custom_effort.clone();
+    model.supported_reasoning_efforts = vec![ReasoningEffortPreset {
+        effort: custom_effort,
+        description: "Model-defined".to_string(),
+    }];
+
+    assert_eq!(
+        spawn_agent_models_description(&[model]),
+        format!(
+            "Available model overrides (optional; inherited parent model is preferred):\n- `visible-model`: visible description Reasoning efforts: {} (default). Service tiers: priority.",
+            "é".repeat(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION)
+        )
+    );
 }
 
 #[test]
@@ -251,6 +279,12 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
         .expect("send_message should use object params");
     assert!(properties.contains_key("target"));
     assert!(properties.contains_key("message"));
+    assert_eq!(
+        properties
+            .get("message")
+            .and_then(|schema| schema.encrypted),
+        Some(true)
+    );
     assert!(!properties.contains_key("interrupt"));
     assert!(!properties.contains_key("items"));
     assert_eq!(
@@ -270,6 +304,7 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
 fn followup_task_tool_requires_message_and_has_no_output_schema() {
     let ToolSpec::Function(ResponsesApiTool {
         name,
+        description,
         parameters,
         output_schema,
         ..
@@ -278,6 +313,10 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
         panic!("followup_task should be a function tool");
     };
     assert_eq!(name, "followup_task");
+    assert_eq!(
+        description,
+        "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes."
+    );
     assert_eq!(
         parameters.schema_type,
         Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))
@@ -288,6 +327,12 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
         .expect("followup_task should use object params");
     assert!(properties.contains_key("target"));
     assert!(properties.contains_key("message"));
+    assert_eq!(
+        properties
+            .get("message")
+            .and_then(|schema| schema.encrypted),
+        Some(true)
+    );
     assert!(!properties.contains_key("items"));
     assert_eq!(
         parameters.required.as_ref(),
@@ -328,7 +373,7 @@ fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
         properties
             .get("timeout_ms")
             .and_then(|schema| schema.description.as_deref()),
-        Some("Timeout in milliseconds. Defaults to 30000, min 10000, max 3600000.")
+        Some("Optional timeout in milliseconds. Defaults to 30000, min 10000, max 3600000.")
     );
     assert_eq!(parameters.required.as_ref(), None);
     assert_eq!(

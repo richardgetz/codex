@@ -61,10 +61,7 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 
 use crate::context_manager::is_user_turn_boundary;
-use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::MemoryAccessPolicy;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::UserPreferencesMemoryBucket;
 use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -99,27 +96,6 @@ pub async fn realtime_conversation_list_voices(sess: &Session, sub_id: String) {
     .await;
 }
 
-pub async fn override_turn_context(sess: &Session, sub_id: String, updates: SessionSettingsUpdate) {
-    if let Err(err) = sess.update_settings(updates).await {
-        sess.send_event_raw(Event {
-            id: sub_id,
-            msg: EventMsg::Error(ErrorEvent {
-                message: err.to_string(),
-                codex_error_info: Some(CodexErrorInfo::BadRequest),
-            }),
-        })
-        .await;
-    } else {
-        sess.send_event_raw(Event {
-            id: sub_id,
-            msg: EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
-                thread_settings: thread_settings_snapshot(sess).await,
-            }),
-        })
-        .await;
-    }
-}
-
 pub async fn user_input_or_turn(
     sess: &Arc<Session>,
     sub_id: String,
@@ -136,42 +112,28 @@ pub async fn user_input_or_turn(
     .await;
 }
 
-async fn thread_settings_snapshot(sess: &Session) -> ThreadSettingsSnapshot {
-    let state = sess.state.lock().await;
-    let snapshot = state.session_configuration.thread_config_snapshot();
-    let model = snapshot.model.clone();
-    let reasoning_effort = snapshot.reasoning_effort;
-    ThreadSettingsSnapshot {
-        model: snapshot.model,
-        model_provider_id: snapshot.model_provider_id,
-        service_tier: snapshot.service_tier,
-        approval_policy: snapshot.approval_policy,
-        approvals_reviewer: snapshot.approvals_reviewer,
-        permission_profile: snapshot.permission_profile,
-        active_permission_profile: snapshot.active_permission_profile,
-        cwd: snapshot.cwd,
-        reasoning_effort,
-        reasoning_summary: None,
-        personality: snapshot.personality,
-        collaboration_mode: CollaborationMode {
-            mode: ModeKind::Default,
-            settings: Settings {
-                model,
-                reasoning_effort,
-                developer_instructions: None,
-            },
-        },
-    }
+pub async fn update_thread_settings(
+    sess: &Arc<Session>,
+    sub_id: String,
+    thread_settings: ThreadSettingsOverrides,
+) {
+    let updates = thread_settings_update(sess, thread_settings).await;
+    let msg = match sess.update_settings(updates).await {
+        Ok(()) => thread_settings_applied_event(sess).await,
+        Err(err) => EventMsg::Error(ErrorEvent {
+            message: format!("invalid thread settings override: {err}"),
+            codex_error_info: Some(CodexErrorInfo::BadRequest),
+        }),
+    };
+    sess.send_event_raw(Event { id: sub_id, msg }).await;
 }
 
-async fn settings_update_from_overrides(
+async fn thread_settings_update(
     sess: &Session,
     thread_settings: ThreadSettingsOverrides,
-    final_output_json_schema: Option<Option<Value>>,
-    environments: Option<Vec<codex_protocol::protocol::TurnEnvironmentSelection>>,
 ) -> SessionSettingsUpdate {
     let ThreadSettingsOverrides {
-        cwd,
+        environments,
         workspace_roots,
         profile_workspace_roots,
         approval_policy,
@@ -187,21 +149,20 @@ async fn settings_update_from_overrides(
         collaboration_mode,
         personality,
     } = thread_settings;
-    let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
-        Some(collab_mode)
-    } else if model.is_some() || effort.is_some() {
-        let state = sess.state.lock().await;
-        Some(
+    let collaboration_mode = match collaboration_mode {
+        Some(collaboration_mode) => collaboration_mode,
+        None => {
+            let state = sess.state.lock().await;
+            // Model and reasoning effort live in CollaborationMode settings today, so
+            // partial thread-settings updates refresh those fields on the active mode.
             state
                 .session_configuration
                 .collaboration_mode
-                .with_updates(model, effort, /*developer_instructions*/ None),
-        )
-    } else {
-        None
+                .with_updates(model, effort, /*developer_instructions*/ None)
+        }
     };
     SessionSettingsUpdate {
-        cwd,
+        environments,
         workspace_roots,
         profile_workspace_roots,
         approval_policy,
@@ -210,32 +171,41 @@ async fn settings_update_from_overrides(
         permission_profile,
         active_permission_profile,
         windows_sandbox_level,
-        collaboration_mode,
+        collaboration_mode: Some(collaboration_mode),
         reasoning_summary: summary,
         service_tier,
-        final_output_json_schema,
-        environments,
         personality,
         ..Default::default()
     }
 }
 
-fn thread_settings_overrides_include_settings(overrides: &ThreadSettingsOverrides) -> bool {
-    overrides.cwd.is_some()
-        || overrides.workspace_roots.is_some()
-        || overrides.profile_workspace_roots.is_some()
-        || overrides.approval_policy.is_some()
-        || overrides.approvals_reviewer.is_some()
-        || overrides.sandbox_policy.is_some()
-        || overrides.permission_profile.is_some()
-        || overrides.active_permission_profile.is_some()
-        || overrides.windows_sandbox_level.is_some()
-        || overrides.model.is_some()
-        || overrides.effort.is_some()
-        || overrides.summary.is_some()
-        || overrides.service_tier.is_some()
-        || overrides.collaboration_mode.is_some()
-        || overrides.personality.is_some()
+async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
+    let (snapshot, reasoning_summary, collaboration_mode) = {
+        let state = sess.state.lock().await;
+        let session_configuration = &state.session_configuration;
+        (
+            session_configuration.thread_config_snapshot(),
+            session_configuration.model_reasoning_summary,
+            session_configuration.collaboration_mode.clone(),
+        )
+    };
+    let cwd = snapshot.cwd().clone();
+    EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
+        thread_settings: ThreadSettingsSnapshot {
+            model: snapshot.model,
+            model_provider_id: snapshot.model_provider_id,
+            service_tier: snapshot.service_tier,
+            approval_policy: snapshot.approval_policy,
+            approvals_reviewer: snapshot.approvals_reviewer,
+            permission_profile: snapshot.permission_profile,
+            active_permission_profile: snapshot.active_permission_profile,
+            cwd,
+            reasoning_effort: snapshot.reasoning_effort,
+            reasoning_summary,
+            personality: snapshot.personality,
+            collaboration_mode,
+        },
+    })
 }
 
 pub(super) async fn user_input_or_turn_inner(
@@ -245,148 +215,23 @@ pub(super) async fn user_input_or_turn_inner(
     mirror_user_text_to_realtime: Option<()>,
     client_user_message_id: Option<String>,
 ) {
-    let (
+    let Op::UserInput {
         items,
-        updates,
+        final_output_json_schema,
         responsesapi_client_metadata,
         additional_context,
-        emit_thread_settings_applied,
-    ) = match op {
-        Op::UserTurn {
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            model,
-            effort,
-            summary,
-            service_tier,
-            final_output_json_schema,
-            items,
-            collaboration_mode,
-            personality,
-            environments,
-        } => {
-            let collaboration_mode = collaboration_mode.or_else(|| {
-                Some(CollaborationMode {
-                    mode: ModeKind::Default,
-                    settings: Settings {
-                        model: model.clone(),
-                        reasoning_effort: effort,
-                        developer_instructions: None,
-                    },
-                })
-            });
-            (
-                items,
-                SessionSettingsUpdate {
-                    cwd: Some(cwd),
-                    approval_policy: Some(approval_policy),
-                    approvals_reviewer,
-                    sandbox_policy: Some(sandbox_policy),
-                    workspace_roots: None,
-                    profile_workspace_roots: None,
-                    permission_profile,
-                    active_permission_profile: None,
-                    windows_sandbox_level: None,
-                    collaboration_mode,
-                    reasoning_summary: summary,
-                    service_tier,
-                    final_output_json_schema: Some(final_output_json_schema),
-                    environments,
-                    personality,
-                    app_server_client_name: None,
-                    app_server_client_version: None,
-                    memory_policy: None,
-                    user_preferences_memory_policy: None,
-                },
-                None,
-                Default::default(),
-                true,
-            )
-        }
-        Op::UserInputWithTurnContext {
-            cwd,
-            workspace_roots,
-            profile_workspace_roots,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            active_permission_profile,
-            windows_sandbox_level,
-            model,
-            effort,
-            summary,
-            service_tier,
-            final_output_json_schema,
-            items,
-            responsesapi_client_metadata,
-            additional_context,
-            collaboration_mode,
-            personality,
-            environments,
-        } => {
-            let thread_settings = ThreadSettingsOverrides {
-                cwd,
-                workspace_roots,
-                profile_workspace_roots,
-                approval_policy,
-                approvals_reviewer,
-                sandbox_policy,
-                permission_profile,
-                active_permission_profile,
-                windows_sandbox_level,
-                model,
-                effort,
-                summary,
-                service_tier,
-                collaboration_mode,
-                personality,
-            };
-            let emit_thread_settings_applied =
-                thread_settings_overrides_include_settings(&thread_settings);
-            (
-                items,
-                settings_update_from_overrides(
-                    sess,
-                    thread_settings,
-                    Some(final_output_json_schema),
-                    environments,
-                )
-                .await,
-                responsesapi_client_metadata,
-                additional_context,
-                emit_thread_settings_applied,
-            )
-        }
-        Op::UserInput {
-            items,
-            environments,
-            final_output_json_schema,
-            responsesapi_client_metadata,
-            additional_context,
-            thread_settings,
-        } => {
-            let emit_thread_settings_applied =
-                thread_settings_overrides_include_settings(&thread_settings);
-            (
-                items,
-                settings_update_from_overrides(
-                    sess,
-                    thread_settings,
-                    Some(final_output_json_schema),
-                    environments,
-                )
-                .await,
-                responsesapi_client_metadata,
-                additional_context,
-                emit_thread_settings_applied,
-            )
-        }
-        _ => unreachable!(),
+        thread_settings,
+    } = op
+    else {
+        unreachable!();
     };
+    let emit_thread_settings_applied = thread_settings != ThreadSettingsOverrides::default();
+    let mut updates = if emit_thread_settings_applied {
+        thread_settings_update(sess, thread_settings).await
+    } else {
+        SessionSettingsUpdate::default()
+    };
+    updates.final_output_json_schema = Some(final_output_json_schema);
 
     let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
         // new_turn_with_sub_id already emits the error event.
@@ -395,9 +240,7 @@ pub(super) async fn user_input_or_turn_inner(
     if emit_thread_settings_applied {
         sess.send_event_raw(Event {
             id: sub_id.clone(),
-            msg: EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
-                thread_settings: thread_settings_snapshot(sess).await,
-            }),
+            msg: thread_settings_applied_event(sess).await,
         })
         .await;
     }
@@ -1199,6 +1042,7 @@ pub async fn prune_idle_agents(sess: &Arc<Session>, sub_id: String) {
         .await
     {
         Ok(report) => {
+            let closed_count = report.closed.len();
             if !report.failed.is_empty() {
                 let failed = report
                     .failed
@@ -1207,7 +1051,7 @@ pub async fn prune_idle_agents(sess: &Arc<Session>, sub_id: String) {
                     .collect::<Vec<_>>()
                     .join("; ");
                 sess.send_event_raw(Event {
-                    id: sub_id,
+                    id: sub_id.clone(),
                     msg: EventMsg::Error(ErrorEvent {
                         message: format!("Failed to prune some idle agents: {failed}"),
                         codex_error_info: Some(CodexErrorInfo::Other),
@@ -1215,6 +1059,17 @@ pub async fn prune_idle_agents(sess: &Arc<Session>, sub_id: String) {
                 })
                 .await;
             }
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Warning(WarningEvent {
+                    message: if closed_count == 0 {
+                        "No idle agents were eligible to prune.".to_string()
+                    } else {
+                        format!("Pruned {closed_count} idle agent session(s).")
+                    },
+                }),
+            })
+            .await;
         }
         Err(err) => {
             sess.send_event_raw(Event {
@@ -1497,63 +1352,10 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::ThreadSettings { thread_settings } => {
-                    let updates = settings_update_from_overrides(
-                        &sess,
-                        thread_settings,
-                        /*final_output_json_schema*/ None,
-                        /*environments*/ None,
-                    )
-                    .await;
-                    override_turn_context(&sess, sub.id.clone(), updates).await;
+                    update_thread_settings(&sess, sub.id.clone(), thread_settings).await;
                     false
                 }
-                Op::OverrideTurnContext {
-                    cwd,
-                    approval_policy,
-                    approvals_reviewer,
-                    sandbox_policy,
-                    permission_profile,
-                    windows_sandbox_level,
-                    model,
-                    effort,
-                    summary,
-                    service_tier,
-                    collaboration_mode,
-                    personality,
-                } => {
-                    let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
-                        collab_mode
-                    } else {
-                        let state = sess.state.lock().await;
-                        state.session_configuration.collaboration_mode.with_updates(
-                            model.clone(),
-                            effort,
-                            /*developer_instructions*/ None,
-                        )
-                    };
-                    override_turn_context(
-                        &sess,
-                        sub.id.clone(),
-                        SessionSettingsUpdate {
-                            cwd,
-                            approval_policy,
-                            approvals_reviewer,
-                            sandbox_policy,
-                            permission_profile,
-                            windows_sandbox_level,
-                            collaboration_mode: Some(collaboration_mode),
-                            reasoning_summary: summary,
-                            service_tier,
-                            personality,
-                            ..Default::default()
-                        },
-                    )
-                    .await;
-                    false
-                }
-                Op::UserInput { .. }
-                | Op::UserInputWithTurnContext { .. }
-                | Op::UserTurn { .. } => {
+                Op::UserInput { .. } => {
                     user_input_or_turn(&sess, sub.id.clone(), sub.op, sub.client_user_message_id)
                         .await;
                     false

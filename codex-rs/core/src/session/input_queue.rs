@@ -18,6 +18,12 @@ pub(crate) enum TurnInput {
     ResponseItem(ResponseItem),
 }
 
+/// Turn-local pending input storage owned by the input queue flow.
+#[derive(Default)]
+pub(crate) struct TurnInputQueue {
+    pub(crate) items: Vec<TurnInput>,
+}
+
 /// Session-scoped pending input storage and active-turn mailbox delivery coordination.
 pub(crate) struct InputQueue {
     mailbox_tx: watch::Sender<()>,
@@ -86,6 +92,12 @@ impl InputQueue {
                 .is_some_and(|task| task.turn_context.sub_id == sub_id)
                 .then(|| Arc::clone(&active_turn.turn_state))
         })
+    }
+
+    pub(crate) async fn clear_pending(&self, active_turn: &ActiveTurn) {
+        let mut turn_state = active_turn.turn_state.lock().await;
+        turn_state.clear_pending_waiters();
+        turn_state.pending_input.items.clear();
     }
 
     pub(crate) async fn defer_mailbox_delivery_to_next_turn(

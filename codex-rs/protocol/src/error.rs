@@ -83,7 +83,9 @@ pub enum CodexErr {
     ContextWindowExceeded,
     #[error("no thread with id: {0}")]
     ThreadNotFound(ThreadId),
-    #[error("agent thread limit reached")]
+    #[error(
+        "agent thread limit reached; close idle subagents with close_agent, or ask the user to run /agents-prune in the owning session"
+    )]
     AgentLimitReached { max_threads: usize },
     #[error("session configured event was not the first event in the stream")]
     SessionConfiguredNotFirstEvent,

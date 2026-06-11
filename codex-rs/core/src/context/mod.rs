@@ -55,6 +55,7 @@ pub(crate) use git_intent_notes_instructions::GitIntentNotesInstructions;
 pub(crate) use guardian_followup_review_reminder::GuardianFollowupReviewReminder;
 pub(crate) use hook_additional_context::HookAdditionalContext;
 pub(crate) use image_generation_instructions::ImageGenerationInstructions;
+pub use image_generation_instructions::extension_image_generation_output_hint;
 pub use internal_model_context::InternalContextSource;
 pub use internal_model_context::InternalModelContextFragment;
 pub use internal_model_context::InvalidInternalContextSource;

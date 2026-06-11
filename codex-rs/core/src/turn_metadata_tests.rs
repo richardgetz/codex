@@ -583,10 +583,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert_eq!(json["reasoning_effort"].as_str(), Some("client-supplied"));
     assert_eq!(json["session_id"].as_str(), Some("session-a"));
     assert_eq!(json["thread_id"].as_str(), Some("thread-a"));
-    assert_eq!(
-        json["forked_from_thread_id"].as_str(),
-        Some("44444444-4444-4444-8444-444444444444")
-    );
+    assert!(json.get("forked_from_thread_id").is_none());
     assert_eq!(
         json["parent_thread_id"].as_str(),
         Some("55555555-5555-4555-8555-555555555555")

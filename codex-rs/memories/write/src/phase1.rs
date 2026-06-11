@@ -198,6 +198,7 @@ async fn build_request_context(
     let reasoning_effort = config
         .memories
         .extract_reasoning_effort
+        .clone()
         .unwrap_or(crate::stage_one::REASONING_EFFORT);
     context
         .stage_one_request_context(config, &model_name, reasoning_effort)

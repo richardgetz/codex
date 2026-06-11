@@ -76,6 +76,7 @@ use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnItemsView;
+use codex_app_server_protocol::TurnModerationMetadataNotification;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnScratchpadUpdatedNotification;
@@ -203,13 +204,17 @@ pub(crate) async fn apply_bespoke_event_handling(
             send_mcp_startup_status_notification(
                 &outgoing,
                 &thread_state,
-                mcp_startup_update_notification(update),
+                mcp_startup_update_notification(conversation_id, update),
             )
             .await;
         }
         EventMsg::McpStartupComplete(complete) => {
-            for notification in
-                mcp_startup_complete_reconciliation_notifications(&thread_state, complete).await
+            for notification in mcp_startup_complete_reconciliation_notifications(
+                conversation_id,
+                &thread_state,
+                complete,
+            )
+            .await
             {
                 outgoing.send_server_notification(notification).await;
             }
@@ -330,6 +335,16 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             outgoing
                 .send_server_notification(ServerNotification::ModelVerification(notification))
+                .await;
+        }
+        EventMsg::TurnModerationMetadata(event) => {
+            let notification = TurnModerationMetadataNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                metadata: event.metadata,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::TurnModerationMetadata(notification))
                 .await;
         }
         EventMsg::RealtimeConversationStarted(event) => {
@@ -750,7 +765,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let requested_permissions = request.permissions.clone();
             let request_cwd = match request.cwd.clone() {
                 Some(cwd) => cwd,
-                None => conversation.config_snapshot().await.cwd,
+                None => conversation.config_snapshot().await.cwd().clone(),
             };
             let params = PermissionsRequestApprovalParams {
                 thread_id: conversation_id.to_string(),
@@ -1145,7 +1160,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         return;
                     }
                 };
-                let fallback_cwd = conversation.config_snapshot().await.cwd;
+                let fallback_cwd = conversation.config_snapshot().await.cwd().clone();
                 let stored_thread = match conversation
                     .read_thread(
                         /*include_archived*/ true, /*include_history*/ true,
@@ -1243,6 +1258,7 @@ pub(crate) async fn apply_bespoke_event_handling(
 }
 
 fn mcp_startup_update_notification(
+    conversation_id: ThreadId,
     update: codex_protocol::protocol::McpStartupUpdateEvent,
 ) -> ServerNotification {
     let (status, error) = match update.status {
@@ -1257,15 +1273,22 @@ fn mcp_startup_update_notification(
             (McpServerStartupState::Cancelled, None)
         }
     };
-    mcp_server_status_notification(update.server, status, error)
+    mcp_server_status_notification(
+        Some(conversation_id.to_string()),
+        update.server,
+        status,
+        error,
+    )
 }
 
 fn mcp_server_status_notification(
+    thread_id: Option<String>,
     name: String,
     status: McpServerStartupState,
     error: Option<String>,
 ) -> ServerNotification {
     ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+        thread_id,
         name,
         status,
         error,
@@ -1297,14 +1320,17 @@ async fn send_mcp_startup_status_notification(
 }
 
 async fn mcp_startup_complete_reconciliation_notifications(
+    conversation_id: ThreadId,
     thread_state: &Arc<Mutex<ThreadState>>,
     complete: codex_protocol::protocol::McpStartupCompleteEvent,
 ) -> Vec<ServerNotification> {
+    let thread_id = Some(conversation_id.to_string());
     let terminal_notifications =
         complete
             .ready
             .into_iter()
             .map(|server| McpServerStatusUpdatedNotification {
+                thread_id: thread_id.clone(),
                 name: server,
                 status: McpServerStartupState::Ready,
                 error: None,
@@ -1314,6 +1340,7 @@ async fn mcp_startup_complete_reconciliation_notifications(
             .failed
             .into_iter()
             .map(|failure| McpServerStatusUpdatedNotification {
+                thread_id: thread_id.clone(),
                 name: failure.server,
                 status: McpServerStartupState::Failed,
                 error: Some(failure.error),
@@ -1323,6 +1350,7 @@ async fn mcp_startup_complete_reconciliation_notifications(
             .cancelled
             .into_iter()
             .map(|server| McpServerStatusUpdatedNotification {
+                thread_id: thread_id.clone(),
                 name: server,
                 status: McpServerStartupState::Cancelled,
                 error: None,
@@ -2263,23 +2291,31 @@ mod tests {
 
     #[test]
     fn mcp_startup_update_maps_status_notifications() {
-        let ready =
-            mcp_startup_update_notification(codex_protocol::protocol::McpStartupUpdateEvent {
+        let thread_id = ThreadId::new();
+        let expected_thread_id = Some(thread_id.to_string());
+        let ready = mcp_startup_update_notification(
+            thread_id,
+            codex_protocol::protocol::McpStartupUpdateEvent {
                 server: "ready-server".to_string(),
                 status: codex_protocol::protocol::McpStartupStatus::Ready,
-            });
-        let failed =
-            mcp_startup_update_notification(codex_protocol::protocol::McpStartupUpdateEvent {
+            },
+        );
+        let failed = mcp_startup_update_notification(
+            thread_id,
+            codex_protocol::protocol::McpStartupUpdateEvent {
                 server: "failed-server".to_string(),
                 status: codex_protocol::protocol::McpStartupStatus::Failed {
                     error: "handshake failed".to_string(),
                 },
-            });
-        let cancelled =
-            mcp_startup_update_notification(codex_protocol::protocol::McpStartupUpdateEvent {
+            },
+        );
+        let cancelled = mcp_startup_update_notification(
+            thread_id,
+            codex_protocol::protocol::McpStartupUpdateEvent {
                 server: "cancelled-server".to_string(),
                 status: codex_protocol::protocol::McpStartupStatus::Cancelled,
-            });
+            },
+        );
 
         let statuses = vec![ready, failed, cancelled]
             .into_iter()
@@ -2293,16 +2329,19 @@ mod tests {
             statuses,
             vec![
                 McpServerStatusUpdatedNotification {
+                    thread_id: expected_thread_id.clone(),
                     name: "ready-server".to_string(),
                     status: McpServerStartupState::Ready,
                     error: None,
                 },
                 McpServerStatusUpdatedNotification {
+                    thread_id: expected_thread_id.clone(),
                     name: "failed-server".to_string(),
                     status: McpServerStartupState::Failed,
                     error: Some("handshake failed".to_string()),
                 },
                 McpServerStatusUpdatedNotification {
+                    thread_id: expected_thread_id,
                     name: "cancelled-server".to_string(),
                     status: McpServerStartupState::Cancelled,
                     error: None,
@@ -2392,16 +2431,19 @@ mod tests {
             statuses,
             vec![
                 McpServerStatusUpdatedNotification {
+                    thread_id: Some(conversation_id.to_string()),
                     name: "ready-server".to_string(),
                     status: McpServerStartupState::Ready,
                     error: None,
                 },
                 McpServerStatusUpdatedNotification {
+                    thread_id: Some(conversation_id.to_string()),
                     name: "failed-server".to_string(),
                     status: McpServerStartupState::Failed,
                     error: Some("handshake failed".to_string()),
                 },
                 McpServerStatusUpdatedNotification {
+                    thread_id: Some(conversation_id.to_string()),
                     name: "cancelled-server".to_string(),
                     status: McpServerStartupState::Cancelled,
                     error: None,
@@ -2709,6 +2751,7 @@ mod tests {
         ];
         let stored_thread = StoredThread {
             thread_id,
+            extra_config: None,
             rollout_path: None,
             forked_from_id: None,
             parent_thread_id: None,

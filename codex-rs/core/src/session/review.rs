@@ -1,5 +1,6 @@
 use super::turn_context::image_generation_tool_auth_allowed;
 use super::*;
+use codex_core_skills::HostLoadedSkills;
 use codex_protocol::openai_models::ToolMode;
 use std::sync::atomic::AtomicBool;
 
@@ -54,7 +55,7 @@ pub(super) async fn spawn_review_thread(
     .with_namespace_tools_capability(provider_capabilities.namespace_tools)
     .with_image_generation_capability(provider_capabilities.image_generation)
     .with_web_search_capability(provider_capabilities.web_search)
-    .with_unified_exec_shell_mode(unified_exec_shell_mode)
+    .with_unified_exec_shell_mode(unified_exec_shell_mode.clone())
     .with_web_search_config(/*web_search_config*/ None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_environment_mode(parent_turn_context.tools_config.environment_mode)
@@ -119,7 +120,7 @@ pub(super) async fn spawn_review_thread(
     let auth_manager_for_context = auth_manager.clone();
     let provider_for_context = provider.clone();
     let session_telemetry_for_context = session_telemetry.clone();
-    let reasoning_effort = per_turn_config.model_reasoning_effort;
+    let reasoning_effort = per_turn_config.model_reasoning_effort.clone();
     let reasoning_summary = per_turn_config
         .model_reasoning_summary
         .unwrap_or(model_info.default_reasoning_summary);
@@ -146,6 +147,13 @@ pub(super) async fn spawn_review_thread(
         parent_turn_context.network.is_some(),
     ));
 
+    let extension_data = Arc::new(codex_extension_api::ExtensionData::new(
+        review_turn_id.clone(),
+    ));
+    extension_data.insert(HostLoadedSkills::new(
+        parent_turn_context.turn_skills.outcome.clone(),
+    ));
+
     let review_turn_context = TurnContext {
         sub_id: review_turn_id.clone(),
         trace_id: current_span_trace_id(),
@@ -163,7 +171,9 @@ pub(super) async fn spawn_review_thread(
         thread_source: parent_turn_context.thread_source,
         environments: parent_turn_context.environments.clone(),
         tools_config,
-        features: parent_turn_context.features.clone(),
+        available_models,
+        unified_exec_shell_mode,
+        features: review_features,
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         current_date: parent_turn_context.current_date.clone(),
         timezone: parent_turn_context.timezone.clone(),
@@ -187,7 +197,7 @@ pub(super) async fn spawn_review_thread(
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_state,
-        extension_data: Arc::new(codex_extension_api::ExtensionData::new(review_turn_id)),
+        extension_data,
         turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.outcome.clone()),
         turn_timing_state: Arc::new(TurnTimingState::default()),
         server_model_warning_emitted: AtomicBool::new(false),
@@ -204,7 +214,9 @@ pub(super) async fn spawn_review_thread(
         client_id: None,
     }];
     let tc = Arc::new(review_turn_context);
-    tc.turn_metadata_state.spawn_git_enrichment_task();
+    if tc.environments.single_local_environment_cwd().is_some() {
+        tc.turn_metadata_state.spawn_git_enrichment_task();
+    }
     // TODO(ccunningham): Review turns currently rely on `spawn_task` for TurnComplete but do not
     // emit a parent TurnStarted. Consider giving review a full parent turn lifecycle
     // (TurnStarted + TurnComplete) for consistency with other standalone tasks.

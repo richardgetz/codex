@@ -18,7 +18,9 @@ use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use rmcp::model::RequestId;
 use tokio::sync::oneshot;
 
+use crate::agent::control::AgentExecutionGuard;
 use crate::session::TurnInput;
+use crate::session::TurnInputQueue;
 use crate::session::turn_context::TurnContext;
 use crate::tasks::AnySessionTask;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -76,6 +78,7 @@ pub(crate) struct RunningTask {
     pub(crate) handle: AbortOnDropHandle<()>,
     pub(crate) turn_context: Arc<TurnContext>,
     pub(crate) turn_extension_data: Arc<ExtensionData>,
+    pub(crate) _agent_execution_guard: Option<AgentExecutionGuard>,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<codex_otel::Timer>,
 }
@@ -88,7 +91,7 @@ pub(crate) struct TurnState {
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
-    pending_input: Vec<TurnInput>,
+    pub(crate) pending_input: TurnInputQueue,
     mailbox_delivery_phase: MailboxDeliveryPhase,
     granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
     strict_auto_review_enabled: bool,
@@ -104,6 +107,23 @@ pub(crate) struct PendingRequestPermissions {
 }
 
 impl TurnState {
+    pub(crate) fn push_pending_input(&mut self, input: TurnInput) {
+        self.pending_input.items.push(input);
+    }
+
+    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<TurnInput>) {
+        input.append(&mut self.pending_input.items);
+        self.pending_input.items = input;
+    }
+
+    pub(crate) fn take_pending_input(&mut self) -> Vec<TurnInput> {
+        self.pending_input.items.split_off(0)
+    }
+
+    pub(crate) fn has_pending_input(&self) -> bool {
+        !self.pending_input.items.is_empty()
+    }
+
     pub(crate) fn insert_pending_approval(
         &mut self,
         key: String,
@@ -119,13 +139,12 @@ impl TurnState {
         self.pending_approvals.remove(key)
     }
 
-    pub(crate) fn clear_pending(&mut self) {
+    pub(crate) fn clear_pending_waiters(&mut self) {
         self.pending_approvals.clear();
         self.pending_request_permissions.clear();
         self.pending_user_input.clear();
         self.pending_elicitations.clear();
         self.pending_dynamic_tools.clear();
-        self.pending_input.clear();
     }
 
     pub(crate) fn insert_pending_request_permissions(
@@ -193,33 +212,6 @@ impl TurnState {
         self.pending_dynamic_tools.remove(key)
     }
 
-    pub(crate) fn push_pending_input(&mut self, input: TurnInput) {
-        self.pending_input.push(input);
-    }
-
-    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<TurnInput>) {
-        if input.is_empty() {
-            return;
-        }
-
-        input.append(&mut self.pending_input);
-        self.pending_input = input;
-    }
-
-    pub(crate) fn take_pending_input(&mut self) -> Vec<TurnInput> {
-        if self.pending_input.is_empty() {
-            Vec::with_capacity(0)
-        } else {
-            let mut ret = Vec::new();
-            std::mem::swap(&mut ret, &mut self.pending_input);
-            ret
-        }
-    }
-
-    pub(crate) fn has_pending_input(&self) -> bool {
-        !self.pending_input.is_empty()
-    }
-
     pub(crate) fn accept_mailbox_delivery_for_current_turn(&mut self) {
         self.set_mailbox_delivery_phase(MailboxDeliveryPhase::CurrentTurn);
     }
@@ -263,13 +255,5 @@ impl TurnState {
 
     pub(crate) fn strict_auto_review_enabled(&self) -> bool {
         self.strict_auto_review_enabled
-    }
-}
-
-impl ActiveTurn {
-    /// Clear any pending approvals and input buffered for the current turn.
-    pub(crate) async fn clear_pending(&self) {
-        let mut ts = self.turn_state.lock().await;
-        ts.clear_pending();
     }
 }

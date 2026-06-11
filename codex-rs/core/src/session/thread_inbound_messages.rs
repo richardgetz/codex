@@ -50,7 +50,6 @@ pub(super) fn start_thread_inbound_message_poller(
                     op: Op::UserInput {
                         items,
                         additional_context: Default::default(),
-                        environments: None,
                         final_output_json_schema: None,
                         responsesapi_client_metadata: None,
                         thread_settings: Default::default(),
@@ -141,7 +140,6 @@ mod tests {
             Op::UserInput {
                 items: input,
                 additional_context: Default::default(),
-                environments: None,
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
                 thread_settings: Default::default(),

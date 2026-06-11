@@ -346,6 +346,7 @@ mod agent {
             config
                 .memories
                 .consolidation_reasoning_effort
+                .clone()
                 .unwrap_or(crate::stage_two::REASONING_EFFORT),
         );
 
