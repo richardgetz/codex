@@ -33,6 +33,7 @@ async fn memories_startup_creates_memory_root() -> anyhow::Result<()> {
     let home = Arc::new(TempDir::new()?);
     let memory_root = home.path().join("memories");
     let test = build_test_codex(&server, home).await?;
+    tokio::fs::remove_dir_all(&memory_root).await.ok();
 
     assert!(!memory_root.exists());
     trigger_memories_startup(&test).await;

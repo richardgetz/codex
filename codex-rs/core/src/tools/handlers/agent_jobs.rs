@@ -128,13 +128,10 @@ async fn build_runner_options(
             "multi-agent runtime is disabled; this session cannot spawn workers".to_string(),
         ));
     }
-    let agent_max_threads = turn
-        .config
-        .effective_agent_max_threads(multi_agent_version)
-        .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
+    let agent_max_threads = turn.config.effective_agent_max_threads(multi_agent_version);
     if agent_max_threads == Some(0) {
         return Err(FunctionCallError::RespondToModel(
-            "agent thread limit reached; this session cannot spawn more subagents".to_string(),
+            "agent thread limit reached; close idle subagents with close_agent, or ask the user to run /agents-prune in the owning session".to_string(),
         ));
     }
     let max_concurrency = normalize_concurrency(requested_concurrency, agent_max_threads);

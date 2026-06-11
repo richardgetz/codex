@@ -23,6 +23,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
@@ -30,8 +31,10 @@ use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::mount_models_once;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
+use core_test_support::test_path_buf;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use std::path::PathBuf;
@@ -127,12 +130,11 @@ fn disabled_permission_user_turn(text: impl Into<String>, cwd: PathBuf, model: S
             text: text.into(),
             text_elements: Vec::new(),
         }],
-        environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(cwd),
+            environments: Some(local_selections(cwd.abs())),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,
@@ -435,7 +437,6 @@ async fn summarize_context_three_requests_and_instructions() {
     // 1) Normal user input – should hit server once.
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello world".into(),
                 text_elements: Vec::new(),
@@ -461,7 +462,6 @@ async fn summarize_context_three_requests_and_instructions() {
     // 3) Next user input – third hit; history should include only the summary.
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: THIRD_USER_MSG.into(),
                 text_elements: Vec::new(),
@@ -633,7 +633,6 @@ async fn manual_pre_compact_block_decision_does_not_block_compaction() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello before blocked compact".to_string(),
                 text_elements: Vec::new(),
@@ -707,7 +706,6 @@ async fn compact_hooks_respect_matchers_and_post_runs_after_compaction() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello before matched compact".to_string(),
                 text_elements: Vec::new(),
@@ -778,7 +776,6 @@ async fn manual_compact_uses_custom_prompt() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
@@ -926,7 +923,6 @@ async fn manual_compact_emits_context_compaction_items() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "manual compact".into(),
                 text_elements: Vec::new(),
@@ -1093,7 +1089,6 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     // Start the conversation with the user message
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: user_message.into(),
                 text_elements: Vec::new(),
@@ -1566,7 +1561,6 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
                 text_elements: Vec::new(),
@@ -1583,7 +1577,6 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
                 text_elements: Vec::new(),
@@ -1600,7 +1593,6 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: POST_AUTO_USER_MSG.into(),
                 text_elements: Vec::new(),
@@ -1772,7 +1764,6 @@ async fn auto_compact_emits_context_compaction_items() {
     for user in [FIRST_AUTO_MSG, SECOND_AUTO_MSG, POST_AUTO_USER_MSG] {
         codex
             .submit(Op::UserInput {
-                environments: None,
                 items: vec![UserInput::Text {
                     text: user.into(),
                     text_elements: Vec::new(),
@@ -1854,7 +1845,6 @@ async fn auto_compact_starts_after_turn_started() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
                 text_elements: Vec::new(),
@@ -1870,7 +1860,6 @@ async fn auto_compact_starts_after_turn_started() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
                 text_elements: Vec::new(),
@@ -1886,7 +1875,6 @@ async fn auto_compact_starts_after_turn_started() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: POST_AUTO_USER_MSG.into(),
                 text_elements: Vec::new(),
@@ -2415,7 +2403,6 @@ async fn auto_compact_persists_rollout_entries() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
                 text_elements: Vec::new(),
@@ -2431,7 +2418,6 @@ async fn auto_compact_persists_rollout_entries() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
                 text_elements: Vec::new(),
@@ -2447,7 +2433,6 @@ async fn auto_compact_persists_rollout_entries() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: POST_AUTO_USER_MSG.into(),
                 text_elements: Vec::new(),
@@ -2520,7 +2505,6 @@ async fn manual_compact_retries_after_context_window_error() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "first turn".into(),
                 text_elements: Vec::new(),
@@ -2625,7 +2609,6 @@ async fn manual_compact_non_context_failure_retries_then_emits_task_error() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "first turn".into(),
                 text_elements: Vec::new(),
@@ -2721,7 +2704,6 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: first_user_message.into(),
                 text_elements: Vec::new(),
@@ -2740,7 +2722,6 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: second_user_message.into(),
                 text_elements: Vec::new(),
@@ -2759,7 +2740,6 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: final_user_message.into(),
                 text_elements: Vec::new(),
@@ -2971,7 +2951,6 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     for user in [MULTI_AUTO_MSG, follow_up_user, final_user] {
         codex
             .submit(Op::UserInput {
-                environments: None,
                 items: vec![UserInput::Text {
                     text: user.into(),
                     text_elements: Vec::new(),
@@ -3077,7 +3056,6 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: FUNCTION_CALL_LIMIT_MSG.into(),
                 text_elements: Vec::new(),
@@ -3509,7 +3487,6 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     {
         codex
             .submit(Op::UserInput {
-                environments: None,
                 items: vec![UserInput::Text {
                     text: user.into(),
                     text_elements: Vec::new(),
@@ -3629,7 +3606,6 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
     for user in [first_user, second_user, third_user] {
         codex
             .submit(Op::UserInput {
-                environments: None,
                 items: vec![UserInput::Text {
                     text: user.into(),
                     text_elements: Vec::new(),
@@ -3692,7 +3668,6 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     for user in ["USER_ONE", "USER_TWO"] {
         codex
             .submit(Op::UserInput {
-                environments: None,
                 items: vec![UserInput::Text {
                     text: user.to_string(),
                     text_elements: Vec::new(),
@@ -3709,7 +3684,9 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     core_test_support::submit_thread_settings(
         &codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
+            environments: Some(local_selections(
+                test_path_buf(PRETURN_CONTEXT_DIFF_CWD).abs(),
+            )),
             ..Default::default()
         },
     )
@@ -3719,7 +3696,6 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
         .to_string();
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![
                 UserInput::Image {
                     image_url: image_url.clone(),
@@ -3915,7 +3891,6 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
@@ -3931,7 +3906,6 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "USER_TWO".to_string(),
                 text_elements: Vec::new(),
@@ -4005,7 +3979,6 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "AFTER_MANUAL_EMPTY_COMPACT".to_string(),
                 text_elements: Vec::new(),

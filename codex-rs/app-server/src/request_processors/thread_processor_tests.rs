@@ -64,7 +64,10 @@ mod thread_processor_behavior_tests {
     use codex_model_provider_info::ModelProviderInfo;
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
+    use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::MemoryAccessPolicy;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Settings;
     use codex_protocol::config_types::UserPreferencesMemoryBucket;
     use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
@@ -79,8 +82,10 @@ mod thread_processor_behavior_tests {
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use codex_protocol::protocol::TurnEnvironmentSelections;
     use codex_state::ThreadMetadataBuilder;
     use codex_thread_store::StoredThread;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
@@ -89,6 +94,39 @@ mod thread_processor_behavior_tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    fn test_thread_config_snapshot(cwd: AbsolutePathBuf) -> ThreadConfigSnapshot {
+        ThreadConfigSnapshot {
+            model: "gpt-5".to_string(),
+            model_provider_id: "openai".to_string(),
+            service_tier: None,
+            approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
+            permission_profile: codex_protocol::models::PermissionProfile::Disabled,
+            active_permission_profile: None,
+            environments: TurnEnvironmentSelections::new(cwd, Vec::new()),
+            workspace_roots: Vec::new(),
+            profile_workspace_roots: Vec::new(),
+            ephemeral: false,
+            reasoning_effort: None,
+            reasoning_summary: None,
+            collaboration_mode: CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "gpt-5".to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            },
+            personality: None,
+            session_source: SessionSource::Cli,
+            forked_from_thread_id: None,
+            parent_thread_id: None,
+            thread_source: None,
+            memory_policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
+            user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
+        }
+    }
 
     #[test]
     fn validate_dynamic_tools_rejects_unsupported_input_schema() {
@@ -395,6 +433,7 @@ mod thread_processor_behavior_tests {
             ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread");
         let stored_thread = StoredThread {
             thread_id,
+            extra_config: None,
             rollout_path: Some(PathBuf::from("/tmp/thread.jsonl")),
             forked_from_id: None,
             parent_thread_id: None,
@@ -683,24 +722,8 @@ mod thread_processor_behavior_tests {
             initial_turns_page: None,
         };
         let config_snapshot = ThreadConfigSnapshot {
-            model: "gpt-5".to_string(),
-            model_provider_id: "openai".to_string(),
             service_tier: Some("flex".to_string()),
-            approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
-            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
-            permission_profile: codex_protocol::models::PermissionProfile::Disabled,
-            active_permission_profile: None,
-            cwd,
-            workspace_roots: Vec::new(),
-            profile_workspace_roots: Vec::new(),
-            ephemeral: false,
-            reasoning_effort: None,
-            personality: None,
-            session_source: SessionSource::Cli,
-            parent_thread_id: None,
-            thread_source: None,
-            memory_policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
-            user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
+            ..test_thread_config_snapshot(cwd)
         };
 
         assert_eq!(
@@ -719,26 +742,7 @@ mod thread_processor_behavior_tests {
             }),
             ..ThreadResumeParams::default()
         };
-        let config_snapshot = ThreadConfigSnapshot {
-            model: "gpt-5".to_string(),
-            model_provider_id: "openai".to_string(),
-            service_tier: None,
-            approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
-            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
-            permission_profile: codex_protocol::models::PermissionProfile::Disabled,
-            active_permission_profile: None,
-            cwd,
-            workspace_roots: Vec::new(),
-            profile_workspace_roots: Vec::new(),
-            ephemeral: false,
-            reasoning_effort: None,
-            personality: None,
-            session_source: SessionSource::Cli,
-            parent_thread_id: None,
-            thread_source: None,
-            memory_policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
-            user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
-        };
+        let config_snapshot = test_thread_config_snapshot(cwd);
 
         assert_eq!(
             collect_resume_override_mismatches(&request, &config_snapshot),
@@ -860,26 +864,7 @@ mod thread_processor_behavior_tests {
             user_preferences_memory_policy: Some(requested_policy),
             ..ThreadResumeParams::default()
         };
-        let config_snapshot = ThreadConfigSnapshot {
-            model: "gpt-5".to_string(),
-            model_provider_id: "openai".to_string(),
-            service_tier: None,
-            approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
-            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
-            permission_profile: codex_protocol::models::PermissionProfile::Disabled,
-            active_permission_profile: None,
-            cwd,
-            workspace_roots: Vec::new(),
-            profile_workspace_roots: Vec::new(),
-            ephemeral: false,
-            reasoning_effort: None,
-            personality: None,
-            session_source: SessionSource::Cli,
-            parent_thread_id: None,
-            thread_source: None,
-            memory_policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
-            user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
-        };
+        let config_snapshot = test_thread_config_snapshot(cwd);
 
         assert_eq!(
             collect_resume_override_mismatches(&request, &config_snapshot),
@@ -899,26 +884,7 @@ mod thread_processor_behavior_tests {
             memory_policy: Some(requested_policy),
             ..ThreadResumeParams::default()
         };
-        let config_snapshot = ThreadConfigSnapshot {
-            model: "gpt-5".to_string(),
-            model_provider_id: "openai".to_string(),
-            service_tier: None,
-            approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
-            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
-            permission_profile: codex_protocol::models::PermissionProfile::Disabled,
-            active_permission_profile: None,
-            cwd,
-            workspace_roots: Vec::new(),
-            profile_workspace_roots: Vec::new(),
-            ephemeral: false,
-            reasoning_effort: None,
-            personality: None,
-            session_source: SessionSource::Cli,
-            parent_thread_id: None,
-            thread_source: None,
-            memory_policy: MemoryAccessPolicy::default(),
-            user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
-        };
+        let config_snapshot = test_thread_config_snapshot(cwd);
 
         assert_eq!(
             collect_resume_override_mismatches(&request, &config_snapshot),

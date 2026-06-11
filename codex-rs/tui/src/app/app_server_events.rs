@@ -16,10 +16,9 @@ use codex_app_server_protocol::ServerRequest;
 use codex_mcp::should_start_server_on_session_start;
 
 impl App {
-    fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
+    pub(super) fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
         let enabled_config_mcp_servers: Vec<String> = self
-            .chat_widget
-            .config_ref()
+            .config
             .mcp_servers
             .get()
             .iter()
@@ -94,10 +93,9 @@ impl App {
                         notification.plan_type,
                     ),
                     notification.plan_type,
-                    matches!(
-                        notification.auth_mode,
-                        Some(AuthMode::Chatgpt) | Some(AuthMode::ChatgptAuthTokens)
-                    ),
+                    notification
+                        .auth_mode
+                        .is_some_and(AuthMode::has_chatgpt_account),
                 );
                 return;
             }
@@ -128,6 +126,14 @@ impl App {
 
         match server_notification_thread_target(&notification) {
             ServerNotificationThreadTarget::Thread(thread_id) => {
+                if let ServerNotification::ThreadSettingsUpdated(notification) = &notification {
+                    self.apply_thread_settings_to_cached_session(
+                        thread_id,
+                        &notification.thread_settings,
+                    )
+                    .await;
+                }
+
                 let result = if self.primary_thread_id == Some(thread_id)
                     || self.primary_thread_id.is_none()
                 {
@@ -146,6 +152,12 @@ impl App {
                 tracing::warn!(
                     thread_id,
                     "ignoring app-server notification with invalid thread_id"
+                );
+                return;
+            }
+            ServerNotificationThreadTarget::AppScoped => {
+                tracing::debug!(
+                    "ignoring app-scoped MCP startup notification without a TUI app-level target"
                 );
                 return;
             }

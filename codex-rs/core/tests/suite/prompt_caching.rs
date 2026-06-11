@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use codex_core::LoadedAgentsMd;
 use codex_core::shell::default_user_shell;
 use codex_features::Feature;
 use codex_prompts::APPLY_PATCH_TOOL_INSTRUCTIONS;
@@ -24,6 +25,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -122,7 +124,9 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         ..
     } = test_codex()
         .with_config(|config| {
-            config.user_instructions = Some("be consistent and helpful".to_string());
+            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
+                "be consistent and helpful",
+            ));
             config.model = Some("gpt-5.2".to_string());
             // Keep tool expectations stable when the default web_search mode changes.
             config
@@ -150,7 +154,6 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
@@ -165,7 +168,6 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
@@ -185,9 +187,9 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     };
     expected_tools_names.extend([
         "update_plan",
+        "scratchpad",
         "request_user_input",
         "apply_patch",
-        "scratchpad",
         "view_image",
         "tool_search",
         "web_search",
@@ -235,7 +237,9 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.user_instructions = Some("be consistent and helpful".to_string());
+            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
+                "be consistent and helpful",
+            ));
             config
                 .features
                 .enable(Feature::CollaborationModes)
@@ -247,7 +251,6 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
@@ -262,7 +265,6 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
@@ -317,7 +319,9 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     let TestCodex { codex, config, .. } = test_codex()
         .with_config(|config| {
-            config.user_instructions = Some("be consistent and helpful".to_string());
+            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
+                "be consistent and helpful",
+            ));
             config
                 .features
                 .enable(Feature::CollaborationModes)
@@ -328,7 +332,6 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
@@ -343,7 +346,6 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
@@ -415,7 +417,9 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
 
     let TestCodex { codex, config, .. } = test_codex()
         .with_config(|config| {
-            config.user_instructions = Some("be consistent and helpful".to_string());
+            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
+                "be consistent and helpful",
+            ));
             config
                 .features
                 .enable(Feature::CollaborationModes)
@@ -427,7 +431,6 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     // First turn
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
@@ -451,26 +454,21 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         .to_legacy_sandbox_policy(config.cwd.as_path())
         .expect("workspace profile should have legacy projection");
     codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: Some(AskForApproval::Never),
-            approvals_reviewer: None,
-            sandbox_policy: Some(sandbox_policy),
-            permission_profile: Some(permission_profile),
-            windows_sandbox_level: None,
-            model: None,
-            effort: Some(Some(ReasoningEffort::High)),
-            summary: Some(ReasoningSummary::Detailed),
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+        .submit(Op::ThreadSettings {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile: Some(permission_profile),
+                effort: Some(Some(ReasoningEffort::High)),
+                summary: Some(ReasoningSummary::Detailed),
+                ..Default::default()
+            },
         })
         .await?;
 
     // Second turn after overrides
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
@@ -555,25 +553,19 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
     };
 
     codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: Some(AskForApproval::Never),
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: Some("gpt-5.4".to_string()),
-            effort: Some(Some(ReasoningEffort::Low)),
-            summary: None,
-            service_tier: None,
-            collaboration_mode: Some(collaboration_mode),
-            personality: None,
+        .submit(Op::ThreadSettings {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                model: Some("gpt-5.4".to_string()),
+                effort: Some(Some(ReasoningEffort::Low)),
+                collaboration_mode: Some(collaboration_mode),
+                ..Default::default()
+            },
         })
         .await?;
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "first message".into(),
                 text_elements: Vec::new(),
@@ -716,7 +708,9 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.user_instructions = Some("be consistent and helpful".to_string());
+            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
+                "be consistent and helpful",
+            ));
             config
                 .features
                 .enable(Feature::CollaborationModes)
@@ -728,7 +722,6 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     // First turn
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
@@ -741,7 +734,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    // Second turn using per-turn overrides via UserTurn
+    // Second turn using per-turn thread settings overrides.
     let new_cwd = TempDir::new().unwrap();
     let writable = TempDir::new().unwrap();
     let permission_profile = PermissionProfile::workspace_write_with(
@@ -753,24 +746,24 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(permission_profile, new_cwd.path());
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: new_cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: "o3".to_string(),
-            effort: Some(ReasoningEffort::High),
-            summary: Some(ReasoningSummary::Detailed),
-            service_tier: None,
-            collaboration_mode: None,
             final_output_json_schema: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(new_cwd.abs())),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                model: Some("o3".to_string()),
+                effort: Some(Some(ReasoningEffort::High)),
+                summary: Some(ReasoningSummary::Detailed),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -850,7 +843,9 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
         ..
     } = test_codex()
         .with_config(|config| {
-            config.user_instructions = Some("be consistent and helpful".to_string());
+            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
+                "be consistent and helpful",
+            ));
             config
                 .features
                 .enable(Feature::CollaborationModes)
@@ -863,51 +858,61 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let default_approval_policy = config.permissions.approval_policy.value();
     let default_sandbox_policy = &config.legacy_sandbox_policy();
     let default_model = session_configured.model;
-    let default_effort = config.model_reasoning_effort;
+    let default_effort = config.model_reasoning_effort.clone();
     let default_summary = config.model_reasoning_summary;
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: default_cwd.to_path_buf(),
-            approval_policy: default_approval_policy,
-            approvals_reviewer: None,
-            sandbox_policy: default_sandbox_policy.clone(),
-            permission_profile: None,
-            model: default_model.clone(),
-            effort: default_effort,
-            summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
-            service_tier: None,
-            collaboration_mode: None,
             final_output_json_schema: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(default_cwd.clone())),
+                approval_policy: Some(default_approval_policy),
+                sandbox_policy: Some(default_sandbox_policy.clone()),
+                summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: default_model.clone(),
+                        reasoning_effort: default_effort.clone(),
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: default_cwd.to_path_buf(),
-            approval_policy: default_approval_policy,
-            approvals_reviewer: None,
-            sandbox_policy: default_sandbox_policy.clone(),
-            permission_profile: None,
-            model: default_model.clone(),
-            effort: default_effort,
-            summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
-            service_tier: None,
-            collaboration_mode: None,
             final_output_json_schema: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(default_cwd.clone())),
+                approval_policy: Some(default_approval_policy),
+                sandbox_policy: Some(default_sandbox_policy.clone()),
+                summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: default_model.clone(),
+                        reasoning_effort: default_effort,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -979,7 +984,9 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         ..
     } = test_codex()
         .with_config(|config| {
-            config.user_instructions = Some("be consistent and helpful".to_string());
+            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
+                "be consistent and helpful",
+            ));
             config
                 .features
                 .enable(Feature::CollaborationModes)
@@ -992,28 +999,33 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let default_approval_policy = config.permissions.approval_policy.value();
     let default_sandbox_policy = &config.legacy_sandbox_policy();
     let default_model = session_configured.model;
-    let default_effort = config.model_reasoning_effort;
+    let default_effort = config.model_reasoning_effort.clone();
     let default_summary = config.model_reasoning_summary;
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: default_cwd.to_path_buf(),
-            approval_policy: default_approval_policy,
-            approvals_reviewer: None,
-            sandbox_policy: default_sandbox_policy.clone(),
-            permission_profile: None,
-            model: default_model,
-            effort: default_effort,
-            summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
-            service_tier: None,
-            collaboration_mode: None,
             final_output_json_schema: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(default_cwd.clone())),
+                approval_policy: Some(default_approval_policy),
+                sandbox_policy: Some(default_sandbox_policy.clone()),
+                summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: default_model,
+                        reasoning_effort: default_effort,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1021,24 +1033,30 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, default_cwd.as_path());
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: default_cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: "o3".to_string(),
-            effort: Some(ReasoningEffort::High),
-            summary: Some(ReasoningSummary::Detailed),
-            service_tier: None,
-            collaboration_mode: None,
             final_output_json_schema: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(default_cwd.clone())),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                summary: Some(ReasoningSummary::Detailed),
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: "o3".to_string(),
+                        reasoning_effort: Some(ReasoningEffort::High),
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

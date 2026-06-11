@@ -79,13 +79,26 @@ impl ChatWidget {
         let default_model = session.model.clone();
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             Some(default_model.clone()),
-            Some(session.reasoning_effort),
+            Some(session.reasoning_effort.clone()),
             /*developer_instructions*/ None,
         );
         match session.collaboration_mode.as_deref() {
-            Some(collaboration_mode) => {
+            Some(collaboration_mode) if collaboration_mode.mode == ModeKind::Default => {
                 self.current_collaboration_mode = collaboration_mode.clone();
                 self.update_collaboration_mode_indicator();
+            }
+            Some(collaboration_mode) => {
+                self.active_collaboration_mask = Some(CollaborationModeMask {
+                    name: collaboration_mode.mode.display_name().to_string(),
+                    mode: Some(collaboration_mode.mode),
+                    model: Some(collaboration_mode.settings.model.clone()),
+                    reasoning_effort: Some(collaboration_mode.settings.reasoning_effort.clone()),
+                    developer_instructions: Some(
+                        collaboration_mode.settings.developer_instructions.clone(),
+                    ),
+                });
+                self.update_collaboration_mode_indicator();
+                self.refresh_plan_mode_nudge();
             }
             None => {
                 self.active_collaboration_mask = Self::initial_collaboration_mask(
@@ -95,7 +108,7 @@ impl ChatWidget {
                     /*initial_mode*/ None,
                 );
                 if let Some(mask) = self.active_collaboration_mask.as_mut() {
-                    mask.reasoning_effort = Some(session.reasoning_effort);
+                    mask.reasoning_effort = Some(session.reasoning_effort.clone());
                 }
                 self.update_collaboration_mode_indicator();
                 self.refresh_plan_mode_nudge();

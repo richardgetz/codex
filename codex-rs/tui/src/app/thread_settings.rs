@@ -28,10 +28,18 @@ impl App {
         model: String,
     ) -> Option<ThreadSettingsUpdateParams> {
         let thread_id = self.active_thread_id?;
+        let collaboration_mode = self
+            .chat_widget
+            .effective_collaboration_mode()
+            .with_updates(
+                Some(model.clone()),
+                /*reasoning_effort*/ None,
+                /*developer_instructions*/ None,
+            );
         Some(ThreadSettingsUpdateParams {
             thread_id: thread_id.to_string(),
             model: Some(model),
-            collaboration_mode: Some(self.chat_widget.effective_collaboration_mode()),
+            collaboration_mode: Some(collaboration_mode),
             ..ThreadSettingsUpdateParams::default()
         })
     }
@@ -124,7 +132,7 @@ impl App {
                 .as_ref()
                 .map(|profile| profile.id.clone()),
             model: model.clone(),
-            effort: effort.unwrap_or_default(),
+            effort: effort.clone().unwrap_or_default(),
             summary: *summary,
             service_tier: service_tier.clone(),
             collaboration_mode: collaboration_mode.clone(),
@@ -172,7 +180,7 @@ impl App {
 fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: &ThreadSettings) {
     if settings.collaboration_mode.mode == ModeKind::Default {
         session.model = settings.model.clone();
-        session.reasoning_effort = settings.effort;
+        session.reasoning_effort = settings.effort.clone();
     }
     session.model_provider_id = settings.model_provider.clone();
     session.service_tier = settings.service_tier.clone();
@@ -190,7 +198,7 @@ fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: 
         .settings
         .model
         .clone_from(&settings.model);
-    collaboration_mode.settings.reasoning_effort = settings.effort;
+    collaboration_mode.settings.reasoning_effort = settings.effort.clone();
     session.collaboration_mode = Some(Box::new(collaboration_mode));
 }
 

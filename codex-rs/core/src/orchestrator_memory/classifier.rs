@@ -236,7 +236,8 @@ fn build_classification_agent_config(
     agent_config.model_reasoning_effort = base
         .memories
         .extract_reasoning_effort
-        .or(base.model_reasoning_effort);
+        .clone()
+        .or_else(|| base.model_reasoning_effort.clone());
 
     Ok(agent_config)
 }

@@ -59,6 +59,8 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadSettings;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -1847,7 +1849,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(config.contains("guardian_approval = true"));
-    assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
+    assert!(config.contains("approvals_reviewer = \"auto_review\""));
     assert!(config.contains("approval_policy = \"on-request\""));
     assert!(config.contains("sandbox_mode = \"workspace-write\""));
     app_server.shutdown().await?;
@@ -2011,7 +2013,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
     );
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
+    assert!(config.contains("approvals_reviewer = \"auto_review\""));
     assert!(config.contains("guardian_approval = true"));
     assert!(config.contains("approval_policy = \"on-request\""));
     assert!(config.contains("sandbox_mode = \"workspace-write\""));
@@ -3376,24 +3378,33 @@ async fn side_thread_snapshot_skips_session_header_preamble() {
 }
 
 #[tokio::test]
-async fn side_thread_ignores_global_mcp_startup_notifications() {
+async fn primary_thread_ignores_child_mcp_startup_notifications() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     while app_event_rx.try_recv().is_ok() {}
+    let sentry_config = toml::from_str::<toml::Value>("command = 'true'")
+        .expect("test MCP config should parse")
+        .try_into()
+        .expect("test MCP config should deserialize");
+    app.config
+        .mcp_servers
+        .set(std::collections::HashMap::from([(
+            "sentry".to_string(),
+            sentry_config,
+        )]))
+        .expect("test MCP servers should accept any configuration");
     let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
         .await
         .expect("embedded app server");
     let parent_thread_id = ThreadId::new();
-    let side_thread_id = ThreadId::new();
+    let child_thread_id = ThreadId::new();
     app.primary_thread_id = Some(parent_thread_id);
-    app.active_thread_id = Some(side_thread_id);
-    app.side_threads
-        .insert(side_thread_id, SideThreadState::new(parent_thread_id));
-    app.sync_side_thread_ui();
+    app.active_thread_id = Some(parent_thread_id);
 
     app.handle_app_server_event(
         &app_server,
         codex_app_server_client::AppServerEvent::ServerNotification(
             ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                thread_id: Some(child_thread_id.to_string()),
                 name: "sentry".to_string(),
                 status: McpServerStartupState::Failed,
                 error: Some("sentry is not logged in".to_string()),
@@ -3403,12 +3414,174 @@ async fn side_thread_ignores_global_mcp_startup_notifications() {
     .await;
 
     assert!(app_event_rx.try_recv().is_err());
+    let mut child_snapshot = app
+        .thread_event_channels
+        .get(&child_thread_id)
+        .expect("child thread channel should be created")
+        .store
+        .lock()
+        .await
+        .snapshot();
+    assert!(
+        matches!(
+            child_snapshot.events.as_slice(),
+            [ThreadBufferedEvent::Notification(
+                ServerNotification::McpServerStatusUpdated(_)
+            )]
+        ),
+        "child MCP startup notification should be buffered for the child thread"
+    );
+
+    app.apply_refreshed_snapshot_thread(
+        child_thread_id,
+        AppServerStartedThread {
+            session: test_thread_session(child_thread_id, test_path_buf("/tmp/child")),
+            turns: Vec::new(),
+        },
+        &mut child_snapshot,
+    )
+    .await;
+    app.replay_thread_snapshot(child_snapshot, /*resume_restored_queue*/ false);
+
+    let mut rendered_cells = Vec::new();
+    while let Ok(event) = app_event_rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            rendered_cells.push(lines_to_single_string(&cell.display_lines(/*width*/ 120)));
+        }
+    }
+    let rendered = rendered_cells.join("\n");
+    assert_eq!(app.chat_widget.thread_id(), Some(child_thread_id));
+    assert_eq!(rendered.matches("sentry is not logged in").count(), 1);
+    assert_eq!(
+        rendered
+            .matches("MCP startup incomplete (failed: sentry)")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn app_scoped_mcp_startup_notifications_do_not_render_in_active_thread() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    while app_event_rx.try_recv().is_ok() {}
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let thread_id = ThreadId::new();
+    app.primary_thread_id = Some(thread_id);
+    app.active_thread_id = Some(thread_id);
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                thread_id: None,
+                name: "sentry".to_string(),
+                status: McpServerStartupState::Failed,
+                error: Some("sentry is not logged in".to_string()),
+            }),
+        ),
+    )
+    .await;
+
+    assert!(app_event_rx.try_recv().is_err());
+    assert_eq!(
+        app.chat_widget.active_cell_transcript_lines(/*width*/ 120),
+        None
+    );
+}
+
+#[tokio::test]
+async fn active_side_thread_renders_live_mcp_startup_notifications() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    while app_event_rx.try_recv().is_ok() {}
+    let sentry_config = toml::from_str::<toml::Value>("command = 'true'")
+        .expect("test MCP config should parse")
+        .try_into()
+        .expect("test MCP config should deserialize");
+    app.config
+        .mcp_servers
+        .set(std::collections::HashMap::from([(
+            "sentry".to_string(),
+            sentry_config,
+        )]))
+        .expect("test MCP servers should accept any configuration");
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let parent_thread_id = ThreadId::new();
+    let side_thread_id = ThreadId::new();
+    app.primary_thread_id = Some(parent_thread_id);
+    app.side_threads
+        .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+    app.ensure_thread_channel(side_thread_id);
+    app.activate_thread_channel(side_thread_id).await;
+    app.replay_thread_snapshot(
+        ThreadEventSnapshot {
+            session: Some(test_thread_session(
+                side_thread_id,
+                test_path_buf("/tmp/side"),
+            )),
+            turns: Vec::new(),
+            events: Vec::new(),
+            input_state: None,
+        },
+        /*resume_restored_queue*/ false,
+    );
+    app.sync_side_thread_ui();
+
+    for status in [
+        McpServerStartupState::Starting,
+        McpServerStartupState::Failed,
+    ] {
+        app.handle_app_server_event(
+            &app_server,
+            codex_app_server_client::AppServerEvent::ServerNotification(
+                ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                    thread_id: Some(side_thread_id.to_string()),
+                    name: "sentry".to_string(),
+                    status,
+                    error: matches!(status, McpServerStartupState::Failed)
+                        .then(|| "sentry is not logged in".to_string()),
+                }),
+            ),
+        )
+        .await;
+    }
+
+    let mut active_thread_events = Vec::new();
+    let active_thread_rx = app
+        .active_thread_rx
+        .as_mut()
+        .expect("side thread receiver should be active");
+    while let Ok(event) = active_thread_rx.try_recv() {
+        active_thread_events.push(event);
+    }
+    for event in active_thread_events {
+        app.handle_thread_event_now(event);
+    }
+
+    let mut rendered_cells = Vec::new();
+    while let Ok(event) = app_event_rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            rendered_cells.push(lines_to_single_string(&cell.display_lines(/*width*/ 120)));
+        }
+    }
+    let rendered = rendered_cells.join("\n");
+    assert!(app.chat_widget.side_conversation_active());
+    assert_eq!(rendered.matches("sentry is not logged in").count(), 1);
+    assert_eq!(
+        rendered
+            .matches("MCP startup incomplete (failed: sentry)")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
 async fn app_server_mcp_startup_lazy_server_does_not_keep_tui_running() {
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-    app.chat_widget.set_thread_id_for_test(ThreadId::new());
+    let thread_id = ThreadId::new();
     let mcp_servers = HashMap::from([
         (
             "eager-docs".to_string(),
@@ -3421,6 +3594,12 @@ async fn app_server_mcp_startup_lazy_server_does_not_keep_tui_running() {
     ]);
     app.config.mcp_servers = Constrained::allow_any(mcp_servers.clone());
     app.chat_widget.set_mcp_servers_for_test(mcp_servers);
+    app.enqueue_primary_thread_session(
+        test_thread_session(thread_id, test_path_buf("/tmp/project")),
+        Vec::new(),
+    )
+    .await
+    .expect("primary thread should be registered");
 
     let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
         .await
@@ -3430,6 +3609,7 @@ async fn app_server_mcp_startup_lazy_server_does_not_keep_tui_running() {
         &app_server,
         codex_app_server_client::AppServerEvent::ServerNotification(
             ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                thread_id: Some(thread_id.to_string()),
                 name: "eager-docs".to_string(),
                 status: McpServerStartupState::Starting,
                 error: None,
@@ -3437,12 +3617,20 @@ async fn app_server_mcp_startup_lazy_server_does_not_keep_tui_running() {
         ),
     )
     .await;
+    let event = app
+        .active_thread_rx
+        .as_mut()
+        .expect("primary thread receiver should be active")
+        .try_recv()
+        .expect("starting notification should be delivered");
+    app.handle_thread_event_now(event);
     assert!(app.chat_widget.is_task_running_for_test());
 
     app.handle_app_server_event(
         &app_server,
         codex_app_server_client::AppServerEvent::ServerNotification(
             ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                thread_id: Some(thread_id.to_string()),
                 name: "eager-docs".to_string(),
                 status: McpServerStartupState::Ready,
                 error: None,
@@ -3450,6 +3638,13 @@ async fn app_server_mcp_startup_lazy_server_does_not_keep_tui_running() {
         ),
     )
     .await;
+    let event = app
+        .active_thread_rx
+        .as_mut()
+        .expect("primary thread receiver should be active")
+        .try_recv()
+        .expect("ready notification should be delivered");
+    app.handle_thread_event_now(event);
 
     assert!(!app.chat_widget.is_task_running_for_test());
 
@@ -3863,6 +4058,7 @@ async fn make_test_app() -> App {
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
         loader_overrides: LoaderOverrides::without_managed_config_for_tests(),
+        cloud_config_bundle: CloudConfigBundleLoader::default(),
         runtime_approval_policy_override: None,
         runtime_permission_profile_override: None,
         file_search,
@@ -3877,6 +4073,7 @@ async fn make_test_app() -> App {
         commit_anim_running: Arc::new(AtomicBool::new(false)),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        skill_load_warnings: SkillLoadWarningState::default(),
         backtrack: BacktrackState::default(),
         backtrack_render_pending: false,
         feedback: codex_feedback::CodexFeedback::new(),
@@ -3927,6 +4124,7 @@ async fn make_test_app_with_channels() -> (
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),
             loader_overrides: LoaderOverrides::without_managed_config_for_tests(),
+            cloud_config_bundle: CloudConfigBundleLoader::default(),
             runtime_approval_policy_override: None,
             runtime_permission_profile_override: None,
             file_search,
@@ -3941,6 +4139,7 @@ async fn make_test_app_with_channels() -> (
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+            skill_load_warnings: SkillLoadWarningState::default(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
@@ -5331,6 +5530,328 @@ async fn interrupt_without_active_turn_is_treated_as_handled() {
 }
 
 #[tokio::test]
+async fn override_turn_context_sends_thread_settings_update() {
+    Box::pin(async {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("thread/start should succeed");
+        let thread_id = started.session.thread_id;
+        let initial_model = started.session.model.clone();
+        let initial_effort = started.session.reasoning_effort.clone();
+        app.enqueue_primary_thread_session(started.session, started.turns)
+            .await
+            .expect("primary thread should be registered");
+        let service_tier = ServiceTier::Fast.request_value().to_string();
+        let collaboration_mode = CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: Settings {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: Some(ReasoningEffortConfig::High),
+                developer_instructions: None,
+            },
+        };
+        let op = AppCommand::override_turn_context(
+            /*cwd*/ None,
+            Some(AskForApproval::OnRequest),
+            Some(ApprovalsReviewer::AutoReview),
+            /*permission_profile*/ None,
+            Some(ActivePermissionProfile::new(
+                codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+            )),
+            /*windows_sandbox_level*/ None,
+            Some("gpt-5.4".to_string()),
+            Some(Some(ReasoningEffortConfig::High)),
+            /*summary*/ None,
+            Some(Some(service_tier.clone())),
+            Some(collaboration_mode.clone()),
+            Some(Personality::Pragmatic),
+        );
+
+        let handled = app
+            .try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op)
+            .await
+            .expect("settings update submission should not fail");
+
+        assert_eq!(handled, true);
+        assert_eq!(
+            app.primary_session_configured
+                .as_ref()
+                .expect("primary session")
+                .model,
+            initial_model,
+            "thread/settings/update response is only an ack; cached state changes on notification"
+        );
+
+        let current_session = app
+            .primary_session_configured
+            .as_ref()
+            .expect("primary session");
+        let notification = ThreadSettingsUpdatedNotification {
+            thread_id: thread_id.to_string(),
+            thread_settings: ThreadSettings {
+                cwd: current_session.cwd.clone(),
+                approval_policy: AskForApproval::OnRequest,
+                approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
+                sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {
+                    network_access: false,
+                },
+                active_permission_profile: Some(
+                    codex_app_server_protocol::ActivePermissionProfile::new(
+                        codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+                    ),
+                ),
+                model: "gpt-5.4".to_string(),
+                model_provider: current_session.model_provider_id.clone(),
+                service_tier: Some(service_tier.clone()),
+                effort: Some(ReasoningEffortConfig::High),
+                summary: None,
+                collaboration_mode: collaboration_mode.clone(),
+                personality: Some(Personality::Pragmatic),
+            },
+        };
+        assert_eq!(notification.thread_settings.model, "gpt-5.4");
+        assert_eq!(
+            notification.thread_settings.effort,
+            Some(ReasoningEffortConfig::High)
+        );
+        assert_eq!(
+            notification.thread_settings.service_tier,
+            Some(service_tier.clone())
+        );
+        assert_eq!(
+            notification.thread_settings.approval_policy,
+            AskForApproval::OnRequest
+        );
+        assert_eq!(
+            notification.thread_settings.approvals_reviewer.to_core(),
+            ApprovalsReviewer::AutoReview
+        );
+        let notified_mode = &notification.thread_settings.collaboration_mode;
+        assert_eq!(notified_mode.mode, collaboration_mode.mode);
+        assert_eq!(
+            notified_mode.settings.model,
+            collaboration_mode.settings.model
+        );
+        assert_eq!(
+            notified_mode.settings.reasoning_effort,
+            collaboration_mode.settings.reasoning_effort
+        );
+        assert_eq!(
+            notification.thread_settings.personality,
+            Some(Personality::Pragmatic)
+        );
+
+        app.handle_app_server_event(
+            &app_server,
+            codex_app_server_client::AppServerEvent::ServerNotification(
+                ServerNotification::ThreadSettingsUpdated(notification),
+            ),
+        )
+        .await;
+        let updated_session = app
+            .primary_session_configured
+            .as_ref()
+            .expect("primary session should be updated from notification");
+        assert_eq!(updated_session.model, initial_model);
+        assert_eq!(updated_session.reasoning_effort, initial_effort);
+        let updated_mode = updated_session
+            .collaboration_mode
+            .as_deref()
+            .expect("collaboration mode should be cached");
+        assert_eq!(updated_mode.mode, collaboration_mode.mode);
+        assert_eq!(
+            updated_mode.settings.model,
+            collaboration_mode.settings.model
+        );
+        assert_eq!(
+            updated_mode.settings.reasoning_effort,
+            collaboration_mode.settings.reasoning_effort
+        );
+        assert_eq!(updated_session.personality, Some(Personality::Pragmatic));
+        assert_eq!(updated_session.service_tier, Some(service_tier));
+        assert_eq!(updated_session.approval_policy, AskForApproval::OnRequest);
+        assert_eq!(
+            updated_session.approvals_reviewer,
+            ApprovalsReviewer::AutoReview
+        );
+        assert_eq!(
+            updated_session
+                .active_permission_profile
+                .as_ref()
+                .expect("active profile")
+                .id,
+            codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn thread_setting_update_params_sync_model_and_default_reasoning() {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    app.chat_widget.handle_thread_session(test_thread_session(
+        thread_id,
+        test_path_buf("/tmp/project"),
+    ));
+
+    assert_eq!(app.active_thread_id, None);
+    app.active_thread_id = Some(thread_id);
+    let params = app
+        .active_thread_model_setting_update_params("gpt-5.4".to_string())
+        .expect("active thread should produce update params");
+    assert_eq!(
+        params
+            .collaboration_mode
+            .as_ref()
+            .expect("collaboration mode should sync with model")
+            .settings
+            .model,
+        "gpt-5.4"
+    );
+
+    app.chat_widget
+        .set_reasoning_effort(Some(ReasoningEffortConfig::Low));
+    app.chat_widget
+        .set_collaboration_mask(CollaborationModeMask {
+            name: "Plan".to_string(),
+            mode: Some(ModeKind::Plan),
+            model: Some("gpt-plan".to_string()),
+            reasoning_effort: Some(Some(ReasoningEffortConfig::Medium)),
+            developer_instructions: None,
+        });
+    app.on_update_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let params = app
+        .active_thread_reasoning_setting_update_params(Some(ReasoningEffortConfig::High))
+        .expect("active thread should produce update params");
+
+    assert_eq!(params.thread_id, thread_id.to_string());
+    assert_eq!(params.effort, Some(ReasoningEffortConfig::High));
+    let collaboration_mode = params
+        .collaboration_mode
+        .expect("collaboration mode should sync with reasoning");
+    assert_eq!(collaboration_mode.mode, ModeKind::Default);
+    assert_eq!(
+        collaboration_mode.settings.reasoning_effort,
+        Some(ReasoningEffortConfig::High)
+    );
+}
+
+#[tokio::test]
+async fn inactive_thread_settings_notification_updates_cached_collaboration_mode() {
+    let mut app = make_test_app().await;
+    let primary_thread_id = ThreadId::new();
+    let inactive_thread_id = ThreadId::new();
+    let primary_session = test_thread_session(primary_thread_id, test_path_buf("/tmp/main"));
+    let inactive_session = test_thread_session(inactive_thread_id, test_path_buf("/tmp/inactive"));
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: "gpt-plan".to_string(),
+            reasoning_effort: Some(ReasoningEffortConfig::High),
+            developer_instructions: Some("draft a plan first".to_string()),
+        },
+    };
+
+    app.primary_thread_id = Some(primary_thread_id);
+    app.active_thread_id = Some(primary_thread_id);
+    app.primary_session_configured = Some(primary_session.clone());
+    app.thread_event_channels.insert(
+        primary_thread_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            primary_session,
+            Vec::new(),
+        ),
+    );
+    app.thread_event_channels.insert(
+        inactive_thread_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            inactive_session,
+            Vec::new(),
+        ),
+    );
+
+    let notification = ThreadSettingsUpdatedNotification {
+        thread_id: inactive_thread_id.to_string(),
+        thread_settings: ThreadSettings {
+            cwd: test_absolute_path("/tmp/thread-settings"),
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
+            sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {
+                network_access: false,
+            },
+            active_permission_profile: Some(
+                codex_app_server_protocol::ActivePermissionProfile::read_only(),
+            ),
+            model: "gpt-plan".to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: None,
+            effort: collaboration_mode.settings.reasoning_effort.clone(),
+            summary: None,
+            collaboration_mode: collaboration_mode.clone(),
+            personality: Some(Personality::Pragmatic),
+        },
+    };
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::ThreadSettingsUpdated(notification),
+        ),
+    )
+    .await;
+
+    let cached_session = app
+        .thread_event_channels
+        .get(&inactive_thread_id)
+        .expect("inactive thread channel")
+        .store
+        .lock()
+        .await
+        .session
+        .clone()
+        .expect("inactive session should remain cached");
+    assert_eq!(cached_session.model, "gpt-test");
+    assert_eq!(cached_session.personality, Some(Personality::Pragmatic));
+    assert_eq!(
+        cached_session.collaboration_mode.as_deref(),
+        Some(&collaboration_mode)
+    );
+
+    app.active_thread_id = None;
+    app.chat_widget.handle_thread_session(cached_session);
+    assert_eq!(
+        app.chat_widget.active_collaboration_mode_kind(),
+        ModeKind::Plan
+    );
+    assert_eq!(app.chat_widget.current_model(), "gpt-plan");
+    assert_eq!(
+        app.chat_widget.current_collaboration_mode().model(),
+        "gpt-test"
+    );
+    assert_eq!(
+        app.chat_widget.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+    assert_eq!(
+        app.chat_widget.config_ref().personality,
+        Some(Personality::Pragmatic)
+    );
+    assert_eq!(app.thread_id_for_active_op(&AppCommand::compact()), None);
+}
+
+#[tokio::test]
 async fn interrupt_targets_displayed_thread_when_active_thread_is_not_attached() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
@@ -5405,6 +5926,34 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
     assert!(!app.backtrack_render_pending);
     assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
     assert_eq!(app.chat_widget.composer_text_with_pending(), "draft prompt");
+}
+
+#[tokio::test]
+async fn clear_only_ui_reset_allows_active_skill_warning_to_render_again() {
+    let mut app = make_test_app().await;
+    let error = SkillErrorInfo {
+        path: test_path_buf("/tmp/project/.codex/skills/abc/SKILL.md"),
+        message: "invalid description".to_string(),
+    };
+
+    assert_eq!(
+        app.skill_load_warnings
+            .newly_active_errors(std::slice::from_ref(&error)),
+        vec![error.clone()]
+    );
+    assert_eq!(
+        app.skill_load_warnings
+            .newly_active_errors(std::slice::from_ref(&error)),
+        Vec::<SkillErrorInfo>::new()
+    );
+
+    app.reset_app_ui_state_after_clear();
+
+    assert_eq!(
+        app.skill_load_warnings
+            .newly_active_errors(std::slice::from_ref(&error)),
+        vec![error]
+    );
 }
 
 #[tokio::test]

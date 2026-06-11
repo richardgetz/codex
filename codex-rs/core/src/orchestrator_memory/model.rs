@@ -300,7 +300,8 @@ pub(super) fn build_consolidation_agent_config(
     agent_config.model_reasoning_effort = base
         .memories
         .consolidation_reasoning_effort
-        .or(base.model_reasoning_effort);
+        .clone()
+        .or_else(|| base.model_reasoning_effort.clone());
 
     Ok(agent_config)
 }
