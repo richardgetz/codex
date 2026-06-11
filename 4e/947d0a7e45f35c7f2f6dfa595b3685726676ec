@@ -1,0 +1,20 @@
+intent:
+  id: fork-stable-release-rust-v0.139.0
+change_type: release_merge
+scope: fork stable release
+summary: Merge upstream rust-v0.139.0 into the fork stable branch while preserving fork-only behavior and fixes.
+decision: Include upstream 0.138.0 and 0.139.0 changes in one 0.139.0 fork release checkpoint instead of creating an intermediate 0.138.0 fork release.
+constraints:
+  - Preserve fork account switching, scratchpad, memory, MCP recovery, and private CI guard behavior.
+  - Preserve the post-0.137 contract removing Orchestrator collaboration mode; legacy orchestrator values remain compatibility-only Default.
+  - Fix /agents-prune so owning sessions can prune idle subagents without closing active/running work.
+  - Keep upstream 0.139.0 generated snapshot and V8 patch payloads unless a release policy decision normalizes them separately.
+intent_priority: must
+code_locations:
+  - codex-rs/core/src/agent/control.rs
+  - codex-rs/core/src/session/handlers.rs
+  - codex-rs/core/src/tools/handlers/multi_agents_spec.rs
+  - codex-rs/protocol/src/protocol.rs
+  - codex-rs/tui/src/app/tests.rs
+requested_by: user
+recorded_by: codex
