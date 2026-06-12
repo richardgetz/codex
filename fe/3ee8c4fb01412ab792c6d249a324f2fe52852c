@@ -1,0 +1,15 @@
+intent:
+  id: fork-release-timeout-macos-2026-06-12
+change_type: fix
+scope: fork release workflow
+summary: Keep the fork release macOS build below the GitHub-hosted 6h job limit.
+decision: Override the fork-release job's Cargo release profile at workflow runtime to disable ThinLTO and use 16 codegen units, preserving the normal workspace release profile while avoiding the observed deployment timeout.
+constraints:
+  - Do not change runtime code or the main Cargo release profile.
+  - Preserve fork release versioning, tag, GitHub release, and npm publishing behavior.
+  - Keep the fix limited to the fork-only release workflow.
+intent_priority: must
+code_locations:
+  - .github/workflows/fork-release.yml
+requested_by: Rick
+recorded_by: Codex
