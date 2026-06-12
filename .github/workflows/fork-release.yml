@@ -112,6 +112,12 @@ jobs:
       - name: "[40-60%] Build release binary"
         shell: bash
         env:
+          # The fork release runs on GitHub-hosted macOS where the default
+          # release profile's ThinLTO/codegen-units=1 can exceed the 6h job
+          # limit. Keep release optimizations, but avoid the linker-heavy
+          # settings that timed out this deployment.
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_LTO: "false"
           CODEX_SOURCE_BASE_VERSION: ${{ needs.compute-release.outputs.base_version }}
           CODEX_SOURCE_VERSION_SUFFIX: rick.${{ needs.compute-release.outputs.fork_counter }}
           HEARTBEAT_INTERVAL_SEC: 60
