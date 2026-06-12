@@ -1415,6 +1415,51 @@ async fn status_card_token_usage_excludes_cached_tokens() {
 }
 
 #[tokio::test]
+async fn status_snapshot_includes_opt_in_api_equivalent_token_usage() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.3-codex".to_string());
+    config.model_provider_id = "openai".to_string();
+    config.tui_status_token_usage.enabled = true;
+    set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
+
+    let account_display = test_status_account_display();
+    let usage = TokenUsage {
+        input_tokens: 151_800,
+        cached_input_tokens: 119_400,
+        output_tokens: 32_400,
+        reasoning_output_tokens: 8_700,
+        total_tokens: 184_200,
+    };
+
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+        .single()
+        .expect("timestamp");
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let token_info = token_info_for(&model_slug, &config, &usage);
+    let composite = new_status_output(
+        &config,
+        account_display.as_ref(),
+        Some(&token_info),
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
+        None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+    );
+    let rendered =
+        sanitize_directory(render_lines(&composite.display_lines(/*width*/ 120))).join("\n");
+
+    assert_snapshot!(rendered);
+}
+
+#[tokio::test]
 async fn status_snapshot_truncates_in_narrow_terminal() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;

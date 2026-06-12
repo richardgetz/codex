@@ -1382,6 +1382,7 @@ fn config_toml_deserializes_model_availability_nux() {
             alternate_screen: AltScreenMode::default(),
             status_line: None,
             status_line_use_colors: true,
+            status_token_usage: Default::default(),
             terminal_title: None,
             theme: None,
             pet: None,
@@ -1427,6 +1428,38 @@ status_line_use_colors = false
         !cfg.tui
             .expect("tui config should deserialize")
             .status_line_use_colors
+    );
+}
+
+#[test]
+fn config_toml_deserializes_status_token_usage_config() {
+    let toml = r#"
+[tui.status_token_usage]
+enabled = true
+
+[tui.status_token_usage.model_rates."custom-model"]
+input_usd_per_1m = 2.0
+cached_input_usd_per_1m = 0.5
+output_usd_per_1m = 8.0
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for TUI config");
+    let status_token_usage = cfg
+        .tui
+        .expect("tui config should deserialize")
+        .status_token_usage;
+
+    assert!(status_token_usage.enabled);
+    assert_eq!(
+        status_token_usage
+            .model_rates
+            .get("custom-model")
+            .expect("custom model rate should deserialize"),
+        &codex_config::types::TuiStatusTokenUsageRate {
+            input_usd_per_1m: 2.0,
+            cached_input_usd_per_1m: 0.5,
+            output_usd_per_1m: 8.0,
+        }
     );
 }
 
@@ -3948,6 +3981,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
             status_line_use_colors: true,
+            status_token_usage: Default::default(),
             terminal_title: None,
             theme: None,
             pet: None,
@@ -9019,7 +9053,6 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         network: None,
         permissions: None,
         guardian_policy_config: None,
-        ..Default::default()
     };
     let requirement_source = codex_config::RequirementSource::Unknown;
     let requirement_source_for_error = requirement_source.clone();

@@ -47,6 +47,8 @@ use super::rate_limits::compose_rate_limit_data_many;
 use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
 use super::remote_connection::RemoteConnectionStatus;
+use super::token_usage_cost::StatusTokenUsageCostData;
+use super::token_usage_cost::compose_status_token_usage_cost;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
 use crate::wrapping::word_wrap_lines;
@@ -118,6 +120,7 @@ struct StatusHistoryCell {
     session_id: Option<String>,
     forked_from: Option<String>,
     token_usage: StatusTokenUsageData,
+    token_usage_cost: Option<StatusTokenUsageCostData>,
     rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
 }
 
@@ -340,6 +343,12 @@ impl StatusHistoryCell {
             output: total_usage.output_tokens,
             context_window,
         };
+        let token_usage_cost = compose_status_token_usage_cost(
+            &config.tui_status_token_usage,
+            &config.model_provider_id,
+            &model_name,
+            total_usage,
+        );
         let rate_limits = if rate_limits.len() <= 1 {
             compose_rate_limit_data(rate_limits.first(), now)
         } else {
@@ -366,6 +375,7 @@ impl StatusHistoryCell {
                 session_id,
                 forked_from,
                 token_usage,
+                token_usage_cost,
                 agents_summary,
                 rate_limit_state: rate_limit_state.clone(),
             },
@@ -778,6 +788,10 @@ impl HistoryCell for StatusHistoryCell {
         }
 
         self.collect_rate_limit_labels(&rate_limit_state, &mut seen, &mut labels);
+        if self.token_usage_cost.is_some() {
+            push_label(&mut labels, &mut seen, "  Input");
+            push_label(&mut labels, &mut seen, "  Output");
+        }
 
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
         let value_width = formatter.value_width(available_inner_width);
@@ -866,6 +880,13 @@ impl HistoryCell for StatusHistoryCell {
         }
 
         lines.extend(self.rate_limit_lines(&rate_limit_state, available_inner_width, &formatter));
+
+        if let Some(token_usage_cost) = self.token_usage_cost.as_ref() {
+            lines.push(Line::from(Vec::<Span<'static>>::new()));
+            lines.push(formatter.line("Token usage", token_usage_cost.summary_spans()));
+            lines.push(formatter.line("  Input", token_usage_cost.input_spans()));
+            lines.push(formatter.line("  Output", token_usage_cost.output_spans()));
+        }
 
         let content_width = lines.iter().map(line_display_width).max().unwrap_or(0);
         let inner_width = content_width.min(available_inner_width);

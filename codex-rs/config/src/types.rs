@@ -1800,6 +1800,14 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub status_line_use_colors: bool,
 
+    /// Opt-in API-equivalent token usage and cost details for `/status`.
+    ///
+    /// Cost estimates use built-in OpenAI API rates when known. Add entries under
+    /// `model_rates` to override built-in rates, keep new model pricing current, or
+    /// support models with custom pricing.
+    #[serde(default)]
+    pub status_token_usage: TuiStatusTokenUsage,
+
     /// Ordered list of terminal title item identifiers.
     ///
     /// When set, the TUI renders the selected items into the terminal window/tab title.
@@ -1849,6 +1857,37 @@ pub struct Tui {
     #[serde(default)]
     #[schemars(range(min = 0))]
     pub terminal_resize_reflow_max_rows: Option<usize>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiStatusTokenUsage {
+    /// Show per-thread API-equivalent token usage and estimated cost in `/status`.
+    ///
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Per-model pricing overrides in USD per 1M tokens.
+    ///
+    /// Example:
+    ///
+    /// ```toml
+    /// [tui.status_token_usage.model_rates."gpt-5.3-codex"]
+    /// input_usd_per_1m = 1.75
+    /// cached_input_usd_per_1m = 0.175
+    /// output_usd_per_1m = 14.0
+    /// ```
+    #[serde(default)]
+    pub model_rates: BTreeMap<String, TuiStatusTokenUsageRate>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiStatusTokenUsageRate {
+    pub input_usd_per_1m: f64,
+    pub cached_input_usd_per_1m: f64,
+    pub output_usd_per_1m: f64,
 }
 
 const fn default_true() -> bool {

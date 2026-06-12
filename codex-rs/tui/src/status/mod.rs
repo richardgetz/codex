@@ -12,6 +12,7 @@ mod format;
 mod helpers;
 mod rate_limits;
 pub(crate) mod remote_connection;
+mod token_usage_cost;
 
 pub(crate) use account::StatusAccountDisplay;
 pub(crate) use card::StatusHistoryHandle;
