@@ -1,0 +1,20 @@
+intent:
+  id: intent/2026-06-12/status-token-usage-costs
+change_type: feat
+scope: codex-rs/tui status token usage
+summary: Add opt-in /status per-thread API-equivalent token usage and estimated costs.
+decision: Keep the default display unchanged by gating the appended usage/cost block behind [tui.status_token_usage].enabled and allowing per-model rate overrides for pricing drift or custom enterprise rates.
+constraints:
+  - Default display must remain off.
+  - Existing /status sections must remain unchanged unless enabled.
+  - Cost display is an OpenAI API-equivalent estimate, not ChatGPT plan accounting.
+  - Unknown models must show token usage without fabricated cost.
+  - Built-in OpenAI API rates must be kept current when published model pricing changes or new models are added; config overrides take precedence.
+intent_priority: should
+code_locations:
+  - codex-rs/config/src/types.rs
+  - codex-rs/core/src/config/mod.rs
+  - codex-rs/tui/src/status/token_usage_cost.rs
+  - codex-rs/tui/src/status/card.rs
+requested_by: Rick
+recorded_by: Codex
