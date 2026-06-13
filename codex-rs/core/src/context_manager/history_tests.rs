@@ -348,6 +348,7 @@ fn total_token_usage_includes_all_items_after_last_model_generated_item() {
             total_tokens: 100,
             ..Default::default()
         },
+        /*service_tier*/ None,
         /*model_context_window*/ None,
     );
     let added_user = user_msg("new user message");

@@ -343,11 +343,16 @@ impl StatusHistoryCell {
             output: total_usage.output_tokens,
             context_window,
         };
+        let empty_usage_by_service_tier = std::collections::BTreeMap::new();
+        let usage_by_service_tier = token_info
+            .map(|info| &info.usage_by_service_tier)
+            .unwrap_or(&empty_usage_by_service_tier);
         let token_usage_cost = compose_status_token_usage_cost(
             &config.tui_status_token_usage,
             &config.model_provider_id,
             &model_name,
             total_usage,
+            usage_by_service_tier,
         );
         let rate_limits = if rate_limits.len() <= 1 {
             compose_rate_limit_data(rate_limits.first(), now)

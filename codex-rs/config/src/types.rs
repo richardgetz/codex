@@ -1868,7 +1868,10 @@ pub struct TuiStatusTokenUsage {
     #[serde(default)]
     pub enabled: bool,
 
-    /// Per-model pricing overrides in USD per 1M tokens.
+    /// Per-model standard pricing overrides in USD per 1M tokens.
+    ///
+    /// Add `service_tiers.<tier>` entries for tier-specific overrides such as
+    /// `priority` (Fast mode) or `flex`.
     ///
     /// Example:
     ///
@@ -1877,14 +1880,31 @@ pub struct TuiStatusTokenUsage {
     /// input_usd_per_1m = 1.75
     /// cached_input_usd_per_1m = 0.175
     /// output_usd_per_1m = 14.0
+    ///
+    /// [tui.status_token_usage.model_rates."gpt-5.3-codex".service_tiers.priority]
+    /// input_usd_per_1m = 2.50
+    /// cached_input_usd_per_1m = 0.25
+    /// output_usd_per_1m = 20.0
     /// ```
     #[serde(default)]
     pub model_rates: BTreeMap<String, TuiStatusTokenUsageRate>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiStatusTokenUsageRate {
+    pub input_usd_per_1m: f64,
+    pub cached_input_usd_per_1m: f64,
+    pub output_usd_per_1m: f64,
+
+    /// Optional service-tier pricing overrides in USD per 1M tokens.
+    #[serde(default)]
+    pub service_tiers: BTreeMap<String, TuiStatusTokenUsageServiceTierRate>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiStatusTokenUsageServiceTierRate {
     pub input_usd_per_1m: f64,
     pub cached_input_usd_per_1m: f64,
     pub output_usd_per_1m: f64,

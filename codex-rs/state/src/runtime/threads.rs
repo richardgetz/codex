@@ -1851,6 +1851,7 @@ mod tests {
                         total_tokens: 321,
                     },
                     last_token_usage: codex_protocol::protocol::TokenUsage::default(),
+                    usage_by_service_tier: Default::default(),
                     model_context_window: None,
                 }),
                 rate_limits: None,

@@ -19180,6 +19180,13 @@
           },
           "total": {
             "$ref": "#/definitions/v2/TokenUsageBreakdown"
+          },
+          "usageByServiceTier": {
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/TokenUsageBreakdown"
+            },
+            "default": {},
+            "type": "object"
           }
         },
         "required": [

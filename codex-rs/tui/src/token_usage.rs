@@ -5,6 +5,7 @@ use std::fmt;
 use codex_protocol::num_format::format_with_separators;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 const BASELINE_TOKENS: i64 = 12000;
 
@@ -57,6 +58,7 @@ impl TokenUsage {
 pub(crate) struct TokenUsageInfo {
     pub(crate) total_token_usage: TokenUsage,
     pub(crate) last_token_usage: TokenUsage,
+    pub(crate) usage_by_service_tier: BTreeMap<String, TokenUsage>,
     pub(crate) model_context_window: Option<i64>,
 }
 

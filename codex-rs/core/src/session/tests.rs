@@ -1915,6 +1915,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             reasoning_output_tokens: 0,
             total_tokens: 7,
         },
+        usage_by_service_tier: Default::default(),
         model_context_window: Some(1_000),
     };
     let info2 = TokenUsageInfo {
@@ -1932,6 +1933,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             reasoning_output_tokens: 5,
             total_tokens: 35,
         },
+        usage_by_service_tier: Default::default(),
         model_context_window: Some(2_000),
     };
 
@@ -2021,6 +2023,7 @@ async fn recompute_token_usage_updates_model_context_window() {
         state.set_token_info(Some(TokenUsageInfo {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
+            usage_by_service_tier: Default::default(),
             model_context_window: Some(258_400),
         }));
     }
@@ -2116,6 +2119,11 @@ async fn record_token_usage_info_notifies_extension_contributors() {
 
     let mut expected_total_usage = first_usage.clone();
     expected_total_usage.add_assign(&second_usage);
+    let mut expected_usage_by_service_tier = std::collections::BTreeMap::new();
+    expected_usage_by_service_tier.insert(
+        TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
+        expected_total_usage.clone(),
+    );
     let expected = vec![
         RecordedTokenUsage {
             session_level_id: session.session_id().to_string(),
@@ -2123,7 +2131,11 @@ async fn record_token_usage_info_notifies_extension_contributors() {
             turn_level_id: turn_context.sub_id.clone(),
             token_usage: TokenUsageInfo {
                 total_token_usage: first_usage.clone(),
-                last_token_usage: first_usage,
+                last_token_usage: first_usage.clone(),
+                usage_by_service_tier: std::collections::BTreeMap::from([(
+                    TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
+                    first_usage.clone(),
+                )]),
                 model_context_window: turn_context.model_context_window(),
             },
             saw_session_store: true,
@@ -2136,6 +2148,7 @@ async fn record_token_usage_info_notifies_extension_contributors() {
             token_usage: TokenUsageInfo {
                 total_token_usage: expected_total_usage,
                 last_token_usage: second_usage,
+                usage_by_service_tier: expected_usage_by_service_tier,
                 model_context_window: turn_context.model_context_window(),
             },
             saw_session_store: true,
@@ -11046,6 +11059,7 @@ async fn set_total_token_usage(sess: &Session, total_token_usage: TokenUsage) {
     state.set_token_info(Some(TokenUsageInfo {
         total_token_usage,
         last_token_usage: TokenUsage::default(),
+        usage_by_service_tier: Default::default(),
         model_context_window: None,
     }));
 }

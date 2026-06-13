@@ -897,6 +897,22 @@ fn token_usage_info_from_app_server(token_usage: ThreadTokenUsage) -> TokenUsage
             output_tokens: token_usage.last.output_tokens,
             reasoning_output_tokens: token_usage.last.reasoning_output_tokens,
         },
+        usage_by_service_tier: token_usage
+            .usage_by_service_tier
+            .into_iter()
+            .map(|(service_tier, usage)| {
+                (
+                    service_tier,
+                    TokenUsage {
+                        total_tokens: usage.total_tokens,
+                        input_tokens: usage.input_tokens,
+                        cached_input_tokens: usage.cached_input_tokens,
+                        output_tokens: usage.output_tokens,
+                        reasoning_output_tokens: usage.reasoning_output_tokens,
+                    },
+                )
+            })
+            .collect(),
         model_context_window: token_usage.model_context_window,
     }
 }

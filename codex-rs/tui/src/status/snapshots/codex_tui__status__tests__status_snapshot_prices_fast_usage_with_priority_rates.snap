@@ -1,0 +1,25 @@
+---
+source: tui/src/status/tests.rs
+expression: rendered
+---
+/status
+
+╭─────────────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.139.0)                                                 │
+│                                                                             │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date               │
+│ information on rate limits and credits                                      │
+│                                                                             │
+│  Model:            gpt-5.5 (reasoning none, summaries auto)                 │
+│  Directory: [[workspace]]                                                   │
+│  Permissions:      Custom (workspace with network access, Ask for approval) │
+│  Agents.md:        <none>                                                   │
+│                                                                             │
+│  Token usage:      20.9K total  (20.9K input + 36 output)                   │
+│  Context window:   96% left (23.3K used / 272K)                             │
+│  Limits:           data not available yet                                   │
+│                                                                             │
+│  Token usage:      23.3K API-equivalent tokens  ~$0.27                      │
+│    Input:          23.3K total, 2.4K cached, 20.9K billable  ~$0.26         │
+│    Output:         36 total, 27 reasoning  ~$0.0027                         │
+╰─────────────────────────────────────────────────────────────────────────────╯

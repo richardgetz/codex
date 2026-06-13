@@ -2020,10 +2020,14 @@ pub struct TokenUsage {
     pub total_tokens: i64,
 }
 
+pub const TOKEN_USAGE_STANDARD_SERVICE_TIER: &str = "standard";
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
+    #[serde(default)]
+    pub usage_by_service_tier: BTreeMap<String, TokenUsage>,
     // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
@@ -2044,11 +2048,12 @@ impl TokenUsageInfo {
             None => Self {
                 total_token_usage: TokenUsage::default(),
                 last_token_usage: TokenUsage::default(),
+                usage_by_service_tier: BTreeMap::new(),
                 model_context_window,
             },
         };
         if let Some(last) = last {
-            info.append_last_usage(last);
+            info.append_last_usage(last, None);
         }
         if let Some(model_context_window) = model_context_window {
             info.model_context_window = Some(model_context_window);
@@ -2056,9 +2061,15 @@ impl TokenUsageInfo {
         Some(info)
     }
 
-    pub fn append_last_usage(&mut self, last: &TokenUsage) {
+    pub fn append_last_usage(&mut self, last: &TokenUsage, service_tier: Option<&str>) {
         self.total_token_usage.add_assign(last);
         self.last_token_usage = last.clone();
+        if let Some(service_tier) = service_tier {
+            self.usage_by_service_tier
+                .entry(service_tier.to_string())
+                .or_default()
+                .add_assign(last);
+        }
     }
 
     pub fn fill_to_context_window(&mut self, context_window: i64) {
@@ -2074,12 +2085,14 @@ impl TokenUsageInfo {
             total_tokens: delta,
             ..TokenUsage::default()
         };
+        self.usage_by_service_tier.clear();
     }
 
     pub fn full_context_window(context_window: i64) -> Self {
         let mut info = Self {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
+            usage_by_service_tier: BTreeMap::new(),
             model_context_window: Some(context_window),
         };
         info.fill_to_context_window(context_window);
@@ -5452,6 +5465,7 @@ mod tests {
         let initial = Some(TokenUsageInfo {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
+            usage_by_service_tier: BTreeMap::new(),
             model_context_window: Some(258_400),
         });
         let last = Some(TokenUsage {
@@ -5473,6 +5487,7 @@ mod tests {
         let initial = Some(TokenUsageInfo {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
+            usage_by_service_tier: BTreeMap::new(),
             model_context_window: Some(258_400),
         });
         let last = Some(TokenUsage {

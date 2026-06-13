@@ -4167,6 +4167,7 @@ mod tests {
                 reasoning_output_tokens: 1,
                 total_tokens: 23,
             },
+            usage_by_service_tier: Default::default(),
             model_context_window: Some(4096),
         };
         let rate_limits = RateLimitSnapshot {

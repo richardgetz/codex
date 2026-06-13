@@ -15,6 +15,13 @@
         },
         "total": {
           "$ref": "#/definitions/TokenUsageBreakdown"
+        },
+        "usageByServiceTier": {
+          "additionalProperties": {
+            "$ref": "#/definitions/TokenUsageBreakdown"
+          },
+          "default": {},
+          "type": "object"
         }
       },
       "required": [

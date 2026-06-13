@@ -1441,6 +1441,11 @@ enabled = true
 input_usd_per_1m = 2.0
 cached_input_usd_per_1m = 0.5
 output_usd_per_1m = 8.0
+
+[tui.status_token_usage.model_rates."custom-model".service_tiers.priority]
+input_usd_per_1m = 5.0
+cached_input_usd_per_1m = 1.0
+output_usd_per_1m = 20.0
 "#;
     let cfg: ConfigToml =
         toml::from_str(toml).expect("TOML deserialization should succeed for TUI config");
@@ -1459,6 +1464,14 @@ output_usd_per_1m = 8.0
             input_usd_per_1m: 2.0,
             cached_input_usd_per_1m: 0.5,
             output_usd_per_1m: 8.0,
+            service_tiers: std::collections::BTreeMap::from([(
+                "priority".to_string(),
+                codex_config::types::TuiStatusTokenUsageServiceTierRate {
+                    input_usd_per_1m: 5.0,
+                    cached_input_usd_per_1m: 1.0,
+                    output_usd_per_1m: 20.0,
+                },
+            )]),
         }
     );
 }
