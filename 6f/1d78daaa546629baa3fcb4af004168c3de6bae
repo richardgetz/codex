@@ -1,0 +1,21 @@
+intent:
+  id: intent/2026-06-13/status-token-usage-service-tiers
+change_type: feat
+scope: codex-rs/tui status token usage service tiers
+summary: Track per-turn token usage by request service tier and price /status estimates with tier-aware rates.
+decision: Bucket usage at response-completion time using the turn's effective service_tier so Fast/Priority and Flex costs are not inferred from the current toggle state.
+constraints:
+  - Preserve existing aggregate token usage fields and default hidden display.
+  - Keep old rollouts readable by defaulting missing usage_by_service_tier maps.
+  - Do not reprice a whole session based on the current Fast toggle.
+  - Config model overrides take precedence; missing custom tier rates must not silently fall back to public built-ins.
+  - Built-in rates must be reviewed when OpenAI API pricing changes; config overrides remain the escape hatch for custom deals.
+intent_priority: should
+code_locations:
+  - codex-rs/protocol/src/protocol.rs
+  - codex-rs/core/src/session/mod.rs
+  - codex-rs/tui/src/status/token_usage_cost.rs
+  - codex-rs/config/src/types.rs
+  - codex-rs/app-server-protocol/src/protocol/v2/thread.rs
+requested_by: Rick
+recorded_by: Codex
