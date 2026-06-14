@@ -3733,6 +3733,18 @@
           "description": "Color status line items with colors derived from the active syntax theme. Defaults to `true`.",
           "type": "boolean"
         },
+        "status_token_usage": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiStatusTokenUsage"
+            }
+          ],
+          "default": {
+            "enabled": false,
+            "model_rates": {}
+          },
+          "description": "Opt-in API-equivalent token usage and cost details for `/status`.\n\nCost estimates use built-in OpenAI API rates when known. Add entries under `model_rates` to override built-in rates, keep new model pricing current, or support models with custom pricing."
+        },
         "terminal_resize_reflow_max_rows": {
           "default": null,
           "description": "Trim terminal resize-reflow replay to the most recent rendered terminal rows when the transcript exceeds this cap. Omit to use Codex's terminal-specific default. Set to `0` to keep all rendered rows.",
@@ -4548,6 +4560,79 @@
           "type": "string"
         }
       ]
+    },
+    "TuiStatusTokenUsage": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Show per-thread API-equivalent token usage and estimated cost in `/status`.\n\nDefaults to `false`.",
+          "type": "boolean"
+        },
+        "model_rates": {
+          "additionalProperties": {
+            "$ref": "#/definitions/TuiStatusTokenUsageRate"
+          },
+          "default": {},
+          "description": "Per-model standard pricing overrides in USD per 1M tokens.\n\nAdd `service_tiers.<tier>` entries for tier-specific overrides such as `priority` (Fast mode) or `flex`.\n\nExample:\n\n```toml [tui.status_token_usage.model_rates.\"gpt-5.3-codex\"] input_usd_per_1m = 1.75 cached_input_usd_per_1m = 0.175 output_usd_per_1m = 14.0\n\n[tui.status_token_usage.model_rates.\"gpt-5.3-codex\".service_tiers.priority] input_usd_per_1m = 2.50 cached_input_usd_per_1m = 0.25 output_usd_per_1m = 20.0 ```",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "TuiStatusTokenUsageRate": {
+      "additionalProperties": false,
+      "properties": {
+        "cached_input_usd_per_1m": {
+          "format": "double",
+          "type": "number"
+        },
+        "input_usd_per_1m": {
+          "format": "double",
+          "type": "number"
+        },
+        "output_usd_per_1m": {
+          "format": "double",
+          "type": "number"
+        },
+        "service_tiers": {
+          "additionalProperties": {
+            "$ref": "#/definitions/TuiStatusTokenUsageServiceTierRate"
+          },
+          "default": {},
+          "description": "Optional service-tier pricing overrides in USD per 1M tokens.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "cached_input_usd_per_1m",
+        "input_usd_per_1m",
+        "output_usd_per_1m"
+      ],
+      "type": "object"
+    },
+    "TuiStatusTokenUsageServiceTierRate": {
+      "additionalProperties": false,
+      "properties": {
+        "cached_input_usd_per_1m": {
+          "format": "double",
+          "type": "number"
+        },
+        "input_usd_per_1m": {
+          "format": "double",
+          "type": "number"
+        },
+        "output_usd_per_1m": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "cached_input_usd_per_1m",
+        "input_usd_per_1m",
+        "output_usd_per_1m"
+      ],
+      "type": "object"
     },
     "TuiVimNormalKeymap": {
       "additionalProperties": false,

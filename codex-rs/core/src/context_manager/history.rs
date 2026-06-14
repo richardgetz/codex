@@ -253,6 +253,7 @@ impl ContextManager {
     pub(crate) fn update_token_info(
         &mut self,
         usage: &TokenUsage,
+        service_tier: Option<&str>,
         model_context_window: Option<i64>,
     ) {
         self.token_info = TokenUsageInfo::new_or_append(
@@ -260,6 +261,14 @@ impl ContextManager {
             &Some(usage.clone()),
             model_context_window,
         );
+        if let Some(service_tier) = service_tier
+            && let Some(info) = self.token_info.as_mut()
+        {
+            info.usage_by_service_tier
+                .entry(service_tier.to_string())
+                .or_default()
+                .add_assign(usage);
+        }
     }
 
     fn get_non_last_reasoning_items_tokens(&self) -> i64 {

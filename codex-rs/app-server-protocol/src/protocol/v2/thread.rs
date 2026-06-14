@@ -27,6 +27,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use ts_rs::TS;
@@ -1375,6 +1376,8 @@ pub struct ThreadTokenUsageUpdatedNotification {
 pub struct ThreadTokenUsage {
     pub total: TokenUsageBreakdown,
     pub last: TokenUsageBreakdown,
+    #[serde(default)]
+    pub usage_by_service_tier: BTreeMap<String, TokenUsageBreakdown>,
     // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
@@ -1506,6 +1509,11 @@ impl From<CoreTokenUsageInfo> for ThreadTokenUsage {
         Self {
             total: value.total_token_usage.into(),
             last: value.last_token_usage.into(),
+            usage_by_service_tier: value
+                .usage_by_service_tier
+                .into_iter()
+                .map(|(service_tier, usage)| (service_tier, usage.into()))
+                .collect(),
             model_context_window: value.model_context_window,
         }
     }

@@ -91,6 +91,7 @@ pub fn create_fake_rollout_with_token_usage(
                 reasoning_output_tokens: 5,
                 total_tokens: 90,
             },
+            usage_by_service_tier: Default::default(),
             model_context_window: Some(200_000),
         }),
         rate_limits: None,

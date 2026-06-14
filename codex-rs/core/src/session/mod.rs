@@ -370,6 +370,7 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionNetworkProxyRuntime;
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::TOKEN_USAGE_STANDARD_SERVICE_TIER;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
@@ -950,6 +951,13 @@ fn get_service_tier(
 fn service_tier_supported_by_model(service_tier: &str, model_info: &ModelInfo) -> bool {
     service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE
         || model_info.supports_service_tier(service_tier)
+}
+
+fn token_usage_service_tier(service_tier: Option<&str>) -> &str {
+    match service_tier {
+        Some(service_tier) if service_tier != SERVICE_TIER_DEFAULT_REQUEST_VALUE => service_tier,
+        Some(_) | None => TOKEN_USAGE_STANDARD_SERVICE_TIER,
+    }
 }
 
 fn session_permission_profile_state_from_config(
@@ -3572,8 +3580,13 @@ impl Session {
         if let Some(token_usage) = token_usage {
             let token_info = {
                 let mut state = self.state.lock().await;
-                state
-                    .update_token_info_from_usage(token_usage, turn_context.model_context_window());
+                let service_tier =
+                    token_usage_service_tier(turn_context.config.service_tier.as_deref());
+                state.update_token_info_from_usage(
+                    token_usage,
+                    Some(service_tier),
+                    turn_context.model_context_window(),
+                );
                 if matches!(
                     turn_context.config.model_auto_compact_token_limit_scope,
                     AutoCompactTokenLimitScope::BodyAfterPrefix
@@ -3610,6 +3623,7 @@ impl Session {
             let mut info = state.token_info().unwrap_or(TokenUsageInfo {
                 total_token_usage: TokenUsage::default(),
                 last_token_usage: TokenUsage::default(),
+                usage_by_service_tier: Default::default(),
                 model_context_window: None,
             });
 

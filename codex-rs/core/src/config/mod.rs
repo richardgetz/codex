@@ -68,6 +68,7 @@ use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::TuiPetAnchor;
+use codex_config::types::TuiStatusTokenUsage;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::UserPreferencesMemoryBucketPolicy;
 use codex_config::types::UserPreferencesMemoryConfig;
@@ -920,6 +921,9 @@ pub struct Config {
 
     /// Whether to color status line items with colors from the active syntax theme.
     pub tui_status_line_use_colors: bool,
+
+    /// Opt-in API-equivalent token usage and cost details for `/status`.
+    pub tui_status_token_usage: TuiStatusTokenUsage,
 
     /// Ordered list of terminal title item identifiers for the TUI.
     ///
@@ -4213,6 +4217,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.status_line_use_colors)
                 .unwrap_or(true),
+            tui_status_token_usage: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.status_token_usage.clone())
+                .unwrap_or_default(),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
             tui_pet: cfg.tui.as_ref().and_then(|t| t.pet.clone()),

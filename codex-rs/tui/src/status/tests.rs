@@ -226,6 +226,7 @@ fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> Toke
     TokenUsageInfo {
         total_token_usage: usage.clone(),
         last_token_usage: usage.clone(),
+        usage_by_service_tier: Default::default(),
         model_context_window: context_window,
     }
 }
@@ -1415,6 +1416,99 @@ async fn status_card_token_usage_excludes_cached_tokens() {
 }
 
 #[tokio::test]
+async fn status_snapshot_includes_opt_in_api_equivalent_token_usage() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.3-codex".to_string());
+    config.model_provider_id = "openai".to_string();
+    config.tui_status_token_usage.enabled = true;
+    set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
+
+    let account_display = test_status_account_display();
+    let usage = TokenUsage {
+        input_tokens: 151_800,
+        cached_input_tokens: 119_400,
+        output_tokens: 32_400,
+        reasoning_output_tokens: 8_700,
+        total_tokens: 184_200,
+    };
+
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+        .single()
+        .expect("timestamp");
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let token_info = token_info_for(&model_slug, &config, &usage);
+    let composite = new_status_output(
+        &config,
+        account_display.as_ref(),
+        Some(&token_info),
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
+        None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+    );
+    let rendered =
+        sanitize_directory(render_lines(&composite.display_lines(/*width*/ 120))).join("\n");
+
+    assert_snapshot!(rendered);
+}
+
+#[tokio::test]
+async fn status_snapshot_prices_fast_usage_with_priority_rates() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.5".to_string());
+    config.model_provider_id = "openai".to_string();
+    config.tui_status_token_usage.enabled = true;
+    set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
+
+    let account_display = test_status_account_display();
+    let usage = TokenUsage {
+        input_tokens: 23_300,
+        cached_input_tokens: 2_400,
+        output_tokens: 36,
+        reasoning_output_tokens: 27,
+        total_tokens: 23_336,
+    };
+
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+        .single()
+        .expect("timestamp");
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let mut token_info = token_info_for(&model_slug, &config, &usage);
+    token_info
+        .usage_by_service_tier
+        .insert("priority".to_string(), usage.clone());
+    let composite = new_status_output(
+        &config,
+        account_display.as_ref(),
+        Some(&token_info),
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
+        None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+    );
+    let rendered =
+        sanitize_directory(render_lines(&composite.display_lines(/*width*/ 120))).join("\n");
+
+    assert_snapshot!(rendered);
+}
+
+#[tokio::test]
 async fn status_snapshot_truncates_in_narrow_terminal() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
@@ -2011,6 +2105,7 @@ async fn status_context_window_uses_last_usage() {
     let token_info = TokenUsageInfo {
         total_token_usage: total_usage.clone(),
         last_token_usage: last_usage,
+        usage_by_service_tier: Default::default(),
         model_context_window: config.model_context_window,
     };
     let composite = new_status_output(
