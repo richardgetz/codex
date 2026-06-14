@@ -804,6 +804,82 @@ items = ["canva@openai-curated"]
 }
 
 #[test]
+fn ignores_legacy_orchestrator_mode_enablement_config() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[enablement.modes.orchestrator.mcps]
+mode = "include"
+items = ["fs-guard"]
+
+[enablement.modes.default.mcps]
+mode = "include"
+items = ["aws-auth-guard"]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.enablement,
+        Some(EnablementConfig {
+            modes: [(
+                ModeKind::Default,
+                ModeEnablementConfig {
+                    skills: None,
+                    mcps: Some(EnablementFilterConfig {
+                        mode: EnablementFilterMode::Include,
+                        items: vec!["aws-auth-guard".to_string()],
+                    }),
+                    plugins: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        })
+    );
+}
+
+#[test]
+fn ignores_legacy_mode_alias_config_blocks() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[skills.modes.orchestrator]
+old_field = "ignored"
+
+[scratchpad.modes.continuous]
+old_field = "ignored"
+
+[schedule.modes.execute]
+old_field = "ignored"
+"#,
+    )
+    .expect("legacy mode config blocks should be ignored");
+
+    assert_eq!(
+        cfg.skills,
+        Some(SkillsConfig {
+            bundled: None,
+            include_instructions: None,
+            config: Vec::new(),
+            modes: Default::default(),
+        })
+    );
+    assert_eq!(
+        cfg.scratchpad,
+        Some(ScratchpadToml {
+            modes: Default::default(),
+            ..Default::default()
+        })
+    );
+    assert_eq!(
+        cfg.schedule,
+        Some(ScheduleToml {
+            enabled: None,
+            modes: Default::default(),
+        })
+    );
+}
+
+#[test]
 fn parses_mode_scoped_scratchpad_config() {
     let cfg: ConfigToml = toml::from_str(
         r#"

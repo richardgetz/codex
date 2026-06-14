@@ -54,7 +54,11 @@ pub struct SkillsConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config: Vec<SkillConfig>,
 
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "crate::mode_config::deserialize_current_mode_config_map",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
     pub modes: HashMap<ModeKind, SkillModeFilterConfig>,
 }
 

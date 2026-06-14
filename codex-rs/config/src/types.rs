@@ -676,7 +676,11 @@ pub struct ScratchpadToml {
     /// TUI rendering controls for live scratchpad update cards.
     pub view: Option<ScratchpadViewToml>,
     /// Collaboration-mode-specific overrides.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "crate::mode_config::deserialize_current_mode_config_map",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
     pub modes: HashMap<ModeKind, ScratchpadModeToml>,
 }
 
@@ -1051,7 +1055,11 @@ pub struct ScheduleToml {
     /// Global default for built-in schedule tool exposure.
     pub enabled: Option<bool>,
     /// Collaboration-mode-specific overrides.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "crate::mode_config::deserialize_current_mode_config_map",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
     pub modes: HashMap<ModeKind, ScheduleModeToml>,
 }
 
