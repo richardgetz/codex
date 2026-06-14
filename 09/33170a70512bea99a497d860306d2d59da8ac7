@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-06-14/ignore-legacy-mode-config-aliases#0933170a7"
+  change_type: "fix"
+  scope: "config"
+  summary: "Prevent stale legacy mode config tables from being applied to Default mode."
+  decision: "Deserialize mode-keyed config maps with current config keys only, ignoring legacy aliases such as orchestrator and continuous, while preserving ModeKind alias compatibility for old serialized session and control payloads."
+  constraints:
+    - "Must not remove the global ModeKind orchestrator alias because old serialized collaboration-mode values still need to map to Default."
+    - "Must prevent stale [enablement.modes.orchestrator] allowlists from filtering Default session MCP visibility."
+    - "Must apply consistently to current config tables keyed by ModeKind."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/config/src/mode_config.rs"
+    - "codex-rs/config/src/enablement_config.rs"
+    - "codex-rs/config/src/skills_config.rs"
+    - "codex-rs/config/src/types.rs"
+    - "codex-rs/core/src/config/config_tests.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
