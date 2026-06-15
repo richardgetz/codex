@@ -38,6 +38,10 @@ pub struct ModeEnablementConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct EnablementConfig {
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "crate::mode_config::deserialize_current_mode_config_map",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
     pub modes: HashMap<ModeKind, ModeEnablementConfig>,
 }
