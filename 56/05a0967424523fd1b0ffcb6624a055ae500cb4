@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-06-18/tui-dismiss-version-release-build#5605a0967"
+  change_type: "fix"
+  scope: "codex-rs/tui update checks"
+  summary: "Fix release-mode TUI build failure after the rust-v0.140.0 stable merge."
+  decision: "Keep updates_cache::dismiss_version as the single dismissal implementation exported through updates.rs and remove the stale release-only duplicate function/import from updates.rs."
+  constraints:
+    - "Must preserve update-popup dismissal behavior for the fork and upstream 0.140.0 additions."
+    - "Must compile under cfg(not(debug_assertions)) because fork-release builds codex-tui in release mode."
+    - "Must keep the change narrow to the post-merge release-build failure."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/updates.rs"
+    - "codex-rs/tui/src/updates_cache.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
