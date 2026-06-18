@@ -7,7 +7,6 @@ use crate::update_action;
 use crate::update_action::UpdateAction;
 use crate::update_versions::extract_version_from_latest_tag;
 use crate::update_versions::is_newer;
-use crate::update_versions::is_source_build_version;
 use crate::updates_cache::VersionInfo;
 use crate::updates_cache::read_version_info;
 use crate::updates_cache::version_filepath;
@@ -141,23 +140,6 @@ pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
         return None;
     }
     Some(latest)
-}
-
-/// Persist a dismissal for the current latest version so we don't show
-/// the update popup again for this version.
-pub async fn dismiss_version(config: &Config, version: &str) -> anyhow::Result<()> {
-    let version_file = version_filepath(config);
-    let mut info = match read_version_info(&version_file) {
-        Ok(info) => info,
-        Err(_) => return Ok(()),
-    };
-    info.dismissed_version = Some(version.to_string());
-    let json_line = format!("{}\n", serde_json::to_string(&info)?);
-    if let Some(parent) = version_file.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::write(version_file, json_line).await?;
-    Ok(())
 }
 
 fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
