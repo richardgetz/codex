@@ -5,6 +5,7 @@ use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo as McpToolInfo;
 use codex_mcp::tool_is_model_visible;
 use codex_tools::ToolsConfig;
+use tracing::instrument;
 
 use crate::config::Config;
 use crate::connectors;
@@ -16,6 +17,7 @@ pub(crate) struct McpToolExposure {
     pub(crate) deferred_tools: Option<Vec<McpToolInfo>>,
 }
 
+#[instrument(level = "trace", skip_all)]
 pub(crate) fn build_mcp_tool_exposure(
     all_mcp_tools: &[McpToolInfo],
     connectors: Option<&[connectors::AppInfo]>,

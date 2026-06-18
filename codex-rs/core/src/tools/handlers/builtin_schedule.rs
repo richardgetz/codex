@@ -107,7 +107,6 @@ fn loose_object_schema() -> JsonSchema {
 
 pub(crate) struct BuiltinScheduleHandler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for BuiltinScheduleHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(SCHEDULE_NAMESPACE, TOOL_CREATE)
@@ -117,7 +116,13 @@ impl ToolExecutor<ToolInvocation> for BuiltinScheduleHandler {
         schedule_namespace_spec()
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl BuiltinScheduleHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {

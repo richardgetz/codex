@@ -826,7 +826,7 @@ fn parse_tool_input_schema_preserves_nested_all_of_property() {
                 JsonSchema::all_of(
                     vec![
                         JsonSchema::string(/*description*/ None),
-                        JsonSchema::default(),
+                        JsonSchema::string(Some("unrecognized by itself".to_string())),
                     ],
                     /*description*/ None,
                 ),

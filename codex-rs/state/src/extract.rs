@@ -22,6 +22,7 @@ pub fn apply_rollout_item(
         RolloutItem::TurnContext(turn_ctx) => apply_turn_context(metadata, turn_ctx),
         RolloutItem::EventMsg(event) => apply_event_msg(metadata, event),
         RolloutItem::ResponseItem(item) => apply_response_item(metadata, item),
+        RolloutItem::InterAgentCommunication(_) => {}
         RolloutItem::Compacted(_) => {}
     }
     if metadata.model_provider.is_empty() {
@@ -36,9 +37,10 @@ pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
         RolloutItem::EventMsg(
             EventMsg::TokenCount(_) | EventMsg::UserMessage(_) | EventMsg::ThreadGoalUpdated(_),
         ) => true,
-        RolloutItem::EventMsg(_) | RolloutItem::ResponseItem(_) | RolloutItem::Compacted(_) => {
-            false
-        }
+        RolloutItem::EventMsg(_)
+        | RolloutItem::ResponseItem(_)
+        | RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::Compacted(_) => false,
     }
 }
 
@@ -50,7 +52,7 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
     }
     metadata.id = meta_line.meta.id;
     metadata.source = enum_to_string(&meta_line.meta.source);
-    metadata.thread_source = meta_line.meta.thread_source;
+    metadata.thread_source = meta_line.meta.thread_source.clone();
     metadata.agent_nickname = meta_line.meta.agent_nickname.clone();
     metadata.agent_role = meta_line.meta.agent_role.clone();
     metadata.agent_path = meta_line.meta.agent_path.clone();
@@ -357,6 +359,7 @@ mod tests {
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
+                comp_hash: None,
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,
@@ -389,6 +392,7 @@ mod tests {
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
+                trace_id: None,
                 cwd: PathBuf::from("/workspace"),
                 workspace_roots: None,
                 current_date: None,
@@ -399,12 +403,17 @@ mod tests {
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
+                comp_hash: None,
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,
                 realtime_active: None,
                 effort: None,
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
+                user_instructions: None,
+                developer_instructions: None,
+                final_output_json_schema: None,
+                truncation_policy: None,
             }),
             "test-provider",
         );
@@ -435,6 +444,7 @@ mod tests {
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
+                comp_hash: None,
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,
@@ -471,6 +481,7 @@ mod tests {
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
+                comp_hash: None,
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,

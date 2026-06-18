@@ -216,7 +216,6 @@ fn loose_object_schema() -> JsonSchema {
 
 pub(crate) struct BuiltinScratchpadHandler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for BuiltinScratchpadHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(SCRATCHPAD_NAMESPACE, TOOL_OPEN)
@@ -226,7 +225,13 @@ impl ToolExecutor<ToolInvocation> for BuiltinScratchpadHandler {
         scratchpad_namespace_spec()
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl BuiltinScratchpadHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
