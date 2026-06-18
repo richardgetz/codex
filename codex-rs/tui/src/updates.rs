@@ -8,16 +8,18 @@ use crate::update_action::UpdateAction;
 use crate::update_versions::extract_version_from_latest_tag;
 use crate::update_versions::is_newer;
 use crate::update_versions::is_source_build_version;
-use chrono::DateTime;
+use crate::updates_cache::VersionInfo;
+use crate::updates_cache::read_version_info;
+use crate::updates_cache::version_filepath;
 use chrono::Duration;
 use chrono::Utc;
 use codex_login::default_client::create_client;
 use serde::Deserialize;
-use serde::Serialize;
 use std::path::Path;
-use std::path::PathBuf;
 
 use crate::version::CODEX_CLI_VERSION;
+
+pub(crate) use crate::updates_cache::dismiss_version;
 
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
     if !config.check_for_update_on_startup || codex_build_info::is_source_build() {
@@ -51,16 +53,6 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
     })
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct VersionInfo {
-    latest_version: String,
-    // ISO-8601 timestamp (RFC3339)
-    last_checked_at: DateTime<Utc>,
-    #[serde(default)]
-    dismissed_version: Option<String>,
-}
-
-const VERSION_FILENAME: &str = "version.json";
 // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
 const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
@@ -73,15 +65,6 @@ struct ReleaseInfo {
 #[derive(Deserialize, Debug, Clone)]
 struct HomebrewCaskInfo {
     version: String,
-}
-
-fn version_filepath(config: &Config) -> PathBuf {
-    config.codex_home.join(VERSION_FILENAME).into_path_buf()
-}
-
-fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
-    let contents = std::fs::read_to_string(version_file)?;
-    Ok(serde_json::from_str(&contents)?)
 }
 
 async fn check_for_update(version_file: &Path, action: Option<UpdateAction>) -> anyhow::Result<()> {

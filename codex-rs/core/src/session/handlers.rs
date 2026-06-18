@@ -20,16 +20,13 @@ use crate::tools::handlers::builtin_scratchpad::scratchpad_update_event_from_res
 use crate::tools::handlers::builtin_scratchpad::set_thread_continuous_policy;
 
 use crate::config::Config;
-use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
-use crate::realtime_context::truncate_realtime_text_to_token_budget;
-use crate::realtime_conversation::REALTIME_USER_TEXT_PREFIX;
-use crate::realtime_conversation::prefix_realtime_v2_text;
 use crate::review_prompts::resolve_review_request;
 use crate::session::spawn_review_thread;
 use crate::tasks::CompactTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
+use codex_mcp::McpConnectionManager;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -65,9 +62,7 @@ use codex_protocol::config_types::MemoryAccessPolicy;
 use codex_protocol::config_types::UserPreferencesMemoryBucket;
 use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
-use codex_protocol::items::UserMessageItem;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
-use codex_protocol::user_input::UserInput;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use serde_json::Value;
@@ -102,14 +97,7 @@ pub async fn user_input_or_turn(
     op: Op,
     client_user_message_id: Option<String>,
 ) {
-    user_input_or_turn_inner(
-        sess,
-        sub_id,
-        op,
-        /*mirror_user_text_to_realtime*/ Some(()),
-        client_user_message_id,
-    )
-    .await;
+    user_input_or_turn_inner(sess, sub_id, op, client_user_message_id).await;
 }
 
 pub async fn update_thread_settings(
@@ -212,7 +200,6 @@ pub(super) async fn user_input_or_turn_inner(
     sess: &Arc<Session>,
     sub_id: String,
     op: Op,
-    mirror_user_text_to_realtime: Option<()>,
     client_user_message_id: Option<String>,
 ) {
     let Op::UserInput {
@@ -248,7 +235,7 @@ pub(super) async fn user_input_or_turn_inner(
         .await;
     sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
         .await;
-    let accepted_items = match sess
+    match sess
         .steer_input(
             items.clone(),
             additional_context.clone(),
@@ -260,7 +247,6 @@ pub(super) async fn user_input_or_turn_inner(
     {
         Ok(_) => {
             current_context.session_telemetry.user_prompt(&items);
-            Some(items)
         }
         Err(SteerInputError::NoActiveTurn(items)) => {
             if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
@@ -274,7 +260,6 @@ pub(super) async fn user_input_or_turn_inner(
                 Some(sess.mcp_elicitation_reviewer()),
             )
             .await;
-            let accepted_items = items.clone();
             let additional_context_input = {
                 let mut state = sess.state.lock().await;
                 state.additional_context.merge(additional_context)
@@ -328,7 +313,6 @@ pub(super) async fn user_input_or_turn_inner(
                 crate::tasks::RegularTask::new(),
             )
             .await;
-            Some(accepted_items)
         }
         Err(err) => {
             sess.send_event_raw(Event {
@@ -336,37 +320,11 @@ pub(super) async fn user_input_or_turn_inner(
                 msg: EventMsg::Error(err.to_error_event()),
             })
             .await;
-            None
         }
-    };
-    if let (Some(items), Some(())) = (accepted_items, mirror_user_text_to_realtime) {
-        self::mirror_user_text_to_realtime(sess, &items).await;
     }
 }
 
-async fn mirror_user_text_to_realtime(sess: &Arc<Session>, items: &[UserInput]) {
-    let text = UserMessageItem::new(items).message();
-    if text.is_empty() {
-        return;
-    }
-    let text = if sess.conversation.is_running_v2().await {
-        prefix_realtime_v2_text(text, REALTIME_USER_TEXT_PREFIX)
-    } else {
-        text
-    };
-    let text = truncate_realtime_text_to_token_budget(&text, REALTIME_TURN_TOKEN_BUDGET);
-    if text.is_empty() {
-        return;
-    }
-    if sess.conversation.running_state().await.is_none() {
-        return;
-    }
-    if let Err(err) = sess.conversation.text_in(text).await {
-        debug!("failed to mirror user text to realtime conversation: {err}");
-    }
-}
-
-/// Records an inter-agent assistant envelope, then lets the shared pending-work scheduler
+/// Queues an inter-agent message, then lets the shared pending-work scheduler
 /// decide whether an idle session should start a regular turn.
 pub async fn inter_agent_communication(
     sess: &Arc<Session>,
@@ -1189,6 +1147,9 @@ async fn clear_memory_root_contents(memory_root: &std::path::Path) -> std::io::R
 }
 
 async fn shutdown_session_runtime(sess: &Arc<Session>) {
+    if let Some(startup_prewarm) = sess.take_session_startup_prewarm().await {
+        startup_prewarm.abort().await;
+    }
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
     let _ = sess.conversation.shutdown().await;
     sess.services
@@ -1198,11 +1159,18 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Err(err) = sess.services.code_mode_service.shutdown().await {
         warn!("failed to shutdown code mode session: {err}");
     }
-    let mcp_shutdown = {
-        let mut manager = sess.services.mcp_connection_manager.write().await;
-        manager.begin_shutdown()
-    };
-    mcp_shutdown.await;
+    let config = sess.get_config().await;
+    let old_mcp_manager = sess.services.mcp_connection_manager.swap(Arc::new(
+        McpConnectionManager::new_uninitialized_with_permission_profile(
+            &config.permissions.approval_policy,
+            config.permissions.permission_profile(),
+            config.prefix_mcp_tool_names(),
+        ),
+    ));
+    match Arc::try_unwrap(old_mcp_manager) {
+        Ok(mut manager) => manager.shutdown().await,
+        Err(_) => warn!("skipping MCP shutdown because the manager still has active references"),
+    }
     sess.guardian_review_session.shutdown().await;
 }
 

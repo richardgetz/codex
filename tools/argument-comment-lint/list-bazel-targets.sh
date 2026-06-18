@@ -23,5 +23,8 @@ if [[ "${RUNNER_OS:-}" == "macOS" ]]; then
   manual_rust_test_targets="$(printf '%s\n' "${manual_rust_test_targets}" | grep -v -- '/realtime-webrtc:realtime-webrtc-unit-tests-bin$' || true)"
 fi
 
-printf '%s\n' "//codex-rs/..."
+# The lint configuration does not register the transitioned Windows toolchain.
+printf '%s\n' \
+  "//codex-rs/..." \
+  "-//codex-rs/core/tests/remote_env_windows:smoke-test"
 printf '%s\n' "${manual_rust_test_targets}"
