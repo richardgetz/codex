@@ -4,8 +4,9 @@ use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::ThreadStoreConfig;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::default_thread_environment_selections;
-use crate::environment_selection::resolve_environment_selections;
+use crate::exec_policy::ExecPolicyManager;
 use crate::mcp::McpManager;
 use crate::rollout::truncation;
 use crate::session::Codex;
@@ -13,7 +14,6 @@ use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::resolve_multi_agent_version;
-use crate::shell_snapshot::ShellSnapshot;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
@@ -211,7 +211,7 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) agent_control: AgentControl,
     pub(crate) session_source: SessionSource,
     pub(crate) parent_thread_id: Option<ThreadId>,
-    pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+    pub(crate) inherited_environments: Option<TurnEnvironmentSnapshot>,
     pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
 }
 
@@ -643,12 +643,25 @@ impl ThreadManager {
         options: StartThreadOptions,
         forked_from_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread> {
+        self.validate_environment_selections(&options.environments)?;
         let (resumed_session_source, resumed_thread_source) = options
             .initial_history
             .get_resumed_session_sources()
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
         let session_source = options.session_source.unwrap_or(resumed_session_source);
         let thread_source = options.thread_source.or(resumed_thread_source);
+        let inherited_exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source)
+        {
+            None
+        } else {
+            Some(Arc::new(
+                ExecPolicyManager::load(&options.config)
+                    .await
+                    .map_err(|err| {
+                        CodexErr::InvalidRequest(format!("failed to load rules: {err}"))
+                    })?,
+            ))
+        };
         Box::pin(self.state.spawn_thread_with_source(
             options.config,
             /*initial_collaboration_mode*/ None,
@@ -661,8 +674,8 @@ impl ThreadManager {
             thread_source,
             options.dynamic_tools,
             options.metrics_service_name,
-            /*inherited_shell_snapshot*/ None,
-            /*inherited_exec_policy*/ None,
+            /*inherited_environments*/ None,
+            inherited_exec_policy,
             options.parent_trace,
             options.environments,
             options.thread_extension_init,
@@ -756,7 +769,7 @@ impl ThreadManager {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
-            /*inherited_shell_snapshot*/ None,
+            /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             parent_trace,
             environments,
@@ -825,7 +838,7 @@ impl ThreadManager {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
-            /*inherited_shell_snapshot*/ None,
+            /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             /*parent_trace*/ None,
             environments,
@@ -1227,7 +1240,7 @@ impl ThreadManagerState {
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
             /*metrics_service_name*/ None,
-            /*inherited_shell_snapshot*/ None,
+            /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             /*environments*/ None,
         ))
@@ -1245,7 +1258,7 @@ impl ThreadManagerState {
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         metrics_service_name: Option<String>,
-        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
@@ -1264,7 +1277,7 @@ impl ThreadManagerState {
             thread_source,
             Vec::new(),
             metrics_service_name,
-            inherited_shell_snapshot,
+            inherited_environments,
             inherited_exec_policy,
             /*parent_trace*/ None,
             environments,
@@ -1284,7 +1297,7 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             parent_thread_id,
-            inherited_shell_snapshot,
+            inherited_environments,
             inherited_exec_policy,
         } = options;
         let environments =
@@ -1302,7 +1315,7 @@ impl ThreadManagerState {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
-            inherited_shell_snapshot,
+            inherited_environments,
             inherited_exec_policy,
             /*parent_trace*/ None,
             environments,
@@ -1323,7 +1336,7 @@ impl ThreadManagerState {
         thread_source: Option<ThreadSource>,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
-        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
@@ -1342,7 +1355,7 @@ impl ThreadManagerState {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
-            inherited_shell_snapshot,
+            inherited_environments,
             inherited_exec_policy,
             /*parent_trace*/ None,
             environments,
@@ -1383,7 +1396,7 @@ impl ThreadManagerState {
             thread_source,
             dynamic_tools,
             metrics_service_name,
-            /*inherited_shell_snapshot*/ None,
+            /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             parent_trace,
             environments,
@@ -1397,7 +1410,7 @@ impl ThreadManagerState {
     pub(crate) async fn spawn_thread_with_source(
         &self,
         config: Config,
-        _initial_collaboration_mode: Option<CollaborationMode>,
+        initial_collaboration_mode: Option<CollaborationMode>,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
@@ -1407,7 +1420,7 @@ impl ThreadManagerState {
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         metrics_service_name: Option<String>,
-        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
@@ -1436,9 +1449,6 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
-        let environment_selections =
-            resolve_environment_selections(self.environment_manager.as_ref(), &environments)
-                .await?;
         let user_instructions = self
             .user_instructions_for_spawn(&session_source, parent_thread_id, forked_from_thread_id)
             .await;
@@ -1468,6 +1478,7 @@ impl ThreadManagerState {
             mcp_manager: Arc::clone(&self.mcp_manager),
             extensions: Arc::clone(&self.extensions),
             conversation_history: initial_history,
+            initial_collaboration_mode,
             session_source,
             forked_from_thread_id,
             parent_thread_id,
@@ -1475,12 +1486,12 @@ impl ThreadManagerState {
             agent_control,
             dynamic_tools,
             metrics_service_name,
-            inherited_shell_snapshot,
+            inherited_environments,
             inherited_exec_policy,
             parent_rollout_thread_trace,
             user_shell_override,
             parent_trace,
-            environment_selections,
+            environment_selections: environments,
             thread_extension_init,
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),

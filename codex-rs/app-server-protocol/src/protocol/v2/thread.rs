@@ -19,6 +19,10 @@ use codex_protocol::config_types::MemoryAccessPolicy;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
+pub use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+pub use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
+pub use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
+pub use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
@@ -42,55 +46,6 @@ pub enum ThreadStartSource {
     Clear,
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct DynamicToolSpec {
-    #[ts(optional)]
-    pub namespace: Option<String>,
-    pub name: String,
-    pub description: String,
-    pub input_schema: JsonValue,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub defer_loading: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DynamicToolSpecDe {
-    namespace: Option<String>,
-    name: String,
-    description: String,
-    input_schema: JsonValue,
-    defer_loading: Option<bool>,
-    expose_to_context: Option<bool>,
-}
-
-impl<'de> Deserialize<'de> for DynamicToolSpec {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let DynamicToolSpecDe {
-            namespace,
-            name,
-            description,
-            input_schema,
-            defer_loading,
-            expose_to_context,
-        } = DynamicToolSpecDe::deserialize(deserializer)?;
-
-        Ok(Self {
-            namespace,
-            name,
-            description,
-            input_schema,
-            defer_loading: defer_loading
-                .unwrap_or_else(|| expose_to_context.map(|visible| !visible).unwrap_or(false)),
-        })
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -98,7 +53,6 @@ pub struct ThreadExecPolicyParams {
     /// Named exec-policy rulesets to apply to this thread.
     pub rulesets: Vec<String>,
 }
-
 // === Threads, Turns, and Items ===
 // Thread APIs
 #[derive(
@@ -180,6 +134,10 @@ pub struct ThreadStartParams {
     #[ts(optional = nullable)]
     pub memory_policy: Option<MemoryAccessPolicy>,
     #[experimental("thread/start.dynamicTools")]
+    #[serde(
+        default,
+        deserialize_with = "codex_protocol::dynamic_tools::deserialize_dynamic_tool_specs"
+    )]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     /// Capability roots selected for this thread by the hosting platform.
@@ -1140,7 +1098,7 @@ pub struct ThreadRollbackResponse {
     pub thread: Thread,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadListParams {
@@ -1180,6 +1138,10 @@ pub struct ThreadListParams {
     /// Optional substring filter for the extracted thread title.
     #[ts(optional = nullable)]
     pub search_term: Option<String>,
+    /// Optional direct parent thread filter.
+    #[experimental("thread/list.parentThreadId")]
+    #[ts(optional = nullable)]
+    pub parent_thread_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

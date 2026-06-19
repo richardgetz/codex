@@ -76,6 +76,7 @@ async fn recent_image_fallback_preserves_latest_user_anchor_and_generated_contex
                 },
             ],
             phase: None,
+            metadata: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -83,10 +84,12 @@ async fn recent_image_fallback_preserves_latest_user_anchor_and_generated_contex
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "mcp-call".to_string(),
+            metadata: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "mcp-call".to_string(),
             output: image_output("mcp"),
+            metadata: None,
         },
         ResponseItem::CustomToolCall {
             id: None,
@@ -94,21 +97,25 @@ async fn recent_image_fallback_preserves_latest_user_anchor_and_generated_contex
             call_id: "code-mode-call".to_string(),
             name: "exec".to_string(),
             input: String::new(),
+            metadata: None,
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "code-mode-call".to_string(),
             name: Some("exec".to_string()),
             output: image_output("code-mode"),
+            metadata: None,
         },
         ResponseItem::ImageGenerationCall {
             id: "generated-call".to_string(),
             status: "completed".to_string(),
             revised_prompt: None,
             result: "generated".to_string(),
+            metadata: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "orphan-call".to_string(),
             output: image_output("orphan"),
+            metadata: None,
         },
     ];
 
@@ -196,6 +203,7 @@ async fn recent_image_fallback_requires_requested_count() {
             role: "user".to_string(),
             content: vec![input_image("only-image")],
             phase: None,
+            metadata: None,
         }],
         &[],
     )
@@ -282,8 +290,8 @@ fn generated_output_omits_oversized_output_hint() {
     );
 }
 
-#[test]
-fn edit_matches_context_selector_for_generated_images_after_latest_user_anchor() {
+#[tokio::test]
+async fn edit_matches_context_selector_for_generated_images_after_latest_user_anchor() {
     let history = vec![
         generated_item("g1"),
         generated_item("g2"),
@@ -302,6 +310,7 @@ fn edit_matches_context_selector_for_generated_images_after_latest_user_anchor()
                 },
             ],
             phase: None,
+            metadata: None,
         },
         generated_item("g4"),
         generated_item("g5"),
@@ -310,13 +319,13 @@ fn edit_matches_context_selector_for_generated_images_after_latest_user_anchor()
     ];
 
     assert_eq!(
-        edit_request("change the lighting", &history, 5),
+        edit_request("change the lighting", &history, 5).await,
         expected_edit_request("change the lighting", &["u1", "u2", "g5", "g6", "g7"])
     );
 }
 
-#[test]
-fn edit_preserves_a_generated_image_when_user_anchor_fills_the_limit() {
+#[tokio::test]
+async fn edit_preserves_a_generated_image_when_user_anchor_fills_the_limit() {
     let history = vec![
         ResponseItem::Message {
             id: None,
@@ -329,12 +338,13 @@ fn edit_preserves_a_generated_image_when_user_anchor_fills_the_limit() {
                 })
                 .collect(),
             phase: None,
+            metadata: None,
         },
         generated_item("generated"),
     ];
 
     assert_eq!(
-        edit_request("edit the last generated image", &history, 5),
+        edit_request("edit the last generated image", &history, 5).await,
         expected_edit_request(
             "edit the last generated image",
             &["b", "c", "d", "e", "generated"]
@@ -342,8 +352,8 @@ fn edit_preserves_a_generated_image_when_user_anchor_fills_the_limit() {
     );
 }
 
-#[test]
-fn edit_uses_latest_user_upload_before_a_text_only_follow_up() {
+#[tokio::test]
+async fn edit_uses_latest_user_upload_before_a_text_only_follow_up() {
     let history = vec![
         ResponseItem::Message {
             id: None,
@@ -353,6 +363,7 @@ fn edit_uses_latest_user_upload_before_a_text_only_follow_up() {
                 detail: None,
             }],
             phase: None,
+            metadata: None,
         },
         ResponseItem::Message {
             id: None,
@@ -366,17 +377,18 @@ fn edit_uses_latest_user_upload_before_a_text_only_follow_up() {
                 },
             ],
             phase: None,
+            metadata: None,
         },
     ];
 
     assert_eq!(
-        edit_request("change the lighting", &history, 1),
+        edit_request("change the lighting", &history, 1).await,
         expected_edit_request("change the lighting", &["user"])
     );
 }
 
-#[test]
-fn edit_reuses_images_from_prior_standalone_imagegen_calls() {
+#[tokio::test]
+async fn edit_reuses_images_from_prior_standalone_imagegen_calls() {
     let history = vec![
         ResponseItem::FunctionCall {
             id: None,
@@ -384,18 +396,19 @@ fn edit_reuses_images_from_prior_standalone_imagegen_calls() {
             namespace: Some(IMAGE_GEN_NAMESPACE.to_string()),
             arguments: "{}".to_string(),
             call_id: "imagegen-1".to_string(),
+            metadata: None,
         },
         generated_function_output("imagegen-1", "standalone"),
     ];
 
     assert_eq!(
-        edit_request("change the lighting", &history, 1),
+        edit_request("change the lighting", &history, 1).await,
         expected_edit_request("change the lighting", &["standalone"])
     );
 }
 
-#[test]
-fn edit_keeps_newest_standalone_generated_images_when_over_limit() {
+#[tokio::test]
+async fn edit_keeps_newest_standalone_generated_images_when_over_limit() {
     let history = (1..=6)
         .flat_map(|index| {
             let call_id = format!("imagegen-{index}");
@@ -406,6 +419,7 @@ fn edit_keeps_newest_standalone_generated_images_when_over_limit() {
                     namespace: Some(IMAGE_GEN_NAMESPACE.to_string()),
                     arguments: "{}".to_string(),
                     call_id: call_id.clone(),
+                    metadata: None,
                 },
                 generated_function_output(&call_id, &index.to_string()),
             ]
@@ -413,7 +427,7 @@ fn edit_keeps_newest_standalone_generated_images_when_over_limit() {
         .collect::<Vec<_>>();
 
     assert_eq!(
-        edit_request("change the lighting", &history, 5),
+        edit_request("change the lighting", &history, 5).await,
         expected_edit_request("change the lighting", &["2", "3", "4", "5", "6"])
     );
 }
@@ -425,15 +439,17 @@ fn input_image(image: &str) -> ContentItem {
     }
 }
 
-fn edit_request(prompt: &str, history: &[ResponseItem], count: usize) -> ImageEditRequest {
-    let ImageRequest::Edit(request) = request_for_args(
+async fn edit_request(prompt: &str, history: &[ResponseItem], count: usize) -> ImageEditRequest {
+    let ImageRequest::Edit(request) = request_for_call_args(
         &ImagegenArgs {
             prompt: prompt.to_string(),
             referenced_image_paths: None,
             num_last_images_to_include: Some(count),
         },
         history,
+        &[],
     )
+    .await
     .expect("edit request should build") else {
         panic!("expected edit request");
     };
@@ -476,6 +492,7 @@ fn generated_item(result: &str) -> ResponseItem {
         status: "completed".to_string(),
         revised_prompt: None,
         result: result.to_string(),
+        metadata: None,
     }
 }
 
@@ -494,5 +511,6 @@ fn generated_function_output(call_id: &str, result: &str) -> ResponseItem {
             ]),
             success: Some(true),
         },
+        metadata: None,
     }
 }

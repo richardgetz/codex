@@ -12,16 +12,20 @@ use crate::elicitation::elicitation_is_rejected_by_policy;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
+use crate::server::EffectiveMcpServer;
+use crate::server::McpServerMetadata;
 use crate::server::McpServerOrigin;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
 use crate::tools::normalize_tools_for_model_with_prefix;
 use crate::tools::tool_with_model_visible_input_schema;
+use codex_config::AppToolApproval;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
 use codex_config::McpServerSharingMode;
 use codex_config::McpServerStartupMode;
+use codex_config::McpServerToolConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_exec_server::EnvironmentManager;
@@ -1132,6 +1136,8 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
                 "https://docs.example".to_string(),
             )),
             supports_parallel_tool_calls: true,
+            default_tools_approval_mode: None,
+            tool_approval_modes: HashMap::new(),
         },
     );
     manager.clients.insert(
@@ -1154,12 +1160,43 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
     assert_eq!(tool.server_origin.as_deref(), Some("https://docs.example"));
 }
 
+#[test]
+fn server_metadata_preserves_tool_approval_policy() {
+    let mut config = crate::codex_apps_mcp_server_config(
+        "https://docs.example",
+        /*apps_mcp_product_sku*/ None,
+    );
+    config.default_tools_approval_mode = Some(AppToolApproval::Prompt);
+    config.tools.insert(
+        "search".to_string(),
+        McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::Approve),
+        },
+    );
+    let metadata = McpServerMetadata::from(&EffectiveMcpServer::configured(config));
+
+    assert_eq!(metadata.tool_approval_mode("read"), AppToolApproval::Prompt);
+    assert_eq!(
+        metadata.tool_approval_mode("search"),
+        AppToolApproval::Approve
+    );
+}
+
 #[tokio::test]
 async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let (tx_event, rx_event) = async_channel::unbounded();
-    drop(rx_event);
     let codex_home = tempdir().expect("tempdir");
+    let codex_apps_cache_context = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        /*account_id*/ None,
+        /*chatgpt_user_id*/ None,
+    );
+    let cached_codex_apps_tools = vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "cached_calendar_search",
+    )];
+    write_cached_codex_apps_tools(&codex_apps_cache_context, &cached_codex_apps_tools);
     let mcp_servers = HashMap::from([
         (
             "stdio".to_string(),
@@ -1176,6 +1213,62 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
                 required: false,
                 supports_parallel_tool_calls: false,
                 startup: McpServerStartupMode::Auto,
+                sharing: McpServerSharingMode::Auto,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                default_tools_approval_mode: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
+            }),
+        ),
+        (
+            "lazy-stdio".to_string(),
+            EffectiveMcpServer::configured(McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "echo".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+                enabled: true,
+                required: false,
+                supports_parallel_tool_calls: false,
+                startup: McpServerStartupMode::Lazy,
+                sharing: McpServerSharingMode::Auto,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                default_tools_approval_mode: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
+            }),
+        ),
+        (
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            EffectiveMcpServer::configured(McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "echo".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+                enabled: true,
+                required: false,
+                supports_parallel_tool_calls: false,
+                startup: McpServerStartupMode::Lazy,
                 sharing: McpServerSharingMode::Auto,
                 disabled_reason: None,
                 startup_timeout_sec: None,
@@ -1249,7 +1342,54 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
     .await;
 
     assert!(manager.clients.contains_key("stdio"));
+    assert!(manager.clients.contains_key("lazy-stdio"));
+    assert!(manager.clients.contains_key(CODEX_APPS_MCP_SERVER_NAME));
     assert!(manager.clients.contains_key("http"));
+    let mut startup_events = Vec::new();
+    while let Ok(event) = tokio::time::timeout(Duration::from_millis(10), rx_event.recv()).await {
+        startup_events.push(event.expect("startup event"));
+    }
+    assert!(
+        startup_events.iter().all(|event| match &event.msg {
+            EventMsg::McpStartupUpdate(update) => {
+                update.server != "lazy-stdio" && update.server != CODEX_APPS_MCP_SERVER_NAME
+            }
+            EventMsg::McpStartupComplete(complete) => {
+                !complete.ready.iter().any(|server| server == "lazy-stdio")
+                    && !complete
+                        .ready
+                        .iter()
+                        .any(|server| server == CODEX_APPS_MCP_SERVER_NAME)
+                    && !complete
+                        .cancelled
+                        .iter()
+                        .any(|server| server == "lazy-stdio")
+                    && !complete
+                        .cancelled
+                        .iter()
+                        .any(|server| server == CODEX_APPS_MCP_SERVER_NAME)
+                    && !complete
+                        .failed
+                        .iter()
+                        .any(|failure| failure.server == "lazy-stdio")
+                    && !complete
+                        .failed
+                        .iter()
+                        .any(|failure| failure.server == CODEX_APPS_MCP_SERVER_NAME)
+            }
+            _ => true,
+        }),
+        "lazy MCP server should not emit startup events: {startup_events:?}"
+    );
+    let cached_tools = manager
+        .clients
+        .get(CODEX_APPS_MCP_SERVER_NAME)
+        .expect("codex apps client")
+        .listed_tools()
+        .await
+        .expect("cached tools should be visible");
+    assert_eq!(cached_tools.len(), 1);
+    assert_eq!(cached_tools[0].callable_name, "cached_calendar_search");
     assert!(
         !manager
             .wait_for_server_ready("stdio", Duration::from_millis(10))
@@ -1268,6 +1408,36 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
     assert_eq!(
         startup_outcome_error_message(error),
         "local stdio MCP server `stdio` requires a local environment"
+    );
+    let error = match manager
+        .clients
+        .get("lazy-stdio")
+        .expect("lazy stdio client")
+        .client()
+        .await
+    {
+        Ok(_) => panic!("explicit lazy stdio MCP startup should fail without a local environment"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        startup_outcome_error_message(error),
+        "local stdio MCP server `lazy-stdio` requires a local environment"
+    );
+    let error = match manager
+        .clients
+        .get(CODEX_APPS_MCP_SERVER_NAME)
+        .expect("codex apps client")
+        .client()
+        .await
+    {
+        Ok(_) => {
+            panic!("explicit lazy Codex Apps MCP startup should fail without a local environment")
+        }
+        Err(error) => error,
+    };
+    assert_eq!(
+        startup_outcome_error_message(error),
+        "local stdio MCP server `codex_apps` requires a local environment"
     );
     cancel_token.cancel();
 }

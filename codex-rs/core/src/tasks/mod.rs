@@ -111,6 +111,7 @@ pub(crate) fn interrupted_turn_history_marker(
                     text: marker.render(),
                 }],
                 phase: None,
+                metadata: None,
             })
         }
     }

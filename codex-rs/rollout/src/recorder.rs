@@ -409,6 +409,7 @@ impl RolloutRecorder {
                 allowed_sources,
                 model_providers,
                 cwd_filters,
+                /*parent_thread_id*/ None,
                 archived,
                 search_term,
             )
@@ -517,6 +518,7 @@ impl RolloutRecorder {
             allowed_sources,
             model_providers,
             cwd_filters,
+            /*parent_thread_id*/ None,
             archived,
             search_term,
         )
@@ -545,6 +547,7 @@ impl RolloutRecorder {
                     allowed_sources,
                     model_providers,
                     cwd_filters,
+                    /*parent_thread_id*/ None,
                     archived,
                     search_term,
                 )
@@ -641,6 +644,7 @@ impl RolloutRecorder {
                     allowed_sources,
                     model_providers,
                     cwd_filter.as_ref().map(std::slice::from_ref),
+                    /*parent_thread_id*/ None,
                     /*archived*/ false,
                     /*search_term*/ None,
                 )

@@ -75,7 +75,7 @@ pub(crate) const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.du
 pub(crate) const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str =
     "codex.mcp.tools.fetch_uncached.duration_ms";
 pub(crate) const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
-pub(crate) const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
+pub(crate) const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(300);
 
 const UNTRUSTED_CONNECTOR_META_KEYS: &[&str] = &[
     "connector_id",
@@ -151,6 +151,7 @@ impl AsyncManagedClient {
         runtime_context: McpRuntimeContext,
         runtime_auth_provider: Option<SharedAuthProvider>,
         client_elicitation_capability: ElicitationCapability,
+        start_cached_client: bool,
     ) -> Self {
         let tool_filter = server
             .configured_config()
@@ -219,7 +220,7 @@ impl AsyncManagedClient {
             outcome
         };
         let client = fut.boxed().shared();
-        if cached_tool_info_snapshot.is_some() {
+        if start_cached_client && cached_tool_info_snapshot.is_some() {
             let startup_task = client.clone();
             tokio::spawn(async move {
                 let _ = startup_task.await;

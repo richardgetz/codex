@@ -26,7 +26,7 @@ pub(super) async fn create_thread(
         generate_memories: matches!(params.metadata.memory_mode, ThreadMemoryMode::Enabled),
         initial_memory_mode: Some(memory_mode_as_str(params.metadata.memory_mode).to_string()),
     };
-    let recorder = RolloutRecorder::new(
+    RolloutRecorder::new(
         &config,
         RolloutRecorderParams::new(
             params.thread_id,
@@ -42,9 +42,7 @@ pub(super) async fn create_thread(
     .await
     .map_err(|err| ThreadStoreError::Internal {
         message: format!("failed to initialize local thread recorder: {err}"),
-    })?;
-
-    Ok(recorder)
+    })
 }
 
 fn memory_mode_as_str(mode: ThreadMemoryMode) -> &'static str {
