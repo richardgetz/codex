@@ -1186,7 +1186,6 @@ fn server_metadata_preserves_tool_approval_policy() {
 async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let (tx_event, rx_event) = async_channel::unbounded();
-    drop(rx_event);
     let codex_home = tempdir().expect("tempdir");
     let mcp_servers = HashMap::from([
         (
@@ -1204,6 +1203,34 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
                 required: false,
                 supports_parallel_tool_calls: false,
                 startup: McpServerStartupMode::Auto,
+                sharing: McpServerSharingMode::Auto,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                default_tools_approval_mode: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
+            }),
+        ),
+        (
+            "lazy-stdio".to_string(),
+            EffectiveMcpServer::configured(McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "echo".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+                enabled: true,
+                required: false,
+                supports_parallel_tool_calls: false,
+                startup: McpServerStartupMode::Lazy,
                 sharing: McpServerSharingMode::Auto,
                 disabled_reason: None,
                 startup_timeout_sec: None,
@@ -1277,7 +1304,30 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
     .await;
 
     assert!(manager.clients.contains_key("stdio"));
+    assert!(manager.clients.contains_key("lazy-stdio"));
     assert!(manager.clients.contains_key("http"));
+    let mut startup_events = Vec::new();
+    while let Ok(event) = tokio::time::timeout(Duration::from_millis(10), rx_event.recv()).await {
+        startup_events.push(event.expect("startup event"));
+    }
+    assert!(
+        startup_events.iter().all(|event| match &event.msg {
+            EventMsg::McpStartupUpdate(update) => update.server != "lazy-stdio",
+            EventMsg::McpStartupComplete(complete) => {
+                !complete.ready.iter().any(|server| server == "lazy-stdio")
+                    && !complete
+                        .cancelled
+                        .iter()
+                        .any(|server| server == "lazy-stdio")
+                    && !complete
+                        .failed
+                        .iter()
+                        .any(|failure| failure.server == "lazy-stdio")
+            }
+            _ => true,
+        }),
+        "lazy MCP server should not emit startup events: {startup_events:?}"
+    );
     assert!(
         !manager
             .wait_for_server_ready("stdio", Duration::from_millis(10))
@@ -1296,6 +1346,20 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
     assert_eq!(
         startup_outcome_error_message(error),
         "local stdio MCP server `stdio` requires a local environment"
+    );
+    let error = match manager
+        .clients
+        .get("lazy-stdio")
+        .expect("lazy stdio client")
+        .client()
+        .await
+    {
+        Ok(_) => panic!("explicit lazy stdio MCP startup should fail without a local environment"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        startup_outcome_error_message(error),
+        "local stdio MCP server `lazy-stdio` requires a local environment"
     );
     cancel_token.cancel();
 }

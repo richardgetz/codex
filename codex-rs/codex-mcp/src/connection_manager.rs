@@ -319,15 +319,6 @@ impl McpConnectionManager {
         {
             server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
             let cancel_token = startup_cancellation_token.child_token();
-            let _ = emit_update(
-                startup_submit_id.as_str(),
-                &tx_event,
-                McpStartupUpdateEvent {
-                    server: server_name.clone(),
-                    status: McpStartupStatus::Starting,
-                },
-            )
-            .await;
             let codex_apps_tools_cache_context = if server_name == CODEX_APPS_MCP_SERVER_NAME {
                 Some(CodexAppsToolsCacheContext {
                     codex_home: codex_home.clone(),
@@ -352,6 +343,13 @@ impl McpConnectionManager {
                 } else {
                     None
                 };
+            let should_start_on_session_start = server.configured_config().is_none_or(|config| {
+                should_start_server_on_session_start(
+                    &server_name,
+                    config,
+                    /*lazy_mcp_servers_by_default*/ false,
+                )
+            });
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
                 server,
@@ -367,6 +365,18 @@ impl McpConnectionManager {
                 client_elicitation_capability.clone(),
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
+            if !should_start_on_session_start {
+                continue;
+            }
+            let _ = emit_update(
+                startup_submit_id.as_str(),
+                &tx_event,
+                McpStartupUpdateEvent {
+                    server: server_name.clone(),
+                    status: McpStartupStatus::Starting,
+                },
+            )
+            .await;
             let tx_event = tx_event.clone();
             let submit_id = startup_submit_id.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();

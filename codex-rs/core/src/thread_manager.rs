@@ -1410,7 +1410,7 @@ impl ThreadManagerState {
     pub(crate) async fn spawn_thread_with_source(
         &self,
         config: Config,
-        _initial_collaboration_mode: Option<CollaborationMode>,
+        initial_collaboration_mode: Option<CollaborationMode>,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
@@ -1478,6 +1478,7 @@ impl ThreadManagerState {
             mcp_manager: Arc::clone(&self.mcp_manager),
             extensions: Arc::clone(&self.extensions),
             conversation_history: initial_history,
+            initial_collaboration_mode,
             session_source,
             forked_from_thread_id,
             parent_thread_id,

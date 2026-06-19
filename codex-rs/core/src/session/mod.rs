@@ -433,6 +433,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
+    pub(crate) initial_collaboration_mode: Option<CollaborationMode>,
     pub(crate) session_source: SessionSource,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) parent_thread_id: Option<ThreadId>,
@@ -519,6 +520,7 @@ impl Codex {
             mcp_manager,
             extensions,
             conversation_history,
+            initial_collaboration_mode,
             session_source,
             forked_from_thread_id,
             parent_thread_id,
@@ -613,16 +615,23 @@ impl Codex {
         } else {
             dynamic_tools
         };
-        // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
-        // to avoid extracting these fields separately and constructing CollaborationMode here.
-        let collaboration_mode = CollaborationMode {
-            mode: ModeKind::Default,
-            settings: Settings {
-                model: model.clone(),
-                reasoning_effort: config.model_reasoning_effort.clone(),
-                developer_instructions: None,
+        let collaboration_mode = initial_collaboration_mode.map_or_else(
+            || CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: model.clone(),
+                    reasoning_effort: config.model_reasoning_effort.clone(),
+                    developer_instructions: None,
+                },
             },
-        };
+            |collaboration_mode| {
+                collaboration_mode.with_updates(
+                    Some(model.clone()),
+                    Some(config.model_reasoning_effort.clone()),
+                    /*developer_instructions*/ None,
+                )
+            },
+        );
         let account_plan_type = auth_manager
             .auth_cached()
             .and_then(|auth| auth.account_plan_type());
