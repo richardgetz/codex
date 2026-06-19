@@ -363,6 +363,7 @@ impl McpConnectionManager {
                 runtime_context.clone(),
                 runtime_auth_provider,
                 client_elicitation_capability.clone(),
+                should_start_on_session_start,
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             if !should_start_on_session_start {
