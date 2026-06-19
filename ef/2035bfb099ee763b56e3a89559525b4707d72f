@@ -1,0 +1,19 @@
+intent:
+  id: stable-rust-v0-141-0-lazy-mcp-cache-startup
+change_type: fix
+scope: mcp lazy startup
+summary: Prevent cached lazy MCP servers from starting during session initialization while preserving cached tool visibility.
+decision: Pass the session-start intent into AsyncManagedClient so cached Codex Apps tools can remain model-visible without arming the underlying MCP client until explicit demand.
+constraints:
+  - Preserve lazy MCP semantics for explicitly lazy and auto-lazy servers.
+  - Preserve cached Codex Apps tool snapshots for startup model-visible inventory.
+  - Avoid changing unrelated MCP startup behavior for eager/required servers.
+intent_priority: must
+code_locations:
+  - codex-rs/codex-mcp/src/rmcp_client.rs
+  - codex-rs/codex-mcp/src/connection_manager.rs
+  - codex-rs/codex-mcp/src/connection_manager_tests.rs
+requested_by: Rick
+recorded_by:
+  agent: Codex
+  model: GPT-5
