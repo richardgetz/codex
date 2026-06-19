@@ -1,0 +1,22 @@
+intent:
+  id: stable-rust-v0-141-0-review-fixes
+change_type: fix
+scope: stable refresh runtime startup
+summary: Preserve fork runtime semantics found by independent post-change review before opening the 0.141.0 stable refresh PR.
+decision: Forward initial collaboration mode into session spawn so forked/resumed mode state is not reset, and keep lazy MCP clients registered without emitting startup events or calling client startup during session initialization.
+constraints:
+  - Preserve upstream rust-v0.141.0 additions and the fork's stable-only behavior.
+  - Do not merge or rebase fork main into the stable refresh.
+  - Use a temporary git index because normal index writes are blocked by the sandbox.
+intent_priority: must
+code_locations:
+  - codex-rs/core/src/session/mod.rs
+  - codex-rs/core/src/thread_manager.rs
+  - codex-rs/core/src/codex_delegate.rs
+  - codex-rs/core/src/session/tests/guardian_tests.rs
+  - codex-rs/codex-mcp/src/connection_manager.rs
+  - codex-rs/codex-mcp/src/connection_manager_tests.rs
+requested_by: Rick
+recorded_by:
+  agent: Codex
+  model: GPT-5
