@@ -88,6 +88,8 @@ use codex_git_utils::get_git_repo_root_with_fs;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::PlanItem;
@@ -236,22 +238,27 @@ pub(crate) async fn run_turn(
         .map_or_else(HashMap::new, |outcome| {
             build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
         });
-    let mentioned_skills = skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
-        let filtered_skills = crate::skills::filter_skills_for_mode(
-            &turn_context.config,
-            turn_context.collaboration_mode.mode,
-            &outcome.skills,
-        )
-        .into_iter()
-        .cloned()
-        .collect::<Vec<_>>();
-        collect_explicit_skill_mentions(
-            &user_input,
-            &filtered_skills,
-            &outcome.disabled_paths,
-            &connector_slug_counts,
-        )
-    });
+    let mentioned_skills =
+        if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source) {
+            Vec::new()
+        } else {
+            skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
+                let filtered_skills = crate::skills::filter_skills_for_mode(
+                    &turn_context.config,
+                    turn_context.collaboration_mode.mode,
+                    &outcome.skills,
+                )
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>();
+                collect_explicit_skill_mentions(
+                    &user_input,
+                    &filtered_skills,
+                    &outcome.disabled_paths,
+                    &connector_slug_counts,
+                )
+            })
+        };
     let config = turn_context.config.clone();
     if config
         .features
@@ -476,7 +483,7 @@ pub(crate) async fn run_turn(
         )
         .await
         {
-            Ok(sampling_request_output) => {
+            Ok((sampling_request_output, sampling_request_input)) => {
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
@@ -568,6 +575,7 @@ pub(crate) async fn run_turn(
                                 text: build_continuous_run_block_message(&scratchpad),
                             }],
                             phase: None,
+                            metadata: None,
                         };
                         sess.record_conversation_items(
                             &turn_context,
@@ -1266,7 +1274,11 @@ pub(super) fn filter_connectors_for_input(
         return Vec::new();
     }
 
-    let mentions = collect_tool_mentions_from_messages(&user_messages);
+    let user_message_texts = user_messages
+        .iter()
+        .map(|message| message.message.clone())
+        .collect::<Vec<_>>();
+    let mentions = collect_tool_mentions_from_messages(&user_message_texts);
     let mention_names_lower = mentions
         .plain_names
         .iter()
@@ -1326,7 +1338,12 @@ fn explicitly_referenced_mcp_servers_for_input(
     input: &[ResponseItem],
     mcp_tools: &[codex_mcp::ToolInfo],
 ) -> HashSet<String> {
-    let user_messages = collect_user_messages(input).join("\n").to_ascii_lowercase();
+    let user_messages = collect_user_messages(input)
+        .into_iter()
+        .map(|message| message.message)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
     if user_messages.is_empty() {
         return HashSet::new();
     }
@@ -1356,8 +1373,7 @@ pub(crate) fn build_prompt(
     let deferred_dynamic_tools = turn_context
         .dynamic_tools
         .iter()
-        .filter(|tool| tool.defer_loading)
-        .map(|tool| ToolName::new(tool.namespace.clone(), tool.name.clone()))
+        .flat_map(deferred_dynamic_tool_names)
         .collect::<HashSet<_>>();
     let tools = if deferred_dynamic_tools.is_empty() {
         router.model_visible_specs()
@@ -1410,6 +1426,25 @@ fn filter_deferred_dynamic_tool_spec(
     }
 }
 
+fn deferred_dynamic_tool_names(spec: &DynamicToolSpec) -> Vec<ToolName> {
+    match spec {
+        DynamicToolSpec::Function(tool) if tool.defer_loading => {
+            vec![ToolName::plain(tool.name.as_str())]
+        }
+        DynamicToolSpec::Function(_) => Vec::new(),
+        DynamicToolSpec::Namespace(namespace) => namespace
+            .tools
+            .iter()
+            .filter_map(|tool| match tool {
+                DynamicToolNamespaceTool::Function(tool) if tool.defer_loading => Some(
+                    ToolName::namespaced(namespace.name.as_str(), tool.name.as_str()),
+                ),
+                DynamicToolNamespaceTool::Function(_) => None,
+            })
+            .collect(),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(deprecated)]
 #[instrument(level = "trace",
@@ -1431,7 +1466,7 @@ async fn run_sampling_request(
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
-) -> CodexResult<SamplingRequestResult> {
+) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
     let router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -1459,6 +1494,7 @@ async fn run_sampling_request(
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
     let mut initial_input = Some(input);
+    let mut original_input = None;
     loop {
         let prompt_input = if let Some(input) = initial_input.take() {
             input
@@ -1487,7 +1523,7 @@ async fn run_sampling_request(
         .await
         {
             Ok(output) => {
-                return Ok(output);
+                return Ok((output, original_input.unwrap_or(prompt.input)));
             }
             Err(CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&turn_context).await;
@@ -1502,6 +1538,10 @@ async fn run_sampling_request(
             }
             Err(err) => err,
         };
+
+        if original_input.is_none() {
+            original_input = Some(prompt.input);
+        }
 
         if !err.is_retryable() {
             return Err(err);
@@ -1698,6 +1738,7 @@ pub(crate) async fn built_tools(
             extension_tool_executors: extension_tool_executors(sess),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
+        &sess.services.tool_search_handler_cache,
     )))
 }
 
@@ -2443,7 +2484,7 @@ async fn try_run_sampling_request(
                     | ResponseItem::WebSearchCall { .. }
                     | ResponseItem::ImageGenerationCall { .. }
                     | ResponseItem::Compaction { .. }
-                    | ResponseItem::CompactionTrigger
+                    | ResponseItem::CompactionTrigger { .. }
                     | ResponseItem::ContextCompaction { .. }
                     | ResponseItem::Other => false,
                 };

@@ -271,53 +271,6 @@ impl McpConnectionManager {
         }
     }
 
-    /// Stop all MCP clients owned by this manager and terminate stdio server processes.
-    pub async fn shutdown(&mut self) {
-        self.begin_shutdown().await;
-    }
-
-    pub fn server_origin(&self, server_name: &str) -> Option<&str> {
-        self.server_metadata
-            .get(server_name)
-            .and_then(|metadata| metadata.origin.as_ref())
-            .map(super::server::McpServerOrigin::as_str)
-    }
-
-    pub fn server_pollutes_memory(&self, server_name: &str) -> bool {
-        self.server_metadata
-            .get(server_name)
-            .is_none_or(|metadata| metadata.pollutes_memory)
-    }
-
-    pub fn plugin_id_for_mcp_server_name(&self, server_name: &str) -> Option<&str> {
-        self.tool_plugin_provenance
-            .plugin_id_for_mcp_server_name(server_name)
-    }
-
-    pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
-        self.host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME
-    }
-
-    pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
-        if let Ok(mut policy) = self.elicitation_requests.approval_policy.lock() {
-            *policy = approval_policy.value();
-        }
-    }
-
-    pub fn set_permission_profile(&self, permission_profile: PermissionProfile) {
-        if let Ok(mut profile) = self.elicitation_requests.permission_profile.lock() {
-            *profile = permission_profile;
-        }
-    }
-
-    pub fn elicitations_auto_deny(&self) -> bool {
-        self.elicitation_requests.auto_deny()
-    }
-
-    pub fn set_elicitations_auto_deny(&self, auto_deny: bool) {
-        self.elicitation_requests.set_auto_deny(auto_deny);
-    }
-
     #[allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
     pub async fn new(
         mcp_servers: &HashMap<String, EffectiveMcpServer>,
@@ -532,6 +485,72 @@ impl McpConnectionManager {
 
     pub(crate) fn contains_server(&self, server_name: &str) -> bool {
         self.clients.contains_key(server_name)
+    }
+
+    /// Stop all MCP clients owned by this manager and terminate stdio server processes.
+    pub async fn shutdown(&self) {
+        self.startup_cancellation_token.cancel();
+        for client in self.clients.values() {
+            client.shutdown().await;
+        }
+    }
+
+    pub fn server_origin(&self, server_name: &str) -> Option<&str> {
+        self.server_metadata
+            .get(server_name)
+            .and_then(|metadata| metadata.origin.as_ref())
+            .map(super::server::McpServerOrigin::as_str)
+    }
+
+    pub fn server_pollutes_memory(&self, server_name: &str) -> bool {
+        self.server_metadata
+            .get(server_name)
+            .is_none_or(|metadata| metadata.pollutes_memory)
+    }
+
+    pub fn plugin_id_for_mcp_server_name(&self, server_name: &str) -> Option<&str> {
+        self.tool_plugin_provenance
+            .plugin_id_for_mcp_server_name(server_name)
+    }
+
+    pub fn is_selected_plugin_mcp_server(&self, server_name: &str) -> bool {
+        self.tool_plugin_provenance
+            .is_selected_plugin_mcp_server(server_name)
+    }
+
+    pub fn tool_approval_mode(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+    ) -> codex_config::AppToolApproval {
+        self.server_metadata
+            .get(server_name)
+            .map(|metadata| metadata.tool_approval_mode(tool_name))
+            .unwrap_or_default()
+    }
+
+    pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
+        self.host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME
+    }
+
+    pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
+        if let Ok(mut policy) = self.elicitation_requests.approval_policy.lock() {
+            *policy = approval_policy.value();
+        }
+    }
+
+    pub fn set_permission_profile(&self, permission_profile: PermissionProfile) {
+        if let Ok(mut profile) = self.elicitation_requests.permission_profile.lock() {
+            *profile = permission_profile;
+        }
+    }
+
+    pub fn elicitations_auto_deny(&self) -> bool {
+        self.elicitation_requests.auto_deny()
+    }
+
+    pub fn set_elicitations_auto_deny(&self, auto_deny: bool) {
+        self.elicitation_requests.set_auto_deny(auto_deny);
     }
 
     pub async fn resolve_elicitation(

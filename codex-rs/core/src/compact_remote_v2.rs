@@ -235,7 +235,7 @@ async fn run_remote_compact_task_inner_impl(
     )
     .await?;
     let mut input = prompt_input.clone();
-    input.push(ResponseItem::CompactionTrigger);
+    input.push(ResponseItem::CompactionTrigger { metadata: None });
     let prompt = Prompt {
         input,
         tools: tool_router.model_visible_specs(),
@@ -520,6 +520,7 @@ fn truncate_message_text_to_token_budget(
         role,
         content,
         phase,
+        metadata,
     } = item
     else {
         return Some(item);
@@ -559,6 +560,7 @@ fn truncate_message_text_to_token_budget(
         role,
         content: truncated_content,
         phase,
+        metadata,
     })
 }
 
@@ -579,6 +581,7 @@ mod tests {
                 text: text.to_string(),
             }],
             phase,
+            metadata: None,
         }
     }
 
@@ -610,13 +613,16 @@ mod tests {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call_1".to_string(),
+                metadata: None,
             },
             ResponseItem::Compaction {
                 encrypted_content: "old".to_string(),
+                metadata: None,
             },
         ];
         let output = ResponseItem::Compaction {
             encrypted_content: "new".to_string(),
+            metadata: None,
         };
 
         let (history, _) = build_v2_compacted_history(&input, output.clone());
@@ -644,6 +650,7 @@ mod tests {
         ];
         let output = ResponseItem::Compaction {
             encrypted_content: "new".to_string(),
+            metadata: None,
         };
 
         let (history, _) = build_v2_compacted_history(&input, output.clone());
@@ -670,9 +677,11 @@ mod tests {
                 },
             ],
             phase: None,
+            metadata: None,
         }];
         let output = ResponseItem::Compaction {
             encrypted_content: "new".to_string(),
+            metadata: None,
         };
 
         let (_, retained_image_count) = build_v2_compacted_history(&input, output);
@@ -720,6 +729,7 @@ mod tests {
                 },
             ],
             phase: None,
+            metadata: None,
         };
 
         let truncated =
@@ -743,6 +753,7 @@ mod tests {
                     },
                 ],
                 phase: None,
+                metadata: None,
             }]
         );
     }
@@ -757,6 +768,7 @@ mod tests {
                 detail: None,
             }],
             phase: None,
+            metadata: None,
         };
         let newest = message("user", "new", /*phase*/ None);
         let retained = vec![
@@ -781,6 +793,7 @@ mod tests {
                 detail: None,
             }],
             phase: None,
+            metadata: None,
         };
         let newest = message("user", "new", /*phase*/ None);
         let retained = vec![image_only_message, newest.clone()];
@@ -795,6 +808,7 @@ mod tests {
     async fn collect_compaction_output_accepts_additional_output_items() {
         let compaction = ResponseItem::Compaction {
             encrypted_content: "encrypted".to_string(),
+            metadata: None,
         };
         let stream = response_stream(vec![
             Ok(ResponseEvent::OutputItemDone(message(

@@ -2101,6 +2101,7 @@ mod tests {
                 ("codex".to_string(), rate_limit_snapshot("codex")),
                 ("other".to_string(), rate_limit_snapshot("other")),
             ])),
+            rate_limit_reset_credits: None,
         };
 
         let snapshots = app_server_rate_limit_snapshots(response);

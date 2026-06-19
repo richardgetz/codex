@@ -74,6 +74,7 @@ async fn installed_extension_uses_host_loaded_skills() -> TestResult {
             config: &config,
             session_source: &session_source,
             persistent_thread_state_available: true,
+            environments: &[],
             session_store: &session_store,
             thread_store: &thread_store,
         })
@@ -175,6 +176,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
             config: &config,
             session_source: &session_source,
             persistent_thread_state_available: true,
+            environments: &[],
             session_store: &session_store,
             thread_store: &thread_store,
         })
@@ -307,6 +309,7 @@ async fn plain_name_selection_prefers_executor_skill_over_host_name_collision() 
             config: &config,
             session_source: &session_source,
             persistent_thread_state_available: true,
+            environments: &[],
             session_store: &session_store,
             thread_store: &thread_store,
         })
@@ -378,6 +381,7 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
             config: &config,
             session_source: &session_source,
             persistent_thread_state_available: true,
+            environments: &[],
             session_store: &session_store,
             thread_store: &thread_store,
         })
@@ -469,6 +473,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
             config: &config,
             session_source: &session_source,
             persistent_thread_state_available: true,
+            environments: &[],
             session_store: &session_store,
             thread_store: &thread_store,
         })
@@ -543,6 +548,7 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
             config: &config,
             session_source: &session_source,
             persistent_thread_state_available: true,
+            environments: &[],
             session_store: &session_store,
             thread_store: &thread_store,
         })
