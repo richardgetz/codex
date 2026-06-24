@@ -831,7 +831,7 @@ pub(super) fn begin_exec_with_source(
     let item = AppServerThreadItem::CommandExecution {
         id: call_id.to_string(),
         command: codex_shell_command::parse_command::shlex_join(&command),
-        cwd: chat.config.cwd.clone(),
+        cwd: chat.config.cwd.clone().into(),
         process_id: None,
         source,
         status: AppServerCommandExecutionStatus::InProgress,
@@ -854,7 +854,7 @@ pub(super) fn begin_unified_exec_startup(
     let item = AppServerThreadItem::CommandExecution {
         id: call_id.to_string(),
         command: codex_shell_command::parse_command::shlex_join(&command),
-        cwd: chat.config.cwd.clone(),
+        cwd: chat.config.cwd.clone().into(),
         process_id: Some(process_id.to_string()),
         source: ExecCommandSource::UnifiedExecStartup,
         status: AppServerCommandExecutionStatus::InProgress,

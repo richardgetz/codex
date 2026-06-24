@@ -1,6 +1,7 @@
 use super::*;
-use crate::legacy_core::config::CustomPermissionProfileSummary;
+use crate::legacy_core::config::PermissionProfileCatalogEntry;
 use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -58,6 +59,10 @@ fn windows_sandbox_requirements_stack(
         }),
         ..Default::default()
     };
+    requirements_stack(requirements_toml)
+}
+
+fn requirements_stack(requirements_toml: codex_config::ConfigRequirementsToml) -> ConfigLayerStack {
     let mut requirements_with_sources = codex_config::ConfigRequirementsWithSources::default();
     requirements_with_sources
         .merge_unset_fields(RequirementSource::Unknown, requirements_toml.clone());
@@ -106,17 +111,39 @@ async fn profile_permissions_selection_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn profile_permissions_selection_popup_with_disallowed_full_access_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.explicit_permission_profile_mode = true;
+    chat.config.config_layer_stack = requirements_stack(codex_config::ConfigRequirementsToml {
+        allowed_sandbox_modes: Some(vec![
+            codex_config::SandboxModeRequirement::ReadOnly,
+            codex_config::SandboxModeRequirement::WorkspaceWrite,
+        ]),
+        ..Default::default()
+    });
+
+    chat.open_permissions_popup();
+
+    assert_chatwidget_snapshot!(
+        "profile_permissions_selection_popup_with_disallowed_full_access",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+}
+
+#[tokio::test]
 async fn profile_permissions_selection_popup_with_custom_profiles_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.explicit_permission_profile_mode = true;
     chat.config.custom_permission_profiles = vec![
-        CustomPermissionProfileSummary {
+        PermissionProfileCatalogEntry {
             id: "locked-down".to_string(),
             description: Some("Inspect and patch only approved workspace files.".to_string()),
+            allowed: true,
         },
-        CustomPermissionProfileSummary {
+        PermissionProfileCatalogEntry {
             id: "web-enabled".to_string(),
             description: Some("Workspace profile with network access.".to_string()),
+            allowed: false,
         },
     ];
     chat.config
@@ -171,9 +198,10 @@ async fn profile_permissions_selection_emits_named_profile_event_only() {
 async fn profile_permissions_selection_emits_active_custom_profile() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.explicit_permission_profile_mode = true;
-    chat.config.custom_permission_profiles = vec![CustomPermissionProfileSummary {
+    chat.config.custom_permission_profiles = vec![PermissionProfileCatalogEntry {
         id: "locked-down".to_string(),
         description: None,
+        allowed: true,
     }];
     chat.config
         .permissions
@@ -257,7 +285,7 @@ async fn profile_permissions_full_access_opens_confirmation() {
                 display_label,
             }),
         } if preset.id == "full-access"
-            && profile_id == ":danger-no-sandbox"
+            && profile_id == BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS
             && display_label == "Full Access"
     ));
 }

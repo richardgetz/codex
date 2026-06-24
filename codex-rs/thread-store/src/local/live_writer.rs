@@ -82,6 +82,11 @@ fn memory_mode_as_str(mode: ThreadMemoryMode) -> &'static str {
     }
 }
 
+#[tracing::instrument(
+    level = "trace",
+    skip_all,
+    fields(item_count = params.items.len())
+)]
 pub(super) async fn append_items(
     store: &LocalThreadStore,
     params: AppendThreadItemsParams,

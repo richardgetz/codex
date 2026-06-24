@@ -5,12 +5,10 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::SkillInjections;
-use crate::SkillLoadOutcome;
 use crate::build_skill_injections;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
-use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
 use crate::compact::collect_user_messages;
@@ -42,18 +40,16 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::plugins::build_plugin_injections;
-use crate::resolve_skill_dependencies_for_turn;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
-use crate::session::active_thread_scratchpad;
-use crate::session::continuous_run_policy_enabled;
-use crate::session::scratchpad_has_continuous_work;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
+use crate::skills::SkillLoadOutcome;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_non_tool_response_item;
@@ -69,6 +65,8 @@ use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolRouterParams;
+use crate::tools::router::ToolSuggestCandidates;
+use crate::tools::router::ToolSuggestPresentation;
 use crate::tools::router::extension_tool_executors;
 use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -81,6 +79,8 @@ use codex_analytics::InvocationType;
 use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
+use codex_core_plugins::RecommendedPluginCandidatesInput;
+use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
@@ -88,8 +88,6 @@ use codex_git_utils::get_git_repo_root_with_fs;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
-use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::PlanItem;
@@ -108,12 +106,11 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
+use codex_protocol::protocol::SafetyBufferingEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
-use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
-use codex_tools::ToolSpec;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
@@ -147,10 +144,6 @@ use tracing::warn;
 /// - If the model sends only an assistant message, we record it in the
 ///   conversation history and consider the turn complete.
 ///
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "turn execution must keep active-turn state transitions atomic"
-)]
 pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -158,8 +151,7 @@ pub(crate) async fn run_turn(
     input: Vec<TurnInput>,
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
-) -> Option<String> {
-    let turn_context = turn_context;
+) -> CodexResult<Option<String>> {
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
@@ -167,194 +159,34 @@ pub(crate) async fn run_turn(
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
     if let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
+        if matches!(err, CodexErr::TurnAborted) {
+            return Err(err);
+        }
         let error = err.to_codex_protocol_error();
         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
             .await;
         error!("Failed to run pre-sampling compact");
-        return None;
+        return Ok(None);
     }
-
-    let turn_skills_outcome = Arc::clone(&turn_context.turn_skills.outcome);
-    let skills_outcome = Some(turn_skills_outcome.as_ref());
 
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
 
-    let user_input = turn_input_user_items(&input);
-    let loaded_plugins = sess
-        .services
-        .plugins_manager
-        .plugins_for_config(&turn_context.config.plugins_config_input())
-        .await;
-    let filtered_plugins = filter_plugins_for_mode(
-        &turn_context.config,
-        turn_context.collaboration_mode.mode,
-        loaded_plugins.capability_summaries(),
-    )
-    .into_iter()
-    .cloned()
-    .collect::<Vec<_>>();
-    // Structured plugin:// mentions are resolved from the current session's
-    // enabled plugins, then converted into turn-scoped guidance below.
-    let mentioned_plugins = collect_explicit_plugin_mentions(&user_input, &filtered_plugins);
-    let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
-        // Plugin mentions need raw MCP/app inventory even when app tools
-        // are normally hidden so we can describe the plugin's currently
-        // usable capabilities for this turn.
-        match sess
-            .services
-            .mcp_connection_manager
-            .load_full()
-            .list_all_tools()
-            .or_cancel(&cancellation_token)
-            .await
-        {
-            Ok(mcp_tools) => mcp_tools,
-            Err(_) if turn_context.apps_enabled() => return None,
-            Err(_) => Vec::new(),
-        }
-    } else {
-        Vec::new()
+    let Some((injection_items, explicitly_enabled_connectors)) =
+        build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token).await
+    else {
+        return Ok(None);
     };
-    let available_connectors = if turn_context.apps_enabled() {
-        let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
-            loaded_plugins
-                .effective_apps()
-                .into_iter()
-                .map(|connector_id| connector_id.0),
-            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
-        );
-        filter_connectors_for_mode(
-            &turn_context.config,
-            turn_context.collaboration_mode.mode,
-            &connectors::with_app_enabled_state(connectors, &turn_context.config),
-        )
-    } else {
-        Vec::new()
-    };
-    let connector_slug_counts = build_connector_slug_counts(&available_connectors);
-    let skill_name_counts_lower = skills_outcome
-        .as_ref()
-        .map_or_else(HashMap::new, |outcome| {
-            build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
-        });
-    let mentioned_skills =
-        if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source) {
-            Vec::new()
-        } else {
-            skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
-                let filtered_skills = crate::skills::filter_skills_for_mode(
-                    &turn_context.config,
-                    turn_context.collaboration_mode.mode,
-                    &outcome.skills,
-                )
-                .into_iter()
-                .cloned()
-                .collect::<Vec<_>>();
-                collect_explicit_skill_mentions(
-                    &user_input,
-                    &filtered_skills,
-                    &outcome.disabled_paths,
-                    &connector_slug_counts,
-                )
-            })
-        };
-    let config = turn_context.config.clone();
-    if config
-        .features
-        .enabled(Feature::SkillEnvVarDependencyPrompt)
-    {
-        let env_var_dependencies = collect_env_var_dependencies(&mentioned_skills);
-        resolve_skill_dependencies_for_turn(&sess, &turn_context, &env_var_dependencies).await;
-    }
-
-    maybe_prompt_and_install_mcp_dependencies(
-        sess.as_ref(),
-        turn_context.as_ref(),
-        &cancellation_token,
-        &mentioned_skills,
-        Some(sess.mcp_elicitation_reviewer()),
-    )
-    .await;
-
-    let extension_injection_items =
-        build_extension_turn_input_items(&sess, &turn_context, &user_input, &cancellation_token)
-            .await?;
-    let injected_host_skill_prompts =
-        turn_extension_data.get::<crate::injection::InjectedHostSkillPrompts>();
-    let session_telemetry = turn_context.session_telemetry.clone();
-    let thread_id = sess.thread_id.to_string();
-    let tracking = build_track_events_context(
-        turn_context.model_info.slug.clone(),
-        thread_id,
-        turn_context.sub_id.clone(),
-    );
-    let SkillInjections {
-        items: skill_injections,
-        warnings: skill_warnings,
-    } = build_skill_injections(
-        &mentioned_skills,
-        injected_host_skill_prompts.as_deref(),
-        skills_outcome,
-        Some(&session_telemetry),
-        &sess.services.analytics_events_client,
-        tracking.clone(),
-    )
-    .await;
-
-    for message in skill_warnings {
-        sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
-            .await;
-    }
-
-    let skill_items: Vec<ResponseItem> = skill_injections
-        .iter()
-        .map(|skill| ContextualUserFragment::into(crate::context::SkillInstructions::from(skill)))
-        .collect();
-
-    let plugin_items =
-        build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
-    let mentioned_plugin_metadata = mentioned_plugins
-        .iter()
-        .filter_map(crate::plugins::PluginCapabilitySummary::telemetry_metadata)
-        .collect::<Vec<_>>();
-
-    let mut explicitly_enabled_connectors = collect_explicit_app_ids(&user_input);
-    explicitly_enabled_connectors.extend(collect_explicit_app_ids_from_skill_items(
-        &skill_items,
-        &available_connectors,
-        &skill_name_counts_lower,
-    ));
-    let connector_names_by_id = available_connectors
-        .iter()
-        .map(|connector| (connector.id.as_str(), connector.name.as_str()))
-        .collect::<HashMap<&str, &str>>();
-    let mentioned_app_invocations = explicitly_enabled_connectors
-        .iter()
-        .map(|connector_id| AppInvocation {
-            connector_id: Some(connector_id.clone()),
-            app_name: connector_names_by_id
-                .get(connector_id.as_str())
-                .map(|name| (*name).to_string()),
-            invocation_type: Some(InvocationType::Explicit),
-        })
-        .collect::<Vec<_>>();
+    let skills_outcome = turn_context.turn_skills.snapshot.outcome();
 
     if run_pending_session_start_hooks(&sess, &turn_context).await {
-        return None;
+        return Ok(None);
     }
     let mut can_drain_pending_input = input.is_empty();
     if run_hooks_and_record_inputs(&sess, &turn_context, &input).await {
-        return None;
+        return Ok(None);
     }
-    sess.services
-        .analytics_events_client
-        .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
-    for plugin in mentioned_plugin_metadata {
-        sess.services
-            .analytics_events_client
-            .track_plugin_used(tracking.clone(), plugin);
-    }
+
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
     if !input.is_empty() {
@@ -363,28 +195,18 @@ pub(crate) async fn run_turn(
         // model/realtime injections.
         sess.set_previous_turn_settings(Some(PreviousTurnSettings {
             model: turn_context.model_info.slug.clone(),
-            comp_hash: turn_context.comp_hash.clone(),
+            comp_hash: turn_context.model_info.comp_hash.clone(),
             realtime_active: Some(turn_context.realtime_active),
         }))
         .await;
     }
-    if !skill_items.is_empty() {
-        sess.record_conversation_items(&turn_context, &skill_items)
-            .await;
-    }
-    if !plugin_items.is_empty() {
-        sess.record_conversation_items(&turn_context, &plugin_items)
-            .await;
-    }
-    if !extension_injection_items.is_empty() {
-        sess.record_conversation_items(&turn_context, &extension_injection_items)
+    for response_item in injection_items {
+        sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
             .await;
     }
 
     track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;
 
-    let turn_skills_outcome = Arc::clone(&turn_context.turn_skills.outcome);
-    let skills_outcome = Some(turn_skills_outcome.as_ref());
     let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
@@ -402,87 +224,80 @@ pub(crate) async fn run_turn(
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
 
     loop {
-        if run_pending_session_start_hooks(&sess, &turn_context).await {
-            break;
-        }
-
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
         let pending_input = if can_drain_pending_input {
-            sess.get_pending_input().await
+            sess.input_queue.get_pending_input(&sess.active_turn).await
         } else {
             Vec::new()
         };
 
-        let mut blocked_pending_input = false;
-        let mut blocked_pending_input_contexts = Vec::new();
-        let mut requeued_pending_input = false;
-        let mut accepted_pending_input = Vec::new();
-        if !pending_input.is_empty() {
-            let mut pending_input_iter = pending_input.into_iter();
-            while let Some(pending_input_item) = pending_input_iter.next() {
-                let hook_outcome =
-                    inspect_pending_input(&sess, &turn_context, &pending_input_item).await;
-                if hook_outcome.should_stop {
-                    let remaining_pending_input = pending_input_iter.collect::<Vec<_>>();
-                    if !remaining_pending_input.is_empty() {
-                        let _ = sess.prepend_pending_input(remaining_pending_input).await;
-                        requeued_pending_input = true;
-                    }
-                    blocked_pending_input_contexts = hook_outcome.additional_contexts;
-                    blocked_pending_input = true;
-                    break;
-                } else {
-                    accepted_pending_input
-                        .push((pending_input_item, hook_outcome.additional_contexts));
-                }
-            }
-        }
-
-        let has_accepted_pending_input = !accepted_pending_input.is_empty();
-        for (pending_input, additional_contexts) in accepted_pending_input {
-            record_pending_input(&sess, &turn_context, pending_input, additional_contexts).await;
-        }
-        record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await;
-
-        if blocked_pending_input && !has_accepted_pending_input {
-            if requeued_pending_input {
-                continue;
-            }
+        if run_hooks_and_record_inputs(&sess, &turn_context, &pending_input).await {
             break;
         }
 
-        // Construct the input that we will send to the model.
-        let sampling_request_input: Vec<ResponseItem> = async {
-            sess.clone_history()
-                .await
-                .for_prompt(&turn_context.model_info.input_modalities)
-        }
-        .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
+        let window_id = sess.current_window_id().await;
+        super::rollout_budget::maybe_record_reminder(
+            sess.as_ref(),
+            turn_context.as_ref(),
+            &window_id,
+        )
         .await;
 
-        let window_id = sess.current_window_id().await;
-        let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
-            sess.installation_id.clone(),
-            window_id,
-            CodexResponsesRequestKind::Turn,
-        );
-        let tokens_before_sampling = sess.get_total_token_usage().await;
-        match run_sampling_request(
-            Arc::clone(&sess),
-            Arc::clone(&turn_context),
-            Arc::clone(&turn_extension_data),
-            Arc::clone(&turn_diff_tracker),
-            &mut client_session,
-            &responses_metadata,
-            sampling_request_input.clone(),
-            &explicitly_enabled_connectors,
-            skills_outcome,
-            cancellation_token.child_token(),
-        )
-        .await
-        {
+        let sampling_request_result: CodexResult<_> = async {
+            super::time_reminder::maybe_record_current_time_reminder(
+                sess.as_ref(),
+                turn_context.as_ref(),
+                &window_id,
+            )
+            .await?;
+
+            if turn_context
+                .config
+                .features
+                .enabled(Feature::DeferredExecutor)
+            {
+                let step_context = StepContext {
+                    environments: sess.services.turn_environments.snapshot().await,
+                };
+                sess.record_step_environment_context_if_changed(
+                    turn_context.as_ref(),
+                    &step_context,
+                )
+                .await;
+            }
+
+            // Construct the input that we will send to the model.
+            let sampling_request_input: Vec<ResponseItem> = async {
+                sess.clone_history()
+                    .await
+                    .for_prompt(&turn_context.model_info.input_modalities)
+            }
+            .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
+            .await;
+
+            let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
+                sess.installation_id.clone(),
+                window_id,
+                CodexResponsesRequestKind::Turn,
+            );
+            run_sampling_request(
+                Arc::clone(&sess),
+                Arc::clone(&turn_context),
+                Arc::clone(&turn_extension_data),
+                Arc::clone(&turn_diff_tracker),
+                &mut client_session,
+                &responses_metadata,
+                sampling_request_input,
+                &explicitly_enabled_connectors,
+                Some(skills_outcome),
+                cancellation_token.child_token(),
+            )
+            .await
+        }
+        .await;
+        match sampling_request_result {
             Ok((sampling_request_output, sampling_request_input)) => {
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
@@ -521,11 +336,20 @@ pub(crate) async fn run_turn(
                 );
 
                 let tokens_after_sampling = token_status.active_context_tokens;
-                super::token_budget::maybe_record_token_budget_remaining_context(
+                let full_context_remaining = token_status
+                    .full_context_window_limit
+                    .map_or(i64::MAX, |limit| {
+                        limit.saturating_sub(tokens_after_sampling)
+                    });
+                let tokens_until_compaction = token_status
+                    .auto_compact_scope_limit
+                    .saturating_sub(token_status.auto_compact_scope_tokens)
+                    .min(full_context_remaining)
+                    .max(0);
+                super::token_budget::maybe_record(
                     sess.as_ref(),
                     turn_context.as_ref(),
-                    tokens_before_sampling,
-                    tokens_after_sampling,
+                    tokens_until_compaction,
                 )
                 .await;
 
@@ -539,7 +363,13 @@ pub(crate) async fn run_turn(
                 }
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if token_limit_reached && needs_follow_up {
+                if turn_context
+                    .config
+                    .features
+                    .enabled(Feature::AutoCompaction)
+                    && token_limit_reached
+                    && needs_follow_up
+                {
                     if let Err(err) = run_auto_compact(
                         &sess,
                         &turn_context,
@@ -550,10 +380,13 @@ pub(crate) async fn run_turn(
                     )
                     .await
                     {
+                        if matches!(err, CodexErr::TurnAborted) {
+                            return Err(err);
+                        }
                         let error = err.to_codex_protocol_error();
                         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                             .await;
-                        return None;
+                        return Ok(None);
                     }
                     can_drain_pending_input = !model_needs_follow_up;
                     continue;
@@ -561,13 +394,14 @@ pub(crate) async fn run_turn(
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
-                    if let Some(scratchpad) =
-                        active_thread_scratchpad(&turn_context.config.codex_home, sess.thread_id)
-                            .filter(|scratchpad| {
-                                continuous_run_policy_enabled(scratchpad)
-                                    && scratchpad_has_continuous_work(scratchpad)
-                            })
-                    {
+                    if let Some(scratchpad) = super::active_thread_scratchpad(
+                        &turn_context.config.codex_home,
+                        sess.thread_id,
+                    )
+                    .filter(|scratchpad| {
+                        super::continuous_run_policy_enabled(scratchpad)
+                            && super::scratchpad_has_continuous_work(scratchpad)
+                    }) {
                         let message = ResponseItem::Message {
                             id: None,
                             role: "user".to_string(),
@@ -575,7 +409,7 @@ pub(crate) async fn run_turn(
                                 text: build_continuous_run_block_message(&scratchpad),
                             }],
                             phase: None,
-                            metadata: None,
+                            internal_chat_message_metadata_passthrough: None,
                         };
                         sess.record_conversation_items(
                             &turn_context,
@@ -623,15 +457,14 @@ pub(crate) async fn run_turn(
                     )
                     .await
                     {
-                        return None;
+                        return Ok(None);
                     }
                     break;
                 }
                 continue;
             }
-            Err(CodexErr::TurnAborted) => {
-                // Aborted turn is reported via a different event.
-                break;
+            Err(err @ CodexErr::TurnAborted) => {
+                return Err(err);
             }
             Err(codex_error @ CodexErr::InvalidImageRequest()) => {
                 {
@@ -670,7 +503,7 @@ pub(crate) async fn run_turn(
         }
     }
 
-    last_agent_message
+    Ok(last_agent_message)
 }
 
 fn build_continuous_run_block_message(scratchpad: &serde_json::Value) -> String {
@@ -784,63 +617,6 @@ fn format_scratchpad_recovery_item(item: &serde_json::Value) -> String {
     }
 }
 
-#[instrument(level = "trace", skip_all)]
-async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, PathBuf)> {
-    let mut display_roots = Vec::new();
-    for turn_environment in &turn_context.environments.turn_environments {
-        let root = get_git_repo_root_with_fs(
-            turn_environment.environment.get_filesystem().as_ref(),
-            turn_environment.cwd(),
-        )
-        .await
-        .unwrap_or_else(|| turn_environment.cwd().clone())
-        .into_path_buf();
-        display_roots.push((turn_environment.environment_id.clone(), root));
-    }
-    display_roots
-}
-
-#[instrument(level = "trace", skip_all)]
-async fn run_hooks_and_record_inputs(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
-    input: &[TurnInput],
-) -> bool {
-    let mut blocked_input = false;
-    let mut accepted_user_input = false;
-    for input_item in input {
-        let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
-        if hook_outcome.should_stop {
-            blocked_input = true;
-            record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
-        } else {
-            if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty()) {
-                accepted_user_input = true;
-            }
-            record_pending_input(
-                sess,
-                turn_context,
-                input_item.clone(),
-                hook_outcome.additional_contexts,
-            )
-            .await;
-        }
-    }
-    blocked_input && !accepted_user_input
-}
-
-fn turn_input_user_items(input: &[TurnInput]) -> Vec<UserInput> {
-    input
-        .iter()
-        .filter_map(|item| match item {
-            TurnInput::UserInput { content, .. } => Some(content.as_slice()),
-            TurnInput::ResponseItem(_) | TurnInput::InterAgentCommunication(_) => None,
-        })
-        .flatten()
-        .cloned()
-        .collect()
-}
-
 #[cfg(test)]
 mod thread_control_tests {
     use super::build_continuous_run_block_message;
@@ -874,6 +650,252 @@ mod thread_control_tests {
     }
 }
 
+#[instrument(level = "trace", skip_all)]
+async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, PathBuf)> {
+    let mut display_roots = Vec::new();
+    for turn_environment in &turn_context.environments.turn_environments {
+        // TODO(anp): Migrate git-root discovery and diff display roots to PathUri so foreign
+        // environment roots can participate without host-native conversion.
+        let Ok(cwd) = turn_environment.cwd().to_abs_path() else {
+            continue;
+        };
+        let root =
+            get_git_repo_root_with_fs(turn_environment.environment.get_filesystem().as_ref(), &cwd)
+                .await
+                .unwrap_or(cwd)
+                .into_path_buf();
+        display_roots.push((turn_environment.environment_id.clone(), root));
+    }
+    display_roots
+}
+
+#[instrument(level = "trace", skip_all)]
+async fn run_hooks_and_record_inputs(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    input: &[TurnInput],
+) -> bool {
+    let mut accepted_user_input = false;
+    for (index, input_item) in input.iter().enumerate() {
+        let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
+        if hook_outcome.should_stop {
+            record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
+            let tail = input[index + 1..].to_vec();
+            if !tail.is_empty() {
+                let _ = sess.prepend_pending_input(tail).await;
+            }
+            return !accepted_user_input;
+        } else {
+            if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty()) {
+                accepted_user_input = true;
+            }
+            record_pending_input(
+                sess,
+                turn_context,
+                input_item.clone(),
+                hook_outcome.additional_contexts,
+            )
+            .await;
+        }
+    }
+    false
+}
+
+#[instrument(level = "trace", skip_all)]
+async fn build_skills_and_plugins(
+    sess: &Arc<Session>,
+    turn_context: &TurnContext,
+    input: &[TurnInput],
+    cancellation_token: &CancellationToken,
+) -> Option<(Vec<ResponseItem>, HashSet<String>)> {
+    // Guardian input embeds the parent transcript as untrusted evidence. Do not interpret skill or
+    // plugin mentions from that generated prompt as requests to inject additional instructions.
+    if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source) {
+        return Some((Vec::new(), HashSet::new()));
+    }
+
+    let user_input = input
+        .iter()
+        .filter_map(|item| match item {
+            TurnInput::UserInput { content, .. } => Some(content.as_slice()),
+            TurnInput::ResponseItem(_) | TurnInput::InterAgentCommunication(_) => None,
+        })
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    let tracking = build_track_events_context(
+        turn_context.model_info.slug.clone(),
+        sess.thread_id.to_string(),
+        turn_context.sub_id.clone(),
+    );
+    let loaded_plugins = sess
+        .services
+        .plugins_manager
+        .plugins_for_config(&turn_context.config.plugins_config_input())
+        .await;
+    let filtered_plugins = filter_plugins_for_mode(
+        &turn_context.config,
+        turn_context.collaboration_mode.mode,
+        loaded_plugins.capability_summaries(),
+    )
+    .into_iter()
+    .cloned()
+    .collect::<Vec<_>>();
+    // Structured plugin:// mentions are resolved from the current session's
+    // enabled plugins, then converted into turn-scoped guidance below.
+    let mentioned_plugins = collect_explicit_plugin_mentions(&user_input, &filtered_plugins);
+    let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
+        // Plugin mentions need raw MCP/app inventory even when app tools
+        // are normally hidden so we can describe the plugin's currently
+        // usable capabilities for this turn.
+        match sess
+            .services
+            .mcp_connection_manager
+            .load_full()
+            .list_all_tools()
+            .or_cancel(cancellation_token)
+            .await
+        {
+            Ok(mcp_tools) => mcp_tools,
+            Err(_) if turn_context.apps_enabled() => return None,
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    let available_connectors = if turn_context.apps_enabled() {
+        let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
+            loaded_plugins
+                .effective_apps()
+                .into_iter()
+                .map(|connector_id| connector_id.0),
+            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+        );
+        filter_connectors_for_mode(
+            &turn_context.config,
+            turn_context.collaboration_mode.mode,
+            &connectors::with_app_enabled_state(connectors, &turn_context.config),
+        )
+    } else {
+        Vec::new()
+    };
+    let skills_outcome = turn_context.turn_skills.snapshot.outcome();
+    let mut filtered_skills_outcome = skills_outcome.clone();
+    filtered_skills_outcome.skills = crate::skills::filter_skills_for_mode(
+        &turn_context.config,
+        turn_context.collaboration_mode.mode,
+        &skills_outcome.skills,
+    )
+    .into_iter()
+    .cloned()
+    .collect();
+    let connector_slug_counts = build_connector_slug_counts(&available_connectors);
+    let extension_injection_items =
+        build_extension_turn_input_items(sess, turn_context, &user_input, cancellation_token)
+            .await?;
+    let skill_name_counts_lower = build_skill_name_counts(
+        &filtered_skills_outcome.skills,
+        &filtered_skills_outcome.disabled_paths,
+    )
+    .1;
+    let mentioned_skills = collect_explicit_skill_mentions(
+        &user_input,
+        &filtered_skills_outcome.skills,
+        &filtered_skills_outcome.disabled_paths,
+        &connector_slug_counts,
+    );
+    maybe_prompt_and_install_mcp_dependencies(
+        sess,
+        turn_context,
+        cancellation_token,
+        &mentioned_skills,
+        Some(sess.mcp_elicitation_reviewer()),
+    )
+    .await;
+
+    let injected_host_skill_prompts = turn_context
+        .extension_data
+        .get::<InjectedHostSkillPrompts>();
+    let SkillInjections {
+        items: skill_injections,
+        warnings: skill_warnings,
+    } = build_skill_injections(
+        &mentioned_skills,
+        injected_host_skill_prompts.as_ref().map(AsRef::as_ref),
+        Some(&filtered_skills_outcome),
+        Some(&turn_context.session_telemetry),
+        &sess.services.analytics_events_client,
+        tracking.clone(),
+    )
+    .await;
+
+    for message in skill_warnings {
+        sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+            .await;
+    }
+
+    let skill_items: Vec<ResponseItem> = skill_injections
+        .iter()
+        .map(|skill| ContextualUserFragment::into(crate::context::SkillInstructions::from(skill)))
+        .collect();
+    let skill_connector_ids = collect_explicit_app_ids_from_skill_items(
+        &skill_items,
+        &available_connectors,
+        &skill_name_counts_lower,
+    );
+    let plugin_items =
+        build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
+    let mut explicitly_enabled_connectors = collect_explicit_app_ids(&user_input);
+    explicitly_enabled_connectors.extend(skill_connector_ids);
+    let connector_names_by_id = available_connectors
+        .iter()
+        .map(|connector| (connector.id.as_str(), connector.name.as_str()))
+        .collect::<HashMap<&str, &str>>();
+    let mentioned_app_invocations = explicitly_enabled_connectors
+        .iter()
+        .map(|connector_id| AppInvocation {
+            connector_id: Some(connector_id.clone()),
+            app_name: connector_names_by_id
+                .get(connector_id.as_str())
+                .map(|name| (*name).to_string()),
+            invocation_type: Some(InvocationType::Explicit),
+        })
+        .collect::<Vec<_>>();
+    sess.services
+        .analytics_events_client
+        .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
+    for summary in &mentioned_plugins {
+        if let Some(plugin) = sess
+            .services
+            .plugins_manager
+            .telemetry_metadata_for_capability_summary(summary)
+        {
+            sess.services
+                .analytics_events_client
+                .track_plugin_used(tracking.clone(), plugin);
+        }
+    }
+
+    let mut injection_items: Vec<ResponseItem> = match injected_host_skill_prompts {
+        Some(injected_host_skill_prompts) => skill_injections
+            .iter()
+            .filter(|skill| !injected_host_skill_prompts.contains_path(&skill.path))
+            .map(|skill| {
+                ContextualUserFragment::into(crate::context::SkillInstructions::from(skill))
+            })
+            .collect(),
+        None => skill_items,
+    };
+    injection_items.extend(plugin_items);
+    injection_items.extend(extension_injection_items);
+    Some((injection_items, explicitly_enabled_connectors))
+}
+
+#[tracing::instrument(
+    level = "trace",
+    skip_all,
+    fields(user_input_count = user_input.len())
+)]
 async fn build_extension_turn_input_items(
     sess: &Arc<Session>,
     turn_context: &TurnContext,
@@ -890,10 +912,14 @@ async fn build_extension_turn_input_items(
         .turn_environments
         .iter()
         .enumerate()
-        .map(|(index, environment)| TurnInputEnvironment {
-            environment_id: environment.environment_id.clone(),
-            cwd: environment.cwd().as_path().to_path_buf(),
-            is_primary: index == 0,
+        .filter_map(|(index, environment)| {
+            // TODO(anp): Migrate extension turn-input environments to PathUri so foreign cwd
+            // values are not omitted from extension context.
+            Some(TurnInputEnvironment {
+                environment_id: environment.environment_id.clone(),
+                cwd: environment.cwd().to_abs_path().ok()?.into_path_buf(),
+                is_primary: index == 0,
+            })
         })
         .collect::<Vec<_>>();
 
@@ -925,6 +951,11 @@ async fn build_extension_turn_input_items(
     Some(items)
 }
 
+#[tracing::instrument(
+    level = "trace",
+    skip_all,
+    fields(input_count = input.len())
+)]
 async fn track_turn_resolved_config_analytics(
     sess: &Session,
     turn_context: &TurnContext,
@@ -981,7 +1012,9 @@ async fn track_turn_resolved_config_analytics(
 
 #[derive(Debug)]
 struct AutoCompactTokenStatus {
+    // Full active context usage, independent of the configured auto-compact scope.
     active_context_tokens: i64,
+    // Usage counted against `model_auto_compact_token_limit` for the current scope.
     auto_compact_scope_tokens: i64,
     auto_compact_scope_limit: i64,
     full_context_window_limit: Option<i64>,
@@ -1022,7 +1055,9 @@ async fn auto_compact_token_status(
             }
         };
     let full_context_window_limit_reached =
-        full_context_window_limit.is_some_and(|limit| active_context_tokens >= limit);
+        full_context_window_limit.is_some_and(|full_context_window_limit| {
+            active_context_tokens >= full_context_window_limit
+        });
     let token_limit_reached =
         auto_compact_scope_tokens >= auto_compact_scope_limit || full_context_window_limit_reached;
 
@@ -1043,8 +1078,17 @@ async fn run_pre_sampling_compact(
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
 ) -> CodexResult<()> {
+    if !turn_context
+        .config
+        .features
+        .enabled(Feature::AutoCompaction)
+    {
+        return Ok(());
+    }
+
     maybe_run_previous_model_inline_compact(sess, turn_context, client_session).await?;
     let token_status = auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
+    // Compact if the configured auto-compaction budget or usable context window is exhausted.
     if token_status.token_limit_reached {
         run_auto_compact(
             sess,
@@ -1081,7 +1125,7 @@ async fn maybe_run_previous_model_inline_compact(
     };
     let should_compact_for_comp_hash_change = comp_hash_changed(
         previous_turn_settings.comp_hash.as_deref(),
-        turn_context.comp_hash.as_deref(),
+        turn_context.model_info.comp_hash.as_deref(),
     );
     let previous_model_turn_context = Arc::new(
         turn_context
@@ -1154,7 +1198,11 @@ async fn run_auto_compact(
     phase: CompactionPhase,
 ) -> CodexResult<()> {
     if should_use_remote_compact_task(turn_context.provider.info()) {
-        if turn_context.features.enabled(Feature::RemoteCompactionV2) {
+        if turn_context
+            .config
+            .features
+            .enabled(Feature::RemoteCompactionV2)
+        {
             emit_compact_metric(
                 &sess.services.session_telemetry,
                 "remote_v2",
@@ -1254,87 +1302,7 @@ pub(super) fn collect_explicit_app_ids_from_skill_items(
     connector_ids
 }
 
-pub(super) fn filter_connectors_for_input(
-    connectors: &[connectors::AppInfo],
-    input: &[ResponseItem],
-    explicitly_enabled_connectors: &HashSet<String>,
-    skill_name_counts_lower: &HashMap<String, usize>,
-) -> Vec<connectors::AppInfo> {
-    let connectors: Vec<connectors::AppInfo> = connectors
-        .iter()
-        .filter(|connector| connector.is_enabled)
-        .cloned()
-        .collect::<Vec<_>>();
-    if connectors.is_empty() {
-        return Vec::new();
-    }
-
-    let user_messages = collect_user_messages(input);
-    if user_messages.is_empty() && explicitly_enabled_connectors.is_empty() {
-        return Vec::new();
-    }
-
-    let user_message_texts = user_messages
-        .iter()
-        .map(|message| message.message.clone())
-        .collect::<Vec<_>>();
-    let mentions = collect_tool_mentions_from_messages(&user_message_texts);
-    let mention_names_lower = mentions
-        .plain_names
-        .iter()
-        .map(|name| name.to_ascii_lowercase())
-        .collect::<HashSet<String>>();
-
-    let connector_slug_counts = build_connector_slug_counts(&connectors);
-    let mut allowed_connector_ids = explicitly_enabled_connectors.clone();
-    for path in mentions
-        .paths
-        .iter()
-        .filter(|path| tool_kind_for_path(path) == ToolMentionKind::App)
-    {
-        if let Some(connector_id) = app_id_from_path(path) {
-            allowed_connector_ids.insert(connector_id.to_string());
-        }
-    }
-
-    connectors
-        .into_iter()
-        .filter(|connector| {
-            connector_inserted_in_messages(
-                connector,
-                &mention_names_lower,
-                &allowed_connector_ids,
-                &connector_slug_counts,
-                skill_name_counts_lower,
-            )
-        })
-        .collect()
-}
-
-fn connector_inserted_in_messages(
-    connector: &connectors::AppInfo,
-    mention_names_lower: &HashSet<String>,
-    allowed_connector_ids: &HashSet<String>,
-    connector_slug_counts: &HashMap<String, usize>,
-    skill_name_counts_lower: &HashMap<String, usize>,
-) -> bool {
-    if allowed_connector_ids.contains(&connector.id) {
-        return true;
-    }
-
-    let mention_slug = codex_connectors::metadata::connector_mention_slug(connector);
-    let connector_count = connector_slug_counts
-        .get(&mention_slug)
-        .copied()
-        .unwrap_or(0);
-    let skill_count = skill_name_counts_lower
-        .get(&mention_slug)
-        .copied()
-        .unwrap_or(0);
-    connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&mention_slug)
-}
-
-fn explicitly_referenced_mcp_servers_for_input(
+pub(super) fn explicitly_referenced_mcp_servers_for_input(
     input: &[ResponseItem],
     mcp_tools: &[codex_mcp::ToolInfo],
 ) -> HashSet<String> {
@@ -1363,6 +1331,91 @@ fn explicitly_referenced_mcp_servers_for_input(
         .collect()
 }
 
+async fn configured_mcp_placeholders_from_history(
+    sess: &Session,
+    turn_context: &TurnContext,
+    items: &[ResponseItem],
+) -> Vec<codex_mcp::ToolInfo> {
+    let mut seen_tool_names = HashSet::new();
+    let mut placeholders = Vec::new();
+
+    for item in items {
+        let ResponseItem::FunctionCall {
+            name, namespace, ..
+        } = item
+        else {
+            continue;
+        };
+        let tool_name = ToolName::new(namespace.clone(), name.clone());
+        if !seen_tool_names.insert(tool_name.clone()) {
+            continue;
+        }
+        if let Some(tool_info) = sess
+            .resolve_configured_mcp_tool_info(turn_context, &tool_name)
+            .await
+        {
+            placeholders.push(tool_info);
+        }
+    }
+
+    placeholders
+}
+
+pub(super) fn filter_connectors_for_input(
+    connectors: &[connectors::AppInfo],
+    input: &[ResponseItem],
+    explicitly_enabled_connectors: &HashSet<String>,
+    skill_name_counts_lower: &HashMap<String, usize>,
+) -> Vec<connectors::AppInfo> {
+    if connectors.is_empty() {
+        return Vec::new();
+    }
+
+    let messages = input
+        .iter()
+        .filter_map(|item| match item {
+            ResponseItem::Message { content, .. } => {
+                content.iter().find_map(|content_item| match content_item {
+                    ContentItem::InputText { text } => Some(text.clone()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
+        .collect::<Vec<String>>();
+    let mentions = collect_tool_mentions_from_messages(&messages);
+    let mention_names_lower = mentions
+        .plain_names
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<HashSet<String>>();
+    let mentioned_app_ids = mentions
+        .paths
+        .iter()
+        .filter(|path| tool_kind_for_path(path) == ToolMentionKind::App)
+        .filter_map(|path| app_id_from_path(path).map(str::to_string))
+        .collect::<HashSet<String>>();
+    let connector_slug_counts = build_connector_slug_counts(connectors);
+
+    connectors
+        .iter()
+        .filter(|connector| connector.is_enabled)
+        .filter(|connector| {
+            if explicitly_enabled_connectors.contains(&connector.id)
+                || mentioned_app_ids.contains(&connector.id)
+            {
+                return true;
+            }
+
+            let slug = codex_connectors::metadata::connector_mention_slug(connector);
+            connector_slug_counts.get(&slug).copied().unwrap_or(0) == 1
+                && !skill_name_counts_lower.contains_key(&slug)
+                && mention_names_lower.contains(&slug)
+        })
+        .cloned()
+        .collect()
+}
+
 #[instrument(level = "trace", skip_all)]
 pub(crate) fn build_prompt(
     input: Vec<ResponseItem>,
@@ -1370,78 +1423,15 @@ pub(crate) fn build_prompt(
     turn_context: &TurnContext,
     base_instructions: BaseInstructions,
 ) -> Prompt {
-    let deferred_dynamic_tools = turn_context
-        .dynamic_tools
-        .iter()
-        .flat_map(deferred_dynamic_tool_names)
-        .collect::<HashSet<_>>();
-    let tools = if deferred_dynamic_tools.is_empty() {
-        router.model_visible_specs()
-    } else {
-        router
-            .model_visible_specs()
-            .into_iter()
-            .filter_map(|spec| filter_deferred_dynamic_tool_spec(spec, &deferred_dynamic_tools))
-            .collect()
-    };
     Prompt {
         input,
-        tools,
+        tools: router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
-        personality: turn_context.personality,
         output_schema: turn_context.final_output_json_schema.clone(),
         output_schema_strict: !crate::guardian::is_guardian_reviewer_source(
             &turn_context.session_source,
         ),
-    }
-}
-
-fn filter_deferred_dynamic_tool_spec(
-    spec: ToolSpec,
-    deferred_dynamic_tools: &HashSet<ToolName>,
-) -> Option<ToolSpec> {
-    match spec {
-        ToolSpec::Function(tool) => {
-            if deferred_dynamic_tools.contains(&ToolName::plain(tool.name.as_str())) {
-                None
-            } else {
-                Some(ToolSpec::Function(tool))
-            }
-        }
-        ToolSpec::Namespace(mut namespace) => {
-            let namespace_name = namespace.name.clone();
-            namespace.tools.retain(|tool| match tool {
-                ResponsesApiNamespaceTool::Function(tool) => !deferred_dynamic_tools.contains(
-                    &ToolName::namespaced(namespace_name.as_str(), tool.name.as_str()),
-                ),
-            });
-            if namespace.tools.is_empty() {
-                None
-            } else {
-                Some(ToolSpec::Namespace(namespace))
-            }
-        }
-        spec => Some(spec),
-    }
-}
-
-fn deferred_dynamic_tool_names(spec: &DynamicToolSpec) -> Vec<ToolName> {
-    match spec {
-        DynamicToolSpec::Function(tool) if tool.defer_loading => {
-            vec![ToolName::plain(tool.name.as_str())]
-        }
-        DynamicToolSpec::Function(_) => Vec::new(),
-        DynamicToolSpec::Namespace(namespace) => namespace
-            .tools
-            .iter()
-            .filter_map(|tool| match tool {
-                DynamicToolNamespaceTool::Function(tool) if tool.defer_loading => Some(
-                    ToolName::namespaced(namespace.name.as_str(), tool.name.as_str()),
-                ),
-                DynamicToolNamespaceTool::Function(_) => None,
-            })
-            .collect(),
     }
 }
 
@@ -1583,31 +1573,16 @@ pub(crate) async fn built_tools(
         .list_all_tools()
         .or_cancel(cancellation_token)
         .await?;
-    drop(mcp_connection_manager);
-    if turn_context
-        .config
-        .features
-        .enabled(Feature::UnavailableDummyTools)
-    {
-        let mut known_tool_names = all_mcp_tools
-            .iter()
-            .map(codex_mcp::ToolInfo::canonical_tool_name)
-            .collect::<HashSet<_>>();
-        for item in input {
-            let ResponseItem::FunctionCall {
-                name, namespace, ..
-            } = item
-            else {
-                continue;
-            };
-            let tool_name = ToolName::new(namespace.clone(), name.clone());
-            if let Some(tool_info) = sess
-                .resolve_configured_mcp_tool_info(turn_context, &tool_name)
-                .await
-                && known_tool_names.insert(tool_info.canonical_tool_name())
-            {
-                all_mcp_tools.push(tool_info);
-            }
+    let history = sess.clone_history().await;
+    let configured_mcp_placeholders =
+        configured_mcp_placeholders_from_history(sess, turn_context, history.raw_items()).await;
+    let mut existing_mcp_tool_names = all_mcp_tools
+        .iter()
+        .map(codex_mcp::ToolInfo::canonical_tool_name)
+        .collect::<HashSet<_>>();
+    for placeholder in configured_mcp_placeholders {
+        if existing_mcp_tool_names.insert(placeholder.canonical_tool_name()) {
+            all_mcp_tools.push(placeholder);
         }
     }
     let loaded_plugins = sess
@@ -1616,9 +1591,6 @@ pub(crate) async fn built_tools(
         .plugins_for_config(&turn_context.config.plugins_config_input())
         .instrument(trace_span!("built_tools.load_plugins"))
         .await;
-
-    let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
-    effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
 
     let apps_enabled = turn_context.apps_enabled();
     let accessible_connectors = apps_enabled.then(|| {
@@ -1652,77 +1624,111 @@ pub(crate) async fn built_tools(
     } else {
         None
     };
-    let auth = sess.services.auth_manager.auth().await;
-    let loaded_plugin_app_connector_ids = loaded_plugins
-        .effective_apps()
-        .into_iter()
-        .map(|connector_id| connector_id.0)
-        .collect::<Vec<_>>();
-    let discoverable_tools = async {
-        if apps_enabled && tool_suggest_enabled(turn_context) {
-            if let Some(accessible_connectors) = accessible_connectors_with_enabled_state.as_ref() {
-                match connectors::list_tool_suggest_discoverable_tools_with_auth(
-                    &turn_context.config,
-                    sess.services.plugins_manager.as_ref(),
-                    auth.as_ref(),
-                    accessible_connectors.as_slice(),
-                    &loaded_plugin_app_connector_ids,
-                )
-                .await
-                .map(|discoverable_tools| {
-                    let discoverable_tools =
-                        filter_request_plugin_install_discoverable_tools_for_client(
-                            discoverable_tools,
-                            turn_context.app_server_client_name.as_deref(),
-                        );
-                    filter_discoverable_tools_for_mode(
-                        &turn_context.config,
-                        turn_context.collaboration_mode.mode,
-                        discoverable_tools,
-                    )
-                }) {
-                    Ok(discoverable_tools) if discoverable_tools.is_empty() => None,
-                    Ok(discoverable_tools) => Some(discoverable_tools),
-                    Err(err) => {
-                        warn!("failed to load discoverable tool suggestions: {err:#}");
+    let tool_suggest_is_enabled = tool_suggest_enabled(turn_context);
+    let auth = if tool_suggest_is_enabled {
+        sess.services.auth_manager.auth().await
+    } else {
+        None
+    };
+    let endpoint_recommended_plugin_candidates = if tool_suggest_is_enabled {
+        let plugins_config = turn_context.config.plugins_config_input();
+        sess.services
+            .plugins_manager
+            .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
+                plugins_config: &plugins_config,
+                loaded_plugins: &loaded_plugins,
+                auth: auth.as_ref(),
+                disabled_tools: &turn_context.config.tool_suggest.disabled_tools,
+                app_server_client_name: turn_context.app_server_client_name.as_deref(),
+            })
+            .await
+    } else {
+        None
+    };
+    let tool_suggest_candidates =
+        if let Some(recommended_plugin_candidates) = endpoint_recommended_plugin_candidates {
+            Some(ToolSuggestCandidates {
+                tools: recommended_plugin_candidates,
+                presentation: ToolSuggestPresentation::RecommendationContext,
+            })
+        } else {
+            let loaded_plugin_app_connector_ids = loaded_plugins
+                .effective_apps()
+                .into_iter()
+                .map(|connector_id| connector_id.0)
+                .collect::<Vec<_>>();
+            async {
+                if apps_enabled && tool_suggest_is_enabled {
+                    if let Some(accessible_connectors) =
+                        accessible_connectors_with_enabled_state.as_ref()
+                    {
+                        match connectors::list_tool_suggest_discoverable_tools_with_auth(
+                            &turn_context.config,
+                            sess.services.plugins_manager.as_ref(),
+                            auth.as_ref(),
+                            accessible_connectors.as_slice(),
+                            &loaded_plugin_app_connector_ids,
+                        )
+                        .await
+                        .map(|discoverable_tools| {
+                            let discoverable_tools =
+                                filter_request_plugin_install_discoverable_tools_for_client(
+                                    discoverable_tools,
+                                    turn_context.app_server_client_name.as_deref(),
+                                );
+                            filter_discoverable_tools_for_mode(
+                                &turn_context.config,
+                                turn_context.collaboration_mode.mode,
+                                discoverable_tools,
+                            )
+                        }) {
+                            Ok(discoverable_tools) if discoverable_tools.is_empty() => None,
+                            Ok(discoverable_tools) => Some(ToolSuggestCandidates {
+                                tools: discoverable_tools,
+                                presentation: ToolSuggestPresentation::ListTool,
+                            }),
+                            Err(err) => {
+                                warn!("failed to load discoverable tool suggestions: {err:#}");
+                                None
+                            }
+                        }
+                    } else {
                         None
                     }
+                } else {
+                    None
                 }
-            } else {
-                None
             }
-        } else {
-            None
-        }
-    }
-    .instrument(trace_span!("built_tools.load_discoverable_tools"))
-    .await;
-
-    let explicitly_enabled = if let Some(connectors) = connectors.as_ref() {
-        let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
-            build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
-        });
-
-        filter_connectors_for_input(
-            connectors,
-            input,
-            &effective_explicitly_enabled_connectors,
-            &skill_name_counts_lower,
-        )
-    } else {
-        Vec::new()
-    };
+            .instrument(trace_span!("built_tools.load_discoverable_tools"))
+            .await
+        };
     let filtered_all_mcp_tools = filter_mcp_tools_for_mode(
         &turn_context.config,
         turn_context.collaboration_mode.mode,
         &all_mcp_tools,
     );
+    let mut explicitly_selected_connector_ids = explicitly_enabled_connectors.clone();
+    explicitly_selected_connector_ids.extend(sess.get_connector_selection().await);
+    let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
+        build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
+    });
+    let explicitly_enabled_connectors = connectors
+        .as_deref()
+        .map(|connectors| {
+            filter_connectors_for_input(
+                connectors,
+                input,
+                &explicitly_selected_connector_ids,
+                &skill_name_counts_lower,
+            )
+        })
+        .unwrap_or_default();
     let explicitly_referenced_mcp_servers =
         explicitly_referenced_mcp_servers_for_input(input, &filtered_all_mcp_tools);
     let mcp_tool_exposure = build_mcp_tool_exposure(
         &filtered_all_mcp_tools,
         connectors.as_deref(),
-        explicitly_enabled.as_slice(),
+        &explicitly_enabled_connectors,
         &explicitly_referenced_mcp_servers,
         &turn_context.config,
         &turn_context.tools_config,
@@ -1734,7 +1740,7 @@ pub(crate) async fn built_tools(
         ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,
-            discoverable_tools,
+            tool_suggest_candidates,
             extension_tool_executors: extension_tool_executors(sess),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
@@ -1919,11 +1925,11 @@ fn agent_message_text(item: &codex_protocol::items::AgentMessageItem) -> String 
         .collect()
 }
 
-pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
+pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<MessagePhase>)> {
     match msg {
-        EventMsg::AgentMessage(event) => Some(event.message.clone()),
+        EventMsg::AgentMessage(event) => Some((event.message.clone(), event.phase.clone())),
         EventMsg::ItemCompleted(event) => match &event.item {
-            TurnItem::AgentMessage(item) => Some(agent_message_text(item)),
+            TurnItem::AgentMessage(item) => Some((agent_message_text(item), item.phase.clone())),
             _ => None,
         },
         EventMsg::Error(_)
@@ -1936,6 +1942,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::ModelReroute(_)
         | EventMsg::ModelVerification(_)
         | EventMsg::TurnModerationMetadata(_)
+        | EventMsg::SafetyBuffering(_)
         | EventMsg::ContextCompacted(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnStarted(_)
@@ -1947,8 +1954,9 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::AgentReasoningRawContent(_)
         | EventMsg::AgentReasoningSectionBreak(_)
         | EventMsg::SessionConfigured(_)
-        | EventMsg::ThreadNameUpdated(_)
         | EventMsg::ThreadGoalUpdated(_)
+        | EventMsg::ThreadNameUpdated(_)
+        | EventMsg::ScratchpadUpdate(_)
         | EventMsg::McpStartupUpdate(_)
         | EventMsg::McpStartupComplete(_)
         | EventMsg::McpToolCallBegin(_)
@@ -1978,7 +1986,6 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::TurnDiff(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
         | EventMsg::PlanUpdate(_)
-        | EventMsg::ScratchpadUpdate(_)
         | EventMsg::TurnAborted(_)
         | EventMsg::ShutdownComplete
         | EventMsg::EnteredReviewMode(_)
@@ -2505,7 +2512,7 @@ async fn try_run_sampling_request(
                 }
                 needs_follow_up |= output_result.needs_follow_up;
                 // todo: remove before stabilizing multi-agent v2
-                if preempt_for_mailbox_mail && sess.has_pending_mailbox_items().await {
+                if preempt_for_mailbox_mail && sess.input_queue.has_pending_mailbox_items().await {
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         last_agent_message,
@@ -2610,6 +2617,17 @@ async fn try_run_sampling_request(
                 sess.emit_turn_moderation_metadata(&turn_context, metadata)
                     .await;
             }
+            ResponseEvent::SafetyBuffering(buffering) => {
+                sess.send_event(
+                    &turn_context,
+                    EventMsg::SafetyBuffering(SafetyBufferingEvent {
+                        model: turn_context.model_info.slug.clone(),
+                        use_cases: buffering.use_cases,
+                        reasons: buffering.reasons,
+                    }),
+                )
+                .await;
+            }
             ResponseEvent::ServerReasoningIncluded(included) => {
                 sess.set_server_reasoning_included(included).await;
             }
@@ -2635,10 +2653,14 @@ async fn try_run_sampling_request(
                     &mut assistant_message_stream_parsers,
                 )
                 .await;
-                sess.record_token_usage_info(&turn_context, token_usage.as_ref())
+                let budget_result = sess
+                    .record_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 should_emit_token_count = true;
                 should_emit_turn_diff = true;
+                if let Err(err) = budget_result {
+                    break Err(err);
+                }
                 if let Some(false) = end_turn {
                     needs_follow_up = true;
                 }

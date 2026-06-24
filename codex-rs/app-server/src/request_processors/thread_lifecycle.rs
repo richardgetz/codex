@@ -651,6 +651,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         reasoning_effort,
         memory_policy,
         user_preferences_memory_policy,
+        multi_agent_mode,
         ..
     } = config_snapshot;
     let instruction_sources = pending.instruction_sources;
@@ -675,6 +676,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         reasoning_effort,
         memory_policy,
         user_preferences_memory_policy,
+        multi_agent_mode,
         initial_turns_page,
     };
     outgoing.send_response(request_id, response).await;

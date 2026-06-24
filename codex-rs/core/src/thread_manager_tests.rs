@@ -24,7 +24,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
-use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -44,7 +43,7 @@ fn user_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 fn assistant_msg(text: &str) -> ResponseItem {
@@ -55,7 +54,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -78,13 +77,13 @@ fn truncates_before_requested_user_message() {
         user_msg("u2"),
         assistant_msg("a3"),
         ResponseItem::Reasoning {
-            id: "r1".to_string(),
+            id: Some("r1".to_string()),
             summary: vec![ReasoningItemReasoningSummary::SummaryText {
                 text: "s".to_string(),
             }],
             content: None,
             encrypted_content: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -92,7 +91,7 @@ fn truncates_before_requested_user_message() {
             name: "tool".to_string(),
             namespace: None,
             arguments: "{}".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         assistant_msg("a4"),
     ];
@@ -335,12 +334,14 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: vec![TurnEnvironmentSelection {
                 environment_id: "local".to_string(),
                 cwd: PathUri::from_abs_path(&config.cwd),
             }],
             thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
         })
         .await;
     let err = match result {
@@ -402,47 +403,19 @@ args = ["dev", "cd /tmp && true"]
         .await
         .expect("thread should start");
 
-    let prompt_items = crate::prompt_debug::build_prompt_input_from_session(
-        thread.thread.codex.session.as_ref(),
-        Vec::<UserInput>::new(),
-    )
-    .await
-    .expect("prompt input");
-    let environment_context = prompt_items
-        .iter()
-        .filter_map(|item| match item {
-            ResponseItem::Message { content, .. } => Some(content),
-            _ => None,
-        })
-        .flatten()
-        .find_map(|content| match content {
-            ContentItem::InputText { text } if text.contains("<environment_context>") => {
-                Some(text.as_str())
-            }
-            _ => None,
-        })
-        .expect("environment context prompt item");
-    assert!(environment_context.contains("<environments>"));
-    let cwd = thread.session_configured.cwd.display().to_string();
-    let dev_entry = format!(
-        r#"<environment id="dev">
-      <cwd>{cwd}</cwd>
-      <shell>"#
+    assert_eq!(
+        thread.thread.environment_selections().await,
+        vec![
+            TurnEnvironmentSelection {
+                environment_id: "dev".to_string(),
+                cwd: PathUri::from_abs_path(&thread.session_configured.cwd),
+            },
+            TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: PathUri::from_abs_path(&thread.session_configured.cwd),
+            },
+        ]
     );
-    let local_entry = format!(
-        r#"<environment id="local">
-      <cwd>{cwd}</cwd>
-      <shell>"#
-    );
-    let dev_position = environment_context
-        .find(&dev_entry)
-        .expect("dev environment entry");
-    let local_position = environment_context
-        .find(&local_entry)
-        .expect("local environment entry");
-    assert!(dev_position < local_position);
-    assert!(!environment_context.contains("\n  <cwd>"));
-    assert!(!environment_context.contains("\n  <shell>"));
 }
 
 #[tokio::test]
@@ -469,9 +442,11 @@ async fn start_thread_reports_selected_exec_policy_ruleset_errors_as_invalid_req
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
         })
         .await
     {
@@ -509,9 +484,11 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
         })
         .await
         .expect("internal thread should start");
@@ -626,6 +603,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
     let selected_root_init = |id: &str, environment_id: &str| {
         let mut init = codex_extension_api::ExtensionDataInit::new();
@@ -647,9 +625,11 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: selected_root_init("selected-a", "env-a"),
+            supports_openai_form_elicitation: false,
         })
         .await
         .expect("start first thread");
@@ -661,9 +641,11 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: selected_root_init("selected-b", "env-b"),
+            supports_openai_form_elicitation: false,
         })
         .await
         .expect("start second thread");
@@ -732,6 +714,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
     let selected_cwd =
         AbsolutePathBuf::try_from(config.cwd.as_path().join("selected")).expect("absolute path");
@@ -751,9 +734,11 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: environments.clone(),
             thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
         })
         .await
         .expect("start source thread");
@@ -780,6 +765,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             rollout_path.clone(),
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume source thread");
@@ -793,11 +779,11 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     assert_eq!(resumed_turn.environments.turn_environments.len(), 1);
     assert_eq!(
         resumed_turn.environments.turn_environments[0].cwd(),
-        &default_cwd
+        &PathUri::from_abs_path(&default_cwd)
     );
     assert_ne!(
         resumed_turn.environments.turn_environments[0].cwd(),
-        &selected_cwd
+        &PathUri::from_abs_path(&selected_cwd)
     );
 
     let forked = manager
@@ -820,11 +806,11 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     assert_eq!(forked_turn.environments.turn_environments.len(), 1);
     assert_eq!(
         forked_turn.environments.turn_environments[0].cwd(),
-        &default_cwd
+        &PathUri::from_abs_path(&default_cwd)
     );
     assert_ne!(
         forked_turn.environments.turn_environments[0].cwd(),
-        &selected_cwd
+        &PathUri::from_abs_path(&selected_cwd)
     );
 }
 
@@ -853,6 +839,7 @@ async fn explicit_installation_id_skips_codex_home_file() {
         state_db.clone(),
         installation_id.clone(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let thread = manager
@@ -893,6 +880,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let source = manager
@@ -916,6 +904,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
             rollout_path,
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume active source thread");
@@ -951,6 +940,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let source = manager
@@ -979,6 +969,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
             rollout_path,
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume stopped source thread");
@@ -1016,6 +1007,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let source = manager
@@ -1026,9 +1018,11 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             thread_source: Some(ThreadSource::User),
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
         })
         .await
         .expect("start source thread");
@@ -1055,6 +1049,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             rollout_path,
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume source thread");
@@ -1107,6 +1102,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         state_db,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let source = manager
@@ -1158,6 +1154,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
             }),
             auth_manager.clone(),
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("seed rollout path in store");
@@ -1174,6 +1171,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
             rollout_path.clone(),
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume from rollout path");
@@ -1233,6 +1231,7 @@ async fn new_uses_active_provider_for_model_refresh() {
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let _ = manager.list_models(RefreshStrategy::Online).await;
@@ -1454,6 +1453,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let source = manager
@@ -1465,6 +1465,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
             ]),
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("create source thread from completed history");
@@ -1561,6 +1562,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let source = manager
@@ -1579,6 +1581,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
             ]),
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("create source thread from explicit partial history");
@@ -1658,6 +1661,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let source = manager
@@ -1669,6 +1673,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             ]),
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("create source thread from partial history");

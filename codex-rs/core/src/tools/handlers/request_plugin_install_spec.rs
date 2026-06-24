@@ -7,54 +7,77 @@ use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolSpec;
 use std::collections::BTreeMap;
 
+use crate::tools::router::ToolSuggestPresentation;
+
 pub(crate) fn create_request_plugin_install_tool(
     discoverable_tools: &[RequestPluginInstallEntry],
+    presentation: ToolSuggestPresentation,
 ) -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "tool_type".to_string(),
-            JsonSchema::string(Some(
-                "Type of discoverable tool to suggest. Use \"connector\" or \"plugin\"."
-                    .to_string(),
-            )),
+    let (properties, required, description) = match presentation {
+        ToolSuggestPresentation::ListTool => {
+            let properties = BTreeMap::from([
+            (
+                "tool_type".to_string(),
+                JsonSchema::string(Some(
+                    "Type of discoverable tool to suggest. Use \"connector\" or \"plugin\"."
+                        .to_string(),
+                )),
+            ),
+            (
+                "action_type".to_string(),
+                JsonSchema::string(Some("Suggested action for the tool. Use \"install\".".to_string())),
+            ),
+            (
+                "tool_id".to_string(),
+                JsonSchema::string(Some("Connector or plugin id to suggest.".to_string())),
+            ),
+            (
+                "suggest_reason".to_string(),
+                JsonSchema::string(Some(
+                    "Concise one-line user-facing reason why this plugin or connector can help with the current request."
+                        .to_string(),
+                )),
+            ),
+        ]);
+            let required = vec![
+                "tool_type".to_string(),
+                "action_type".to_string(),
+                "tool_id".to_string(),
+                "suggest_reason".to_string(),
+            ];
+            let discoverable_tools = format_discoverable_tools(discoverable_tools);
+            let description = format!(
+                "# Request plugin/connector install\n\nUse this tool only to ask the user to install one known plugin or connector from the list below. The list contains known candidates that are not currently installed.\n\nUse this ONLY when all of the following are true:\n- The user explicitly asks to use a specific plugin or connector that is not already available in the current context or active `tools` list.\n- `{TOOL_SEARCH_TOOL_NAME}` is not available, or it has already been called and did not find or make the requested tool callable.\n- The plugin or connector is one of the known installable plugins or connectors listed below. Only ask to install plugins or connectors from this list.\n\nDo not use this tool for adjacent capabilities, broad recommendations, or tools that merely seem useful. Only use when the user explicitly asks to use that exact listed plugin or connector.\n\nKnown plugins/connectors available to install:\n{discoverable_tools}\n\nWorkflow:\n\n1. Check the current context and active `tools` list first. If current active tools aren't relevant and `{TOOL_SEARCH_TOOL_NAME}` is available, only call this tool after `{TOOL_SEARCH_TOOL_NAME}` has already been tried and found no relevant tool.\n2. Match the user's explicit request against the known plugin/connector list above. Only proceed when one listed plugin or connector exactly fits.\n3. If we found both connectors and plugins to install, use plugins first, only use connectors if the corresponding plugin is installed but the connector is not.\n4. If one plugin or connector clearly fits, call `{REQUEST_PLUGIN_INSTALL_TOOL_NAME}` with:\n   - `tool_type`: `connector` or `plugin`\n   - `action_type`: `install`\n   - `tool_id`: exact id from the known plugin/connector list above\n   - `suggest_reason`: concise one-line user-facing reason this plugin or connector can help with the current request\n5. After the request flow completes:\n   - if the user finished the install flow, continue by searching again or using the newly available plugin or connector\n   - if the user did not finish, continue without that plugin or connector, and don't request it again unless the user explicitly asks for it.\n\nIMPORTANT: DO NOT call this tool in parallel with other tools."
+            );
+            (properties, required, description)
+        }
+        ToolSuggestPresentation::RecommendationContext => (
+            BTreeMap::from([
+                (
+                    "plugin_id".to_string(),
+                    JsonSchema::string(Some(
+                        "Plugin id from the `<recommended_plugins>` list.".to_string(),
+                    )),
+                ),
+                (
+                    "suggest_reason".to_string(),
+                    JsonSchema::string(Some(
+                        "Concise one-line user-facing reason why this plugin can help with the current request."
+                            .to_string(),
+                    )),
+                ),
+            ]),
+            vec!["plugin_id".to_string(), "suggest_reason".to_string()],
+            "# Suggest a recommended plugin installation\n\nSuggest installing a plugin from the `<recommended_plugins>` list when it would help with the user's current request. Briefly explain why in `suggest_reason`.".to_string(),
         ),
-        (
-            "action_type".to_string(),
-            JsonSchema::string(Some("Suggested action for the tool. Use \"install\".".to_string())),
-        ),
-        (
-            "tool_id".to_string(),
-            JsonSchema::string(Some("Connector or plugin id to suggest.".to_string())),
-        ),
-        (
-            "suggest_reason".to_string(),
-            JsonSchema::string(Some(
-                "Concise one-line user-facing reason why this plugin or connector can help with the current request."
-                    .to_string(),
-            )),
-        ),
-    ]);
-
-    let discoverable_tools = format_discoverable_tools(discoverable_tools);
-    let description = format!(
-        "# Request plugin/connector install\n\nUse this tool only to ask the user to install one known plugin or connector from the list below. The list contains known candidates that are not currently installed.\n\nUse this ONLY when all of the following are true:\n- The user explicitly asks to use a specific plugin or connector that is not already available in the current context or active `tools` list.\n- `{TOOL_SEARCH_TOOL_NAME}` is not available, or it has already been called and did not find or make the requested tool callable.\n- The plugin or connector is one of the known installable plugins or connectors listed below. Only ask to install plugins or connectors from this list.\n\nDo not use this tool for adjacent capabilities, broad recommendations, or tools that merely seem useful. Only use when the user explicitly asks to use that exact listed plugin or connector.\n\nKnown plugins/connectors available to install:\n{discoverable_tools}\n\nWorkflow:\n\n1. Check the current context and active `tools` list first. If current active tools aren't relevant and `{TOOL_SEARCH_TOOL_NAME}` is available, only call this tool after `{TOOL_SEARCH_TOOL_NAME}` has already been tried and found no relevant tool.\n2. Match the user's explicit request against the known plugin/connector list above. Only proceed when one listed plugin or connector exactly fits.\n3. If we found both connectors and plugins to install, use plugins first, only use connectors if the corresponding plugin is installed but the connector is not.\n4. If one plugin or connector clearly fits, call `{REQUEST_PLUGIN_INSTALL_TOOL_NAME}` with:\n   - `tool_type`: `connector` or `plugin`\n   - `action_type`: `install`\n   - `tool_id`: exact id from the known plugin/connector list above\n   - `suggest_reason`: concise one-line user-facing reason this plugin or connector can help with the current request\n5. After the request flow completes:\n   - if the user finished the install flow, continue by searching again or using the newly available plugin or connector\n   - if the user did not finish, continue without that plugin or connector, and don't request it again unless the user explicitly asks for it.\n\nIMPORTANT: DO NOT call this tool in parallel with other tools."
-    );
+    };
 
     ToolSpec::Function(ResponsesApiTool {
         name: REQUEST_PLUGIN_INSTALL_TOOL_NAME.to_string(),
         description,
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(
-            properties,
-            Some(vec![
-                "tool_type".to_string(),
-                "action_type".to_string(),
-                "tool_id".to_string(),
-                "suggest_reason".to_string(),
-            ]),
-            Some(false.into()),
-        ),
+        parameters: JsonSchema::object(properties, Some(required), Some(false.into())),
         output_schema: None,
     })
 }
@@ -163,26 +186,29 @@ mod tests {
         );
 
         assert_eq!(
-            create_request_plugin_install_tool(&[
-                RequestPluginInstallEntry {
-                    id: "slack@openai-curated".to_string(),
-                    name: "Slack".to_string(),
-                    description: None,
-                    tool_type: DiscoverableToolType::Connector,
-                    has_skills: false,
-                    mcp_server_names: Vec::new(),
-                    app_connector_ids: Vec::new(),
-                },
-                RequestPluginInstallEntry {
-                    id: "github".to_string(),
-                    name: "GitHub".to_string(),
-                    description: None,
-                    tool_type: DiscoverableToolType::Plugin,
-                    has_skills: true,
-                    mcp_server_names: vec!["github-mcp".to_string()],
-                    app_connector_ids: vec!["github-app".to_string()],
-                },
-            ]),
+            create_request_plugin_install_tool(
+                &[
+                    RequestPluginInstallEntry {
+                        id: "slack@openai-curated".to_string(),
+                        name: "Slack".to_string(),
+                        description: None,
+                        tool_type: DiscoverableToolType::Connector,
+                        has_skills: false,
+                        mcp_server_names: Vec::new(),
+                        app_connector_ids: Vec::new(),
+                    },
+                    RequestPluginInstallEntry {
+                        id: "github".to_string(),
+                        name: "GitHub".to_string(),
+                        description: None,
+                        tool_type: DiscoverableToolType::Plugin,
+                        has_skills: true,
+                        mcp_server_names: vec!["github-mcp".to_string()],
+                        app_connector_ids: vec!["github-app".to_string()],
+                    },
+                ],
+                ToolSuggestPresentation::ListTool,
+            ),
             ToolSpec::Function(ResponsesApiTool {
                 name: "request_plugin_install".to_string(),
                 description: expected_description.to_string(),
@@ -223,6 +249,42 @@ mod tests {
                         "tool_id".to_string(),
                         "suggest_reason".to_string(),
                     ]), Some(false.into())),
+                output_schema: None,
+            })
+        );
+    }
+
+    #[test]
+    fn recommendation_context_uses_simplified_plugin_wire_shape() {
+        assert_eq!(
+            create_request_plugin_install_tool(
+                &[],
+                ToolSuggestPresentation::RecommendationContext,
+            ),
+            ToolSpec::Function(ResponsesApiTool {
+                name: "request_plugin_install".to_string(),
+                description: "# Suggest a recommended plugin installation\n\nSuggest installing a plugin from the `<recommended_plugins>` list when it would help with the user's current request. Briefly explain why in `suggest_reason`.".to_string(),
+                strict: false,
+                defer_loading: None,
+                parameters: JsonSchema::object(
+                    BTreeMap::from([
+                        (
+                            "plugin_id".to_string(),
+                            JsonSchema::string(Some(
+                                "Plugin id from the `<recommended_plugins>` list.".to_string(),
+                            )),
+                        ),
+                        (
+                            "suggest_reason".to_string(),
+                            JsonSchema::string(Some(
+                                "Concise one-line user-facing reason why this plugin can help with the current request."
+                                    .to_string(),
+                            )),
+                        ),
+                    ]),
+                    Some(vec!["plugin_id".to_string(), "suggest_reason".to_string()]),
+                    Some(false.into()),
+                ),
                 output_schema: None,
             })
         );

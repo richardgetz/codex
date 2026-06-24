@@ -220,6 +220,7 @@ async fn run_codex_tool_session_inner(
                         let approval_id = ev.effective_approval_id();
                         let ExecApprovalRequestEvent {
                             turn_id: _,
+                            environment_id: _,
                             started_at_ms: _,
                             command,
                             cwd,
@@ -268,6 +269,7 @@ async fn run_codex_tool_session_inner(
                     EventMsg::Warning(_)
                     | EventMsg::GuardianWarning(_)
                     | EventMsg::ModelVerification(_)
+                    | EventMsg::SafetyBuffering(_)
                     | EventMsg::TurnModerationMetadata(_) => {
                         continue;
                     }

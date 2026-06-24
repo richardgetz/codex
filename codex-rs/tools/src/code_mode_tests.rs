@@ -1,4 +1,5 @@
 use super::augment_tool_spec_for_code_mode;
+use super::code_mode_name_for_tool_name;
 use super::tool_spec_to_code_mode_tool_definition;
 use crate::AdditionalProperties;
 use crate::FreeformTool;
@@ -10,6 +11,18 @@ use crate::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
+
+#[test]
+fn code_mode_name_for_tool_name_preserves_codex_app_global_name_shape() {
+    assert_eq!(
+        code_mode_name_for_tool_name(&ToolName::namespaced("codex_app", "lookup")),
+        "codex_app_lookup"
+    );
+    assert_eq!(
+        code_mode_name_for_tool_name(&ToolName::namespaced("mcp", "lookup")),
+        "mcp__lookup"
+    );
+}
 
 #[test]
 fn augment_tool_spec_for_code_mode_augments_function_tools() {

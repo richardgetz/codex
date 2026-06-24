@@ -93,6 +93,7 @@ mod tests {
                 rollout_path: codex_home.join(format!("rollout-{thread_id}.jsonl")),
                 created_at: now,
                 updated_at: now,
+                recency_at: now,
                 source: "cli".to_string(),
                 agent_nickname: None,
                 agent_role: None,

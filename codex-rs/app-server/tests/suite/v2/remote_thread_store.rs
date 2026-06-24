@@ -157,6 +157,7 @@ async fn thread_start_and_delete_with_non_local_thread_store_do_not_create_local
     let unloaded_thread_id = ThreadId::from_string(&Uuid::new_v4().to_string())?;
     thread_store
         .create_thread(StoreCreateThreadParams {
+            session_id: unloaded_thread_id.into(),
             thread_id: unloaded_thread_id,
             extra_config: None,
             forked_from_id: None,
