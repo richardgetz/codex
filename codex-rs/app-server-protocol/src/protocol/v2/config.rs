@@ -192,6 +192,7 @@ pub struct AppsDefaultConfig {
     pub destructive_enabled: bool,
     #[serde(default = "default_enabled")]
     pub open_world_enabled: bool,
+    pub default_tools_approval_mode: Option<AppToolApproval>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -666,7 +667,7 @@ pub struct ExternalAgentConfigDetectResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigDetectParams {
-    /// If true, include detection under the user's home (~/.claude, ~/.codex, etc.).
+    /// If true, include detection under the user's home directory.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_home: bool,
     /// Zero or more working directories to include for repo-scoped detection.
@@ -679,6 +680,9 @@ pub struct ExternalAgentConfigDetectParams {
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportParams {
     pub migration_items: Vec<ExternalAgentConfigMigrationItem>,
+    /// Source product that produced the migration items. Missing means unspecified.
+    #[ts(optional = nullable)]
+    pub source: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -693,6 +697,7 @@ pub struct ExternalAgentConfigImportResponse {
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportItemTypeFailure {
     pub item_type: ExternalAgentConfigMigrationItemType,
+    pub error_type: Option<String>,
     pub failure_stage: String,
     pub message: String,
     pub cwd: Option<PathBuf>,
@@ -716,6 +721,31 @@ pub struct ExternalAgentConfigImportTypeResult {
     pub item_type: ExternalAgentConfigMigrationItemType,
     pub successes: Vec<ExternalAgentConfigImportItemTypeSuccess>,
     pub failures: Vec<ExternalAgentConfigImportItemTypeFailure>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportHistory {
+    pub import_id: String,
+    pub completed_at_ms: i64,
+    pub successes: Vec<ExternalAgentConfigImportItemTypeSuccess>,
+    pub failures: Vec<ExternalAgentConfigImportItemTypeFailure>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportHistoriesReadResponse {
+    pub data: Vec<ExternalAgentConfigImportHistory>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportProgressNotification {
+    pub import_id: String,
+    pub item_type_results: Vec<ExternalAgentConfigImportTypeResult>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

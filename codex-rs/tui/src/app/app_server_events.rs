@@ -8,8 +8,10 @@ use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_server_session::AppServerSession;
+use crate::app_server_session::status_account_display_from_account;
 use crate::app_server_session::status_account_display_from_auth_mode;
 use codex_app_server_client::AppServerEvent;
+use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
@@ -96,11 +98,22 @@ impl App {
                             | AuthMode::PersonalAccessToken
                     )
                 );
+                let account_display =
+                    if matches!(notification.auth_mode, Some(AuthMode::PersonalAccessToken))
+                        && !matches!(notification.account, Some(Account::Chatgpt { .. }))
+                    {
+                        status_account_display_from_auth_mode(
+                            notification.auth_mode,
+                            notification.plan_type,
+                        )
+                    } else {
+                        status_account_display_from_account(
+                            notification.account.clone(),
+                            self.config.active_account_alias(),
+                        )
+                    };
                 self.chat_widget.update_account_state(
-                    status_account_display_from_auth_mode(
-                        notification.auth_mode,
-                        notification.plan_type,
-                    ),
+                    account_display,
                     notification.plan_type,
                     notification
                         .auth_mode

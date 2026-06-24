@@ -2909,6 +2909,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
                 model_provider: "agent-provider".to_string(),
                 created_at: 1,
                 updated_at: 2,
+                recency_at: Some(2),
                 status: codex_app_server_protocol::ThreadStatus::Idle,
                 path: Some(rollout_path.clone()),
                 cwd: test_path_buf("/tmp/agent").abs(),
@@ -3001,6 +3002,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
                 model_provider: "agent-provider".to_string(),
                 created_at: 1,
                 updated_at: 2,
+                recency_at: Some(2),
                 status: codex_app_server_protocol::ThreadStatus::Idle,
                 path: None,
                 cwd: test_path_buf("/tmp/agent").abs(),
@@ -3060,6 +3062,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         model_provider: "read-provider".to_string(),
         created_at: 1,
         updated_at: 2,
+        recency_at: Some(2),
         status: codex_app_server_protocol::ThreadStatus::Idle,
         path: None,
         cwd: test_path_buf("/tmp/read").abs(),
@@ -3598,6 +3601,80 @@ async fn app_scoped_mcp_startup_notifications_do_not_render_in_active_thread() {
         app.chat_widget.active_cell_transcript_lines(/*width*/ 120),
         None
     );
+}
+
+#[tokio::test]
+async fn account_updated_notification_preserves_account_payload_display() {
+    let mut app = make_test_app().await;
+    app.config.accounts.active = Some("work".to_string());
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::AccountUpdated(
+                codex_app_server_protocol::AccountUpdatedNotification {
+                    account: Some(codex_app_server_protocol::Account::Chatgpt {
+                        email: Some("person@example.com".to_string()),
+                        plan_type: codex_protocol::account::PlanType::Pro,
+                    }),
+                    auth_mode: Some(codex_app_server_protocol::AuthMode::Chatgpt),
+                    plan_type: Some(codex_protocol::account::PlanType::Pro),
+                },
+            ),
+        ),
+    )
+    .await;
+
+    assert_eq!(
+        app.chat_widget.status_account_display(),
+        Some(&crate::status::StatusAccountDisplay::ChatGpt {
+            alias: Some("work".to_string()),
+            email: Some("person@example.com".to_string()),
+            plan: Some("Pro".to_string()),
+        })
+    );
+    assert_eq!(
+        app.chat_widget.current_plan_type(),
+        Some(codex_protocol::account::PlanType::Pro)
+    );
+    assert!(app.chat_widget.has_chatgpt_account());
+    assert!(app.chat_widget.has_codex_backend_auth());
+}
+
+#[tokio::test]
+async fn account_updated_notification_treats_personal_access_token_as_chatgpt_display() {
+    let mut app = make_test_app().await;
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::AccountUpdated(
+                codex_app_server_protocol::AccountUpdatedNotification {
+                    account: Some(codex_app_server_protocol::Account::ApiKey {}),
+                    auth_mode: Some(codex_app_server_protocol::AuthMode::PersonalAccessToken),
+                    plan_type: Some(codex_protocol::account::PlanType::Pro),
+                },
+            ),
+        ),
+    )
+    .await;
+
+    assert_eq!(
+        app.chat_widget.status_account_display(),
+        Some(&crate::status::StatusAccountDisplay::ChatGpt {
+            alias: None,
+            email: None,
+            plan: Some("Pro".to_string()),
+        })
+    );
+    assert!(app.chat_widget.has_chatgpt_account());
+    assert!(app.chat_widget.has_codex_backend_auth());
 }
 
 #[tokio::test]
@@ -4811,10 +4888,11 @@ fn exec_approval_request(
             item_id: item_id.to_string(),
             started_at_ms: 0,
             approval_id: approval_id.map(str::to_string),
+            environment_id: None,
             reason: Some("needs approval".to_string()),
             network_approval_context: None,
             command: Some("echo hello".to_string()),
-            cwd: Some(test_path_buf("/tmp/project").abs()),
+            cwd: Some(test_path_buf("/tmp/project").abs().into()),
             command_actions: None,
             additional_permissions: None,
             proposed_execpolicy_amendment: None,
@@ -5671,7 +5749,7 @@ async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
         /*has_chatgpt_account*/ false, /*has_codex_backend_auth*/ true,
     );
     app.chat_widget
-        .set_composer_text("/usage".to_string(), Vec::new(), Vec::new());
+        .set_composer_text("/usage daily".to_string(), Vec::new(), Vec::new());
     app.chat_widget
         .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     app.chat_widget
@@ -5713,6 +5791,38 @@ async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
 }
 
 #[tokio::test]
+async fn late_usage_result_can_follow_finalized_plan() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.chat_widget
+        .add_token_activity_output(crate::chatwidget::TokenActivityView::Daily);
+    let request_id = match app_event_rx.try_recv() {
+        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
+        other => panic!("expected token activity refresh request, got {other:?}"),
+    };
+
+    app.chat_widget.note_stream_consolidation_queued();
+    app.transcript_cells
+        .push(Arc::new(history_cell::new_proposed_plan_stream(
+            vec![Line::from("finalized plan")],
+            /*is_stream_continuation*/ false,
+        )));
+    app.chat_widget.note_stream_consolidation_completed();
+
+    assert!(
+        app.chat_widget.finish_token_activity_refresh(
+            request_id,
+            Err("token activity unavailable".to_string()),
+        )
+    );
+    assert!(!app.pending_usage_output_insertion_blocked());
+    assert!(
+        app.chat_widget
+            .take_completed_token_activity_output()
+            .is_some()
+    );
+}
+
+#[tokio::test]
 async fn thread_rollback_response_discards_queued_active_thread_events() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
@@ -5744,6 +5854,7 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
                 model_provider: "openai".to_string(),
                 created_at: 0,
                 updated_at: 0,
+                recency_at: Some(0),
                 status: codex_app_server_protocol::ThreadStatus::Idle,
                 path: None,
                 cwd: test_path_buf("/tmp/project").abs(),
@@ -5975,6 +6086,7 @@ async fn override_turn_context_sends_thread_settings_update() {
                 effort: Some(ReasoningEffortConfig::High),
                 summary: None,
                 collaboration_mode: collaboration_mode.clone(),
+                multi_agent_mode: Default::default(),
                 personality: Some(Personality::Pragmatic),
             },
         };
@@ -6161,6 +6273,7 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
             effort: collaboration_mode.settings.reasoning_effort.clone(),
             summary: None,
             collaboration_mode: collaboration_mode.clone(),
+            multi_agent_mode: Default::default(),
             personality: Some(Personality::Pragmatic),
         },
     };

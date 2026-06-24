@@ -76,7 +76,7 @@ async fn recent_image_fallback_preserves_latest_user_anchor_and_generated_contex
                 },
             ],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -84,12 +84,13 @@ async fn recent_image_fallback_preserves_latest_user_anchor_and_generated_contex
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "mcp-call".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
+            id: None,
             call_id: "mcp-call".to_string(),
             output: image_output("mcp"),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCall {
             id: None,
@@ -97,25 +98,27 @@ async fn recent_image_fallback_preserves_latest_user_anchor_and_generated_contex
             call_id: "code-mode-call".to_string(),
             name: "exec".to_string(),
             input: String::new(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCallOutput {
+            id: None,
             call_id: "code-mode-call".to_string(),
             name: Some("exec".to_string()),
             output: image_output("code-mode"),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ImageGenerationCall {
-            id: "generated-call".to_string(),
+            id: Some("generated-call".to_string()),
             status: "completed".to_string(),
             revised_prompt: None,
             result: "generated".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
+            id: None,
             call_id: "orphan-call".to_string(),
             output: image_output("orphan"),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -203,7 +206,7 @@ async fn recent_image_fallback_requires_requested_count() {
             role: "user".to_string(),
             content: vec![input_image("only-image")],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }],
         &[],
     )
@@ -310,7 +313,7 @@ async fn edit_matches_context_selector_for_generated_images_after_latest_user_an
                 },
             ],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         generated_item("g4"),
         generated_item("g5"),
@@ -338,7 +341,7 @@ async fn edit_preserves_a_generated_image_when_user_anchor_fills_the_limit() {
                 })
                 .collect(),
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         generated_item("generated"),
     ];
@@ -363,7 +366,7 @@ async fn edit_uses_latest_user_upload_before_a_text_only_follow_up() {
                 detail: None,
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Message {
             id: None,
@@ -377,7 +380,7 @@ async fn edit_uses_latest_user_upload_before_a_text_only_follow_up() {
                 },
             ],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -396,7 +399,7 @@ async fn edit_reuses_images_from_prior_standalone_imagegen_calls() {
             namespace: Some(IMAGE_GEN_NAMESPACE.to_string()),
             arguments: "{}".to_string(),
             call_id: "imagegen-1".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         generated_function_output("imagegen-1", "standalone"),
     ];
@@ -419,7 +422,7 @@ async fn edit_keeps_newest_standalone_generated_images_when_over_limit() {
                     namespace: Some(IMAGE_GEN_NAMESPACE.to_string()),
                     arguments: "{}".to_string(),
                     call_id: call_id.clone(),
-                    metadata: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
                 generated_function_output(&call_id, &index.to_string()),
             ]
@@ -488,11 +491,11 @@ fn function_payload() -> ToolPayload {
 
 fn generated_item(result: &str) -> ResponseItem {
     ResponseItem::ImageGenerationCall {
-        id: format!("id-{result}"),
+        id: Some(format!("id-{result}")),
         status: "completed".to_string(),
         revised_prompt: None,
         result: result.to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -511,6 +514,7 @@ fn generated_function_output(call_id: &str, result: &str) -> ResponseItem {
             ]),
             success: Some(true),
         },
-        metadata: None,
+        id: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }

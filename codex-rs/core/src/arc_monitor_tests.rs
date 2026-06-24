@@ -66,7 +66,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
                 }],
                 phase: None,
 
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
             &turn_context,
         )
@@ -95,7 +95,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
                 }],
                 phase: Some(MessagePhase::Commentary),
 
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
             &turn_context,
         )
@@ -110,7 +110,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
                 }],
                 phase: Some(MessagePhase::FinalAnswer),
 
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
             &turn_context,
         )
@@ -125,7 +125,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
                 }],
                 phase: None,
 
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
             &turn_context,
         )
@@ -139,7 +139,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
                 arguments: "{\"old\":true}".to_string(),
                 call_id: "call_old".to_string(),
 
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
             &turn_context,
         )
@@ -147,12 +147,12 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
     session
         .record_into_history(
             &[ResponseItem::Reasoning {
-                id: "reasoning_old".to_string(),
+                id: Some("reasoning_old".to_string()),
                 summary: Vec::new(),
                 content: None,
                 encrypted_content: Some("encrypted-old".to_string()),
 
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
             &turn_context,
         )
@@ -171,7 +171,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
                     user: None,
                 }),
 
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
             &turn_context,
         )
@@ -179,12 +179,12 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
     session
         .record_into_history(
             &[ResponseItem::Reasoning {
-                id: "reasoning_latest".to_string(),
+                id: Some("reasoning_latest".to_string()),
                 summary: Vec::new(),
                 content: None,
                 encrypted_content: Some("encrypted-latest".to_string()),
 
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
             &turn_context,
         )
@@ -289,7 +289,7 @@ async fn monitor_action_posts_expected_arc_request() {
                 }],
                 phase: None,
 
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
             &turn_context,
         )
@@ -371,7 +371,7 @@ async fn monitor_action_uses_env_url_and_token_overrides() {
                 }],
                 phase: None,
 
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
             &turn_context,
         )
@@ -442,7 +442,7 @@ async fn monitor_action_rejects_legacy_response_fields() {
                 }],
                 phase: None,
 
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
             &turn_context,
         )

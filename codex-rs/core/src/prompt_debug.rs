@@ -61,6 +61,7 @@ pub async fn build_prompt_input(
         state_db.clone(),
         installation_id,
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
     let thread = thread_manager.start_thread(config).await?;
 
@@ -81,7 +82,7 @@ pub(crate) async fn build_prompt_input_from_session(
         .await;
 
     if !input.is_empty() {
-        let response_item = sess.response_item_from_user_input(turn_context.as_ref(), input);
+        let response_item = sess.response_item_from_user_input(input);
         sess.record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&response_item))
             .await;
     }
@@ -95,7 +96,7 @@ pub(crate) async fn build_prompt_input_from_session(
         turn_context.as_ref(),
         &prompt_input,
         &HashSet::new(),
-        Some(turn_context.turn_skills.outcome.as_ref()),
+        None,
         &CancellationToken::new(),
     )
     .await?;

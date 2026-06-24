@@ -17,6 +17,7 @@ from .v2_all import ContextCompactedNotification
 from .v2_all import DeprecationNoticeNotification
 from .v2_all import ErrorNotification
 from .v2_all import ExternalAgentConfigImportCompletedNotification
+from .v2_all import ExternalAgentConfigImportProgressNotification
 from .v2_all import FileChangeOutputDeltaNotification
 from .v2_all import FileChangePatchUpdatedNotification
 from .v2_all import FsChangedNotification
@@ -33,6 +34,7 @@ from .v2_all import McpServerOauthLoginCompletedNotification
 from .v2_all import McpServerStatusUpdatedNotification
 from .v2_all import McpToolCallProgressNotification
 from .v2_all import ModelReroutedNotification
+from .v2_all import ModelSafetyBufferingUpdatedNotification
 from .v2_all import ModelVerificationNotification
 from .v2_all import PlanDeltaNotification
 from .v2_all import ProcessExitedNotification
@@ -46,6 +48,7 @@ from .v2_all import SkillsChangedNotification
 from .v2_all import TerminalInteractionNotification
 from .v2_all import ThreadArchivedNotification
 from .v2_all import ThreadClosedNotification
+from .v2_all import ThreadDeletedNotification
 from .v2_all import ThreadGoalClearedNotification
 from .v2_all import ThreadGoalUpdatedNotification
 from .v2_all import ThreadNameUpdatedNotification
@@ -64,6 +67,7 @@ from .v2_all import ThreadTokenUsageUpdatedNotification
 from .v2_all import ThreadUnarchivedNotification
 from .v2_all import TurnCompletedNotification
 from .v2_all import TurnDiffUpdatedNotification
+from .v2_all import TurnModerationMetadataNotification
 from .v2_all import TurnPlanUpdatedNotification
 from .v2_all import TurnScratchpadUpdatedNotification
 from .v2_all import TurnStartedNotification
@@ -81,6 +85,7 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "deprecationNotice": DeprecationNoticeNotification,
     "error": ErrorNotification,
     "externalAgentConfig/import/completed": ExternalAgentConfigImportCompletedNotification,
+    "externalAgentConfig/import/progress": ExternalAgentConfigImportProgressNotification,
     "fs/changed": FsChangedNotification,
     "fuzzyFileSearch/sessionCompleted": FuzzyFileSearchSessionCompletedNotification,
     "fuzzyFileSearch/sessionUpdated": FuzzyFileSearchSessionUpdatedNotification,
@@ -104,6 +109,7 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "mcpServer/oauthLogin/completed": McpServerOauthLoginCompletedNotification,
     "mcpServer/startupStatus/updated": McpServerStatusUpdatedNotification,
     "model/rerouted": ModelReroutedNotification,
+    "model/safetyBuffering/updated": ModelSafetyBufferingUpdatedNotification,
     "model/verification": ModelVerificationNotification,
     "process/exited": ProcessExitedNotification,
     "process/outputDelta": ProcessOutputDeltaNotification,
@@ -113,6 +119,7 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "thread/archived": ThreadArchivedNotification,
     "thread/closed": ThreadClosedNotification,
     "thread/compacted": ContextCompactedNotification,
+    "thread/deleted": ThreadDeletedNotification,
     "thread/goal/cleared": ThreadGoalClearedNotification,
     "thread/goal/updated": ThreadGoalUpdatedNotification,
     "thread/name/updated": ThreadNameUpdatedNotification,
@@ -131,6 +138,7 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "thread/unarchived": ThreadUnarchivedNotification,
     "turn/completed": TurnCompletedNotification,
     "turn/diff/updated": TurnDiffUpdatedNotification,
+    "turn/moderationMetadata": TurnModerationMetadataNotification,
     "turn/plan/updated": TurnPlanUpdatedNotification,
     "turn/scratchpad/updated": TurnScratchpadUpdatedNotification,
     "turn/started": TurnStartedNotification,
@@ -154,6 +162,7 @@ DIRECT_TURN_ID_NOTIFICATION_TYPES: tuple[type[BaseModel], ...] = (
     ItemStartedNotification,
     McpToolCallProgressNotification,
     ModelReroutedNotification,
+    ModelSafetyBufferingUpdatedNotification,
     ModelVerificationNotification,
     PlanDeltaNotification,
     ReasoningSummaryPartAddedNotification,
@@ -163,6 +172,7 @@ DIRECT_TURN_ID_NOTIFICATION_TYPES: tuple[type[BaseModel], ...] = (
     ThreadGoalUpdatedNotification,
     ThreadTokenUsageUpdatedNotification,
     TurnDiffUpdatedNotification,
+    TurnModerationMetadataNotification,
     TurnPlanUpdatedNotification,
     TurnScratchpadUpdatedNotification,
 )
