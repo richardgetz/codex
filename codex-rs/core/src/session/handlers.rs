@@ -136,7 +136,6 @@ async fn thread_settings_update(
         summary,
         service_tier,
         collaboration_mode,
-        multi_agent_mode,
         personality,
     } = thread_settings;
     let collaboration_mode = match collaboration_mode {
@@ -162,7 +161,6 @@ async fn thread_settings_update(
         active_permission_profile,
         windows_sandbox_level,
         collaboration_mode: Some(collaboration_mode),
-        multi_agent_mode,
         reasoning_summary: summary,
         service_tier,
         personality,
@@ -171,13 +169,12 @@ async fn thread_settings_update(
 }
 
 async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
-    let (snapshot, reasoning_summary, collaboration_mode) = {
+    let (snapshot, reasoning_summary) = {
         let state = sess.state.lock().await;
         let session_configuration = &state.session_configuration;
         (
             session_configuration.thread_config_snapshot(),
             session_configuration.model_reasoning_summary,
-            session_configuration.collaboration_mode.clone(),
         )
     };
     let cwd = snapshot.cwd().clone();
@@ -194,8 +191,7 @@ async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
             reasoning_effort: snapshot.reasoning_effort,
             reasoning_summary,
             personality: snapshot.personality,
-            collaboration_mode,
-            multi_agent_mode: snapshot.multi_agent_mode,
+            collaboration_mode: snapshot.collaboration_mode,
         },
     })
 }
@@ -237,7 +233,7 @@ pub(super) async fn user_input_or_turn_inner(
     }
     sess.record_scratchpad_checkpoint_before_turn(current_context.as_ref())
         .await;
-    sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
+    sess.maybe_emit_model_warnings_for_turn(current_context.as_ref())
         .await;
     match sess
         .steer_input(
@@ -1247,7 +1243,7 @@ pub async fn review(
     review_request: ReviewRequest,
 ) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
-    sess.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+    sess.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
         .await;
     sess.refresh_mcp_servers_if_requested(&turn_context, Some(sess.mcp_elicitation_reviewer()))
         .await;

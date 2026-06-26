@@ -29,35 +29,101 @@ use serde_json::Map;
 use serde_json::Value;
 
 const LEGACY_MCP_TOOL_NAME_PREFIX: &str = "mcp__";
+const ESCAPED_MCP_TOOL_NAME_PREFIX: &str = "mcp____";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const CONFIGURED_PLACEHOLDER_DESCRIPTION: &str =
     "Configured MCP tool placeholder recovered after tool listing was unavailable.";
 
 pub struct McpHandler {
     tool_info: ToolInfo,
+    tool_name: ToolName,
     spec: ToolSpec,
 }
 
 impl McpHandler {
-    pub fn new(tool_info: ToolInfo) -> Result<Self, serde_json::Error> {
-        let spec = create_tool_spec(&tool_info)?;
-        Ok(Self { tool_info, spec })
+    pub fn new(
+        tool_info: ToolInfo,
+        namespace_tools_enabled: bool,
+    ) -> Result<Self, serde_json::Error> {
+        let canonical_tool_name = tool_info.canonical_tool_name();
+        let tool_name = if namespace_tools_enabled {
+            canonical_tool_name
+        } else {
+            ToolName::plain(flat_mcp_tool_name(&canonical_tool_name))
+        };
+        let spec = create_tool_spec(&tool_info, &tool_name, namespace_tools_enabled)?;
+        Ok(Self {
+            tool_info,
+            tool_name,
+            spec,
+        })
     }
 
     fn hook_tool_name(&self) -> HookToolName {
-        HookToolName::new(ensure_mcp_prefix(&join_tool_name(&self.tool_name())))
+        HookToolName::new(hook_mcp_tool_name(&self.tool_info.canonical_tool_name()))
     }
 }
 
 fn join_tool_name(tool_name: &ToolName) -> String {
     match tool_name.namespace.as_deref() {
         Some(namespace) => {
-            let namespace = namespace.trim_end_matches('_');
-            let name = tool_name.name.trim_start_matches('_');
-            format!("{namespace}{MCP_TOOL_NAME_DELIMITER}{name}")
+            format!("{namespace}{MCP_TOOL_NAME_DELIMITER}{}", tool_name.name)
         }
         None => tool_name.name.clone(),
     }
+}
+
+fn flat_mcp_tool_name(tool_name: &ToolName) -> String {
+    match tool_name.namespace.as_deref() {
+        Some(namespace) => {
+            if is_legacy_flat_safe_mcp_namespace(namespace)
+                && is_legacy_flat_safe_mcp_name(&tool_name.name)
+            {
+                return ensure_mcp_prefix(&join_tool_name(tool_name));
+            }
+            let escaped_namespace = escape_flat_mcp_tool_name_component(namespace);
+            let escaped_name = escape_flat_mcp_tool_name_component(&tool_name.name);
+            format!(
+                "{ESCAPED_MCP_TOOL_NAME_PREFIX}{escaped_namespace}{MCP_TOOL_NAME_DELIMITER}{escaped_name}"
+            )
+        }
+        None => ensure_mcp_prefix(&escape_flat_mcp_tool_name_component(&tool_name.name)),
+    }
+}
+
+fn is_legacy_flat_safe_mcp_namespace(namespace: &str) -> bool {
+    let ambiguous_part = namespace
+        .strip_prefix(LEGACY_MCP_TOOL_NAME_PREFIX)
+        .unwrap_or(namespace);
+
+    !namespace.ends_with('_')
+        && !ambiguous_part.contains(MCP_TOOL_NAME_DELIMITER)
+        && ambiguous_part
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn is_legacy_flat_safe_mcp_name(name: &str) -> bool {
+    !name.starts_with('_')
+        && !name.contains(MCP_TOOL_NAME_DELIMITER)
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn hook_mcp_tool_name(tool_name: &ToolName) -> String {
+    ensure_mcp_prefix(&join_tool_name(tool_name))
+}
+
+fn escape_flat_mcp_tool_name_component(component: &str) -> String {
+    let mut escaped = String::with_capacity(component.len());
+    for byte in component.bytes() {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => escaped.push(byte as char),
+            _ => escaped.push_str(&format!("_x{byte:02x}")),
+        }
+    }
+    escaped
 }
 
 fn ensure_mcp_prefix(name: &str) -> String {
@@ -70,7 +136,7 @@ fn ensure_mcp_prefix(name: &str) -> String {
 
 impl ToolExecutor<ToolInvocation> for McpHandler {
     fn tool_name(&self) -> ToolName {
-        self.tool_info.canonical_tool_name()
+        self.tool_name.clone()
     }
 
     fn spec(&self) -> ToolSpec {
@@ -135,7 +201,7 @@ impl McpHandler {
             payload,
             ..
         } = invocation;
-        if matches!(source, ToolCallSource::Direct) && tool_name != self.tool_name() {
+        if matches!(source, ToolCallSource::Direct) && !self.supports_direct_tool_name(&tool_name) {
             return Err(FunctionCallError::RespondToModel(format!(
                 "unsupported call: {tool_name}"
             )));
@@ -174,6 +240,28 @@ impl McpHandler {
             original_image_detail_supported: can_request_original_image_detail(&turn.model_info),
             truncation_policy: turn.model_info.truncation_policy.into(),
         }))
+    }
+
+    fn supports_direct_tool_name(&self, tool_name: &ToolName) -> bool {
+        if *tool_name == self.tool_name() {
+            return true;
+        }
+
+        let canonical_tool_name = self.tool_info.canonical_tool_name();
+        *tool_name == ToolName::plain(hook_mcp_tool_name(&canonical_tool_name))
+            || *tool_name
+                == ToolName::namespaced(
+                    format!(
+                        "{}{MCP_TOOL_NAME_DELIMITER}",
+                        canonical_tool_name.namespace.as_deref().unwrap_or_default()
+                    ),
+                    canonical_tool_name.name.clone(),
+                )
+            || *tool_name
+                == ToolName::namespaced(
+                    visible_namespace_for_tool_spec(&self.tool_info),
+                    canonical_tool_name.name,
+                )
     }
 }
 
@@ -244,9 +332,16 @@ impl CoreToolRuntime for McpHandler {
     }
 }
 
-fn create_tool_spec(tool_info: &ToolInfo) -> Result<ToolSpec, serde_json::Error> {
-    let tool_name = tool_info.canonical_tool_name();
-    let tool = mcp_tool_to_responses_api_tool(&tool_name, &tool_info.tool)?;
+fn create_tool_spec(
+    tool_info: &ToolInfo,
+    tool_name: &ToolName,
+    namespace_tools_enabled: bool,
+) -> Result<ToolSpec, serde_json::Error> {
+    let tool = mcp_tool_to_responses_api_tool(tool_name, &tool_info.tool)?;
+    if !namespace_tools_enabled {
+        return Ok(ToolSpec::Function(tool));
+    }
+
     let namespace_name = visible_namespace_for_tool_spec(tool_info);
     let description = tool_info
         .namespace_description
@@ -376,8 +471,11 @@ mod tests {
             .to_string(),
         };
         let (session, turn) = make_session_and_context().await;
-        let handler = McpHandler::new(tool_info("memory", "memory", "create_entities"))
-            .expect("MCP tool spec should build");
+        let handler = McpHandler::new(
+            tool_info("memory", "memory", "create_entities"),
+            /*namespace_tools_enabled*/ true,
+        )
+        .expect("MCP tool spec should build");
         assert_eq!(
             handler.pre_tool_use_payload(&ToolInvocation {
                 session: session.into(),
@@ -407,8 +505,11 @@ mod tests {
             arguments: json!({ "message": "hello" }).to_string(),
         };
         let (session, turn) = make_session_and_context().await;
-        let handler = McpHandler::new(tool_info("foo", "mcp__foo", "exec_command"))
-            .expect("MCP tool spec should build");
+        let handler = McpHandler::new(
+            tool_info("foo", "mcp__foo", "exec_command"),
+            /*namespace_tools_enabled*/ true,
+        )
+        .expect("MCP tool spec should build");
 
         assert_eq!(
             handler.pre_tool_use_payload(&ToolInvocation {
@@ -434,8 +535,11 @@ mod tests {
             arguments: json!({ "message": "hello" }).to_string(),
         };
         let (session, turn) = make_session_and_context().await;
-        let handler = McpHandler::new(tool_info("foo", "mcp__foo", "exec_command"))
-            .expect("MCP tool spec should build");
+        let handler = McpHandler::new(
+            tool_info("foo", "mcp__foo", "exec_command"),
+            /*namespace_tools_enabled*/ true,
+        )
+        .expect("MCP tool spec should build");
 
         let invocation = handler
             .with_updated_hook_input(
@@ -457,6 +561,68 @@ mod tests {
             panic!("builtin-like MCP tool should stay function-shaped");
         };
         assert_eq!(arguments, json!({ "message": "rewritten" }).to_string());
+    }
+
+    #[test]
+    fn flat_mcp_tool_names_escape_component_boundaries() {
+        let first = McpHandler::new(
+            tool_info("first", "mcp__a.b", "c"),
+            /*namespace_tools_enabled*/ false,
+        )
+        .expect("MCP tool spec should build")
+        .tool_name();
+        let second = McpHandler::new(
+            tool_info("second", "mcp__a", "b.c"),
+            /*namespace_tools_enabled*/ false,
+        )
+        .expect("MCP tool spec should build")
+        .tool_name();
+
+        assert_eq!(first.name, "mcp____mcp_x5f_x5fa_x2eb__c");
+        assert_eq!(second.name, "mcp____mcp_x5f_x5fa__b_x2ec");
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn flat_mcp_tool_names_do_not_trim_legal_underscores() {
+        let trailing_namespace = McpHandler::new(
+            tool_info("first", "mcp__a_", "b"),
+            /*namespace_tools_enabled*/ false,
+        )
+        .expect("MCP tool spec should build")
+        .tool_name();
+        let ordinary = McpHandler::new(
+            tool_info("second", "mcp__a", "b"),
+            /*namespace_tools_enabled*/ false,
+        )
+        .expect("MCP tool spec should build")
+        .tool_name();
+        let leading_name = McpHandler::new(
+            tool_info("third", "mcp__a", "_b"),
+            /*namespace_tools_enabled*/ false,
+        )
+        .expect("MCP tool spec should build")
+        .tool_name();
+
+        assert_eq!(trailing_namespace.name, "mcp____mcp_x5f_x5fa_x5f__b");
+        assert_eq!(ordinary.name, "mcp__a__b");
+        assert_eq!(leading_name.name, "mcp____mcp_x5f_x5fa___x5fb");
+        assert_ne!(trailing_namespace, ordinary);
+        assert_ne!(leading_name, ordinary);
+    }
+
+    #[test]
+    fn mcp_handler_accepts_recovered_legacy_aliases() {
+        let handler = McpHandler::new(
+            tool_info("foo", "mcp__foo", "exec_command"),
+            /*namespace_tools_enabled*/ true,
+        )
+        .expect("MCP tool spec should build");
+
+        assert!(handler.supports_direct_tool_name(&ToolName::plain("mcp__foo__exec_command")));
+        assert!(
+            handler.supports_direct_tool_name(&ToolName::namespaced("mcp__foo__", "exec_command"))
+        );
     }
 
     #[tokio::test]
@@ -484,8 +650,11 @@ mod tests {
             truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(1024),
         };
         let (session, turn) = make_session_and_context().await;
-        let handler = McpHandler::new(tool_info("filesystem", "filesystem", "read_file"))
-            .expect("MCP tool spec should build");
+        let handler = McpHandler::new(
+            tool_info("filesystem", "filesystem", "read_file"),
+            /*namespace_tools_enabled*/ true,
+        )
+        .expect("MCP tool spec should build");
         let invocation = ToolInvocation {
             session: session.into(),
             turn: turn.into(),
@@ -523,7 +692,7 @@ mod tests {
         read_only_info.tool.annotations = Some(rmcp::model::ToolAnnotations::new().read_only(true));
 
         assert!(
-            McpHandler::new(read_only_info)
+            McpHandler::new(read_only_info, /*namespace_tools_enabled*/ true)
                 .expect("MCP tool spec should build")
                 .supports_parallel_tool_calls()
         );
@@ -533,7 +702,7 @@ mod tests {
     fn mcp_parallel_calls_require_read_only_hint_or_server_opt_in() {
         let missing_hint_info = tool_info("foo", "mcp__foo__", "unannotated");
         assert!(
-            !McpHandler::new(missing_hint_info)
+            !McpHandler::new(missing_hint_info, /*namespace_tools_enabled*/ true)
                 .expect("MCP tool spec should build")
                 .supports_parallel_tool_calls()
         );
@@ -541,7 +710,7 @@ mod tests {
         let mut writable_info = tool_info("foo", "mcp__foo__", "write");
         writable_info.tool.annotations = Some(rmcp::model::ToolAnnotations::new().read_only(false));
         assert!(
-            !McpHandler::new(writable_info)
+            !McpHandler::new(writable_info, /*namespace_tools_enabled*/ true)
                 .expect("MCP tool spec should build")
                 .supports_parallel_tool_calls()
         );
@@ -549,7 +718,7 @@ mod tests {
         let mut server_opt_in_info = tool_info("foo", "mcp__foo__", "server_opt_in");
         server_opt_in_info.supports_parallel_tool_calls = true;
         assert!(
-            McpHandler::new(server_opt_in_info)
+            McpHandler::new(server_opt_in_info, /*namespace_tools_enabled*/ true)
                 .expect("MCP tool spec should build")
                 .supports_parallel_tool_calls()
         );

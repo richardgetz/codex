@@ -2,7 +2,6 @@ use std::collections::HashSet;
 
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_connectors::AppToolPolicyInput;
-use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo as McpToolInfo;
 use codex_mcp::tool_is_model_visible;
@@ -11,8 +10,6 @@ use tracing::instrument;
 
 use crate::config::Config;
 use crate::connectors;
-
-pub(crate) const DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
 
 pub(crate) struct McpToolExposure {
     pub(crate) direct_tools: Vec<McpToolInfo>,
@@ -37,32 +34,10 @@ pub(crate) fn build_mcp_tool_exposure(
         ));
     }
 
-    let always_defer = config
-        .features
-        .enabled(Feature::ToolSearchAlwaysDeferMcpTools);
-    let should_defer = tools_config.search_tool
-        && (always_defer || deferred_tools.len() >= DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
-
-    if !should_defer {
+    if !tools_config.search_tool || !tools_config.namespace_tools {
         return McpToolExposure {
             direct_tools: deferred_tools,
             deferred_tools: None,
-        };
-    }
-
-    if always_defer {
-        let direct_tools = filter_explicitly_referenced_non_app_mcp_tools(
-            all_mcp_tools,
-            explicitly_referenced_mcp_servers,
-        );
-        let direct_tool_names = direct_tools
-            .iter()
-            .map(McpToolInfo::canonical_tool_name)
-            .collect::<HashSet<_>>();
-        deferred_tools.retain(|tool| !direct_tool_names.contains(&tool.canonical_tool_name()));
-        return McpToolExposure {
-            direct_tools,
-            deferred_tools: (!deferred_tools.is_empty()).then_some(deferred_tools),
         };
     }
 

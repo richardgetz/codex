@@ -328,7 +328,7 @@ fn hosted_model_tool_specs(context: &CoreToolPlanContext<'_>) -> Vec<ToolSpec> {
 }
 
 pub(crate) fn search_tool_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.model_info.supports_search_tool
+    turn_context.model_info.supports_search_tool && namespace_tools_enabled(turn_context)
 }
 
 pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
@@ -340,6 +340,7 @@ pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
 
 fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
     turn_context.provider.capabilities().namespace_tools
+        && turn_context.tools_config.namespace_tools
 }
 
 fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
@@ -830,12 +831,11 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
         } else {
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
-            let exposure =
-                if search_tool_enabled(turn_context) && namespace_tools_enabled(turn_context) {
-                    ToolExposure::Deferred
-                } else {
-                    ToolExposure::Direct
-                };
+            let exposure = if search_tool_enabled(turn_context) {
+                ToolExposure::Deferred
+            } else {
+                ToolExposure::Direct
+            };
             planned_tools.add_with_exposure(
                 SpawnAgentHandler::new(SpawnAgentToolOptions {
                     available_models: turn_context.available_models.clone(),
@@ -870,9 +870,10 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
     )
 )]
 fn add_mcp_runtime_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    let namespace_tools_enabled = namespace_tools_enabled(context.turn_context);
     if let Some(mcp_tools) = context.mcp_tools {
         for tool in mcp_tools {
-            match McpHandler::new(tool.clone()) {
+            match McpHandler::new(tool.clone(), namespace_tools_enabled) {
                 Ok(handler) => planned_tools.add(handler),
                 Err(err) => warn!(
                     "Skipping MCP tool `{}`: failed to build tool spec: {err}",
@@ -884,7 +885,7 @@ fn add_mcp_runtime_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut 
 
     if let Some(deferred_mcp_tools) = context.deferred_mcp_tools {
         for tool in deferred_mcp_tools {
-            match McpHandler::new(tool.clone()) {
+            match McpHandler::new(tool.clone(), namespace_tools_enabled) {
                 Ok(handler) => planned_tools.add_with_exposure(handler, ToolExposure::Deferred),
                 Err(err) => warn!(
                     "Skipping deferred MCP tool `{}`: failed to build tool spec: {err}",
@@ -953,7 +954,7 @@ fn append_tool_search_executor(
     planned_tools: &mut PlannedTools,
 ) {
     let turn_context = context.turn_context;
-    if !(search_tool_enabled(turn_context) && namespace_tools_enabled(turn_context)) {
+    if !search_tool_enabled(turn_context) {
         return;
     }
 
@@ -1000,7 +1001,6 @@ fn append_extension_tool_executors(
         reserved_tool_names.insert(ToolName::plain(codex_code_mode::WAIT_TOOL_NAME));
     }
     if search_tool_enabled(turn_context)
-        && namespace_tools_enabled(turn_context)
         && planned_tools
             .runtimes()
             .iter()

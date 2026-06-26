@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::path::PathBuf;
 use std::time::Duration;
 
+use codex_utils_path_uri::LegacyAppPathString;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -256,7 +256,7 @@ pub struct RawMcpServerConfig {
     #[serde(default)]
     pub env_vars: Option<Vec<McpServerEnvVar>>,
     #[serde(default)]
-    pub cwd: Option<PathBuf>,
+    pub cwd: Option<LegacyAppPathString>,
     pub http_headers: Option<HashMap<String, String>>,
     #[serde(default)]
     pub env_http_headers: Option<HashMap<String, String>>,
@@ -396,6 +396,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
 
         let environment_id =
             environment_id.unwrap_or_else(|| DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string());
+
         validate_remote_stdio_cwd(&transport, &environment_id)?;
 
         Ok(Self {
@@ -460,12 +461,11 @@ fn validate_remote_stdio_cwd(
             "remote stdio MCP servers require an absolute cwd when environment_id is `{environment_id}`"
         ));
     };
-    if cwd.is_absolute() {
+    if cwd.infer_absolute_path_convention().is_some() {
         return Ok(());
     }
     Err(format!(
-        "remote stdio MCP servers require an absolute cwd when environment_id is `{environment_id}`, got `{}`",
-        cwd.display()
+        "remote stdio MCP servers require an absolute cwd when environment_id is `{environment_id}`, got `{cwd}`"
     ))
 }
 
@@ -482,7 +482,7 @@ pub enum McpServerTransportConfig {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         env_vars: Vec<McpServerEnvVar>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        cwd: Option<PathBuf>,
+        cwd: Option<LegacyAppPathString>,
     },
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
     StreamableHttp {

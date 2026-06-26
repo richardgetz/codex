@@ -126,6 +126,7 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_path_uri::LegacyAppPathString;
 use serde::Deserialize;
 use tempfile::tempdir;
 
@@ -6377,6 +6378,7 @@ async fn load_global_mcp_servers_returns_empty_if_missing() -> anyhow::Result<()
 #[tokio::test]
 async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
+    let expected_cwd = LegacyAppPathString::from_path(codex_home.path());
 
     let mut servers = BTreeMap::new();
     servers.insert(
@@ -6387,7 +6389,7 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
                 args: vec!["hello".to_string()],
                 env: None,
                 env_vars: Vec::new(),
-                cwd: Some(codex_home.path().to_path_buf()),
+                cwd: Some(expected_cwd.clone()),
             },
             environment_id: "remote".to_string(),
             enabled: true,
@@ -6428,7 +6430,7 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
             assert_eq!(args, &vec!["hello".to_string()]);
             assert!(env.is_none());
             assert!(env_vars.is_empty());
-            assert_eq!(cwd, &Some(codex_home.path().to_path_buf()));
+            assert_eq!(cwd, &Some(expected_cwd));
         }
         other => panic!("unexpected transport {other:?}"),
     }
@@ -6935,6 +6937,7 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
 
     let cwd_path = PathBuf::from("/tmp/codex-mcp");
+    let cwd = LegacyAppPathString::from_path(&cwd_path);
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
@@ -6943,7 +6946,7 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
-                cwd: Some(cwd_path.clone()),
+                cwd: Some(cwd.clone()),
             },
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
@@ -6980,7 +6983,7 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
     let docs = loaded.get("docs").expect("docs entry");
     match &docs.transport {
         McpServerTransportConfig::Stdio { cwd, .. } => {
-            assert_eq!(cwd.as_deref(), Some(Path::new("/tmp/codex-mcp")));
+            assert_eq!(cwd, &Some(LegacyAppPathString::from_path(&cwd_path)));
         }
         other => panic!("unexpected transport {other:?}"),
     }
@@ -10582,6 +10585,7 @@ async fn browser_feature_requirements_are_valid() -> std::io::Result<()> {
 [features]
 in_app_browser = false
 browser_use = false
+browser_use_full_cdp_access = false
 "#,
             ),
         )
@@ -10590,6 +10594,7 @@ browser_use = false
 
     assert!(!config.features.enabled(Feature::InAppBrowser));
     assert!(!config.features.enabled(Feature::BrowserUse));
+    assert!(!config.features.enabled(Feature::BrowserUseFullCdpAccess));
 
     Ok(())
 }

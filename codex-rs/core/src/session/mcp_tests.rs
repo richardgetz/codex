@@ -82,6 +82,30 @@ fn guardian_elicitation_review_request_builds_mcp_tool_call() {
 }
 
 #[test]
+fn parse_non_app_mcp_tool_name_decodes_escaped_flat_names() {
+    assert_eq!(
+        parse_non_app_mcp_tool_name(&ToolName::plain("mcp____mcp_x5f_x5fa_x2eb__c")),
+        Some(("mcp__a.b".to_string(), "c".to_string()))
+    );
+    assert_eq!(
+        parse_non_app_mcp_tool_name(&ToolName::plain("mcp____mcp_x5f_x5fa_x5f__b")),
+        Some(("mcp__a_".to_string(), "b".to_string()))
+    );
+    assert_eq!(
+        parse_non_app_mcp_tool_name(&ToolName::plain("mcp____mcp_x5f_x5fa___x5fb")),
+        Some(("mcp__a".to_string(), "_b".to_string()))
+    );
+}
+
+#[test]
+fn parse_non_app_mcp_tool_name_preserves_legacy_flat_names() {
+    assert_eq!(
+        parse_non_app_mcp_tool_name(&ToolName::plain("mcp__direct__lookup")),
+        Some(("mcp__direct".to_string(), "lookup".to_string()))
+    );
+}
+
+#[test]
 fn guardian_elicitation_review_request_defaults_missing_tool_params() {
     let request = form_request(guardian_meta(/*tool_params*/ None));
 

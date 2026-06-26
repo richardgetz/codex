@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use codex_features::Feature;
 use codex_features::Features;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo;
@@ -123,10 +122,30 @@ fn with_visibility(mut tool: ToolInfo, visibility: &[&str]) -> ToolInfo {
 }
 
 #[tokio::test]
-async fn directly_exposes_small_effective_tool_sets() {
+async fn directly_exposes_effective_tool_sets_when_search_is_unavailable() {
     let config = test_config().await;
-    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
-    let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
+    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ false).await;
+    let mcp_tools = numbered_mcp_tools(/*count*/ 2);
+
+    let exposure = build_mcp_tool_exposure(
+        &mcp_tools,
+        /*connectors*/ None,
+        &[],
+        &HashSet::new(),
+        &config,
+        &tools_config,
+    );
+
+    assert_eq!(tool_names(&exposure.direct_tools), tool_names(&mcp_tools));
+    assert!(exposure.deferred_tools.is_none());
+}
+
+#[tokio::test]
+async fn directly_exposes_effective_tool_sets_when_namespace_tools_are_unavailable() {
+    let config = test_config().await;
+    let mut tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
+    tools_config.namespace_tools = false;
+    let mcp_tools = numbered_mcp_tools(/*count*/ 2);
 
     let exposure = build_mcp_tool_exposure(
         &mcp_tools,
@@ -224,11 +243,7 @@ async fn excludes_tools_hidden_from_model_exposure() {
 
 #[tokio::test]
 async fn explicitly_referenced_servers_do_not_expose_hidden_tools() {
-    let mut config = test_config().await;
-    config
-        .features
-        .enable(Feature::ToolSearchAlwaysDeferMcpTools)
-        .expect("enable tool search deferral");
+    let config = test_config().await;
     let visible_tool = make_mcp_tool(
         "rmcp",
         "visible_tool",
@@ -323,10 +338,10 @@ enabled = true
 }
 
 #[tokio::test]
-async fn searches_large_effective_tool_sets() {
+async fn defers_effective_tool_sets_when_search_is_available() {
     let config = test_config().await;
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
-    let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
+    let mcp_tools = numbered_mcp_tools(/*count*/ 2);
 
     let exposure = build_mcp_tool_exposure(
         &mcp_tools,
@@ -341,7 +356,7 @@ async fn searches_large_effective_tool_sets() {
     let deferred_tools = exposure
         .deferred_tools
         .as_ref()
-        .expect("large tool sets should be discoverable through tool_search");
+        .expect("MCP tools should be discoverable through tool_search");
     assert_eq!(tool_names(deferred_tools), tool_names(&mcp_tools));
 }
 
@@ -349,7 +364,7 @@ async fn searches_large_effective_tool_sets() {
 async fn directly_exposes_explicit_apps_without_deferred_overlap() {
     let config = test_config().await;
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
-    let mut mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
+    let mut mcp_tools = numbered_mcp_tools(/*count*/ 2);
     mcp_tools.push(make_mcp_tool(
         CODEX_APPS_MCP_SERVER_NAME,
         "calendar_create_event",
@@ -377,10 +392,7 @@ async fn directly_exposes_explicit_apps_without_deferred_overlap() {
             "_create_event"
         )])
     );
-    assert_eq!(
-        exposure.deferred_tools.as_ref().map(Vec::len),
-        Some(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1)
-    );
+    assert_eq!(exposure.deferred_tools.as_ref().map(Vec::len), Some(2));
     let deferred_tools = exposure
         .deferred_tools
         .as_ref()
@@ -398,12 +410,8 @@ async fn directly_exposes_explicit_apps_without_deferred_overlap() {
 }
 
 #[tokio::test]
-async fn always_defer_feature_preserves_explicit_apps() {
-    let mut config = test_config().await;
-    config
-        .features
-        .enable(Feature::ToolSearchAlwaysDeferMcpTools)
-        .expect("test config should allow feature update");
+async fn defers_apps_and_non_app_mcp_tools_without_explicit_connectors() {
+    let config = test_config().await;
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
     let mcp_tools = vec![
         make_mcp_tool(
@@ -428,7 +436,7 @@ async fn always_defer_feature_preserves_explicit_apps() {
     let exposure = build_mcp_tool_exposure(
         &mcp_tools,
         Some(connectors.as_slice()),
-        connectors.as_slice(),
+        &[],
         &HashSet::new(),
         &config,
         &tools_config,
@@ -449,11 +457,7 @@ async fn always_defer_feature_preserves_explicit_apps() {
 
 #[tokio::test]
 async fn direct_exposure_preserves_explicit_non_app_mcp_servers() {
-    let mut config = test_config().await;
-    config
-        .features
-        .enable(Feature::ToolSearchAlwaysDeferMcpTools)
-        .expect("test config should allow feature update");
+    let config = test_config().await;
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
     let mcp_tools = vec![
         make_mcp_tool(

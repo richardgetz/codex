@@ -1305,6 +1305,83 @@ async fn record_initial_history_stale_environment_context_does_not_seed_baseline
 }
 
 #[tokio::test]
+async fn record_initial_history_partial_environment_context_does_not_seed_baseline() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let mut config = (*turn_context.config).clone();
+    config.include_environment_context = true;
+    config
+        .features
+        .enable(Feature::DeferredExecutor)
+        .expect("enable deferred executor");
+    turn_context.config = Arc::new(config);
+    let current_environment_context = session
+        .build_world_state(&turn_context)
+        .await
+        .render_full()
+        .into_iter()
+        .find_map(|fragment| {
+            let rendered = fragment.render();
+            EnvironmentsState::matches_text(&rendered).then_some(rendered)
+        })
+        .expect("current world state should render environment context");
+    let partial_environment_context = current_environment_context
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            !line.starts_with("<network ") && !line.starts_with("<filesystem>")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let rollout_items = compacted_rollout_items(
+        &turn_context,
+        vec![user_message(&partial_environment_context)],
+    );
+    session
+        .apply_rollout_reconstruction(&turn_context, &rollout_items)
+        .await;
+    assert!(session.reference_context_item().await.is_some());
+
+    let before_count = session.state.lock().await.clone_history().raw_items().len();
+    let step_context = super::step_context::StepContext {
+        environments: turn_context.environments.clone(),
+    };
+    session
+        .record_step_environment_context_if_changed(&turn_context, &step_context)
+        .await;
+
+    assert_eq!(
+        session.state.lock().await.clone_history().raw_items().len(),
+        before_count + 1
+    );
+}
+
+#[tokio::test]
+async fn step_environment_snapshot_world_state_includes_subagents() {
+    let (_session, mut turn_context) = make_session_and_context().await;
+    let mut config = (*turn_context.config).clone();
+    config.include_environment_context = true;
+    turn_context.config = Arc::new(config);
+
+    let world_state = build_world_state_from_environment_snapshot(
+        &turn_context,
+        &turn_context.environments,
+        "- worker [Atlas]",
+    );
+    let environment_context = world_state
+        .render_full()
+        .into_iter()
+        .find_map(|fragment| {
+            let rendered = fragment.render();
+            EnvironmentsState::matches_text(&rendered).then_some(rendered)
+        })
+        .expect("environment world state should render");
+
+    assert!(environment_context.contains("<subagents>"));
+    assert!(environment_context.contains("- worker [Atlas]"));
+}
+
+#[tokio::test]
 async fn record_initial_history_newer_stale_environment_context_controls_baseline() {
     let (session, mut turn_context) = make_session_and_context().await;
     let mut config = (*turn_context.config).clone();

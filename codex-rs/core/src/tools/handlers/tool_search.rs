@@ -199,10 +199,13 @@ mod tests {
     fn cache_reuses_handler_for_identical_search_infos_and_rebuilds_for_changes() {
         let cache = ToolSearchHandlerCache::default();
         let search_infos = vec![
-            McpHandler::new(tool_info("calendar", "create_event", "Create events"))
-                .expect("MCP tool should convert")
-                .search_info()
-                .expect("MCP handler should return search info"),
+            McpHandler::new(
+                tool_info("calendar", "create_event", "Create events"),
+                /*namespace_tools_enabled*/ true,
+            )
+            .expect("MCP tool should convert")
+            .search_info()
+            .expect("MCP handler should return search info"),
         ];
 
         let first = cache.get_or_build(search_infos.clone());
@@ -245,7 +248,7 @@ mod tests {
         let mut search_infos = mcp_tools
             .iter()
             .map(|tool| {
-                McpHandler::new(tool.clone())
+                McpHandler::new(tool.clone(), /*namespace_tools_enabled*/ true)
                     .expect("MCP tool should convert")
                     .search_info()
                     .expect("MCP handler should return search info")
