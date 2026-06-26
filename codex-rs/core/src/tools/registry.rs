@@ -466,7 +466,10 @@ impl ToolRegistry {
                     .resolve_configured_mcp_tool_info(invocation.turn.as_ref(), &tool_name)
                     .await
                 {
-                    match McpHandler::new(tool_info) {
+                    match McpHandler::new(
+                        tool_info,
+                        recovered_mcp_namespace_tools_enabled(invocation.turn.as_ref()),
+                    ) {
                         Ok(handler) => Arc::new(handler) as Arc<dyn CoreToolRuntime>,
                         Err(err) => {
                             let message = format!("failed to build MCP tool spec: {err}");
@@ -790,6 +793,11 @@ fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &ToolName) ->
         ToolPayload::Custom { .. } => format!("unsupported custom tool call: {tool_name}"),
         _ => format!("unsupported call: {tool_name}"),
     }
+}
+
+fn recovered_mcp_namespace_tools_enabled(turn_context: &TurnContext) -> bool {
+    turn_context.provider.capabilities().namespace_tools
+        && turn_context.tools_config.namespace_tools
 }
 
 fn is_mcp_tool_name(tool_name: &ToolName) -> bool {

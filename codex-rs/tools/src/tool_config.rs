@@ -365,6 +365,7 @@ impl ToolsConfig {
     pub fn with_namespace_tools_capability(mut self, namespace_tools: bool) -> Self {
         if !namespace_tools {
             self.namespace_tools = false;
+            self.search_tool = false;
         }
         self
     }

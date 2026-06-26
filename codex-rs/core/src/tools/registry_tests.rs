@@ -179,6 +179,15 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
 }
 
 #[tokio::test]
+async fn recovered_mcp_handler_respects_namespace_tools_setting() {
+    let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
+    assert!(recovered_mcp_namespace_tools_enabled(&turn));
+
+    turn.tools_config.namespace_tools = false;
+    assert!(!recovered_mcp_namespace_tools_enabled(&turn));
+}
+
+#[tokio::test]
 async fn function_tools_expose_default_hook_payloads_and_rewrites() -> anyhow::Result<()> {
     let (session, turn) = crate::session::tests::make_session_and_context().await;
     let tool_name = codex_tools::ToolName::namespaced("functions.", "echo");

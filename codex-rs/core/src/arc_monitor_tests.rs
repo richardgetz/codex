@@ -13,7 +13,6 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::*;
-use crate::context::ContextualUserFragment;
 use crate::session::tests::make_session_and_context;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::LocalShellAction;
@@ -68,20 +67,6 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
 
                 internal_chat_message_metadata_passthrough: None,
             }],
-            &turn_context,
-        )
-        .await;
-    session
-        .record_into_history(
-            &[ContextualUserFragment::into(
-                crate::context::EnvironmentContext::new(
-                    Vec::new(),
-                    /*current_date*/ None,
-                    /*timezone*/ None,
-                    /*network*/ None,
-                    /*subagents*/ None,
-                ),
-            )],
             &turn_context,
         )
         .await;

@@ -20,7 +20,6 @@ use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
@@ -72,7 +71,6 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) initial_collaboration_mode: Option<CollaborationMode>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
-    pub(crate) initial_multi_agent_mode: Option<MultiAgentMode>,
 }
 
 #[derive(Clone, Debug)]

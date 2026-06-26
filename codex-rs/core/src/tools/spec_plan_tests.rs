@@ -768,6 +768,26 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     .await;
     bedrock_namespace_capability.assert_visible_contains(&["tool_search"]);
 
+    let direct_without_namespace_tools = probe_with(
+        |turn| {
+            turn.tools_config.namespace_tools = false;
+        },
+        ToolPlanInputs {
+            mcp_tools: Some(vec![mcp_tool("direct", "mcp__direct", "lookup")]),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    direct_without_namespace_tools.assert_visible_contains(&["mcp__direct__lookup"]);
+    direct_without_namespace_tools.assert_visible_lacks(&["lookup"]);
+    direct_without_namespace_tools.assert_registered_contains(&["mcp__direct__lookup"]);
+    let ToolSpec::Function(tool) =
+        direct_without_namespace_tools.visible_spec("mcp__direct__lookup")
+    else {
+        panic!("expected direct MCP tool to use a function spec without namespace tools");
+    };
+    assert_eq!(tool.name, "mcp__direct__lookup");
+
     let enabled = probe_with(
         |turn| {
             turn.model_info.supports_search_tool = true;

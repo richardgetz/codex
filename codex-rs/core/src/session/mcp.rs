@@ -782,8 +782,16 @@ fn parse_non_app_mcp_tool_name(tool_name: &ToolName) -> Option<(String, String)>
         }
         None => {
             let raw = tool_name.name.strip_prefix("mcp__")?;
-            let (server, tool) = raw.split_once("__")?;
-            (format!("mcp__{server}"), tool.to_string())
+            if let Some(encoded) = raw.strip_prefix("__") {
+                let (namespace, tool) = encoded.split_once("__")?;
+                (
+                    decode_flat_mcp_tool_name_component(namespace)?,
+                    decode_flat_mcp_tool_name_component(tool)?,
+                )
+            } else {
+                let (server, tool) = raw.split_once("__")?;
+                (format!("mcp__{server}"), tool.to_string())
+            }
         }
     };
 
@@ -800,6 +808,26 @@ fn parse_non_app_mcp_tool_name(tool_name: &ToolName) -> Option<(String, String)>
     }
 
     Some((callable_namespace, tool))
+}
+
+fn decode_flat_mcp_tool_name_component(component: &str) -> Option<String> {
+    let bytes = component.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'_' {
+            if bytes.get(i + 1) != Some(&b'x') {
+                return None;
+            }
+            let hex = std::str::from_utf8(bytes.get(i + 2..i + 4)?).ok()?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 4;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
 }
 
 async fn review_guardian_mcp_elicitation(

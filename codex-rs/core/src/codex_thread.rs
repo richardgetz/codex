@@ -158,7 +158,6 @@ pub struct CodexThreadSettingsOverrides {
     pub summary: Option<ReasoningSummary>,
     pub service_tier: Option<Option<String>>,
     pub collaboration_mode: Option<CollaborationMode>,
-    pub multi_agent_mode: Option<MultiAgentMode>,
     pub personality: Option<Personality>,
 }
 
@@ -384,7 +383,6 @@ impl CodexThread {
             summary,
             service_tier,
             collaboration_mode,
-            multi_agent_mode,
             personality,
         } = overrides;
         let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
@@ -408,7 +406,6 @@ impl CodexThread {
             active_permission_profile,
             windows_sandbox_level,
             collaboration_mode: Some(collaboration_mode),
-            multi_agent_mode,
             reasoning_summary: summary,
             service_tier,
             personality,
