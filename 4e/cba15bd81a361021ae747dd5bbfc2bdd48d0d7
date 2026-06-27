@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-06-27/stable-rust-v0.142.3#4ecba15bd81a"
+change_type: "chore"
+scope: "stable-release"
+summary: "Merge upstream rust-v0.142.3 into the fork stable branch."
+decision: "Use a stable-based merge of upstream rust-v0.142.3 to include the latest mainline fixes while preserving fork-only features; keep the upstream Bedrock 5.6 catalog additions but clear inherited GPT-5.5 NUX metadata and align alias default reasoning metadata with the existing fallback."
+constraints:
+  - "Must preserve fork-only runtime features, slash commands, app-server policy controls, MCP visibility/recovery, scratchpad continuous recovery, account alias/auth behavior, and stable release behavior documented in the fork inventory."
+  - "Must keep Cargo.toml and Cargo.lock aligned with the 0.142.3 workspace version."
+  - "Must keep stable-based merge ancestry and avoid fork main."
+  - "Must not touch sandbox network environment variable behavior."
+intent_priority: "must"
+code_locations:
+  - "codex-rs/Cargo.toml"
+  - "codex-rs/Cargo.lock"
+  - "codex-rs/model-provider-info/src/lib.rs"
+  - "codex-rs/model-provider/src/amazon_bedrock/catalog.rs"
+  - "codex-rs/model-provider/src/provider.rs"
+requested_by: "@rick"
+recorded_by:
+  agent: "codex-cli"
+  model: "gpt-5"
