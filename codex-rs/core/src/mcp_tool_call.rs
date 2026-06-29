@@ -587,7 +587,12 @@ async fn execute_mcp_tool_call(
     metadata: Option<&McpToolApprovalMetadata>,
     request_meta: Option<JsonValue>,
 ) -> Result<CallToolResult, String> {
-    let request_meta = with_mcp_tool_call_thread_id_meta(request_meta, &sess.thread_id.to_string());
+    let request_meta = with_mcp_tool_call_codex_meta(
+        request_meta,
+        &sess.thread_id.to_string(),
+        &sess.session_id().to_string(),
+        &codex_mcp_cwd(turn_context),
+    );
     let request_meta = augment_mcp_tool_request_meta_with_sandbox_state(
         sess,
         turn_context,
@@ -1086,6 +1091,9 @@ const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
 const MCP_TOOL_LINK_ID_META_KEY: &str = "link_id";
 const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
+const MCP_TOOL_CODEX_META_KEY: &str = "codex";
+const MCP_TOOL_CWD_META_KEY: &str = "cwd";
+const MCP_TOOL_SESSION_ID_META_KEY: &str = "sessionId";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
 async fn custom_mcp_tool_approval_mode(
@@ -1203,6 +1211,42 @@ fn with_mcp_tool_call_thread_id_meta(
         }
         other => other,
     }
+}
+
+fn with_mcp_tool_call_codex_meta(
+    meta: Option<serde_json::Value>,
+    thread_id: &str,
+    session_id: &str,
+    cwd: &str,
+) -> Option<serde_json::Value> {
+    let mut meta = with_mcp_tool_call_thread_id_meta(meta, thread_id);
+    let codex_meta = serde_json::json!({
+        MCP_TOOL_THREAD_ID_META_KEY: thread_id,
+        MCP_TOOL_SESSION_ID_META_KEY: session_id,
+        MCP_TOOL_CWD_META_KEY: cwd,
+    });
+    match meta.as_mut() {
+        Some(serde_json::Value::Object(map)) => {
+            map.insert(MCP_TOOL_CODEX_META_KEY.to_string(), codex_meta);
+            meta
+        }
+        _ => meta,
+    }
+}
+
+fn codex_mcp_cwd(turn_context: &TurnContext) -> String {
+    turn_context
+        .environments
+        .single_local_environment_cwd()
+        .unwrap_or_else(|| {
+            #[allow(deprecated)]
+            {
+                turn_context.cwd.clone()
+            }
+        })
+        .as_path()
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[derive(Clone, Copy)]

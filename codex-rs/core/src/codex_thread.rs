@@ -667,6 +667,12 @@ impl CodexThread {
             .refresh_mcp_servers_if_requested(&turn_context, /*elicitation_reviewer*/ None)
             .await;
         turn_context = self.codex.session.new_default_turn().await;
+        let meta = with_mcp_tool_call_codex_meta(
+            meta,
+            &self.codex.session.thread_id().to_string(),
+            &self.codex.session.session_id().to_string(),
+            &codex_mcp_cwd(&turn_context),
+        );
         self.codex
             .session
             .call_tool_with_reconnect(&turn_context, server, tool, arguments, meta)
@@ -712,3 +718,60 @@ impl CodexThread {
         Ok(*guard)
     }
 }
+
+const MCP_TOOL_CODEX_META_KEY: &str = "codex";
+const MCP_TOOL_CWD_META_KEY: &str = "cwd";
+const MCP_TOOL_SESSION_ID_META_KEY: &str = "sessionId";
+const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
+
+fn with_mcp_tool_call_codex_meta(
+    meta: Option<serde_json::Value>,
+    thread_id: &str,
+    session_id: &str,
+    cwd: &str,
+) -> Option<serde_json::Value> {
+    let codex_meta = serde_json::json!({
+        MCP_TOOL_THREAD_ID_META_KEY: thread_id,
+        MCP_TOOL_SESSION_ID_META_KEY: session_id,
+        MCP_TOOL_CWD_META_KEY: cwd,
+    });
+    match meta {
+        Some(serde_json::Value::Object(mut map)) => {
+            map.insert(
+                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
+                serde_json::Value::String(thread_id.to_string()),
+            );
+            map.insert(MCP_TOOL_CODEX_META_KEY.to_string(), codex_meta);
+            Some(serde_json::Value::Object(map))
+        }
+        None => {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
+                serde_json::Value::String(thread_id.to_string()),
+            );
+            map.insert(MCP_TOOL_CODEX_META_KEY.to_string(), codex_meta);
+            Some(serde_json::Value::Object(map))
+        }
+        other => other,
+    }
+}
+
+fn codex_mcp_cwd(turn_context: &crate::session::turn_context::TurnContext) -> String {
+    turn_context
+        .environments
+        .single_local_environment_cwd()
+        .unwrap_or_else(|| {
+            #[allow(deprecated)]
+            {
+                turn_context.cwd.clone()
+            }
+        })
+        .as_path()
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[cfg(test)]
+#[path = "codex_thread_tests.rs"]
+mod tests;
