@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-06-29/codex-for-human-mcp-contract#c6da48a54"
+  change_type: "feat"
+  scope: "mcp"
+  summary: "Expose stable Codex identity metadata to MCP tools for For Human-style comms and lineage integrations."
+  decision: "Add nested _meta.codex threadId, sessionId, and cwd to both model-invoked and app-server-initiated MCP tool calls while preserving the legacy flat _meta.threadId compatibility field. Use the per-turn cwd fallback when no single local environment is selected so local MCP integrations can still register project lineage."
+  constraints:
+    - "Must not change MCP transport retry semantics or duplicate maybe-delivered MCP side effects."
+    - "Must preserve flat _meta.threadId compatibility for existing MCP tools."
+    - "Must support direct app-server MCP calls as well as model-invoked MCP calls."
+    - "Must keep the contract generic for local MCP integrations and not hard-code For Human into Codex."
+    - "Must avoid collapsing Codex descendant threads on the For Human side by treating Codex thread id as the resume identity."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/mcp_tool_call.rs"
+    - "codex-rs/core/src/mcp_tool_call_tests.rs"
+    - "codex-rs/core/src/codex_thread.rs"
+    - "codex-rs/core/src/codex_thread_tests.rs"
+    - "codex-rs/app-server/tests/suite/v2/mcp_tool.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
