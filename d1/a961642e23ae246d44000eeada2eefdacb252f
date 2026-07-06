@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-07-06/quick-xml-rustsec#d1a961642"
+  change_type: "chore"
+  scope: "dependencies"
+  summary: "Update quick-xml direct dependency for RustSec advisories and document the residual transitive exception."
+  decision: "Bump the workspace quick-xml dependency to 0.41.0 so direct XML serialization uses the fixed release, and add cargo-deny ignores for the remaining quick-xml 0.39.4 reachable only through wayland-scanner proc-macro because no fixed wayland-scanner release is available yet."
+  constraints:
+    - "Must keep PR cargo-deny green without masking the direct quick-xml dependency."
+    - "Must document the residual dependency path and removal condition for advisory exceptions."
+    - "Must preserve stable refresh ancestry and avoid unrelated dependency churn beyond cargo update output needed for quick-xml."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/Cargo.toml"
+    - "codex-rs/Cargo.lock"
+    - "codex-rs/deny.toml"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
