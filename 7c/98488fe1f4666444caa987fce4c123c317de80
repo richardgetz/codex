@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-07-06/stable-rust-v0.142.5#7c98488"
+  change_type: "chore"
+  scope: "stable-release"
+  summary: "Merge upstream rust-v0.142.5 into the fork stable branch."
+  decision: "Use a stable-based merge of upstream rust-v0.142.5 to include upstream 0.142.4 and 0.142.5 fixes while preserving fork-only stable behavior; resolve the workspace version to 0.142.5, keep the upstream websocket trace fix, carry upstream V1 delegation guidance, and preserve fork-only auto_review permission guidance plus MultiAgentV2 spawn-agent guardrails."
+  constraints:
+    - "Must preserve fork-only runtime features, slash commands, app-server policy controls, MCP visibility/recovery, scratchpad continuous recovery, account alias/auth behavior, and stable release behavior documented in the fork inventory."
+    - "Must keep Cargo.toml and Cargo.lock aligned with the 0.142.5 workspace version."
+    - "Must keep stable-based merge ancestry and avoid fork main."
+    - "Must not touch sandbox network environment variable behavior."
+    - "Must preserve fork-only auto_review permission instructions so automatic approval review does not inherit user approval/prefix_rule wording."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/Cargo.toml"
+    - "codex-rs/Cargo.lock"
+    - "codex-rs/codex-api/src/endpoint/responses_websocket.rs"
+    - "codex-rs/core/src/tools/handlers/multi_agents_spec.rs"
+    - "codex-rs/core/tests/suite/search_tool.rs"
+    - "codex-rs/core/tests/suite/spawn_agent_description.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5"
