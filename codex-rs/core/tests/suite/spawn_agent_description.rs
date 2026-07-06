@@ -39,6 +39,16 @@ fn spawn_agent_description(body: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+fn direct_spawn_agent_description(body: &Value) -> Option<String> {
+    body.get("tools")?
+        .as_array()?
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some(SPAWN_AGENT_TOOL_NAME))
+        .and_then(|tool| tool.get("description"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
 fn test_model_info(
     slug: &str,
     display_name: &str,
@@ -218,8 +228,10 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
         "expected explicit authorization rule in spawn_agent description: {description:?}"
     );
     assert!(
-        !description.contains("### When to delegate vs. do the subtask yourself"),
-        "spawn_agent description should not include extra when-to-use delegation guidance: {description:?}"
+        description.contains(
+            "Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn."
+        ) && description.contains("### When to delegate vs. do the subtask yourself"),
+        "expected delegation decision guidance in spawn_agent description: {description:?}"
     );
     assert!(
         description.contains(
@@ -230,6 +242,53 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
     assert!(
         !description.contains("A mini model can solve many tasks faster than the main model."),
         "spawn_agent description should not encourage choosing a smaller model by default: {description:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_agent_v2_spawn_agent_description_requires_explicit_user_permission() -> Result<()> {
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let test = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("hello").await?;
+
+    let body = resp_mock.single_request().body_json();
+    let description = direct_spawn_agent_description(&body)
+        .expect("direct spawn_agent description should be present");
+
+    assert!(
+        description.contains(
+            "Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work."
+        ),
+        "expected explicit authorization rule in v2 spawn_agent description: {description:?}"
+    );
+    assert!(
+        description.contains(
+            "Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn."
+        ),
+        "expected research/investigation carve-out in v2 spawn_agent description: {description:?}"
+    );
+    assert!(
+        description.contains(
+            "Only call this tool for a concrete, bounded subtask that can run independently alongside useful local work"
+        ),
+        "expected bounded independent subtask guidance in v2 spawn_agent description: {description:?}"
     );
 
     Ok(())
