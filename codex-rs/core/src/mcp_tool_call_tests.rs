@@ -1671,6 +1671,34 @@ fn mcp_tool_call_thread_id_meta_is_added_to_request_meta() {
 }
 
 #[test]
+fn mcp_tool_call_codex_meta_is_added_to_request_meta() {
+    assert_eq!(
+        with_mcp_tool_call_codex_meta(
+            Some(serde_json::json!({
+                "source": "test-client",
+                "codex": {
+                    "threadId": "stale-thread",
+                    "sessionId": "stale-session",
+                    "cwd": "/stale",
+                },
+            })),
+            "thread-live",
+            "session-live",
+            "/workspace/project",
+        ),
+        Some(serde_json::json!({
+            "source": "test-client",
+            "threadId": "thread-live",
+            "codex": {
+                "threadId": "thread-live",
+                "sessionId": "session-live",
+                "cwd": "/workspace/project",
+            },
+        }))
+    );
+}
+
+#[test]
 fn accepted_elicitation_content_converts_to_request_user_input_response() {
     let response = request_user_input_response_from_elicitation_content(Some(serde_json::json!(
         {

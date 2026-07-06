@@ -142,6 +142,11 @@ url = "{mcp_server_url}/mcp"
         Some(json!({
             "echoed": "hello from app",
             "threadId": thread_id,
+            "codex": {
+                "threadId": thread_id,
+                "sessionId": thread.session_id,
+                "cwd": thread.cwd.as_path().to_string_lossy(),
+            },
         }))
     );
     assert_eq!(response.is_error, Some(false));
@@ -590,6 +595,7 @@ impl ServerHandler for ToolAppsMcpServer {
             .get("threadId")
             .and_then(|value| value.as_str())
             .unwrap_or_default();
+        let codex_meta = context.meta.0.get("codex").cloned().unwrap_or(json!(null));
 
         let mut meta = Meta::new();
         meta.0.insert("calledBy".to_string(), json!("mcp-app"));
@@ -659,6 +665,7 @@ impl ServerHandler for ToolAppsMcpServer {
         let mut result = CallToolResult::structured(json!({
             "echoed": message,
             "threadId": thread_id,
+            "codex": codex_meta,
         }));
         result.content = vec![Content::text(format!("echo: {message}"))];
         result.meta = Some(meta);
