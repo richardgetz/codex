@@ -4265,6 +4265,41 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
 }
 
 #[test]
+fn thread_settings_defaults_legacy_memory_policies() {
+    let settings: ThreadSettings = serde_json::from_value(json!({
+        "cwd": absolute_path_string("tmp"),
+        "approvalPolicy": "on-request",
+        "approvalsReviewer": "user",
+        "sandboxPolicy": { "type": "dangerFullAccess" },
+        "activePermissionProfile": null,
+        "model": "gpt-5",
+        "modelProvider": "openai",
+        "serviceTier": null,
+        "effort": null,
+        "summary": null,
+        "collaborationMode": {
+            "mode": "default",
+            "settings": {
+                "model": "gpt-5",
+                "reasoning_effort": null,
+                "developer_instructions": null
+            }
+        },
+        "personality": null
+    }))
+    .expect("legacy thread settings should deserialize");
+
+    assert_eq!(
+        settings.memory_policy,
+        codex_protocol::config_types::MemoryAccessPolicy::default()
+    );
+    assert_eq!(
+        settings.user_preferences_memory_policy,
+        codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default()
+    );
+}
+
+#[test]
 fn thread_recency_sort_key_serializes_as_snake_case() {
     assert_eq!(
         serde_json::to_value(ThreadSortKey::RecencyAt).expect("sort key should serialize"),

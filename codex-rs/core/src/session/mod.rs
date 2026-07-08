@@ -880,6 +880,8 @@ impl Codex {
                 })
                 .await
                 .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+            let msg = self::handlers::thread_settings_applied_event(&self.session).await;
+            self.session.send_event_raw(Event { id: sub.id, msg }).await;
             return Ok(());
         }
         if let Op::SetUserPreferencesMemoryPolicy { policy } = &sub.op {
@@ -890,6 +892,8 @@ impl Codex {
                 })
                 .await
                 .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+            let msg = self::handlers::thread_settings_applied_event(&self.session).await;
+            self.session.send_event_raw(Event { id: sub.id, msg }).await;
             return Ok(());
         }
         if let Op::SetScratchpadContinuousPolicy { enabled } = sub.op {

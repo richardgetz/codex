@@ -2068,6 +2068,10 @@ pub struct ThreadSettingsSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
     pub collaboration_mode: CollaborationMode,
+    #[serde(default)]
+    pub memory_policy: MemoryAccessPolicy,
+    #[serde(default)]
+    pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]
@@ -5788,6 +5792,44 @@ mod tests {
             _ => panic!("expected turn_aborted event"),
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn thread_settings_applied_event_defaults_legacy_memory_policies() -> Result<()> {
+        let event: EventMsg = serde_json::from_value(json!({
+            "type": "thread_settings_applied",
+            "thread_settings": {
+                "model": "gpt-5",
+                "model_provider_id": "openai",
+                "service_tier": null,
+                "approval_policy": "on-request",
+                "approvals_reviewer": "user",
+                "permission_profile": { "type": "disabled" },
+                "cwd": test_path_buf("/tmp"),
+                "reasoning_effort": null,
+                "reasoning_summary": null,
+                "personality": null,
+                "collaboration_mode": {
+                    "mode": "default",
+                    "settings": {
+                        "model": "gpt-5",
+                        "reasoning_effort": null,
+                        "developer_instructions": null
+                    }
+                }
+            }
+        }))?;
+
+        let EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent { thread_settings }) = event
+        else {
+            panic!("expected thread_settings_applied event");
+        };
+        assert_eq!(thread_settings.memory_policy, MemoryAccessPolicy::default());
+        assert_eq!(
+            thread_settings.user_preferences_memory_policy,
+            UserPreferencesMemoryBucketPolicy::default()
+        );
         Ok(())
     }
 

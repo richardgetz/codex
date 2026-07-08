@@ -167,7 +167,7 @@ async fn thread_settings_update(
     }
 }
 
-async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
+pub(super) async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
     let (snapshot, reasoning_summary) = {
         let state = sess.state.lock().await;
         let session_configuration = &state.session_configuration;
@@ -191,6 +191,8 @@ async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
             reasoning_summary,
             personality: snapshot.personality,
             collaboration_mode: snapshot.collaboration_mode,
+            memory_policy: snapshot.memory_policy,
+            user_preferences_memory_policy: snapshot.user_preferences_memory_policy,
         },
     })
 }
@@ -1075,23 +1077,23 @@ pub async fn set_memory_access_policy(
     sub_id: String,
     policy: MemoryAccessPolicy,
 ) {
-    if let Err(err) = sess
+    let msg = match sess
         .update_settings(SessionSettingsUpdate {
             memory_policy: Some(policy),
             ..Default::default()
         })
         .await
     {
-        warn!("Failed to update memory access policy: {err}");
-        let event = Event {
-            id: sub_id,
-            msg: EventMsg::Error(ErrorEvent {
+        Ok(()) => thread_settings_applied_event(sess).await,
+        Err(err) => {
+            warn!("Failed to update memory access policy: {err}");
+            EventMsg::Error(ErrorEvent {
                 message: err.to_string(),
                 codex_error_info: Some(CodexErrorInfo::Other),
-            }),
-        };
-        sess.send_event_raw(event).await;
-    }
+            })
+        }
+    };
+    sess.send_event_raw(Event { id: sub_id, msg }).await;
 }
 
 /// Applies the session-local user preferences memory bucket policy.
@@ -1103,23 +1105,23 @@ pub async fn set_user_preferences_memory_policy(
     sub_id: String,
     policy: UserPreferencesMemoryBucketPolicy,
 ) {
-    if let Err(err) = sess
+    let msg = match sess
         .update_settings(SessionSettingsUpdate {
             user_preferences_memory_policy: Some(policy),
             ..Default::default()
         })
         .await
     {
-        warn!("Failed to update user preferences memory policy: {err}");
-        let event = Event {
-            id: sub_id,
-            msg: EventMsg::Error(ErrorEvent {
+        Ok(()) => thread_settings_applied_event(sess).await,
+        Err(err) => {
+            warn!("Failed to update user preferences memory policy: {err}");
+            EventMsg::Error(ErrorEvent {
                 message: err.to_string(),
                 codex_error_info: Some(CodexErrorInfo::Other),
-            }),
-        };
-        sess.send_event_raw(event).await;
-    }
+            })
+        }
+    };
+    sess.send_event_raw(Event { id: sub_id, msg }).await;
 }
 
 async fn clear_memory_root_contents(memory_root: &std::path::Path) -> std::io::Result<()> {

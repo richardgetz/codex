@@ -20129,6 +20129,17 @@
               }
             ]
           },
+          "memoryPolicy": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/MemoryAccessPolicy"
+              }
+            ],
+            "default": {
+              "read": true,
+              "write": true
+            }
+          },
           "model": {
             "type": "string"
           },
@@ -20163,6 +20174,31 @@
                 "type": "null"
               }
             ]
+          },
+          "userPreferencesMemoryPolicy": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/UserPreferencesMemoryBucketPolicy"
+              }
+            ],
+            "default": {
+              "readBuckets": [
+                "durable_preference",
+                "personal_context",
+                "relational_attunement",
+                "operator_playbook",
+                "ongoing_threads",
+                "followup_state"
+              ],
+              "writeBuckets": [
+                "durable_preference",
+                "personal_context",
+                "relational_attunement",
+                "operator_playbook",
+                "ongoing_threads",
+                "followup_state"
+              ]
+            }
           }
         },
         "required": [

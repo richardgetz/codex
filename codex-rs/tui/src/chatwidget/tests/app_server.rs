@@ -1,4 +1,6 @@
 use super::*;
+use codex_protocol::config_types::MemoryAccessPolicy;
+use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use pretty_assertions::assert_eq;
 
 fn thread_settings_for_test(
@@ -32,6 +34,8 @@ fn thread_settings_for_test(
             },
             multi_agent_mode: Default::default(),
             personality: Some(Personality::Pragmatic),
+            memory_policy: MemoryAccessPolicy::default(),
+            user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
         },
     }
 }

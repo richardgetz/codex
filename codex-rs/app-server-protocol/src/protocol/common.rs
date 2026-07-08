@@ -3772,6 +3772,9 @@ mod tests {
                     },
                     multi_agent_mode: Default::default(),
                     personality: None,
+                    memory_policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
+                    user_preferences_memory_policy:
+                        codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
                 },
             });
 

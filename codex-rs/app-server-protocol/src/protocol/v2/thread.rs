@@ -322,6 +322,10 @@ pub struct ThreadSettings {
     #[serde(default)]
     pub multi_agent_mode: MultiAgentMode,
     pub personality: Option<Personality>,
+    #[serde(default)]
+    pub memory_policy: MemoryAccessPolicy,
+    #[serde(default)]
+    pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -89,10 +89,12 @@ use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::config_types::MemoryAccessPolicy;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
+use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -6102,6 +6104,8 @@ async fn override_turn_context_sends_thread_settings_update() {
                 collaboration_mode: collaboration_mode.clone(),
                 multi_agent_mode: Default::default(),
                 personality: Some(Personality::Pragmatic),
+                memory_policy: MemoryAccessPolicy::default(),
+                user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
             },
         };
         assert_eq!(notification.thread_settings.model, "gpt-5.4");
@@ -6289,6 +6293,8 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
             collaboration_mode: collaboration_mode.clone(),
             multi_agent_mode: Default::default(),
             personality: Some(Personality::Pragmatic),
+            memory_policy: MemoryAccessPolicy::default(),
+            user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
         },
     };
     let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())

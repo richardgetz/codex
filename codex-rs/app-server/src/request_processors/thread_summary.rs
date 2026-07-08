@@ -210,6 +210,8 @@ pub(crate) fn thread_settings_from_config_snapshot(
         collaboration_mode: config_snapshot.collaboration_mode.clone(),
         multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         personality: config_snapshot.personality,
+        memory_policy: config_snapshot.memory_policy,
+        user_preferences_memory_policy: config_snapshot.user_preferences_memory_policy.clone(),
     }
 }
 
@@ -229,6 +231,8 @@ pub(crate) fn thread_settings_from_core_snapshot(
         reasoning_summary,
         personality,
         collaboration_mode,
+        memory_policy,
+        user_preferences_memory_policy,
     } = snapshot;
     let sandbox_policy = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
     ThreadSettings {
@@ -247,6 +251,8 @@ pub(crate) fn thread_settings_from_core_snapshot(
         collaboration_mode,
         multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         personality,
+        memory_policy,
+        user_preferences_memory_policy,
     }
 }
 
