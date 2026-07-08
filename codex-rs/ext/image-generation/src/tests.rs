@@ -97,6 +97,7 @@ async fn recent_image_fallback_preserves_latest_user_anchor_and_generated_contex
             status: Some("completed".to_string()),
             call_id: "code-mode-call".to_string(),
             name: "exec".to_string(),
+            namespace: None,
             input: String::new(),
             internal_chat_message_metadata_passthrough: None,
         },

@@ -1302,16 +1302,20 @@ fn mcp_startup_update_notification(
     conversation_id: ThreadId,
     update: codex_protocol::protocol::McpStartupUpdateEvent,
 ) -> ServerNotification {
-    let (status, error) = match update.status {
+    let (status, error, failure_reason) = match update.status {
         codex_protocol::protocol::McpStartupStatus::Starting => {
-            (McpServerStartupState::Starting, None)
+            (McpServerStartupState::Starting, None, None)
         }
-        codex_protocol::protocol::McpStartupStatus::Ready => (McpServerStartupState::Ready, None),
-        codex_protocol::protocol::McpStartupStatus::Failed { error } => {
-            (McpServerStartupState::Failed, Some(error))
+        codex_protocol::protocol::McpStartupStatus::Ready => {
+            (McpServerStartupState::Ready, None, None)
         }
+        codex_protocol::protocol::McpStartupStatus::Failed { error, reason } => (
+            McpServerStartupState::Failed,
+            Some(error),
+            reason.map(Into::into),
+        ),
         codex_protocol::protocol::McpStartupStatus::Cancelled => {
-            (McpServerStartupState::Cancelled, None)
+            (McpServerStartupState::Cancelled, None, None)
         }
     };
     mcp_server_status_notification(
@@ -1319,6 +1323,7 @@ fn mcp_startup_update_notification(
         update.server,
         status,
         error,
+        failure_reason,
     )
 }
 
@@ -1327,12 +1332,14 @@ fn mcp_server_status_notification(
     name: String,
     status: McpServerStartupState,
     error: Option<String>,
+    failure_reason: Option<codex_app_server_protocol::McpServerStartupFailureReason>,
 ) -> ServerNotification {
     ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
         thread_id,
         name,
         status,
         error,
+        failure_reason,
     })
 }
 
@@ -1375,6 +1382,7 @@ async fn mcp_startup_complete_reconciliation_notifications(
                 name: server,
                 status: McpServerStartupState::Ready,
                 error: None,
+                failure_reason: None,
             });
     let failed_notifications =
         complete
@@ -1385,6 +1393,7 @@ async fn mcp_startup_complete_reconciliation_notifications(
                 name: failure.server,
                 status: McpServerStartupState::Failed,
                 error: Some(failure.error),
+                failure_reason: None,
             });
     let cancelled_notifications =
         complete
@@ -1395,6 +1404,7 @@ async fn mcp_startup_complete_reconciliation_notifications(
                 name: server,
                 status: McpServerStartupState::Cancelled,
                 error: None,
+                failure_reason: None,
             });
 
     let mut state = thread_state.lock().await;
@@ -2393,6 +2403,7 @@ mod tests {
                 server: "failed-server".to_string(),
                 status: codex_protocol::protocol::McpStartupStatus::Failed {
                     error: "handshake failed".to_string(),
+                    reason: None,
                 },
             },
         );
@@ -2420,18 +2431,21 @@ mod tests {
                     name: "ready-server".to_string(),
                     status: McpServerStartupState::Ready,
                     error: None,
+                    failure_reason: None,
                 },
                 McpServerStatusUpdatedNotification {
                     thread_id: expected_thread_id.clone(),
                     name: "failed-server".to_string(),
                     status: McpServerStartupState::Failed,
                     error: Some("handshake failed".to_string()),
+                    failure_reason: None,
                 },
                 McpServerStatusUpdatedNotification {
                     thread_id: expected_thread_id,
                     name: "cancelled-server".to_string(),
                     status: McpServerStartupState::Cancelled,
                     error: None,
+                    failure_reason: None,
                 },
             ]
         );
@@ -2522,18 +2536,21 @@ mod tests {
                     name: "ready-server".to_string(),
                     status: McpServerStartupState::Ready,
                     error: None,
+                    failure_reason: None,
                 },
                 McpServerStatusUpdatedNotification {
                     thread_id: Some(conversation_id.to_string()),
                     name: "failed-server".to_string(),
                     status: McpServerStartupState::Failed,
                     error: Some("handshake failed".to_string()),
+                    failure_reason: None,
                 },
                 McpServerStatusUpdatedNotification {
                     thread_id: Some(conversation_id.to_string()),
                     name: "cancelled-server".to_string(),
                     status: McpServerStartupState::Cancelled,
                     error: None,
+                    failure_reason: None,
                 },
             ]
         );
@@ -2854,6 +2871,7 @@ mod tests {
             cwd: test_path_buf("/tmp").abs().into(),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,
+            history_mode: Default::default(),
             thread_source: None,
             agent_nickname: None,
             agent_role: None,

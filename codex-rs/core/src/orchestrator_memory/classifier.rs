@@ -91,8 +91,7 @@ pub(super) async fn classify_with_model(
             vec![UserInput::Text {
                 text: prompt,
                 text_elements: vec![],
-            }]
-            .into(),
+            }],
             Some(source),
             crate::agent::control::SpawnAgentOptions::default(),
         )

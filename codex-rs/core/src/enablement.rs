@@ -1,6 +1,6 @@
-use codex_app_server_protocol::AppInfo;
 use codex_config::EnablementFilterConfig;
 use codex_config::EnablementFilterMode;
+use codex_connectors::AppInfo;
 use codex_mcp::LazyMcpServerInfo;
 use codex_mcp::ToolInfo;
 use codex_plugin::PluginCapabilitySummary;
@@ -203,7 +203,7 @@ pub(crate) fn filter_discoverable_tools_for_mode(
         .into_iter()
         .filter(|tool| match tool {
             DiscoverableTool::Connector(connector) => {
-                connector_allowed_in_mode(config, mode, connector)
+                connector_allowed_in_mode(config, mode, connector.as_ref())
             }
             DiscoverableTool::Plugin(plugin) => {
                 let summary = PluginCapabilitySummary {
@@ -229,7 +229,7 @@ pub(crate) fn filter_discoverable_tools_for_mode(
 mod tests {
     use std::sync::Arc;
 
-    use codex_app_server_protocol::AppInfo;
+    use codex_connectors::AppInfo;
     use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
     use codex_mcp::ToolInfo;
     use codex_plugin::AppConnectorId;
@@ -249,6 +249,8 @@ mod tests {
             description: None,
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,

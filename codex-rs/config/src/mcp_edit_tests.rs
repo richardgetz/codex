@@ -18,6 +18,7 @@ async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow:
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
@@ -101,6 +102,7 @@ async fn replace_mcp_servers_serializes_oauth_client_id() -> anyhow::Result<()> 
     let servers = BTreeMap::from([(
         "maas_outlook".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: None,

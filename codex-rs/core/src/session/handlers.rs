@@ -27,7 +27,6 @@ use crate::tasks::CompactTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
-use codex_mcp::McpConnectionManager;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -332,7 +331,10 @@ pub async fn inter_agent_communication(
     communication: InterAgentCommunication,
 ) {
     let trigger_turn = communication.trigger_turn;
-    sess.enqueue_mailbox_communication(communication).await;
+    sess.input_queue
+        .enqueue_mailbox_communication(communication)
+        .await;
+    crate::agent_communication::emit_agent_communication_receive(&sub_id);
     if trigger_turn {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
             .await;
@@ -1154,8 +1156,8 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Some(startup_prewarm) = sess.take_session_startup_prewarm().await {
         startup_prewarm.abort().await;
     }
-    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
     let _ = sess.conversation.shutdown().await;
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
     sess.services
         .unified_exec_manager
         .terminate_all_processes()
@@ -1163,18 +1165,11 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Err(err) = sess.services.code_mode_service.shutdown().await {
         warn!("failed to shutdown code mode session: {err}");
     }
-    let config = sess.get_config().await;
-    let old_mcp_manager = sess.services.mcp_connection_manager.swap(Arc::new(
-        McpConnectionManager::new_uninitialized_with_permission_profile(
-            &config.permissions.approval_policy,
-            config.permissions.permission_profile(),
-            config.prefix_mcp_tool_names(),
-        ),
-    ));
-    match Arc::try_unwrap(old_mcp_manager) {
-        Ok(manager) => manager.shutdown().await,
-        Err(_) => warn!("skipping MCP shutdown because the manager still has active references"),
-    }
+    sess.services
+        .latest_mcp_runtime()
+        .manager_arc()
+        .shutdown()
+        .await;
     sess.guardian_review_session.shutdown().await;
 }
 
@@ -1463,6 +1458,11 @@ pub(super) async fn submission_loop(
     if !shutdown_received {
         shutdown_session_runtime(&sess).await;
         emit_thread_stop_lifecycle(sess.as_ref()).await;
+        if let Some(live_thread) = sess.live_thread()
+            && let Err(err) = live_thread.shutdown().await
+        {
+            warn!("failed to shutdown thread persistence after submission channel closed: {err}");
+        }
     }
     debug!("Agent loop exited");
 }

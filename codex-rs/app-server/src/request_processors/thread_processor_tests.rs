@@ -141,6 +141,7 @@ mod thread_processor_behavior_tests {
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use codex_protocol::protocol::ThreadHistoryMode;
     use codex_protocol::protocol::TurnEnvironmentSelections;
     use codex_state::ThreadMetadataBuilder;
     use codex_thread_store::StoredThread;
@@ -180,9 +181,11 @@ mod thread_processor_behavior_tests {
             },
             personality: None,
             session_source: SessionSource::Cli,
+            history_mode: ThreadHistoryMode::Legacy,
             forked_from_thread_id: None,
             parent_thread_id: None,
             thread_source: None,
+            originator: "test_originator".to_string(),
             memory_policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
             user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
             multi_agent_mode: Default::default(),
@@ -523,6 +526,7 @@ mod thread_processor_behavior_tests {
             cwd: PathBuf::from("/tmp"),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,
+            history_mode: Default::default(),
             thread_source: Some(codex_protocol::protocol::ThreadSource::User),
             agent_nickname: None,
             agent_role: None,

@@ -42,6 +42,7 @@ use crate::types::WindowsToml;
 use codex_app_server_protocol::ForcedChatgptWorkspaceIds as ApiForcedChatgptWorkspaceIds;
 use codex_app_server_protocol::OrchestratorThreadControlConfigV1;
 use codex_app_server_protocol::Profile;
+use codex_app_server_protocol::SandboxSettings;
 use codex_app_server_protocol::ThreadControlConfigV1;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
@@ -664,6 +665,17 @@ impl From<ConfigToml> for UserSavedConfig {
             thread_control: config_toml.thread_control.map(Into::into),
             profile: config_toml.profile,
             profiles,
+        }
+    }
+}
+
+impl From<SandboxWorkspaceWrite> for SandboxSettings {
+    fn from(sandbox: SandboxWorkspaceWrite) -> Self {
+        Self {
+            writable_roots: sandbox.writable_roots,
+            network_access: Some(sandbox.network_access),
+            exclude_tmpdir_env_var: Some(sandbox.exclude_tmpdir_env_var),
+            exclude_slash_tmp: Some(sandbox.exclude_slash_tmp),
         }
     }
 }

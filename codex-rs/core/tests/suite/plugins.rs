@@ -246,7 +246,7 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
     let developer_messages = request.message_input_texts("developer");
     let developer_text = developer_messages.join("\n\n");
     let apps_pos = developer_text
-        .find("## Apps")
+        .rfind("## Apps")
         .expect("expected apps section in developer message");
     let skills_pos = developer_text
         .find("## Skills")
@@ -255,8 +255,8 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
         .find("## Plugins")
         .expect("expected plugins section in developer message");
     assert!(
-        apps_pos < skills_pos && skills_pos < plugins_pos,
-        "expected Apps -> Skills -> Plugins order: {developer_messages:?}"
+        skills_pos < apps_pos && apps_pos < plugins_pos,
+        "expected Skills -> Apps -> Plugins order: {developer_messages:?}"
     );
     assert!(
         !developer_text.contains("`sample`: inspect sample data"),

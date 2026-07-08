@@ -27,6 +27,15 @@ pub enum ConstraintError {
 
     #[error("{message}")]
     OperationFailed { message: String },
+
+    #[error(
+        "invalid requirement for MCP server `{server_name}` (set by {requirement_source}): {reason}"
+    )]
+    McpServerRequirementParse {
+        server_name: String,
+        requirement_source: RequirementSource,
+        reason: String,
+    },
 }
 
 impl ConstraintError {
