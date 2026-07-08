@@ -382,6 +382,7 @@ fn build_arc_monitor_message_item(
         | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. }
+        | ResponseItem::AdditionalTools { .. }
         | ResponseItem::AgentMessage { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }

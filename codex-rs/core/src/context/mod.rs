@@ -85,6 +85,7 @@ pub(crate) use schedule_instructions::ScheduleInstructions;
 pub(crate) use scratchpad_instructions::ScratchpadInstructions;
 pub(crate) use situational_requirements_instructions::SituationalRequirementsInstructions;
 pub(crate) use subagent_notification::SubagentNotification;
+pub(crate) use token_budget_context::ContextWindowGuidance;
 pub(crate) use token_budget_context::TokenBudgetContext;
 pub(crate) use token_budget_context::TokenBudgetRemainingContext;
 pub(crate) use token_budget_context::TokenBudgetReminder;

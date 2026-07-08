@@ -39,7 +39,6 @@
         {
           "enum": [
             "untrusted",
-            "on-failure",
             "on-request",
             "never"
           ],
@@ -100,6 +99,21 @@
       ],
       "type": "object"
     },
+    "MemoryAccessPolicy": {
+      "properties": {
+        "read": {
+          "type": "boolean"
+        },
+        "write": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read",
+        "write"
+      ],
+      "type": "object"
+    },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
@@ -109,13 +123,29 @@
       "type": "string"
     },
     "MultiAgentMode": {
-      "description": "Controls whether the model receives multi-agent delegation instructions and, when it does, whether it should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help. `none` leaves the multi-agent tools available without injecting delegation instructions.",
-      "enum": [
-        "none",
-        "explicitRequestOnly",
-        "proactive"
-      ],
-      "type": "string"
+      "description": "Controls the effective multi-agent delegation instructions for a turn. `custom` means the configured mode hint defines the policy instead of a built-in policy.",
+      "oneOf": [
+        {
+          "enum": [
+            "explicitRequestOnly",
+            "proactive"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "custom": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "custom"
+          ],
+          "title": "CustomMultiAgentMode",
+          "type": "object"
+        }
+      ]
     },
     "NetworkAccess": {
       "enum": [
@@ -318,6 +348,17 @@
             }
           ]
         },
+        "memoryPolicy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MemoryAccessPolicy"
+            }
+          ],
+          "default": {
+            "read": true,
+            "write": true
+          }
+        },
         "model": {
           "type": "string"
         },
@@ -352,6 +393,31 @@
               "type": "null"
             }
           ]
+        },
+        "userPreferencesMemoryPolicy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/UserPreferencesMemoryBucketPolicy"
+            }
+          ],
+          "default": {
+            "readBuckets": [
+              "durable_preference",
+              "personal_context",
+              "relational_attunement",
+              "operator_playbook",
+              "ongoing_threads",
+              "followup_state"
+            ],
+            "writeBuckets": [
+              "durable_preference",
+              "personal_context",
+              "relational_attunement",
+              "operator_playbook",
+              "ongoing_threads",
+              "followup_state"
+            ]
+          }
         }
       },
       "required": [
@@ -362,6 +428,38 @@
         "model",
         "modelProvider",
         "sandboxPolicy"
+      ],
+      "type": "object"
+    },
+    "UserPreferencesMemoryBucket": {
+      "enum": [
+        "durable_preference",
+        "personal_context",
+        "relational_attunement",
+        "operator_playbook",
+        "ongoing_threads",
+        "followup_state"
+      ],
+      "type": "string"
+    },
+    "UserPreferencesMemoryBucketPolicy": {
+      "properties": {
+        "readBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        },
+        "writeBuckets": {
+          "items": {
+            "$ref": "#/definitions/UserPreferencesMemoryBucket"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "readBuckets",
+        "writeBuckets"
       ],
       "type": "object"
     }

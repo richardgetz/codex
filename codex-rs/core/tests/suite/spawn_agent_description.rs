@@ -40,12 +40,19 @@ fn spawn_agent_description(body: &Value) -> Option<String> {
 }
 
 fn direct_spawn_agent_description(body: &Value) -> Option<String> {
-    body.get("tools")?
-        .as_array()?
+    let direct_description = body
+        .get("tools")
+        .and_then(Value::as_array)?
         .iter()
         .find(|tool| tool.get("name").and_then(Value::as_str) == Some(SPAWN_AGENT_TOOL_NAME))
         .and_then(|tool| tool.get("description"))
-        .and_then(Value::as_str)
+        .and_then(Value::as_str);
+    direct_description
+        .or_else(|| {
+            namespace_child_tool(body, "multi_tool_use", SPAWN_AGENT_TOOL_NAME)
+                .and_then(|tool| tool.get("description"))
+                .and_then(Value::as_str)
+        })
         .map(str::to_string)
 }
 
@@ -81,6 +88,7 @@ fn test_model_info(
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
+        include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
@@ -223,7 +231,7 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
     );
     assert!(
         description.contains(
-            "Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work."
+            "Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work."
         ),
         "expected explicit authorization rule in spawn_agent description: {description:?}"
     );
@@ -262,6 +270,7 @@ async fn multi_agent_v2_spawn_agent_description_requires_explicit_user_permissio
                 .features
                 .enable(Feature::MultiAgentV2)
                 .expect("test config should allow feature update");
+            config.multi_agent_v2.tool_namespace = None;
         })
         .build(&server)
         .await?;

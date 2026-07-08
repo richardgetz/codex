@@ -456,7 +456,7 @@ async fn explicit_app_mentions_leave_app_tools_deferred() -> Result<()> {
     let tools = tool_names(&body);
     assert!(
         tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
-        "explicit app mentions should leave app tools deferred: {tools:?}"
+        "explicit app mentions should keep tool_search available: {tools:?}"
     );
     assert!(
         namespace_child_tool(
@@ -464,12 +464,12 @@ async fn explicit_app_mentions_leave_app_tools_deferred() -> Result<()> {
             SEARCH_CALENDAR_NAMESPACE,
             SEARCH_CALENDAR_CREATE_TOOL
         )
-        .is_none(),
-        "explicit app mentions should not directly expose create tool, got tools: {tools:?}"
+        .is_some(),
+        "explicit app mentions should directly expose create tool, got tools: {tools:?}"
     );
     assert!(
-        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_none(),
-        "explicit app mentions should not directly expose list tool, got tools: {tools:?}"
+        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_some(),
+        "explicit app mentions should directly expose list tool, got tools: {tools:?}"
     );
 
     Ok(())
@@ -545,6 +545,8 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
         unreachable!("event guard guarantees McpToolCallBegin");
     };
     assert_eq!(begin.call_id, "calendar-call-1");
+    assert_eq!(begin.app_name.as_deref(), Some("Calendar"));
+    assert_eq!(begin.action_name.as_deref(), Some("calendar_create_event"));
     assert_eq!(
         begin.mcp_app_resource_uri.as_deref(),
         Some(CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI)
@@ -559,6 +561,8 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     };
     assert_eq!(end.call_id, "calendar-call-1");
     assert_eq!(end.connector_id.as_deref(), Some("calendar"));
+    assert_eq!(end.app_name.as_deref(), Some("Calendar"));
+    assert_eq!(end.action_name.as_deref(), Some("calendar_create_event"));
     assert_eq!(
         end.mcp_app_resource_uri.as_deref(),
         Some(CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI)
@@ -854,7 +858,7 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
         .and_then(Value::as_str)
         .expect("spawn_agent description should be present");
     assert!(description.contains(
-        "Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work."
+        "Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work."
     ));
     assert!(description.contains("### Designing delegated subtasks"));
     assert!(description.contains("### When to delegate vs. do the subtask yourself"));
@@ -1090,6 +1094,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
             servers.insert(
                 "rmcp".to_string(),
                 McpServerConfig {
+                    auth: Default::default(),
                     transport: McpServerTransportConfig::Stdio {
                         command: rmcp_test_server_bin,
                         args: Vec::new(),
@@ -1218,6 +1223,7 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
             servers.insert(
                 "rmcp".to_string(),
                 McpServerConfig {
+                    auth: Default::default(),
                     transport: McpServerTransportConfig::Stdio {
                         command: rmcp_test_server_bin,
                         args: Vec::new(),
@@ -1254,7 +1260,7 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
-                text: "Find the rmcp echo tool and call it.".to_string(),
+                text: "Find the echo tool and call it.".to_string(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
@@ -1301,7 +1307,7 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
     );
     assert!(
         !first_request_tools.iter().any(|name| name == "mcp__rmcp"),
-        "deferred rmcp namespace should not be directly exposed before search: {first_request_tools:?}"
+        "unmentioned rmcp namespace should stay deferred before search: {first_request_tools:?}"
     );
 
     assert!(
@@ -1368,6 +1374,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
             servers.insert(
                 "rmcp".to_string(),
                 McpServerConfig {
+                    auth: Default::default(),
                     transport: McpServerTransportConfig::Stdio {
                         command: rmcp_test_server_bin,
                         args: Vec::new(),
@@ -1402,7 +1409,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
     wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     test.submit_turn_with_approval_and_permission_profile(
-        "Find the rmcp echo tool.",
+        "Find the echo tool.",
         AskForApproval::Never,
         PermissionProfile::Disabled,
     )

@@ -210,6 +210,8 @@ pub(crate) fn thread_settings_from_config_snapshot(
         collaboration_mode: config_snapshot.collaboration_mode.clone(),
         multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         personality: config_snapshot.personality,
+        memory_policy: config_snapshot.memory_policy,
+        user_preferences_memory_policy: config_snapshot.user_preferences_memory_policy.clone(),
     }
 }
 
@@ -229,6 +231,8 @@ pub(crate) fn thread_settings_from_core_snapshot(
         reasoning_summary,
         personality,
         collaboration_mode,
+        memory_policy,
+        user_preferences_memory_policy,
     } = snapshot;
     let sandbox_policy = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
     ThreadSettings {
@@ -247,6 +251,8 @@ pub(crate) fn thread_settings_from_core_snapshot(
         collaboration_mode,
         multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         personality,
+        memory_policy,
+        user_preferences_memory_policy,
     }
 }
 
@@ -316,11 +322,13 @@ pub(crate) fn summary_to_thread(
     let thread_id = conversation_id.to_string();
     Thread {
         id: thread_id.clone(),
+        extra: None,
         session_id: thread_id,
         forked_from_id: None,
         parent_thread_id: None,
         preview,
         ephemeral: false,
+        history_mode: ThreadHistoryMode::Legacy,
         model_provider,
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
         updated_at: updated_at.map(|dt| dt.timestamp()).unwrap_or(0),

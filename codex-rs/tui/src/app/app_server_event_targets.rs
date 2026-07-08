@@ -209,8 +209,10 @@ mod tests {
     use codex_app_server_protocol::WarningNotification;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::MemoryAccessPolicy;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
+    use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
     use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
 
@@ -238,6 +240,8 @@ mod tests {
             },
             multi_agent_mode: Default::default(),
             personality: None,
+            memory_policy: MemoryAccessPolicy::default(),
+            user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
         }
     }
 
@@ -288,6 +292,7 @@ mod tests {
                 name: "sentry".to_string(),
                 status: McpServerStartupState::Failed,
                 error: Some("sentry is not logged in".to_string()),
+                failure_reason: None,
             });
 
         let target = server_notification_thread_target(&notification);
@@ -303,6 +308,7 @@ mod tests {
                 name: "sentry".to_string(),
                 status: McpServerStartupState::Failed,
                 error: Some("sentry is not logged in".to_string()),
+                failure_reason: None,
             });
 
         let target = server_notification_thread_target(&notification);

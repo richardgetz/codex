@@ -101,6 +101,7 @@ mod tests {
                 model_provider: "test-provider".to_string(),
                 model: Some("gpt-test".to_string()),
                 reasoning_effort: None,
+                history_mode: Default::default(),
                 thread_source: None,
                 cwd: codex_home.clone(),
                 cli_version: "0.0.0".to_string(),

@@ -53,11 +53,13 @@ impl ListMcpResourceTemplatesHandler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
-            turn,
+            step_context,
             call_id,
             payload,
             ..
         } = invocation;
+        let turn = std::sync::Arc::clone(&step_context.turn);
+        let manager = step_context.mcp.manager();
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -108,10 +110,7 @@ impl ListMcpResourceTemplatesHandler {
                     ));
                 }
 
-                let templates = session
-                    .services
-                    .mcp_connection_manager
-                    .load_full()
+                let templates = manager
                     .list_all_resource_templates(|server_name| {
                         model_can_access_mcp_server(turn.as_ref(), server_name)
                     })

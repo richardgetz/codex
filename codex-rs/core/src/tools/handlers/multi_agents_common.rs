@@ -21,7 +21,6 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::CollabAgentRef;
 use codex_protocol::protocol::CollabAgentStatusEntry;
-use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
@@ -179,7 +178,7 @@ pub(crate) fn reject_recursive_subagent_spawn(
 pub(crate) fn parse_collab_input(
     message: Option<String>,
     items: Option<Vec<UserInput>>,
-) -> Result<Op, FunctionCallError> {
+) -> Result<Vec<UserInput>, FunctionCallError> {
     match (message, items) {
         (Some(_), Some(_)) => Err(FunctionCallError::RespondToModel(
             "Provide either message or items, but not both".to_string(),
@@ -196,8 +195,7 @@ pub(crate) fn parse_collab_input(
             Ok(vec![UserInput::Text {
                 text: message,
                 text_elements: Vec::new(),
-            }]
-            .into())
+            }])
         }
         (None, Some(items)) => {
             if items.is_empty() {
@@ -205,7 +203,7 @@ pub(crate) fn parse_collab_input(
                     "Items can't be empty".to_string(),
                 ));
             }
-            Ok(items.into())
+            Ok(items)
         }
     }
 }

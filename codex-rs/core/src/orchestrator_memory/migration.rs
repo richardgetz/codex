@@ -55,7 +55,7 @@ pub(super) async fn migrate_if_needed(codex_home: &AbsolutePathBuf) -> std::io::
         let legacy = match serde_json::from_str::<LegacyMemoryEvent>(line) {
             Ok(legacy) => legacy,
             Err(err) => {
-                warn!("skipping unparseable legacy orchestrator memory event: {err}");
+                warn!("skipping unparsable legacy orchestrator memory event: {err}");
                 continue;
             }
         };

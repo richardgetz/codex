@@ -61,18 +61,18 @@ fn gpt_5_bedrock_model(openai_slug: &str, bedrock_slug: &str, priority: i32) -> 
     model.priority = priority;
     model.context_window = Some(GPT_5_BEDROCK_CONTEXT_WINDOW);
     model.max_context_window = Some(GPT_5_BEDROCK_CONTEXT_WINDOW);
+    model.availability_nux = None;
+    model.upgrade = None;
     model
 }
 
 fn gpt_5_6_bedrock_model(bedrock_slug: &str, display_name: &str, priority: i32) -> ModelInfo {
     let mut model = gpt_5_bedrock_model(GPT_5_5_OPENAI_MODEL_ID, bedrock_slug, priority);
     model.display_name = display_name.to_string();
-    model.default_reasoning_level = Some(ReasoningEffort::High);
-    model.availability_nux = None;
     model
         .supported_reasoning_levels
         .push(ReasoningEffortPreset {
-            effort: ReasoningEffort::Custom("max".to_string()),
+            effort: ReasoningEffort::Max,
             description: "Maximum reasoning depth for the hardest problems".to_string(),
         });
     model
@@ -129,6 +129,14 @@ mod tests {
         }
     }
 
+    fn gpt_5_bedrock_models_do_not_include_availability_nux_or_upgrade() {
+        let catalog = static_model_catalog();
+
+        for model in catalog.models {
+            assert_eq!((model.availability_nux, model.upgrade), (None, None));
+        }
+    }
+
     #[test]
     fn gpt_5_6_bedrock_models_clone_gpt_5_5_config_with_max_reasoning_effort() {
         let catalog = static_model_catalog();
@@ -152,7 +160,7 @@ mod tests {
             expected
                 .supported_reasoning_levels
                 .push(ReasoningEffortPreset {
-                    effort: ReasoningEffort::Custom("max".to_string()),
+                    effort: ReasoningEffort::Max,
                     description: "Maximum reasoning depth for the hardest problems".to_string(),
                 });
 
