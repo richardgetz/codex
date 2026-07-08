@@ -75,5 +75,6 @@ jobs:
 
       - name: Require successful dependencies
         env:
+          ALLOWED_SKIPPED_DEPENDENCIES: ${{ github.repository != 'openai/codex' && 'bazel,repo-checks,sdk' || '' }}
           NEEDS: ${{ toJSON(needs) }}
         run: python3 .github/scripts/check_ci_results.py
