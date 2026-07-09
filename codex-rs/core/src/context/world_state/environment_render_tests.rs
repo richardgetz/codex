@@ -225,6 +225,7 @@ fn turn_context_item_filesystem_uses_workspace_roots_instead_of_cwd() {
         current_date: None,
         timezone: None,
         approval_policy: AskForApproval::Never,
+        approvals_reviewer: None,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         permission_profile: Some(workspace_write_permission_profile_with_private_denials()),
         network: None,

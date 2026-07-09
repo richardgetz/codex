@@ -178,6 +178,7 @@ pub struct ThreadControlConfig {
 pub enum AppToolApproval {
     Auto,
     Prompt,
+    Writes,
     Approve,
 }
 

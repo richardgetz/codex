@@ -1015,19 +1015,6 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
     assert_eq!(manager.refresh_failure_for_auth(&updated_auth), None);
 }
 
-#[test]
-fn external_auth_tokens_without_chatgpt_metadata_cannot_seed_chatgpt_auth() {
-    let err = AuthDotJson::from_external_tokens(&ExternalAuthTokens::access_token_only(
-        "test-access-token",
-    ))
-    .expect_err("bearer-only external auth should not seed ChatGPT auth");
-
-    assert_eq!(
-        err.to_string(),
-        "external auth tokens are missing ChatGPT metadata"
-    );
-}
-
 #[tokio::test]
 async fn external_bearer_only_auth_manager_uses_cached_provider_token() {
     let script = ProviderAuthScript::new(&["provider-token", "next-token"]).unwrap();
@@ -1082,11 +1069,11 @@ async fn unauthorized_recovery_uses_external_refresh_for_bearer_manager() {
     let mut auth_config = script.auth_config();
     auth_config.refresh_interval_ms = 0;
     let manager = AuthManager::external_bearer_only(auth_config);
+    let mut recovery = manager.unauthorized_recovery();
     let initial_token = manager
         .auth()
         .await
         .and_then(|auth| auth.api_key().map(str::to_string));
-    let mut recovery = manager.unauthorized_recovery();
 
     assert!(recovery.has_next());
     assert_eq!(recovery.mode_name(), "external");
@@ -1104,6 +1091,245 @@ async fn unauthorized_recovery_uses_external_refresh_for_bearer_manager() {
         .and_then(|auth| auth.api_key().map(str::to_string));
     assert_eq!(initial_token.as_deref(), Some("provider-token"));
     assert_eq!(refreshed_token.as_deref(), Some("refreshed-provider-token"));
+}
+
+#[derive(Clone)]
+struct StaticExternalAuth(CodexAuth);
+
+impl ExternalAuth for StaticExternalAuth {
+    fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(self.0.clone()) })
+    }
+
+    fn refresh(&self, _context: ExternalAuthRefreshContext) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(self.0.clone()) })
+    }
+}
+
+#[derive(Clone)]
+struct MutableExternalAuth {
+    current: Arc<std::sync::Mutex<CodexAuth>>,
+    refresh_candidate: CodexAuth,
+}
+
+impl MutableExternalAuth {
+    fn new(current: CodexAuth, refresh_candidate: CodexAuth) -> Self {
+        Self {
+            current: Arc::new(std::sync::Mutex::new(current)),
+            refresh_candidate,
+        }
+    }
+}
+
+impl ExternalAuth for MutableExternalAuth {
+    fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async {
+            self.current
+                .lock()
+                .map(|auth| auth.clone())
+                .map_err(|_| std::io::Error::other("external auth lock is poisoned"))
+        })
+    }
+
+    fn refresh(&self, _context: ExternalAuthRefreshContext) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(self.refresh_candidate.clone()) })
+    }
+
+    fn accept(&self, auth: CodexAuth) -> ExternalAuthFuture<'_, ()> {
+        Box::pin(async {
+            *self
+                .current
+                .lock()
+                .map_err(|_| std::io::Error::other("external auth lock is poisoned"))? = auth;
+            Ok(())
+        })
+    }
+}
+
+fn external_chatgpt_auth(account_id: &str) -> CodexAuth {
+    let access_token = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: Some("pro".to_string()),
+        chatgpt_account_id: Some(account_id.to_string()),
+    })
+    .expect("fake jwt");
+    CodexAuth::from_external_chatgpt_tokens(&access_token, account_id, Some("pro"))
+        .expect("external ChatGPT auth")
+}
+
+#[tokio::test]
+async fn external_auth_provider_can_install_headers() {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        reqwest::header::HeaderValue::from_static("Bearer external"),
+    );
+    headers.insert(
+        "x-external-auth",
+        reqwest::header::HeaderValue::from_static("enabled"),
+    );
+    let auth = CodexAuth::Headers(AuthHeaders::new(headers));
+    let codex_home = tempdir().expect("tempdir");
+    let manager = AuthManager::new(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::Ephemeral,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
+    )
+    .await;
+
+    manager
+        .set_external_auth(Arc::new(StaticExternalAuth(auth.clone())))
+        .await
+        .expect("external auth should install");
+
+    assert_eq!(manager.auth_cached(), Some(auth));
+    assert!(
+        manager
+            .auth_cached()
+            .is_some_and(|auth| auth.uses_codex_backend())
+    );
+    assert!(
+        !manager
+            .auth_cached()
+            .is_some_and(|auth| auth.is_chatgpt_auth())
+    );
+}
+
+#[tokio::test]
+async fn auth_storage_selection_clears_external_auth() {
+    let codex_home = tempdir().expect("tempdir");
+    let manager = AuthManager::new(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
+    )
+    .await;
+    let auth = external_chatgpt_auth(WORKSPACE_ID_ALLOWED);
+    manager
+        .set_external_auth(Arc::new(StaticExternalAuth(auth)))
+        .await
+        .expect("external auth should install");
+    assert!(manager.has_external_auth());
+    assert!(manager.auth_cached().is_some());
+
+    let alias_home = codex_home.path().join("accounts").join("work");
+    manager
+        .set_auth_storage_selection(alias_home, AuthCredentialsStoreMode::Auto)
+        .await;
+
+    assert!(!manager.has_external_auth());
+    assert_eq!(manager.auth_cached(), None);
+
+    let auth = external_chatgpt_auth(WORKSPACE_ID_ALLOWED);
+    manager
+        .set_external_auth(Arc::new(StaticExternalAuth(auth)))
+        .await
+        .expect("external auth should reinstall");
+    assert!(manager.has_external_auth());
+
+    let selected_home = manager.auth_storage_home();
+    let selected_store_mode = manager.auth_credentials_store_mode();
+    manager
+        .set_auth_storage_selection(selected_home, selected_store_mode)
+        .await;
+
+    assert!(!manager.has_external_auth());
+    assert_eq!(manager.auth_cached(), None);
+}
+
+#[tokio::test]
+async fn external_chatgpt_auth_mirrors_to_selected_storage_home() {
+    let codex_home = tempdir().expect("tempdir");
+    let alias_home = codex_home.path().join("accounts").join("work");
+    let manager = AuthManager::new(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
+    )
+    .await;
+    manager
+        .set_auth_storage_selection(alias_home.clone(), AuthCredentialsStoreMode::Auto)
+        .await;
+    let auth = external_chatgpt_auth(WORKSPACE_ID_ALLOWED);
+
+    manager
+        .set_external_auth(Arc::new(StaticExternalAuth(auth)))
+        .await
+        .expect("external auth should install");
+
+    let root_auth = CodexAuth::from_auth_storage(
+        codex_home.path(),
+        AuthCredentialsStoreMode::Ephemeral,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
+    )
+    .await
+    .expect("load root auth");
+    let alias_auth = CodexAuth::from_auth_storage(
+        &alias_home,
+        AuthCredentialsStoreMode::Ephemeral,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
+    )
+    .await
+    .expect("load alias auth")
+    .expect("alias external auth");
+
+    assert_eq!(root_auth, None);
+    assert_eq!(
+        alias_auth.get_account_id().as_deref(),
+        Some(WORKSPACE_ID_ALLOWED)
+    );
+}
+
+#[tokio::test]
+async fn rejected_external_refresh_does_not_replace_current_auth() {
+    let codex_home = tempdir().expect("tempdir");
+    let manager = AuthManager::new(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
+    )
+    .await;
+    let accepted = external_chatgpt_auth(WORKSPACE_ID_ALLOWED);
+    let rejected = external_chatgpt_auth(WORKSPACE_ID_DISALLOWED);
+    let external_auth = Arc::new(MutableExternalAuth::new(accepted.clone(), rejected));
+    manager
+        .set_external_auth(external_auth.clone())
+        .await
+        .expect("external auth should install");
+
+    let err = manager
+        .refresh_token_from_authority()
+        .await
+        .expect_err("disallowed external refresh should fail");
+    assert!(
+        err.to_string().contains(WORKSPACE_ID_DISALLOWED),
+        "unexpected error: {err}"
+    );
+    assert_eq!(manager.auth_cached(), Some(accepted.clone()));
+    assert_eq!(
+        external_auth.resolve().await.expect("resolve current auth"),
+        accepted
+    );
 }
 
 struct ProviderAuthScript {

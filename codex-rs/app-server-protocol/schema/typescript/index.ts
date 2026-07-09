@@ -37,6 +37,7 @@ export type { GitDiffToRemoteParams } from "./GitDiffToRemoteParams";
 export type { GitDiffToRemoteResponse } from "./GitDiffToRemoteResponse";
 export type { GitSha } from "./GitSha";
 export type { ImageDetail } from "./ImageDetail";
+export type { ImageGenerationItem } from "./ImageGenerationItem";
 export type { InitializeCapabilities } from "./InitializeCapabilities";
 export type { InitializeParams } from "./InitializeParams";
 export type { InitializeResponse } from "./InitializeResponse";
@@ -84,6 +85,7 @@ export type { UserPreferencesMemoryBucketPolicy } from "./UserPreferencesMemoryB
 export type { Verbosity } from "./Verbosity";
 export type { WebSearchAction } from "./WebSearchAction";
 export type { WebSearchContextSize } from "./WebSearchContextSize";
+export type { WebSearchItem } from "./WebSearchItem";
 export type { WebSearchLocation } from "./WebSearchLocation";
 export type { WebSearchMode } from "./WebSearchMode";
 export type { WebSearchToolConfig } from "./WebSearchToolConfig";

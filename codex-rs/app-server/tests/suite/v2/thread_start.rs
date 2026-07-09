@@ -99,7 +99,10 @@ async fn thread_start_provider_model_fallback_applies_to_configured_model() -> R
 model = "gpt-5.4-mini"
 "#,
     )?;
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -122,7 +125,10 @@ model = "gpt-5.4-mini"
 #[tokio::test]
 async fn thread_start_warns_for_exec_policy_parse_failure_after_initialize() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let rules_dir = codex_home.path().join("rules");
@@ -200,7 +206,10 @@ async fn thread_start_does_not_repeat_initialize_exec_policy_warning() -> Result
     std::fs::create_dir_all(&rules_dir)?;
     std::fs::write(rules_dir.join("broken.rules"), "prefix_rule(")?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -245,7 +254,10 @@ async fn thread_start_provider_model_fallback_uses_bedrock_static_catalog() -> R
         r#"model_provider = "amazon-bedrock"
 "#,
     )?;
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let unsupported_with_fallback = start_thread_with_model(
@@ -283,7 +295,10 @@ async fn thread_start_provider_model_fallback_ignores_dynamic_catalog() -> Resul
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let response = start_thread_with_model(
@@ -306,7 +321,10 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
 
     // Start server and initialize.
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a v2 thread with an explicit model override.
@@ -453,7 +471,10 @@ async fn thread_start_history_mode_accepts_legacy_and_rejects_paginated() -> Res
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -502,11 +523,14 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
     let extra_root = cwd.join("extra-root");
     std::fs::create_dir_all(&extra_root)?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(cwd.to_string_lossy().to_string()),
             runtime_workspace_roots: Some(vec![extra_root.abs()]),
             ..Default::default()
@@ -543,11 +567,14 @@ async fn thread_start_excludes_profile_workspace_roots_from_runtime_workspace_ro
         profile_root.path(),
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(cwd.path().to_string_lossy().to_string()),
             ..Default::default()
         })
@@ -578,7 +605,10 @@ async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -657,13 +687,17 @@ async fn thread_start_rejects_relative_environment_cwd_as_invalid_request() -> R
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let environment_id = mcp.auto_env_params()?.environment_id;
 
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
             environments: Some(vec![TurnEnvironmentParams {
-                environment_id: "local".to_string(),
+                environment_id: environment_id.clone(),
                 cwd: serde_json::from_value(json!("relative"))?,
             }]),
             ..Default::default()
@@ -679,7 +713,9 @@ async fn thread_start_rejects_relative_environment_cwd_as_invalid_request() -> R
     assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
     assert_eq!(
         error.error.message,
-        "invalid cwd for environment `local`: path `relative` does not use absolute POSIX or Windows path syntax"
+        format!(
+            "invalid cwd for environment `{environment_id}`: path `relative` does not use absolute POSIX or Windows path syntax"
+        )
     );
 
     Ok(())
@@ -696,7 +732,12 @@ async fn thread_start_response_includes_loaded_instruction_sources() -> Result<(
     let project_agents_path = workspace.path().join("AGENTS.md");
     std::fs::write(&project_agents_path, "project instructions")?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        // TODO(anp): Move the instruction-source fixture into the auto environment cwd.
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -743,7 +784,12 @@ async fn thread_start_response_excludes_empty_project_instruction_source() -> Re
     let project_agents_path = workspace.path().join("AGENTS.md");
     std::fs::write(project_agents_path, "")?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        // TODO(anp): Move the instruction-source fixture into the auto environment cwd.
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -786,7 +832,10 @@ async fn thread_start_without_selected_environment_includes_only_global_instruct
     let workspace = TempDir::new()?;
     std::fs::write(workspace.path().join("AGENTS.md"), "project instructions")?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -876,11 +925,15 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
     create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
     mount_analytics_capture(&server, codex_home.path()).await?;
 
-    let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_managed_config()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             thread_source: Some(ThreadSource::User),
             service_name: Some("codex_work_desktop".to_string()),
             ..Default::default()
@@ -926,11 +979,14 @@ model_reasoning_effort = "high"
     )?;
     set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(workspace.path().to_string_lossy().into_owned()),
             ..Default::default()
         })
@@ -956,7 +1012,10 @@ async fn thread_start_drops_unsupported_service_tier_id() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let service_tier_id = "experimental-tier-id".to_string();
@@ -986,7 +1045,10 @@ async fn thread_start_accepts_default_service_tier() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
@@ -1017,7 +1079,10 @@ async fn thread_start_accepts_metrics_service_name() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
@@ -1044,7 +1109,10 @@ async fn thread_start_ephemeral_remains_pathless() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
@@ -1090,7 +1158,10 @@ async fn thread_start_fails_when_required_mcp_server_fails_to_initialize() -> Re
     let codex_home = TempDir::new()?;
     create_config_toml_with_required_broken_mcp(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
@@ -1126,7 +1197,10 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
     let codex_home = TempDir::new()?;
     create_config_toml_with_optional_broken_mcp(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
@@ -1260,21 +1334,21 @@ async fn thread_start_surfaces_cloud_config_bundle_load_errors() -> Result<()> {
     )?;
 
     let refresh_token_url = format!("{}/oauth/token", server.uri());
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[
             ("OPENAI_API_KEY", None),
             (
                 REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
                 Some(refresh_token_url.as_str()),
             ),
-        ],
-    )
-    .await?;
+        ])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
 
     let err: JSONRPCError = timeout(
@@ -1320,11 +1394,14 @@ model_reasoning_effort = "high"
 "#,
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let first_request = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
             sandbox: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()
@@ -1337,7 +1414,7 @@ model_reasoning_effort = "high"
     .await??;
 
     let second_request = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
             ..Default::default()
         })
@@ -1380,11 +1457,14 @@ async fn thread_start_with_nested_git_cwd_trusts_repo_root() -> Result<()> {
     let nested = repo_root.path().join("nested/project");
     std::fs::create_dir_all(&nested)?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(nested.display().to_string()),
             sandbox: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()
@@ -1418,11 +1498,14 @@ async fn thread_start_with_read_only_sandbox_does_not_persist_project_trust() ->
 
     let workspace = TempDir::new()?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
             ..Default::default()
         })
@@ -1456,11 +1539,14 @@ async fn thread_start_preserves_untrusted_project_trust() -> Result<()> {
     std::fs::write(&config_path, config_toml.to_string())?;
     let config_before = std::fs::read_to_string(&config_path)?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
             sandbox: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()
@@ -1497,11 +1583,14 @@ model_reasoning_effort = "high"
     set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
     let config_before = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
             sandbox: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()

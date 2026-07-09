@@ -4,6 +4,7 @@ use crate::CodexThread;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::codex_thread::TryStartTurnIfIdleRejectionReason;
 use crate::config::ConfigBuilder;
+use crate::config::ConfigOverrides;
 use crate::config::test_config;
 use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
@@ -71,6 +72,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -121,6 +123,8 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::UserPreferencesMemoryBucket;
 use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
+use codex_protocol::items::HookPromptFragment;
+use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
@@ -283,6 +287,24 @@ fn assign_missing_response_item_ids_assigns_additional_tools_ids() {
     let items = Session::assign_missing_response_item_ids(items);
 
     assert!(items[0].id().is_some_and(|id| id.starts_with("at_")));
+}
+
+#[tokio::test]
+async fn paginated_turn_context_assigns_missing_response_item_ids_without_feature() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.history_mode = ThreadHistoryMode::Paginated;
+    let response_item = user_message("hello");
+
+    let items = session.prepare_conversation_items_for_history(
+        &turn_context,
+        std::slice::from_ref(&response_item),
+    );
+
+    assert!(
+        items[0]
+            .id()
+            .is_some_and(|item_id| item_id.starts_with("msg_"))
+    );
 }
 
 fn assistant_message(text: &str) -> ResponseItem {
@@ -1337,7 +1359,7 @@ async fn get_base_instructions_no_user_content() {
             expects_apply_patch_description: false,
         },
         InstructionsTestCase {
-            slug: "gpt-5.3-codex",
+            slug: "gpt-5.5",
             expects_apply_patch_description: false,
         },
         InstructionsTestCase {
@@ -1931,6 +1953,44 @@ async fn record_conversation_items_stamps_missing_turn_id_and_preserves_existing
         session.clone_history().await.raw_items(),
         expected_items.as_slice()
     );
+}
+
+#[tokio::test]
+async fn record_response_item_and_emit_turn_item_emits_hook_prompt_lifecycle() {
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    let response_item = build_hook_prompt_message(&[HookPromptFragment::from_single_hook(
+        "Retry with tests.",
+        "hook-run-1",
+    )])
+    .expect("hook prompt message");
+    let response_item_id = response_item.id().expect("hook prompt id").to_string();
+
+    session
+        .record_response_item_and_emit_turn_item(&turn_context, response_item)
+        .await;
+
+    let raw_response = rx.recv().await.expect("raw response item event");
+    assert!(matches!(raw_response.msg, EventMsg::RawResponseItem(_)));
+
+    let started = rx.recv().await.expect("started hook prompt event");
+    assert!(matches!(
+        started.msg,
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::HookPrompt(item),
+            ..
+        }) if item.id == response_item_id
+    ));
+
+    let completed = rx.recv().await.expect("completed hook prompt event");
+    assert!(matches!(
+        completed.msg,
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::HookPrompt(item),
+            ..
+        }) if item.id == response_item_id
+    ));
+
+    assert!(rx.try_recv().is_err(), "no extra events expected");
 }
 
 #[tokio::test]
@@ -3233,6 +3293,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
+        approvals_reviewer: None,
         sandbox_policy: turn_context.sandbox_policy(),
         permission_profile: None,
         network: None,
@@ -4611,6 +4672,10 @@ fn text_block(s: &str) -> serde_json::Value {
 async fn build_test_config(codex_home: &Path) -> Config {
     ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            model: Some("gpt-5.5".to_string()),
+            ..Default::default()
+        })
         .build()
         .await
         .expect("load default test config")
@@ -9980,102 +10045,6 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
 }
 
 #[tokio::test]
-async fn handle_output_item_done_records_image_save_history_message() {
-    let (session, turn_context) = make_session_and_context().await;
-    let session = Arc::new(session);
-    let turn_context = Arc::new(turn_context);
-    let call_id = "ig_history_records_message";
-    let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
-        &turn_context.config.codex_home,
-        &session.thread_id.to_string(),
-        call_id,
-    );
-    let _ = std::fs::remove_file(&expected_saved_path);
-    let item = ResponseItem::ImageGenerationCall {
-        id: Some(call_id.to_string()),
-        status: "completed".to_string(),
-        revised_prompt: Some("a tiny blue square".to_string()),
-        result: "Zm9v".to_string(),
-        internal_chat_message_metadata_passthrough: None,
-    };
-
-    let mut ctx = HandleOutputCtx {
-        sess: Arc::clone(&session),
-        turn_context: Arc::clone(&turn_context),
-        turn_store: Arc::new(codex_extension_api::ExtensionData::new(
-            turn_context.sub_id.clone(),
-        )),
-        tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
-        cancellation_token: CancellationToken::new(),
-    };
-    handle_output_item_done(&mut ctx, item.clone(), /*previously_active_item*/ None)
-        .await
-        .expect("image generation item should succeed");
-
-    let history = session.clone_history().await;
-    let image_output_path = crate::stream_events_utils::image_generation_artifact_path(
-        &turn_context.config.codex_home,
-        &session.thread_id.to_string(),
-        "<image_id>",
-    );
-    let image_output_dir = image_output_path
-        .parent()
-        .expect("generated image path should have a parent");
-    let image_message: ResponseItem = crate::context::ContextualUserFragment::into(
-        crate::context::ImageGenerationInstructions::new(
-            image_output_dir.display(),
-            image_output_path.display(),
-        ),
-    );
-    let expected = vec![image_message, item];
-    assert_eq!(strip_metadata_from_items(history.raw_items()), expected);
-    assert_eq!(
-        std::fs::read(&expected_saved_path).expect("saved file"),
-        b"foo"
-    );
-    let _ = std::fs::remove_file(&expected_saved_path);
-}
-
-#[tokio::test]
-async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
-    let (session, turn_context) = make_session_and_context().await;
-    let session = Arc::new(session);
-    let turn_context = Arc::new(turn_context);
-    let call_id = "ig_history_no_message";
-    let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
-        &turn_context.config.codex_home,
-        &session.thread_id.to_string(),
-        call_id,
-    );
-    let _ = std::fs::remove_file(&expected_saved_path);
-    let item = ResponseItem::ImageGenerationCall {
-        id: Some(call_id.to_string()),
-        status: "completed".to_string(),
-        revised_prompt: Some("broken payload".to_string()),
-        result: "_-8".to_string(),
-        internal_chat_message_metadata_passthrough: None,
-    };
-
-    let mut ctx = HandleOutputCtx {
-        sess: Arc::clone(&session),
-        turn_context: Arc::clone(&turn_context),
-        turn_store: Arc::new(codex_extension_api::ExtensionData::new(
-            turn_context.sub_id.clone(),
-        )),
-        tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
-        cancellation_token: CancellationToken::new(),
-    };
-    handle_output_item_done(&mut ctx, item.clone(), /*previously_active_item*/ None)
-        .await
-        .expect("image generation item should still complete");
-
-    let history = session.clone_history().await;
-    let expected = vec![item];
-    assert_eq!(strip_metadata_from_items(history.raw_items()), expected);
-    assert!(!expected_saved_path.exists());
-}
-
-#[tokio::test]
 async fn build_initial_context_uses_previous_turn_settings_for_realtime_end() {
     let (session, turn_context) = make_session_and_context().await;
     let previous_turn_settings = PreviousTurnSettings {
@@ -11105,18 +11074,13 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_mcp_inv
 #[tokio::test]
 async fn record_context_updates_and_set_reference_context_item_persists_baseline_without_emitting_diffs()
  {
-    let (mut session, previous_context) = make_session_and_context().await;
-    let next_model = if previous_context.model_info.slug == "gpt-5.4" {
-        "gpt-5.2"
-    } else {
-        "gpt-5.4"
-    };
-    let turn_context = previous_context
-        .with_model(next_model.to_string(), &session.services.models_manager)
-        .await;
-    let previous_context_item = previous_context.to_turn_context_item();
-    let previous_context = Arc::new(previous_context);
+    let (mut session, turn_context) = make_session_and_context().await;
+    let previous_context_item = turn_context.to_turn_context_item();
+    let previous_context = Arc::new(turn_context);
     let world_state = build_world_state_from_turn_context(&session, &previous_context).await;
+    let mut turn_context = Arc::try_unwrap(previous_context)
+        .unwrap_or_else(|_| panic!("previous turn context should have no remaining references"));
+    turn_context.sub_id = format!("{}-next", turn_context.sub_id);
     {
         let mut state = session.state.lock().await;
         state.set_reference_context_item(Some(previous_context_item.clone()));
