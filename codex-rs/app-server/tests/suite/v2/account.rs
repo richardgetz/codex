@@ -59,6 +59,7 @@ use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 const LOGIN_ISSUER_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
+const LOGIN_OPEN_APP_URL_ENV_VAR: &str = "CODEX_APP_SERVER_DEV_OPEN_APP_URL";
 const WORKSPACE_ID_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174000";
 const WORKSPACE_ID_SECOND_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174001";
 const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
@@ -184,7 +185,7 @@ async fn mock_device_code_token_failure(server: &MockServer, status: u16) {
         .await;
 }
 
-async fn mock_device_code_oauth_token(server: &MockServer, id_token: &str) {
+async fn mock_oauth_token(server: &MockServer, id_token: &str) {
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -209,8 +210,12 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
     )?;
     assert!(codex_home.path().join("auth.json").exists());
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let id = mcp.send_logout_account_request().await?;
@@ -278,8 +283,12 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
             .chatgpt_account_id(WORKSPACE_ID_EMBEDDED),
     )?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
@@ -338,6 +347,27 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
         }
     );
 
+    let logout_id = mcp.send_logout_account_request().await?;
+    let logout_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(logout_id)),
+    )
+    .await??;
+    let _: LogoutAccountResponse = to_response(logout_resp)?;
+
+    let get_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let get_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(get_id)),
+    )
+    .await??;
+    let account: GetAccountResponse = to_response(get_resp)?;
+    assert_eq!(account.account, None);
+
     Ok(())
 }
 
@@ -394,8 +424,12 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
             .chatgpt_account_id(WORKSPACE_ID_EMBEDDED),
     )?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
@@ -520,8 +554,11 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
             .chatgpt_account_id(WORKSPACE_ID_REFRESHED),
     )?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
@@ -545,7 +582,7 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
     .await??;
 
     let thread_req = mcp
-        .send_thread_start_request(codex_app_server_protocol::ThreadStartParams {
+        .send_thread_start_request_with_auto_env(codex_app_server_protocol::ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -628,8 +665,11 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
             .chatgpt_account_id(WORKSPACE_ID_INITIAL),
     )?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
@@ -653,7 +693,7 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
     .await??;
 
     let thread_req = mcp
-        .send_thread_start_request(codex_app_server_protocol::ThreadStartParams {
+        .send_thread_start_request_with_auto_env(codex_app_server_protocol::ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -752,8 +792,11 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
             .chatgpt_account_id(WORKSPACE_ID_DISALLOWED),
     )?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
@@ -777,7 +820,7 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
     .await??;
 
     let thread_req = mcp
-        .send_thread_start_request(codex_app_server_protocol::ThreadStartParams {
+        .send_thread_start_request_with_auto_env(codex_app_server_protocol::ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -869,8 +912,11 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
             .chatgpt_account_id(WORKSPACE_ID_INITIAL),
     )?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
@@ -894,7 +940,7 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
     .await??;
 
     let thread_req = mcp
-        .send_thread_start_request(codex_app_server_protocol::ThreadStartParams {
+        .send_thread_start_request_with_auto_env(codex_app_server_protocol::ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -963,7 +1009,11 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
@@ -1018,7 +1068,11 @@ async fn login_account_api_key_rejected_when_forced_chatgpt() -> Result<()> {
         },
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1048,7 +1102,11 @@ async fn login_account_chatgpt_rejected_when_forced_api() -> Result<()> {
         },
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_request().await?;
@@ -1081,14 +1139,15 @@ async fn login_account_chatgpt_device_code_returns_error_when_disabled() -> Resu
     mock_device_code_usercode_failure(&mock_server, /*status*/ 404).await;
 
     let issuer = mock_server.uri();
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
             ("OPENAI_API_KEY", None),
             (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
-        ],
-    )
-    .await?;
+        ])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
@@ -1143,17 +1202,18 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
             .plan_type("pro")
             .chatgpt_account_id(WORKSPACE_ID_DEVICE),
     )?;
-    mock_device_code_oauth_token(&mock_server, &id_token).await;
+    mock_oauth_token(&mock_server, &id_token).await;
 
     let issuer = mock_server.uri();
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
             ("OPENAI_API_KEY", None),
             (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
-        ],
-    )
-    .await?;
+        ])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
@@ -1223,14 +1283,15 @@ async fn login_account_chatgpt_device_code_failure_notifies_without_account_upda
     mock_device_code_token_failure(&mock_server, /*status*/ 500).await;
 
     let issuer = mock_server.uri();
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
             ("OPENAI_API_KEY", None),
             (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
-        ],
-    )
-    .await?;
+        ])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
@@ -1298,14 +1359,15 @@ async fn login_account_chatgpt_device_code_can_be_cancelled() -> Result<()> {
     mock_device_code_token_failure(&mock_server, /*status*/ 404).await;
 
     let issuer = mock_server.uri();
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
             ("OPENAI_API_KEY", None),
             (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
-        ],
-    )
-    .await?;
+        ])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
@@ -1371,7 +1433,11 @@ async fn login_account_chatgpt_start_can_be_cancelled() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_request().await?;
@@ -1437,14 +1503,15 @@ async fn login_account_chatgpt_uses_debug_oauth_overrides() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
             (CLIENT_ID_OVERRIDE_ENV_VAR, Some("staging-client")),
             (LOGIN_ISSUER_ENV_VAR, Some("https://auth.example.com")),
-        ],
-    )
-    .await?;
+        ])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_request().await?;
@@ -1485,11 +1552,87 @@ async fn login_account_chatgpt_uses_debug_oauth_overrides() -> Result<()> {
 #[tokio::test]
 // Serialize tests that launch the login server since it binds to a fixed port.
 #[serial(login_port)]
+async fn login_account_chatgpt_redirects_to_hosted_success_page() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    let mock_server = MockServer::start().await;
+    let id_token = encode_id_token(
+        &ChatGptIdTokenClaims::new()
+            .email("hosted@example.com")
+            .plan_type("pro")
+            .chatgpt_account_id(WORKSPACE_ID_EMBEDDED),
+    )?;
+    mock_oauth_token(&mock_server, &id_token).await;
+    let issuer = mock_server.uri();
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
+            (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
+            (
+                LOGIN_OPEN_APP_URL_ENV_VAR,
+                Some("http://localhost:3000/codex/open-app"),
+            ),
+        ])
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_login_account_request(json!({
+            "type": "chatgpt",
+            "appBrand": "chatgpt",
+            "useHostedLoginSuccessPage": true,
+        }))
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let login: LoginAccountResponse = to_response(resp)?;
+    let LoginAccountResponse::Chatgpt { auth_url, .. } = login else {
+        bail!("unexpected login response: {login:?}");
+    };
+    let auth_url = Url::parse(&auth_url)?;
+    let callback_url = auth_url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "redirect_uri").then(|| value.into_owned()))
+        .ok_or_else(|| anyhow::anyhow!("missing redirect_uri"))?;
+    let state = auth_url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+        .ok_or_else(|| anyhow::anyhow!("missing state"))?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+
+    let response = client
+        .get(format!("{callback_url}?code=test-code&state={state}"))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), 302);
+    assert_eq!(
+        response.headers()["location"].to_str()?,
+        "http://localhost:3000/codex/open-app?source=login&app_brand=chatgpt"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+// Serialize tests that launch the login server since it binds to a fixed port.
+#[serial(login_port)]
 async fn set_auth_token_cancels_active_chatgpt_login() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Initiate the ChatGPT login flow
@@ -1564,7 +1707,11 @@ async fn login_account_chatgpt_includes_forced_workspace_query_param() -> Result
         },
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_request().await?;
@@ -1601,7 +1748,11 @@ async fn login_account_chatgpt_includes_forced_workspace_allowlist_query_param()
         },
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_request().await?;
@@ -1640,8 +1791,12 @@ async fn get_account_no_auth() -> Result<()> {
         },
     )?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let params = GetAccountParams {
@@ -1672,7 +1827,11 @@ async fn get_account_with_api_key() -> Result<()> {
         },
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
@@ -1716,7 +1875,11 @@ async fn get_account_when_auth_not_required() -> Result<()> {
         },
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let params = GetAccountParams {
@@ -1757,7 +1920,11 @@ region = "us-west-2"
         },
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let params = GetAccountParams {
@@ -1800,7 +1967,11 @@ async fn get_account_with_managed_bedrock_provider() -> Result<()> {
         AuthKeyringBackendKind::default(),
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1845,8 +2016,12 @@ async fn get_account_with_chatgpt() -> Result<()> {
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let params = GetAccountParams {
@@ -1888,8 +2063,12 @@ async fn get_account_with_chatgpt_without_email() -> Result<()> {
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1951,17 +2130,18 @@ async fn get_account_omits_chatgpt_after_permanent_refresh_failure() -> Result<(
         .await;
 
     let refresh_url = format!("{}/oauth/token", server.uri());
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
             ("OPENAI_API_KEY", None),
             (
                 REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
                 Some(refresh_url.as_str()),
             ),
-        ],
-    )
-    .await?;
+        ])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let auth_status_request_id = mcp
@@ -2017,8 +2197,12 @@ async fn get_account_with_chatgpt_missing_plan_claim_returns_unknown() -> Result
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let params = GetAccountParams {

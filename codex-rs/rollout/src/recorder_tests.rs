@@ -90,6 +90,7 @@ fn rollout_message(role: &str, text: &str) -> ResponseItem {
         role: role.to_string(),
         content,
         phase: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -137,6 +138,10 @@ async fn fast_resume_loads_latest_compaction_tail_without_old_heavy_events() -> 
         RolloutItem::Compacted(CompactedItem {
             message: "summary checkpoint".to_string(),
             replacement_history: Some(vec![rollout_message("user", "compacted baseline")]),
+            window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
+            window_id: None,
         }),
     )?;
     write_rollout_line(
@@ -1311,6 +1316,7 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             permission_profile: None,
             network: None,

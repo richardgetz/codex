@@ -235,6 +235,7 @@ fn turn_context_item_does_not_seed_unknown_environment_id() {
         current_date: Some("2026-06-26".to_string()),
         timezone: Some("America/New_York".to_string()),
         approval_policy: codex_protocol::protocol::AskForApproval::Never,
+        approvals_reviewer: None,
         sandbox_policy: codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
         permission_profile: None,
         network: None,

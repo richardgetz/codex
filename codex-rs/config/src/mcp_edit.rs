@@ -214,6 +214,7 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
         entry["default_tools_approval_mode"] = value(match approval_mode {
             AppToolApproval::Auto => "auto",
             AppToolApproval::Prompt => "prompt",
+            AppToolApproval::Writes => "writes",
             AppToolApproval::Approve => "approve",
         });
     }
@@ -258,6 +259,7 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
                 tool_entry["approval_mode"] = value(match approval_mode {
                     AppToolApproval::Auto => "auto",
                     AppToolApproval::Prompt => "prompt",
+                    AppToolApproval::Writes => "writes",
                     AppToolApproval::Approve => "approve",
                 });
             }
