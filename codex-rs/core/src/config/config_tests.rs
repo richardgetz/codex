@@ -1693,12 +1693,14 @@ output_usd_per_1m = 20.0
         &codex_config::types::TuiStatusTokenUsageRate {
             input_usd_per_1m: 2.0,
             cached_input_usd_per_1m: 0.5,
+            cache_write_usd_per_1m: 0.0,
             output_usd_per_1m: 8.0,
             service_tiers: std::collections::BTreeMap::from([(
                 "priority".to_string(),
                 codex_config::types::TuiStatusTokenUsageServiceTierRate {
                     input_usd_per_1m: 5.0,
                     cached_input_usd_per_1m: 1.0,
+                    cache_write_usd_per_1m: 0.0,
                     output_usd_per_1m: 20.0,
                 },
             )]),

@@ -14,6 +14,7 @@ pub(crate) struct StatusTokenUsageCostData {
     total_tokens: i64,
     input_tokens: i64,
     cached_input_tokens: i64,
+    cache_write_tokens: i64,
     billable_input_tokens: i64,
     output_tokens: i64,
     reasoning_output_tokens: i64,
@@ -31,6 +32,7 @@ struct StatusTokenUsageCostBreakdown {
 struct ResolvedRate {
     input_usd_per_1m: f64,
     cached_input_usd_per_1m: f64,
+    cache_write_usd_per_1m: f64,
     output_usd_per_1m: f64,
 }
 
@@ -45,9 +47,8 @@ pub(crate) fn compose_status_token_usage_cost(
         return None;
     }
 
-    let input_tokens = usage.input_tokens.max(0);
-    let cached_input_tokens = usage.cached_input().min(input_tokens);
-    let billable_input_tokens = (input_tokens - cached_input_tokens).max(0);
+    let (input_tokens, cached_input_tokens, cache_write_tokens, billable_input_tokens) =
+        input_token_breakdown(usage);
     let output_tokens = usage.output_tokens.max(0);
     let reasoning_output_tokens = usage.reasoning_output_tokens.max(0).min(output_tokens);
     let total_tokens = input_tokens.saturating_add(output_tokens);
@@ -63,6 +64,7 @@ pub(crate) fn compose_status_token_usage_cost(
         total_tokens,
         input_tokens,
         cached_input_tokens,
+        cache_write_tokens,
         billable_input_tokens,
         output_tokens,
         reasoning_output_tokens,
@@ -86,9 +88,13 @@ impl StatusTokenUsageCostData {
             Span::from(" total, "),
             Span::from(format_token_count(self.cached_input_tokens)),
             Span::from(" cached, "),
-            Span::from(format_token_count(self.billable_input_tokens)),
-            Span::from(" billable"),
         ];
+        if self.cache_write_tokens > 0 {
+            spans.push(Span::from(format_token_count(self.cache_write_tokens)));
+            spans.push(Span::from(" cache writes, "));
+        }
+        spans.push(Span::from(format_token_count(self.billable_input_tokens)));
+        spans.push(Span::from(" billable"));
         push_optional_cost(&mut spans, self.cost.as_ref().map(|cost| cost.input_usd));
         spans
     }
@@ -136,6 +142,21 @@ fn format_token_count(tokens: i64) -> String {
 
 fn cost_for_tokens(tokens: i64, usd_per_1m: f64) -> f64 {
     tokens.max(0) as f64 * usd_per_1m / TOKENS_PER_MILLION
+}
+
+fn input_token_breakdown(usage: &TokenUsage) -> (i64, i64, i64, i64) {
+    let input_tokens = usage.input_tokens.max(0);
+    let cached_input_tokens = usage.cached_input().max(0).min(input_tokens);
+    let non_cached_input_tokens = input_tokens - cached_input_tokens;
+    let cache_write_tokens = usage.cache_write_tokens.max(0).min(non_cached_input_tokens);
+    let billable_input_tokens = non_cached_input_tokens - cache_write_tokens;
+
+    (
+        input_tokens,
+        cached_input_tokens,
+        cache_write_tokens,
+        billable_input_tokens,
+    )
 }
 
 fn cost_for_usage_by_service_tier(
@@ -196,12 +217,12 @@ impl StatusTokenUsageCostBreakdown {
 }
 
 fn cost_for_usage(usage: &TokenUsage, rate: ResolvedRate) -> StatusTokenUsageCostBreakdown {
-    let input_tokens = usage.input_tokens.max(0);
-    let cached_input_tokens = usage.cached_input().min(input_tokens);
-    let billable_input_tokens = (input_tokens - cached_input_tokens).max(0);
+    let (_, cached_input_tokens, cache_write_tokens, billable_input_tokens) =
+        input_token_breakdown(usage);
     let output_tokens = usage.output_tokens.max(0);
     let input_usd = cost_for_tokens(billable_input_tokens, rate.input_usd_per_1m)
-        + cost_for_tokens(cached_input_tokens, rate.cached_input_usd_per_1m);
+        + cost_for_tokens(cached_input_tokens, rate.cached_input_usd_per_1m)
+        + cost_for_tokens(cache_write_tokens, rate.cache_write_usd_per_1m);
     let output_usd = cost_for_tokens(output_tokens, rate.output_usd_per_1m);
     StatusTokenUsageCostBreakdown {
         total_usd: input_usd + output_usd,
@@ -213,6 +234,7 @@ fn cost_for_usage(usage: &TokenUsage, rate: ResolvedRate) -> StatusTokenUsageCos
 fn add_usage(total: &mut TokenUsage, usage: &TokenUsage) {
     total.input_tokens += usage.input_tokens;
     total.cached_input_tokens += usage.cached_input_tokens;
+    total.cache_write_tokens += usage.cache_write_tokens;
     total.output_tokens += usage.output_tokens;
     total.reasoning_output_tokens += usage.reasoning_output_tokens;
     total.total_tokens += usage.total_tokens;
@@ -222,6 +244,7 @@ fn unbucketed_usage(total: &TokenUsage, covered: &TokenUsage) -> TokenUsage {
     TokenUsage {
         input_tokens: (total.input_tokens - covered.input_tokens).max(0),
         cached_input_tokens: (total.cached_input_tokens - covered.cached_input_tokens).max(0),
+        cache_write_tokens: (total.cache_write_tokens - covered.cache_write_tokens).max(0),
         output_tokens: (total.output_tokens - covered.output_tokens).max(0),
         reasoning_output_tokens: (total.reasoning_output_tokens - covered.reasoning_output_tokens)
             .max(0),
@@ -255,6 +278,11 @@ fn built_in_rate_for_model(
     }
 
     let model = model.to_ascii_lowercase();
+    let service_tier = if is_standard_service_tier(service_tier) {
+        TOKEN_USAGE_STANDARD_SERVICE_TIER
+    } else {
+        service_tier
+    };
     match (model.as_str(), service_tier) {
         // Keep this table aligned with public OpenAI API processing rates.
         // Unknown or newly added models still render tokens without cost until rates
@@ -283,6 +311,20 @@ fn built_in_rate_for_model(
             /*input_usd_per_1m*/ 5.0, /*cached_input_usd_per_1m*/ 0.50,
             /*output_usd_per_1m*/ 30.0,
         )),
+        ("gpt-5.6" | "gpt-5.6-sol", TOKEN_USAGE_STANDARD_SERVICE_TIER) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 5.0, /*cached_input_usd_per_1m*/ 0.50,
+                /*cache_write_usd_per_1m*/ 6.25, /*output_usd_per_1m*/ 30.0,
+            ))
+        }
+        ("gpt-5.6-terra", TOKEN_USAGE_STANDARD_SERVICE_TIER) => Some(rate_with_cache_write(
+            /*input_usd_per_1m*/ 2.50, /*cached_input_usd_per_1m*/ 0.25,
+            /*cache_write_usd_per_1m*/ 3.125, /*output_usd_per_1m*/ 15.0,
+        )),
+        ("gpt-5.6-luna", TOKEN_USAGE_STANDARD_SERVICE_TIER) => Some(rate_with_cache_write(
+            /*input_usd_per_1m*/ 1.0, /*cached_input_usd_per_1m*/ 0.10,
+            /*cache_write_usd_per_1m*/ 1.25, /*output_usd_per_1m*/ 6.0,
+        )),
         ("gpt-5.4", "priority") => Some(rate(
             /*input_usd_per_1m*/ 5.0, /*cached_input_usd_per_1m*/ 0.50,
             /*output_usd_per_1m*/ 30.0,
@@ -294,6 +336,18 @@ fn built_in_rate_for_model(
         ("gpt-5.5", "priority") => Some(rate(
             /*input_usd_per_1m*/ 12.50, /*cached_input_usd_per_1m*/ 1.25,
             /*output_usd_per_1m*/ 75.0,
+        )),
+        ("gpt-5.6" | "gpt-5.6-sol", "priority") => Some(rate_with_cache_write(
+            /*input_usd_per_1m*/ 10.0, /*cached_input_usd_per_1m*/ 1.0,
+            /*cache_write_usd_per_1m*/ 12.50, /*output_usd_per_1m*/ 60.0,
+        )),
+        ("gpt-5.6-terra", "priority") => Some(rate_with_cache_write(
+            /*input_usd_per_1m*/ 5.0, /*cached_input_usd_per_1m*/ 0.50,
+            /*cache_write_usd_per_1m*/ 6.25, /*output_usd_per_1m*/ 30.0,
+        )),
+        ("gpt-5.6-luna", "priority") => Some(rate_with_cache_write(
+            /*input_usd_per_1m*/ 2.0, /*cached_input_usd_per_1m*/ 0.20,
+            /*cache_write_usd_per_1m*/ 2.50, /*output_usd_per_1m*/ 12.0,
         )),
         ("gpt-5.4", "flex") => Some(rate(
             /*input_usd_per_1m*/ 1.25, /*cached_input_usd_per_1m*/ 0.13,
@@ -311,6 +365,18 @@ fn built_in_rate_for_model(
             /*input_usd_per_1m*/ 2.50, /*cached_input_usd_per_1m*/ 0.25,
             /*output_usd_per_1m*/ 15.0,
         )),
+        ("gpt-5.6" | "gpt-5.6-sol", "flex" | "batch") => Some(rate_with_cache_write(
+            /*input_usd_per_1m*/ 2.50, /*cached_input_usd_per_1m*/ 0.25,
+            /*cache_write_usd_per_1m*/ 3.125, /*output_usd_per_1m*/ 15.0,
+        )),
+        ("gpt-5.6-terra", "flex" | "batch") => Some(rate_with_cache_write(
+            /*input_usd_per_1m*/ 1.25, /*cached_input_usd_per_1m*/ 0.125,
+            /*cache_write_usd_per_1m*/ 1.5625, /*output_usd_per_1m*/ 7.50,
+        )),
+        ("gpt-5.6-luna", "flex" | "batch") => Some(rate_with_cache_write(
+            /*input_usd_per_1m*/ 0.50, /*cached_input_usd_per_1m*/ 0.05,
+            /*cache_write_usd_per_1m*/ 0.625, /*output_usd_per_1m*/ 3.0,
+        )),
         _ => None,
     }
 }
@@ -324,9 +390,24 @@ fn rate(
     cached_input_usd_per_1m: f64,
     output_usd_per_1m: f64,
 ) -> ResolvedRate {
+    rate_with_cache_write(
+        input_usd_per_1m,
+        cached_input_usd_per_1m,
+        /*cache_write_usd_per_1m*/ 0.0,
+        output_usd_per_1m,
+    )
+}
+
+fn rate_with_cache_write(
+    input_usd_per_1m: f64,
+    cached_input_usd_per_1m: f64,
+    cache_write_usd_per_1m: f64,
+    output_usd_per_1m: f64,
+) -> ResolvedRate {
     ResolvedRate {
         input_usd_per_1m,
         cached_input_usd_per_1m,
+        cache_write_usd_per_1m,
         output_usd_per_1m,
     }
 }
@@ -336,6 +417,7 @@ impl From<&TuiStatusTokenUsageRate> for ResolvedRate {
         Self {
             input_usd_per_1m: rate.input_usd_per_1m,
             cached_input_usd_per_1m: rate.cached_input_usd_per_1m,
+            cache_write_usd_per_1m: rate.cache_write_usd_per_1m,
             output_usd_per_1m: rate.output_usd_per_1m,
         }
     }
@@ -346,6 +428,7 @@ impl From<&TuiStatusTokenUsageServiceTierRate> for ResolvedRate {
         Self {
             input_usd_per_1m: rate.input_usd_per_1m,
             cached_input_usd_per_1m: rate.cached_input_usd_per_1m,
+            cache_write_usd_per_1m: rate.cache_write_usd_per_1m,
             output_usd_per_1m: rate.output_usd_per_1m,
         }
     }
@@ -372,6 +455,7 @@ mod tests {
         TuiStatusTokenUsageRate {
             input_usd_per_1m,
             cached_input_usd_per_1m,
+            cache_write_usd_per_1m: 0.0,
             output_usd_per_1m,
             service_tiers: BTreeMap::new(),
         }
@@ -385,6 +469,7 @@ mod tests {
         TuiStatusTokenUsageServiceTierRate {
             input_usd_per_1m,
             cached_input_usd_per_1m,
+            cache_write_usd_per_1m: 0.0,
             output_usd_per_1m,
         }
     }
@@ -398,6 +483,7 @@ mod tests {
         let usage = TokenUsage {
             input_tokens: 151_800,
             cached_input_tokens: 119_400,
+            cache_write_tokens: 0,
             output_tokens: 32_400,
             reasoning_output_tokens: 8_700,
             total_tokens: 184_200,
@@ -440,6 +526,7 @@ mod tests {
         let usage = TokenUsage {
             input_tokens: 1_000_000,
             cached_input_tokens: 250_000,
+            cache_write_tokens: 0,
             output_tokens: 500_000,
             reasoning_output_tokens: 100_000,
             total_tokens: 1_500_000,
@@ -469,6 +556,7 @@ mod tests {
         let usage = TokenUsage {
             input_tokens: 100_000,
             cached_input_tokens: 20_000,
+            cache_write_tokens: 0,
             output_tokens: 10_000,
             reasoning_output_tokens: 5_000,
             total_tokens: 110_000,
@@ -499,6 +587,45 @@ mod tests {
     }
 
     #[test]
+    fn cost_uses_gpt_5_6_cache_write_rates() {
+        let config = TuiStatusTokenUsage {
+            enabled: true,
+            model_rates: BTreeMap::new(),
+        };
+        let usage = TokenUsage {
+            input_tokens: 1_000_000,
+            cached_input_tokens: 200_000,
+            cache_write_tokens: 100_000,
+            output_tokens: 500_000,
+            reasoning_output_tokens: 100_000,
+            total_tokens: 1_500_000,
+        };
+        let usage_by_service_tier = BTreeMap::from([("flex".to_string(), usage.clone())]);
+
+        let data = compose_status_token_usage_cost(
+            &config,
+            "openai",
+            "gpt-5.6-terra",
+            &usage,
+            &usage_by_service_tier,
+        )
+        .expect("usage should render");
+
+        assert_eq!(
+            span_text(data.summary_spans()),
+            "1.5M API-equivalent tokens  ~$4.81"
+        );
+        assert_eq!(
+            span_text(data.input_spans()),
+            "1.0M total, 200.0K cached, 100.0K cache writes, 700.0K billable  ~$1.06"
+        );
+        assert_eq!(
+            span_text(data.output_spans()),
+            "500.0K total, 100.0K reasoning  ~$3.75"
+        );
+    }
+
+    #[test]
     fn configured_service_tier_rates_override_model_rates() {
         let mut custom_rate = model_rate(
             /*input*/ 2.0, /*cached_input*/ 1.0, /*output*/ 4.0,
@@ -516,6 +643,7 @@ mod tests {
         let usage = TokenUsage {
             input_tokens: 1_000_000,
             cached_input_tokens: 250_000,
+            cache_write_tokens: 0,
             output_tokens: 500_000,
             reasoning_output_tokens: 100_000,
             total_tokens: 1_500_000,
@@ -546,6 +674,7 @@ mod tests {
         let usage = TokenUsage {
             input_tokens: 1_000,
             cached_input_tokens: 100,
+            cache_write_tokens: 0,
             output_tokens: 200,
             reasoning_output_tokens: 50,
             total_tokens: 1_200,

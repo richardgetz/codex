@@ -134,7 +134,13 @@ impl From<ResponseCompletedUsage> for TokenUsage {
             input_tokens: val.input_tokens,
             cached_input_tokens: val
                 .input_tokens_details
+                .as_ref()
                 .map(|d| d.cached_tokens)
+                .unwrap_or(0),
+            cache_write_tokens: val
+                .input_tokens_details
+                .as_ref()
+                .map(|d| d.cache_write_tokens)
                 .unwrap_or(0),
             output_tokens: val.output_tokens,
             reasoning_output_tokens: val
@@ -148,7 +154,10 @@ impl From<ResponseCompletedUsage> for TokenUsage {
 
 #[derive(Debug, Deserialize)]
 struct ResponseCompletedInputTokensDetails {
+    #[serde(default)]
     cached_tokens: i64,
+    #[serde(default)]
+    cache_write_tokens: i64,
 }
 
 #[derive(Debug, Deserialize)]

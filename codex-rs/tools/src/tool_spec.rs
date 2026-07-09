@@ -79,12 +79,45 @@ pub fn create_tools_json_for_responses_api(
 ) -> Result<Vec<Value>, serde_json::Error> {
     let mut tools_json = Vec::new();
 
-    for tool in tools {
+    for tool in coalesce_tool_specs(tools) {
         let json = serde_json::to_value(tool)?;
         tools_json.push(json);
     }
 
     Ok(tools_json)
+}
+
+fn coalesce_tool_specs(tools: &[ToolSpec]) -> Vec<ToolSpec> {
+    let mut coalesced_tools = Vec::new();
+    for tool in tools {
+        match tool {
+            ToolSpec::Namespace(namespace) => {
+                if let Some(existing_namespace) =
+                    coalesced_tools.iter_mut().find_map(|tool| match tool {
+                        ToolSpec::Namespace(existing_namespace)
+                            if existing_namespace.name == namespace.name =>
+                        {
+                            Some(existing_namespace)
+                        }
+                        ToolSpec::Function(_)
+                        | ToolSpec::Namespace(_)
+                        | ToolSpec::ToolSearch { .. }
+                        | ToolSpec::WebSearch { .. }
+                        | ToolSpec::Freeform(_) => None,
+                    })
+                {
+                    existing_namespace.tools.extend(namespace.tools.clone());
+                } else {
+                    coalesced_tools.push(tool.clone());
+                }
+            }
+            ToolSpec::Function(_)
+            | ToolSpec::ToolSearch { .. }
+            | ToolSpec::WebSearch { .. }
+            | ToolSpec::Freeform(_) => coalesced_tools.push(tool.clone()),
+        }
+    }
+    coalesced_tools
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

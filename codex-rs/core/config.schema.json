@@ -4820,7 +4820,7 @@
             "$ref": "#/definitions/TuiStatusTokenUsageRate"
           },
           "default": {},
-          "description": "Per-model standard pricing overrides in USD per 1M tokens.\n\nAdd `service_tiers.<tier>` entries for tier-specific overrides such as `priority` (Fast mode) or `flex`.\n\nExample:\n\n```toml [tui.status_token_usage.model_rates.\"gpt-5.3-codex\"] input_usd_per_1m = 1.75 cached_input_usd_per_1m = 0.175 output_usd_per_1m = 14.0\n\n[tui.status_token_usage.model_rates.\"gpt-5.3-codex\".service_tiers.priority] input_usd_per_1m = 2.50 cached_input_usd_per_1m = 0.25 output_usd_per_1m = 20.0 ```",
+          "description": "Per-model standard pricing overrides in USD per 1M tokens.\n\nAdd `service_tiers.<tier>` entries for tier-specific overrides such as `priority` (Fast mode) or `flex`.\n\nExample:\n\n```toml [tui.status_token_usage.model_rates.\"gpt-5.3-codex\"] input_usd_per_1m = 1.75 cached_input_usd_per_1m = 0.175 cache_write_usd_per_1m = 2.1875 output_usd_per_1m = 14.0\n\n[tui.status_token_usage.model_rates.\"gpt-5.3-codex\".service_tiers.priority] input_usd_per_1m = 2.50 cached_input_usd_per_1m = 0.25 cache_write_usd_per_1m = 3.125 output_usd_per_1m = 20.0 ```",
           "type": "object"
         }
       },
@@ -4829,6 +4829,11 @@
     "TuiStatusTokenUsageRate": {
       "additionalProperties": false,
       "properties": {
+        "cache_write_usd_per_1m": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
         "cached_input_usd_per_1m": {
           "format": "double",
           "type": "number"
@@ -4860,6 +4865,11 @@
     "TuiStatusTokenUsageServiceTierRate": {
       "additionalProperties": false,
       "properties": {
+        "cache_write_usd_per_1m": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
         "cached_input_usd_per_1m": {
           "format": "double",
           "type": "number"
