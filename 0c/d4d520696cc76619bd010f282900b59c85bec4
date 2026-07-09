@@ -1,0 +1,20 @@
+intent:
+  id: intent/2026-07-09/fix-lazy-mcp-gpt56
+change_type: fix
+scope: codex-rs/mcp-startup,gpt-5.6-tools,cost-tracking
+summary: Fix lazy MCP startup hang, GPT-5.6 reserved collaboration namespace request shape, and GPT-5.6 cost tracking.
+decision: Keep lazy MCP configured servers out of eager startup completion; coalesce duplicate Responses namespaces before serialization; add cache_write token plumbing and GPT-5.6 short-context API pricing.
+constraints:
+  - Preserve runtime lazy MCP terminal failures and warnings.
+  - Preserve existing token usage compatibility by serde-defaulting cache_write fields.
+  - Do not infer long-context or regional GPT-5.6 pricing without runtime signals.
+intent_priority: must
+code_locations:
+  - codex-rs/tui/src/chatwidget/mcp_startup.rs
+  - codex-rs/tools/src/tool_spec.rs
+  - codex-rs/protocol/src/protocol.rs
+  - codex-rs/tui/src/status/token_usage_cost.rs
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: GPT-5
