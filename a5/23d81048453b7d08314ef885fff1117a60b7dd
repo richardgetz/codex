@@ -1,0 +1,28 @@
+intent:
+  id: intent/2026-07-09/stable-rust-v0.144.0
+change_type: chore
+scope: stable-release
+summary: Merge upstream rust-v0.144.0 into the fork stable branch.
+decision: Use a stable-based merge of upstream rust-v0.144.0 and resolve conflicts by preserving fork-only account aliases, scratchpad/continuous recovery, user-preferences memory, MCP visibility/recovery, app-server policy, generated artifacts, and release packaging while adopting upstream 0.144.0 additions including gpt-5.6-sol support.
+constraints:
+  - Must preserve fork-only runtime features and slash commands documented in the fork inventory.
+  - Must preserve account aliases/root auth compatibility while adapting upstream app-server external auth bridge behavior.
+  - Must keep generated config schema, app-server schemas, Cargo lock, and Bazel module lock artifacts aligned with resolved sources.
+  - Must preserve MCP lazy/eager visibility recovery, built-in scratchpad behavior, and legacy orchestrator compatibility mapping.
+  - Must keep stable-based merge ancestry and avoid fork main.
+  - Must not touch sandbox network environment variable behavior.
+intent_priority: must
+code_locations:
+  - codex-rs/login/src/auth/manager.rs
+  - codex-rs/app-server/src/request_processors/account_processor.rs
+  - codex-rs/app-server/src/external_auth.rs
+  - codex-rs/codex-mcp/src/connection_manager.rs
+  - codex-rs/core/src/session/turn.rs
+  - codex-rs/rollout/src/policy.rs
+  - codex-rs/tools/src/code_mode.rs
+  - codex-rs/Cargo.lock
+  - MODULE.bazel.lock
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: GPT-5
