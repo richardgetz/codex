@@ -1,0 +1,20 @@
+intent:
+  id: align-spawn-agent-schema-mainline-2026-07-10
+change_type: fix
+scope: agents
+summary: Remove the fork-only collaboration_mode argument from the model-visible MultiAgentV2 spawn_agent tool so reserved tool schemas match mainline Codex.
+decision: Keep Default/Plan runtime mode support, but do not allow models to choose a child agent collaboration mode through spawn_agent. V2 spawn calls now omit and reject collaboration_mode like upstream/mainline, preventing GPT-5.6 reserved-schema validation failures.
+constraints:
+  - Preserve existing multi-agent guardrails, task naming, fork_turns, model/reasoning/service-tier override behavior, and runtime collaboration-mode controls.
+  - Do not remove /plan, mode-scoped enablement, or session-level collaboration-mode state.
+  - Keep stable refresh in the same PR as requested.
+intent_priority: must
+code_locations:
+  - codex-rs/core/src/tools/handlers/multi_agents_spec.rs
+  - codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs
+  - codex-rs/core/src/tools/handlers/multi_agents_common.rs
+  - codex-rs/core/src/tools/handlers/multi_agents_spec_tests.rs
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: GPT-5
