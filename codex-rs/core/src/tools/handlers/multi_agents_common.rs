@@ -11,8 +11,6 @@ use codex_features::Feature;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -252,26 +250,6 @@ pub(crate) fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32)
         let _ = config.features.disable(Feature::SpawnCsv);
         let _ = config.features.disable(Feature::Collab);
     }
-}
-
-pub(crate) fn inherited_spawn_agent_collaboration_mode(
-    parent_mode: ModeKind,
-    config: &Config,
-    inherited_mode: CollaborationMode,
-) -> Option<CollaborationMode> {
-    if enforce_orchestrator_child_mode_allowlist(parent_mode, config, inherited_mode.mode).is_ok() {
-        Some(inherited_mode)
-    } else {
-        None
-    }
-}
-
-fn enforce_orchestrator_child_mode_allowlist(
-    _parent_mode: ModeKind,
-    _config: &Config,
-    _requested_mode: ModeKind,
-) -> Result<(), FunctionCallError> {
-    Ok(())
 }
 
 pub(crate) async fn apply_requested_spawn_agent_model_overrides(

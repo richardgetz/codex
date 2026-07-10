@@ -135,6 +135,9 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   Orchestrator mode.
 - Standalone Continuous collaboration mode is removed. Use `/continuous` inside
   a normal session to enable or disable continuous execution for that thread.
+- Multi-agent `spawn_agent` uses the mainline model-visible schema. Agents
+  cannot request a child collaboration mode; child sessions use the normal spawn
+  defaults and runtime controls.
 
 ### Orchestrator memory
 
