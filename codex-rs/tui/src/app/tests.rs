@@ -3830,6 +3830,28 @@ async fn app_server_mcp_startup_lazy_server_does_not_keep_tui_running() {
         codex_app_server_client::AppServerEvent::ServerNotification(
             ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
                 thread_id: Some(thread_id.to_string()),
+                name: "lazy-docs".to_string(),
+                status: McpServerStartupState::Starting,
+                error: None,
+                failure_reason: None,
+            }),
+        ),
+    )
+    .await;
+    let event = app
+        .active_thread_rx
+        .as_mut()
+        .expect("primary thread receiver should be active")
+        .try_recv()
+        .expect("lazy starting notification should be delivered");
+    app.handle_thread_event_now(event);
+    assert!(app.chat_widget.is_task_running_for_test());
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                thread_id: Some(thread_id.to_string()),
                 name: "eager-docs".to_string(),
                 status: McpServerStartupState::Ready,
                 error: None,
@@ -4858,6 +4880,7 @@ fn token_usage_notification(
                 total_tokens: 10,
                 input_tokens: 4,
                 cached_input_tokens: 1,
+                cache_write_tokens: 0,
                 output_tokens: 5,
                 reasoning_output_tokens: 0,
             },
@@ -4865,6 +4888,7 @@ fn token_usage_notification(
                 total_tokens: 10,
                 input_tokens: 4,
                 cached_input_tokens: 1,
+                cache_write_tokens: 0,
                 output_tokens: 5,
                 reasoning_output_tokens: 0,
             },

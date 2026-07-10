@@ -1916,11 +1916,13 @@ pub struct TuiStatusTokenUsage {
     /// [tui.status_token_usage.model_rates."gpt-5.3-codex"]
     /// input_usd_per_1m = 1.75
     /// cached_input_usd_per_1m = 0.175
+    /// cache_write_usd_per_1m = 2.1875
     /// output_usd_per_1m = 14.0
     ///
     /// [tui.status_token_usage.model_rates."gpt-5.3-codex".service_tiers.priority]
     /// input_usd_per_1m = 2.50
     /// cached_input_usd_per_1m = 0.25
+    /// cache_write_usd_per_1m = 3.125
     /// output_usd_per_1m = 20.0
     /// ```
     #[serde(default)]
@@ -1932,6 +1934,8 @@ pub struct TuiStatusTokenUsage {
 pub struct TuiStatusTokenUsageRate {
     pub input_usd_per_1m: f64,
     pub cached_input_usd_per_1m: f64,
+    #[serde(default)]
+    pub cache_write_usd_per_1m: f64,
     pub output_usd_per_1m: f64,
 
     /// Optional service-tier pricing overrides in USD per 1M tokens.
@@ -1944,6 +1948,8 @@ pub struct TuiStatusTokenUsageRate {
 pub struct TuiStatusTokenUsageServiceTierRate {
     pub input_usd_per_1m: f64,
     pub cached_input_usd_per_1m: f64,
+    #[serde(default)]
+    pub cache_write_usd_per_1m: f64,
     pub output_usd_per_1m: f64,
 }
 

@@ -81,6 +81,17 @@ impl ChatWidget {
         } else {
             // Normal path: fold the update into the active round and surface
             // per-server failures immediately.
+            if matches!(status, McpStartupStatus::Starting)
+                && let Some(expected_servers) = &self.mcp_startup_expected_servers
+                && !expected_servers.is_empty()
+                && !expected_servers.contains(&server)
+                && self
+                    .mcp_startup_status
+                    .as_ref()
+                    .is_none_or(|current| !current.contains_key(&server))
+            {
+                return;
+            }
             let mut startup_status = self.mcp_startup_status.take().unwrap_or_default();
             if let McpStartupStatus::Failed { error } = &status {
                 let already_reported = matches!(
@@ -115,9 +126,11 @@ impl ChatWidget {
             && expected_servers
                 .iter()
                 .all(|name| current.contains_key(name))
-            && current
-                .values()
-                .all(|state| !matches!(state, McpStartupStatus::Starting))
+            && expected_servers.iter().all(|name| {
+                current
+                    .get(name)
+                    .is_some_and(|state| !matches!(state, McpStartupStatus::Starting))
+            })
         {
             let mut failed = Vec::new();
             let mut cancelled = Vec::new();

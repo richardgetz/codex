@@ -189,6 +189,67 @@ fn namespace_tool_spec_serializes_expected_wire_shape() {
 }
 
 #[test]
+fn create_tools_json_for_responses_api_coalesces_duplicate_namespaces() {
+    let function = |name: &str| {
+        ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+            name: name.to_string(),
+            description: format!("{name} description"),
+            strict: false,
+            defer_loading: None,
+            parameters: JsonSchema::object(
+                BTreeMap::new(),
+                /*required*/ None,
+                /*additional_properties*/ None,
+            ),
+            output_schema: None,
+        })
+    };
+
+    assert_eq!(
+        create_tools_json_for_responses_api(&[
+            ToolSpec::Namespace(ResponsesApiNamespace {
+                name: "collaboration".to_string(),
+                description: "Collaboration tools".to_string(),
+                tools: vec![function("spawn_agent")],
+            }),
+            ToolSpec::Namespace(ResponsesApiNamespace {
+                name: "collaboration".to_string(),
+                description: "Collaboration tools".to_string(),
+                tools: vec![function("wait_agent")],
+            }),
+        ])
+        .expect("serialize tools"),
+        vec![json!({
+            "type": "namespace",
+            "name": "collaboration",
+            "description": "Collaboration tools",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "spawn_agent",
+                    "description": "spawn_agent description",
+                    "strict": false,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "wait_agent",
+                    "description": "wait_agent description",
+                    "strict": false,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                    },
+                },
+            ],
+        })]
+    );
+}
+
+#[test]
 fn web_search_tool_spec_serializes_expected_wire_shape() {
     assert_eq!(
         serde_json::to_value(ToolSpec::WebSearch {

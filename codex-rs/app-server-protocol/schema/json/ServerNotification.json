@@ -5292,6 +5292,11 @@
     },
     "TokenUsageBreakdown": {
       "properties": {
+        "cacheWriteTokens": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
         "cachedInputTokens": {
           "format": "int64",
           "type": "integer"
