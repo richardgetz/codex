@@ -613,13 +613,6 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
             )),
         ),
         (
-            "collaboration_mode".to_string(),
-            JsonSchema::string_enum(
-                vec![json!("default"), json!("plan")],
-                Some("Optional collaboration mode for the child agent.".to_string()),
-            ),
-        ),
-        (
             "model".to_string(),
             JsonSchema::string(Some(
                 SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION.to_string(),

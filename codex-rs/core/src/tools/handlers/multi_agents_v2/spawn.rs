@@ -10,7 +10,6 @@ use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::tools::handlers::multi_agents_v2::message_tool::message_content;
 use codex_protocol::AgentPath;
-use codex_protocol::config_types::ModeKind;
 use codex_tools::ToolSpec;
 
 #[derive(Default)]
@@ -93,24 +92,6 @@ async fn handle_spawn_agent(
     .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
     apply_spawn_agent_overrides(&mut config, child_depth);
-    let initial_collaboration_mode = args
-        .collaboration_mode
-        .map(|mode| {
-            let mut collaboration_mode = turn.collaboration_mode.clone();
-            collaboration_mode.mode = mode;
-            inherited_spawn_agent_collaboration_mode(
-                turn.collaboration_mode.mode,
-                &config,
-                collaboration_mode,
-            )
-            .ok_or_else(|| {
-                FunctionCallError::RespondToModel(format!(
-                    "collaboration_mode `{}` is not allowed for this child agent",
-                    mode.display_name().to_lowercase()
-                ))
-            })
-        })
-        .transpose()?;
 
     let spawn_source = thread_spawn_source(
         session.thread_id,
@@ -142,7 +123,7 @@ async fn handle_spawn_agent(
                 SpawnAgentOptions {
                     fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
                     fork_mode,
-                    initial_collaboration_mode,
+                    initial_collaboration_mode: None,
                     parent_thread_id: Some(session.thread_id),
                     environments: Some(turn.environments.to_selections()),
                 },
@@ -205,7 +186,6 @@ struct SpawnAgentArgs {
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
     service_tier: Option<String>,
-    collaboration_mode: Option<ModeKind>,
     fork_turns: Option<String>,
     fork_context: Option<bool>,
 }
