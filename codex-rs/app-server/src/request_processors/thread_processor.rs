@@ -3113,15 +3113,33 @@ impl ThreadRequestProcessor {
             memory_policy,
             exec_policy_rulesets,
         );
-        self.load_and_apply_persisted_resume_metadata(
-            &thread_history,
-            &mut request_overrides,
-            &mut typesafe_overrides,
-        )
-        .await;
+        let has_explicit_model_resume_override =
+            has_model_resume_override(request_overrides.as_ref(), &typesafe_overrides);
+        let persisted_reasoning_effort_was_explicitly_cleared = match &thread_history {
+            InitialHistory::Resumed(resumed) => resumed
+                .history
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    RolloutItem::TurnContext(turn_context) => Some(turn_context.effort.is_none()),
+                    RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
+                        Some(event.thread_settings.reasoning_effort.is_none())
+                    }
+                    _ => None,
+                })
+                .unwrap_or(false),
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => false,
+        };
+        let persisted_metadata = self
+            .load_and_apply_persisted_resume_metadata(
+                &thread_history,
+                &mut request_overrides,
+                &mut typesafe_overrides,
+            )
+            .await;
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = match self
+        let mut config = match self
             .config_manager
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
@@ -3133,6 +3151,14 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
+        if !has_explicit_model_resume_override
+            && persisted_reasoning_effort_was_explicitly_cleared
+            && persisted_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.reasoning_effort.is_none())
+        {
+            config.model_reasoning_effort = None;
+        }
 
         let response_history = thread_history.clone();
 

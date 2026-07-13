@@ -929,8 +929,16 @@ impl App {
                 (ChatWidget::new_with_app_event(init), Some(started))
             }
             SessionSelection::Resume(target_session) => {
+                let model_settings = config_persistence::resume_model_settings_for_overrides(
+                    &config,
+                    &harness_overrides,
+                );
                 let resumed = app_server
-                    .resume_thread(session_bootstrap_config.clone(), target_session.thread_id)
+                    .resume_thread(
+                        session_bootstrap_config.clone(),
+                        target_session.thread_id,
+                        model_settings,
+                    )
                     .await
                     .map_err(|err| session_start_error("resume", &target_session, err))?;
                 let init = crate::chatwidget::ChatWidgetInit {
