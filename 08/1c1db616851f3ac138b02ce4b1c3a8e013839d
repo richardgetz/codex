@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-07-13/stable-rust-v0.144.3#081c1db616"
+  change_type: "chore"
+  scope: "stable-release"
+  summary: "Merge upstream rust-v0.144.3 into the fork stable branch."
+  decision: "Use a stable-based merge of the exact upstream tag, preserving fork contracts while adopting the advanced reasoning picker, persisted resume model settings, legacy-resume compatibility, and guardian policy changes."
+  constraints:
+    - "Preserve maintained fork runtime, account alias, memory, MCP recovery, scratchpad, and app-server behavior."
+    - "Keep the workspace version aligned at 0.144.3."
+    - "Keep stable-based ancestry and do not merge fork main."
+    - "Do not change sandbox network environment behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/Cargo.toml"
+    - "codex-rs/core/src/guardian"
+    - "codex-rs/tui"
+    - "codex-rs/app-server"
+    - "codex-rs/state"
+    - "codex-rs/thread-store"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-5.4"
