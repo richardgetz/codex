@@ -46,6 +46,7 @@ use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
+use crate::session::capacity_retry::wait_for_model_capacity_retry;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
@@ -1517,6 +1518,12 @@ async fn run_sampling_request(
 
         if original_input.is_none() {
             original_input = Some(prompt.input);
+        }
+
+        if matches!(err, CodexErr::ServerOverloaded)
+            && wait_for_model_capacity_retry(&sess, &turn_context, &cancellation_token).await?
+        {
+            continue;
         }
 
         if !err.is_retryable() {

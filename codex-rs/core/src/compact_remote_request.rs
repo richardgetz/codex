@@ -10,7 +10,9 @@ use crate::responses_metadata::CompactionTurnMetadata;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn::built_tools;
+use crate::session::wait_for_active_turn_model_capacity_retry;
 use codex_protocol::auth::AuthMode;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseItem;
 use codex_rollout_trace::CompactionTraceContext;
@@ -82,27 +84,37 @@ pub(super) async fn run_remote_compact_attempt(
         window_id,
         CodexResponsesRequestKind::Compaction(compaction_metadata),
     );
-    let new_history = sess
-        .services
-        .model_client
-        .compact_conversation_history(
-            &prompt,
-            &turn_context.model_info,
-            turn_state,
-            CompactConversationRequestSettings {
-                effort: turn_context.reasoning_effort.clone(),
-                summary: turn_context.reasoning_summary,
-                service_tier: if sess.services.auth_manager.auth_mode() == Some(AuthMode::ApiKey) {
-                    None
-                } else {
-                    turn_context.config.service_tier.clone()
+    let new_history = loop {
+        let result = sess
+            .services
+            .model_client
+            .compact_conversation_history(
+                &prompt,
+                &turn_context.model_info,
+                turn_state.clone(),
+                CompactConversationRequestSettings {
+                    effort: turn_context.reasoning_effort.clone(),
+                    summary: turn_context.reasoning_summary,
+                    service_tier: if sess.services.auth_manager.auth_mode()
+                        == Some(AuthMode::ApiKey)
+                    {
+                        None
+                    } else {
+                        turn_context.config.service_tier.clone()
+                    },
                 },
-            },
-            &turn_context.session_telemetry,
-            compaction_trace,
-            &responses_metadata,
-        )
-        .await?;
+                &turn_context.session_telemetry,
+                compaction_trace,
+                &responses_metadata,
+            )
+            .await;
+        if matches!(result, Err(CodexErr::ServerOverloaded))
+            && wait_for_active_turn_model_capacity_retry(sess, turn_context).await?
+        {
+            continue;
+        }
+        break result?;
+    };
     Ok(RemoteCompactAttempt {
         new_history,
         trace_input_history,

@@ -17,6 +17,8 @@ fn stdio_server(command: &str, args: &[&str]) -> McpServerConfig {
         enabled: true,
         required: false,
         supports_parallel_tool_calls: false,
+        startup: crate::McpServerStartupMode::Auto,
+        sharing: crate::McpServerSharingMode::Auto,
         disabled_reason: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,

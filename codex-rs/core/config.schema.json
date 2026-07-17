@@ -3215,6 +3215,23 @@
       },
       "type": "object"
     },
+    "ScratchpadCapacityRetryToml": {
+      "additionalProperties": false,
+      "description": "Model-capacity retry settings loaded from config.toml.",
+      "properties": {
+        "delay_minutes": {
+          "description": "Delay between retries, in minutes. Defaults to five minutes.",
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "enabled": {
+          "description": "Global enable switch. Defaults to false.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ScratchpadFanoutToml": {
       "additionalProperties": false,
       "description": "Opt-in scratchpad agent fanout settings loaded from config.toml.",
@@ -3275,6 +3292,14 @@
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "capacity_retry": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ScratchpadCapacityRetryToml"
+            }
+          ],
+          "description": "Retry model-capacity errors while the thread's continuous policy is enabled."
         },
         "default_continuous": {
           "description": "Global default for enabling continuous run policy on newly created thread scratchpads.",

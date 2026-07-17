@@ -72,6 +72,7 @@ use codex_config::types::ResumeToml;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::ScheduleModeToml;
 use codex_config::types::ScheduleToml;
+use codex_config::types::ScratchpadCapacityRetryToml;
 use codex_config::types::ScratchpadConfig;
 use codex_config::types::ScratchpadFanoutConfig;
 use codex_config::types::ScratchpadFanoutToml;
@@ -848,6 +849,10 @@ auto_archive_after_days = 14
 delete_archived_after_days = 120
 outcomes_enabled = true
 
+[scratchpad.capacity_retry]
+enabled = true
+delay_minutes = 7
+
 [scratchpad.rollback]
 max_user_turn_checkpoints = 12
 
@@ -884,6 +889,10 @@ recover_after_compaction = false
             auto_archive_after_days: Some(14),
             delete_archived_after_days: Some(120),
             outcomes_enabled: Some(true),
+            capacity_retry: Some(ScratchpadCapacityRetryToml {
+                enabled: Some(true),
+                delay_minutes: Some(7),
+            }),
             fanout: Some(ScratchpadFanoutToml {
                 enabled: Some(true),
                 max_agents: Some(6),

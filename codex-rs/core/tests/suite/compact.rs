@@ -1881,6 +1881,109 @@ async fn auto_compact_runs_after_token_limit_hit() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_recovers_from_model_capacity_without_terminal_error() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let first_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", /*total_tokens*/ 330_000),
+    ]);
+    let compact_at_capacity = sse_failed(
+        "compact-capacity",
+        "server_is_overloaded",
+        "model at capacity",
+    );
+    let compact_succeeds = sse(vec![
+        ev_assistant_message("m2", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r2", /*total_tokens*/ 200),
+    ]);
+    let second_turn = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed_with_tokens("r3", /*total_tokens*/ 120),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_turn,
+            compact_at_capacity,
+            compact_succeeds,
+            second_turn,
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200_000);
+        config.scratchpad.capacity_retry.enabled = true;
+        config.scratchpad.capacity_retry.delay = std::time::Duration::ZERO;
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    let thread_id = test.session_configured.session_id.to_string();
+    let entries_dir = test.codex_home_path().join("scratchpad").join("entries");
+    tokio::fs::create_dir_all(&entries_dir).await?;
+    tokio::fs::write(
+        entries_dir.join(format!("{thread_id}.json")),
+        serde_json::to_vec(&json!({
+            "scratchpad_id": thread_id,
+            "origin_thread_id": thread_id,
+            "status": "active",
+            "run_policy": { "continuous": { "enabled": true } },
+            "next_steps": []
+        }))?,
+    )
+    .await?;
+
+    for message in [FIRST_AUTO_MSG, SECOND_AUTO_MSG] {
+        test.codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: message.into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+                thread_settings: Default::default(),
+            })
+            .await?;
+        if message == FIRST_AUTO_MSG {
+            wait_for_event(&test.codex, |event| {
+                matches!(event, EventMsg::TurnComplete(_))
+            })
+            .await;
+        }
+    }
+
+    let mut errors = Vec::new();
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::Error(error) => errors.push(error.message),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(errors, Vec::<String>::new());
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| {
+                body_contains_text(&request.body_json().to_string(), SUMMARIZATION_PROMPT)
+            })
+            .count(),
+        2,
+        "capacity failure and successful retry should both be compaction requests"
+    );
+    Ok(())
+}
+
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
