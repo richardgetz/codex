@@ -309,6 +309,21 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   actionable `next_steps`, Codex loops back to the scratchpad instead of
   finalizing. Blocked work should be moved to `pending_waits`; pending waits
   alone do not keep continuous mode running.
+- Model-capacity self-healing is opt-in and only applies while the current
+  thread's continuous policy is enabled. When the backend reports "Selected
+  model is at capacity," Codex waits for the configured interval and retries
+  the same sampling request instead of ending the turn. The wait remains
+  interruptible, and `/continuous off` prevents another retry after the
+  current wait:
+
+  ```toml
+  [scratchpad.capacity_retry]
+  enabled = true
+  delay_minutes = 5
+  ```
+
+  The feature defaults to disabled; `delay_minutes` defaults to `5` and must
+  be at least `1` when configured through `config.toml`.
 - Scratchpads include `communication_policy` for durable communication
   preferences; channel failure alone is not treated as permission to stop or
   fall back to a final response.
@@ -426,6 +441,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
   [scratchpad.rollback]
   max_user_turn_checkpoints = 10
+
+  [scratchpad.capacity_retry]
+  enabled = false
+  delay_minutes = 5
 
   [scratchpad.fanout]
   enabled = false

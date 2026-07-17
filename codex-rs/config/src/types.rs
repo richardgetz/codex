@@ -696,6 +696,8 @@ pub struct ScratchpadToml {
     pub rollback: Option<ScratchpadRollbackToml>,
     /// TUI rendering controls for live scratchpad update cards.
     pub view: Option<ScratchpadViewToml>,
+    /// Retry model-capacity errors while the thread's continuous policy is enabled.
+    pub capacity_retry: Option<ScratchpadCapacityRetryToml>,
     /// Collaboration-mode-specific overrides.
     #[serde(
         default,
@@ -703,6 +705,47 @@ pub struct ScratchpadToml {
         skip_serializing_if = "HashMap::is_empty"
     )]
     pub modes: HashMap<ModeKind, ScratchpadModeToml>,
+}
+
+/// Model-capacity retry settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ScratchpadCapacityRetryToml {
+    /// Global enable switch. Defaults to false.
+    pub enabled: Option<bool>,
+    /// Delay between retries, in minutes. Defaults to five minutes.
+    #[schemars(range(min = 1))]
+    pub delay_minutes: Option<u64>,
+}
+
+/// Effective model-capacity retry settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScratchpadCapacityRetryConfig {
+    pub enabled: bool,
+    pub delay: std::time::Duration,
+}
+
+impl Default for ScratchpadCapacityRetryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            delay: std::time::Duration::from_secs(5 * 60),
+        }
+    }
+}
+
+impl From<Option<ScratchpadCapacityRetryToml>> for ScratchpadCapacityRetryConfig {
+    fn from(toml: Option<ScratchpadCapacityRetryToml>) -> Self {
+        let defaults = Self::default();
+        let Some(toml) = toml else {
+            return defaults;
+        };
+        let delay_minutes = toml.delay_minutes.unwrap_or(5).max(1);
+        Self {
+            enabled: toml.enabled.unwrap_or(defaults.enabled),
+            delay: std::time::Duration::from_secs(delay_minutes.saturating_mul(60)),
+        }
+    }
 }
 
 /// Scratchpad rollback settings loaded from config.toml.
@@ -878,6 +921,7 @@ pub struct ScratchpadConfig {
     pub fanout: ScratchpadFanoutConfig,
     pub rollback: ScratchpadRollbackConfig,
     pub view: ScratchpadViewConfig,
+    pub capacity_retry: ScratchpadCapacityRetryConfig,
 }
 
 impl Default for ScratchpadConfig {
@@ -899,6 +943,7 @@ impl Default for ScratchpadConfig {
             fanout: ScratchpadFanoutConfig::default(),
             rollback: ScratchpadRollbackConfig::default(),
             view: ScratchpadViewConfig::default(),
+            capacity_retry: ScratchpadCapacityRetryConfig::default(),
         }
     }
 }
@@ -953,6 +998,7 @@ impl From<ScratchpadToml> for ScratchpadConfig {
             fanout: toml.fanout.into(),
             rollback: toml.rollback.into(),
             view: toml.view.into(),
+            capacity_retry: toml.capacity_retry.into(),
         }
     }
 }

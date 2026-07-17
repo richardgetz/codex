@@ -79,11 +79,11 @@ As of the current branch, the fork contract includes at least:
 
 - fork packaging/versioning surfaces for the `codex-rick` line
 - account alias switching and keychain/file auth compatibility
-- Orchestrator and Continuous mode behavior, including CLI startup mode selection
-- Orchestrator model defaults/fallbacks, spawn safety, primary contact polling, session overwatch, and child completion hooks
+- Plan mode and scratchpad-backed Continuous mode behavior, including
+  config-gated model-capacity retry
 - orchestrator memory, memory helper naming, cleanup/consolidation, and slash commands
 - built-in scratchpad, built-in schedule, compaction recovery, and resume/fast-resume integration
-- MCP behavior with mode enablement filters, startup cancellation retry, missing-tool recovery, and inline Orchestrator communication/state MCP use
+- MCP behavior with mode enablement filters, startup cancellation retry, missing-tool recovery, and selected-executor isolation
 - fork docs and skill docs that teach future agents how to preserve the fork
 
 When refreshing `stable`, prefer carrying forward commits that stay inside those surfaces or are clearly required to preserve them.
@@ -185,8 +185,8 @@ Examples of required proofs when those surfaces are in scope:
 - release/CLI compile path for packaging changes
 - MCP startup cancel/retry regression proof
 - lazy MCP visibility/loading checks
-- Orchestrator mode entry/default behavior
-- Continuous mode interrupt behavior
+- Plan mode entry and legacy Orchestrator-mode rejection
+- Continuous mode interrupt and model-capacity retry behavior
 - built-in scratchpad and compaction recovery behavior
 - state migration compatibility, especially that already-shipped stable migration checksums did not change
 

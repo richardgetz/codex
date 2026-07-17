@@ -170,6 +170,11 @@ stable/mainline is pulled in.
     When it is enabled and the scratchpad still has actionable `next_steps`,
     Codex loops back to continue instead of finalizing. Blocked work belongs in
     `pending_waits`; pending waits alone do not keep continuous mode running.
+  - Config: `[scratchpad.capacity_retry]`, with `enabled = false` and
+    `delay_minutes = 5` by default. When enabled, model-capacity errors retry
+    after the configured delay only while the thread's scratchpad continuous
+    policy remains enabled; the wait is interruptible and rechecks the live
+    policy before retrying.
   - Scratchpads support standalone `communication_policy` fields for durable
     communication preferences; channel failure alone must not force a final
     response while the main work can continue.

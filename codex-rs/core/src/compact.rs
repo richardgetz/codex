@@ -17,6 +17,7 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
+use crate::session::wait_for_active_turn_model_capacity_retry;
 use crate::util::backoff;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
@@ -275,6 +276,11 @@ async fn run_compact_task_inner_impl(
             }
             Err(err @ (CodexErr::Interrupted | CodexErr::TurnAborted)) => {
                 return Err(err);
+            }
+            Err(CodexErr::ServerOverloaded)
+                if wait_for_active_turn_model_capacity_retry(&sess, &turn_context).await? =>
+            {
+                continue;
             }
             Err(e @ CodexErr::SessionBudgetExceeded) => {
                 sess.track_turn_codex_error(turn_context.as_ref(), &e);
