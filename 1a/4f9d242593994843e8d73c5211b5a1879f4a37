@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-07-17/continuous-capacity-retry#1a4f9d242593"
+  change_type: "feat"
+  scope: "continuous-capacity-retry"
+  summary: "Self-heal transient model-capacity failures during unattended continuous runs."
+  decision: "Keep capacity failures terminal by default; when the config opt-in and live thread continuous policy are both enabled, wait the configured duration and retry sampling or compaction requests without emitting a premature terminal error."
+  constraints:
+    - "Preserve existing behavior when the feature is disabled."
+    - "Require the current thread scratchpad continuous policy to remain enabled."
+    - "Allow interruption and live /continuous off to stop a pending retry."
+    - "Preserve fork-only behavior while integrating upstream rust-v0.144.5."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/config/src/types.rs::ScratchpadCapacityRetryToml"
+    - "codex-rs/core/src/session/capacity_retry.rs"
+    - "codex-rs/core/src/session/turn.rs::run_sampling_request"
+    - "codex-rs/core/src/compact.rs::run_compact_task_inner_impl"
+    - "codex-rs/core/src/compact_remote_request.rs::run_remote_compact_attempt"
+    - "codex-rs/core/src/compact_remote_v2.rs::run_remote_compaction_request_v2"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5"
