@@ -105,6 +105,7 @@ mod tests {
                 thread_source: None,
                 cwd: codex_home.clone(),
                 cli_version: "0.0.0".to_string(),
+                name: None,
                 title: "target".to_string(),
                 preview: None,
                 sandbox_policy: "read-only".to_string(),

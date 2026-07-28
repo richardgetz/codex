@@ -257,10 +257,7 @@ impl BuiltinScratchpadHandler {
             config.codex_home.as_path(),
         )?;
         let default_scratchpad_id = session.thread_id.to_string();
-        let default_continuous = config
-            .scratchpad
-            .for_mode(turn.collaboration_mode.mode)
-            .default_continuous;
+        let default_continuous = config.scratchpad.for_mode(turn.mode).default_continuous;
 
         let tool_name = tool_name.name.as_str();
         let result = match tool_name {

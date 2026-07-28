@@ -6,8 +6,7 @@ use crate::context::environment_context::NetworkContext;
 use crate::context::environment_context::push_xml_escaped_text;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::turn_context::TurnContext;
-#[cfg(test)]
-use codex_utils_absolute_path::AbsolutePathBuf;
+use crate::session::turn_context::TurnEnvironment;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
@@ -29,14 +28,18 @@ impl EnvironmentsState {
         turn_context: &TurnContext,
         environments: &TurnEnvironmentSnapshot,
     ) -> Self {
+        let workspace_roots = environments
+            .primary()
+            .map(TurnEnvironment::workspace_roots)
+            .unwrap_or_default();
         Self {
             environments: environment_states(environments),
             current_date: turn_context.current_date.clone(),
             timezone: turn_context.timezone.clone(),
             network: network_from_turn_context(turn_context),
             filesystem: Some(FileSystemContext::from_permission_profile(
-                &turn_context.permission_profile,
-                &turn_context.config.effective_workspace_roots(),
+                turn_context.config.permissions.permission_profile(),
+                workspace_roots,
             )),
             subagents: None,
         }
@@ -341,8 +344,7 @@ enum EnvironmentStatus {
 
 fn environment_states(snapshot: &TurnEnvironmentSnapshot) -> BTreeMap<String, EnvironmentState> {
     let mut environments = snapshot
-        .turn_environments
-        .iter()
+        .turn_environments()
         .map(|environment| {
             (
                 environment.environment_id.clone(),
@@ -357,7 +359,7 @@ fn environment_states(snapshot: &TurnEnvironmentSnapshot) -> BTreeMap<String, En
             )
         })
         .collect::<BTreeMap<_, _>>();
-    for environment in &snapshot.starting {
+    for environment in snapshot.starting() {
         environments
             .entry(environment.selection.environment_id.clone())
             .or_insert_with(|| EnvironmentState {
@@ -422,12 +424,12 @@ fn network_from_turn_context_item(
 #[cfg(test)]
 fn workspace_roots_from_turn_context_item(
     turn_context_item: &codex_protocol::protocol::TurnContextItem,
-) -> Vec<AbsolutePathBuf> {
+) -> Vec<PathUri> {
     if let Some(workspace_roots) = turn_context_item.workspace_roots.as_ref() {
-        return workspace_roots.clone();
+        return workspace_roots.iter().map(PathUri::from_abs_path).collect();
     }
 
-    vec![turn_context_item.cwd.clone()]
+    vec![PathUri::from_abs_path(&turn_context_item.cwd)]
 }
 
 #[cfg(test)]

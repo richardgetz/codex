@@ -14,6 +14,7 @@ use wiremock::matchers::path;
 
 use super::*;
 use crate::session::tests::make_session_and_context;
+use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
@@ -132,7 +133,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
     session
         .record_into_history(
             &[ResponseItem::Reasoning {
-                id: Some("reasoning_old".to_string()),
+                id: Some(ResponseItemId::new("reasoning_old")),
                 summary: Vec::new(),
                 content: None,
                 encrypted_content: Some("encrypted-old".to_string()),
@@ -164,7 +165,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
     session
         .record_into_history(
             &[ResponseItem::Reasoning {
-                id: Some("reasoning_latest".to_string()),
+                id: Some(ResponseItemId::new("reasoning_latest")),
                 summary: Vec::new(),
                 content: None,
                 encrypted_content: Some("encrypted-latest".to_string()),

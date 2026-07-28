@@ -18,8 +18,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
+use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
-use app_test_support::run_current_thread_test_with_stack;
 use codex_app_server::in_process;
 use codex_app_server::in_process::InProcessClientHandle;
 use codex_app_server::in_process::InProcessServerEvent;
@@ -27,10 +27,12 @@ use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadDeleteParams;
 use codex_app_server_protocol::ThreadDeleteResponse;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -61,20 +63,51 @@ use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-#[test]
-fn thread_start_and_delete_with_non_local_thread_store_do_not_create_local_persistence()
--> Result<()> {
-    run_current_thread_test_with_stack(
-        "thread_start_and_delete_with_non_local_thread_store_do_not_create_local_persistence",
-        async {
-            thread_start_and_delete_with_non_local_thread_store_do_not_create_local_persistence_impl()
-                .await
-        },
+#[tokio::test]
+async fn thread_start_rejects_paginated_history_without_list_support() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let store_id = Uuid::new_v4().to_string();
+    create_config_toml_with_thread_store(codex_home.path(), &server.uri(), &store_id)?;
+
+    let _in_memory_store = InMemoryThreadStoreId { store_id };
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(ClientInfo {
+            name: "codex-app-server-tests".to_string(),
+            title: None,
+            version: "0.1.0".to_string(),
+        }),
     )
+    .await??;
+    let request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(
+        error.error.message,
+        "paginated threads require thread/turns/list and thread/items/list support"
+    );
+
+    Ok(())
 }
 
-async fn thread_start_and_delete_with_non_local_thread_store_do_not_create_local_persistence_impl()
--> Result<()> {
+#[tokio::test]
+async fn thread_delete_with_non_local_thread_store_does_not_create_local_persistence() -> Result<()>
+{
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     let store_id = Uuid::new_v4().to_string();
@@ -93,8 +126,9 @@ async fn thread_start_and_delete_with_non_local_thread_store_do_not_create_local
             params: ThreadStartParams::default(),
         })
         .await?
-        .map_err(|error| anyhow::anyhow!("thread/start should succeed: {error:?}"))?;
-    let ThreadStartResponse { thread, .. } = serde_json::from_value(response)?;
+        .expect("thread/start should succeed");
+    let ThreadStartResponse { thread, .. } =
+        serde_json::from_value(response).expect("thread/start response should parse");
     assert_eq!(thread.path, None);
 
     client
@@ -111,7 +145,7 @@ async fn thread_start_and_delete_with_non_local_thread_store_do_not_create_local
             },
         })
         .await?
-        .map_err(|error| anyhow::anyhow!("turn/start should succeed: {error:?}"))?;
+        .expect("turn/start should succeed");
 
     timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
@@ -148,8 +182,9 @@ async fn thread_start_and_delete_with_non_local_thread_store_do_not_create_local
             },
         })
         .await?
-        .map_err(|error| anyhow::anyhow!("thread/list should succeed: {error:?}"))?;
-    let ThreadListResponse { data, .. } = serde_json::from_value(response)?;
+        .expect("thread/list should succeed");
+    let ThreadListResponse { data, .. } =
+        serde_json::from_value(response).expect("thread/list response should parse");
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].id, thread.id);
     assert_eq!(data[0].path, None);
@@ -171,6 +206,7 @@ async fn thread_start_and_delete_with_non_local_thread_store_do_not_create_local
             selected_capability_roots: Vec::new(),
             multi_agent_version: None,
             history_mode: Default::default(),
+            subagent_history_start_ordinal: None,
             initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(codex_home.path().to_path_buf()),
@@ -393,19 +429,16 @@ fn assert_no_local_persistence_artifacts(codex_home: &Path) -> Result<()> {
     // That is not thread persistence; keep the assertion focused on rollout,
     // session, sqlite, and other unexpected thread-store artifacts.
     entries.remove("shell_snapshots");
-    // Fork-owned built-in stores may initialize their directories during config
-    // load. They are independent of thread rollout persistence.
-    entries.remove("orchestrator_memory");
-    entries.remove("orchestrator_supervision");
-    entries.remove("schedule");
-    entries.remove("scratchpad");
-    entries.remove("accounts");
-    entries.remove("memories");
     assert_eq!(
         entries,
         BTreeSet::from([
+            "accounts".to_string(),
             "config.toml".to_string(),
             "installation_id".to_string(),
+            "memories".to_string(),
+            "orchestrator_supervision".to_string(),
+            "schedule".to_string(),
+            "scratchpad".to_string(),
             "skills".to_string(),
         ]),
         "non-local thread persistence should not create unexpected files in codex_home"

@@ -947,6 +947,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
             environments: Some(vec![TurnEnvironmentParams {
                 environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd: AbsolutePathBuf::try_from(codex_home.path().to_path_buf())?.into(),
+                runtime_workspace_roots: None,
             }]),
             selected_capability_roots: None,
             mock_experimental_field: None,

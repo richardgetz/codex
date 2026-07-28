@@ -133,7 +133,6 @@ async fn thread_settings_update(
 ) -> SessionSettingsUpdate {
     let ThreadSettingsOverrides {
         environments,
-        workspace_roots,
         profile_workspace_roots,
         approval_policy,
         approvals_reviewer,
@@ -162,7 +161,6 @@ async fn thread_settings_update(
     };
     SessionSettingsUpdate {
         environments,
-        workspace_roots,
         profile_workspace_roots,
         approval_policy,
         approvals_reviewer,
@@ -178,7 +176,7 @@ async fn thread_settings_update(
     }
 }
 
-pub(super) async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
+pub(crate) async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
     let (snapshot, reasoning_summary) = {
         let state = sess.state.lock().await;
         let session_configuration = &state.session_configuration;
@@ -298,7 +296,7 @@ pub(super) async fn user_input_or_turn_inner(
                             .started_at_unix_secs()
                             .await,
                         model_context_window: current_context.model_context_window(),
-                        collaboration_mode_kind: current_context.collaboration_mode.mode,
+                        collaboration_mode_kind: current_context.mode,
                     }),
                 )
                 .await;
@@ -311,9 +309,14 @@ pub(super) async fn user_input_or_turn_inner(
                     EventMsg::TurnComplete(TurnCompleteEvent {
                         turn_id: current_context.sub_id.clone(),
                         last_agent_message: None,
+                        started_at: current_context
+                            .turn_timing_state
+                            .started_at_unix_secs()
+                            .await,
                         completed_at,
                         duration_ms,
                         time_to_first_token_ms: None,
+                        error: None,
                     }),
                 )
                 .await;
@@ -1178,12 +1181,10 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Err(err) = sess.services.code_mode_service.shutdown().await {
         warn!("failed to shutdown code mode session: {err}");
     }
-    sess.services
-        .latest_mcp_runtime()
-        .manager_arc()
-        .shutdown()
-        .await;
+    sess.services.mcp_runtime.shutdown().await;
     sess.guardian_review_session.shutdown().await;
+
+    crate::hook_runtime::run_session_end_hooks(sess).await;
 }
 
 async fn emit_thread_stop_lifecycle(sess: &Session) {

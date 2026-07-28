@@ -85,6 +85,7 @@ impl App {
         let account_generation = self.chat_widget.account_generation();
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
+        let hard_stop_generation = self.rate_limit_hard_stop_generation;
         tokio::spawn(async move {
             let request = fetch_account_rate_limits(request_handle);
             let result = match origin {
@@ -105,6 +106,7 @@ impl App {
                 origin,
                 account_alias,
                 account_generation,
+                hard_stop_generation,
                 result,
             });
         });

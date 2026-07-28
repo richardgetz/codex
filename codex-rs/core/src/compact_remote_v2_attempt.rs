@@ -13,13 +13,15 @@ use crate::session::step_context::StepContext;
 use crate::session::turn::built_tools;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RawResponseCompletedEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::CompactionTraceContext;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 pub(super) struct RemoteCompactV2Attempt {
-    pub(super) trace_input_history: Vec<ResponseItem>,
+    pub(super) trace_input_history: Option<Vec<ResponseItem>>,
     pub(super) prompt_input: Vec<ResponseItem>,
     pub(super) compaction_output: ResponseItem,
     pub(super) token_usage: Option<TokenUsage>,
@@ -63,7 +65,9 @@ pub(super) async fn run_remote_compact_v2_attempt(
             });
     }
 
-    let trace_input_history = history.raw_items().to_vec();
+    let trace_input_history = compaction_trace
+        .is_enabled()
+        .then(|| history.raw_items().to_vec());
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
     let tool_router = built_tools(
         sess.as_ref(),
@@ -117,8 +121,19 @@ pub(super) async fn run_remote_compact_v2_attempt(
     );
     let RemoteCompactionV2Output {
         compaction_output,
+        response_id,
         token_usage,
     } = compaction_output_result?;
+    // TODO: Emit this before compaction output validation so malformed completed
+    // responses still surface their raw upstream usage.
+    sess.send_event(
+        turn_context,
+        EventMsg::RawResponseCompleted(RawResponseCompletedEvent {
+            response_id,
+            token_usage: token_usage.clone(),
+        }),
+    )
+    .await;
     Ok(RemoteCompactV2Attempt {
         trace_input_history,
         prompt_input,

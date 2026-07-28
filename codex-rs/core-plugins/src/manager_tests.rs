@@ -42,13 +42,13 @@ use codex_config::types::McpServerTransportConfig;
 use codex_core_skills::PluginSkillSnapshots;
 use codex_core_skills::SkillsLoadInput;
 use codex_core_skills::SkillsService;
-use codex_core_skills::config_rules::SkillConfigRules;
 use codex_login::CodexAuth;
 use codex_plugin::AppDeclaration;
 use codex_plugin::PluginId;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
+use codex_skills::SkillConfigRules;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use pretty_assertions::assert_eq;
@@ -782,6 +782,7 @@ fn remote_installed_plugin_in_marketplace(
         enabled: true,
         install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
         install_policy_source: None,
+        must_show_installation_interstitial: None,
         auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
         availability: codex_app_server_protocol::PluginAvailability::Available,
         interface: None,
@@ -975,6 +976,8 @@ enabled = true
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
+                startup: codex_config::McpServerStartupMode::Auto,
+                sharing: codex_config::McpServerSharingMode::Auto,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
@@ -1867,6 +1870,8 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
                     enabled: true,
                     required: false,
                     supports_parallel_tool_calls: false,
+                    startup: codex_config::McpServerStartupMode::Auto,
+                    sharing: codex_config::McpServerSharingMode::Auto,
                     disabled_reason: None,
                     startup_timeout_sec: None,
                     tool_timeout_sec: None,
@@ -1885,6 +1890,153 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
             vec![app_declaration("custom-app", "connector_custom")]
         );
     }
+}
+
+#[tokio::test]
+async fn install_plugin_materializes_default_command_skills() {
+    let codex_home = TempDir::new().unwrap();
+    let source_root = codex_home.path().join("source/sample");
+
+    write_file(
+        &source_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "sample",
+  "skills": "./custom-skills/"
+}"#,
+    );
+    fs::create_dir_all(source_root.join("custom-skills")).unwrap();
+    write_file(
+        &source_root.join("custom-skills/source-command-pr-review/SKILL.md"),
+        "---\nname: source-command-pr-review\ndescription: Native review skill\n---\n",
+    );
+    write_file(
+        &source_root.join("commands/pr/review.md"),
+        "---\ndescription: Review a pull request\n---\nInspect the proposed changes.\n",
+    );
+    write_file(
+        &source_root.join("commands/summarize.md"),
+        "---\ndescription: Summarize a change\n---\nSummarize the proposed changes.\n",
+    );
+    write_file(
+        &source_root.join("commands/oversized.md"),
+        &format!("---\ndescription: Oversized\n---\n{}", "x".repeat(4_000)),
+    );
+    write_file(
+        &source_root.join(".codex-plugin/migrated-command-skills/undeclared-command/SKILL.md"),
+        "---\nname: undeclared-command\ndescription: undeclared command\n---\n",
+    );
+    let result = PluginStore::new(codex_home.path().to_path_buf())
+        .install(
+            source_root.abs(),
+            PluginId::parse("sample@test").expect("plugin id should parse"),
+        )
+        .unwrap();
+    let migrated_skill = result
+        .installed_path
+        .join(".codex-plugin/migrated-command-skills/source-command-pr-review/SKILL.md");
+    let expected_migrated_skill = "---\nname: \"source-command-pr-review\"\ndescription: \"Review a pull request\"\n---\n\n# source-command-pr-review\n\nUse this skill when the user asks to run the migrated source command `pr-review`.\n\n## Command Template\n\nInspect the proposed changes.\n";
+    assert_eq!(
+        fs::read_to_string(&migrated_skill).unwrap(),
+        expected_migrated_skill
+    );
+    assert!(
+        !result
+            .installed_path
+            .join(".codex-plugin/migrated-command-skills/undeclared-command")
+            .exists()
+    );
+    assert!(
+        !result
+            .installed_path
+            .join(".codex-plugin/migrated-command-skills/source-command-oversized")
+            .exists()
+    );
+
+    let manifest = crate::manifest::load_plugin_manifest(&result.installed_path).unwrap();
+    let resolved = load_plugin_skills(
+        &result.installed_path,
+        &result.plugin_id,
+        &manifest,
+        /*restriction_product*/ None,
+        &SkillConfigRules::default(),
+        /*plugin_skill_snapshots*/ None,
+        Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
+    )
+    .await;
+    assert_eq!(
+        resolved
+            .skills
+            .iter()
+            .map(|skill| skill.path_to_skills_md.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            AbsolutePathBuf::from_absolute_path_checked(
+                fs::canonicalize(
+                    result
+                        .installed_path
+                        .join("custom-skills/source-command-pr-review/SKILL.md")
+                )
+                .unwrap()
+            )
+            .unwrap(),
+            AbsolutePathBuf::from_absolute_path_checked(
+                fs::canonicalize(result.installed_path.join(
+                    ".codex-plugin/migrated-command-skills/source-command-summarize/SKILL.md"
+                ))
+                .unwrap()
+            )
+            .unwrap()
+        ]
+    );
+}
+
+#[test]
+fn install_plugin_ignores_invalid_commands_manifest_field() {
+    let codex_home = TempDir::new().unwrap();
+    let source_root = codex_home.path().join("source/sample");
+    write_file(
+        &source_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample","commands":{}}"#,
+    );
+    write_file(
+        &source_root.join("commands/review.md"),
+        "---\ndescription: Review\n---\nReview the current change.\n",
+    );
+
+    let result = PluginStore::new(codex_home.path().to_path_buf())
+        .install(
+            source_root.abs(),
+            PluginId::parse("sample@test").expect("plugin id should parse"),
+        )
+        .unwrap();
+
+    assert!(
+        !result
+            .installed_path
+            .join(".codex-plugin/migrated-command-skills")
+            .exists()
+    );
+}
+
+#[test]
+fn install_plugin_ignores_command_migration_errors() {
+    let codex_home = TempDir::new().unwrap();
+    let source_root = codex_home.path().join("source/sample");
+    write_file(
+        &source_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample","commands":"./commands/review.md"}"#,
+    );
+    fs::create_dir_all(source_root.join("commands")).unwrap();
+    fs::write(source_root.join("commands/review.md"), [0xff]).unwrap();
+
+    let result = PluginStore::new(codex_home.path().to_path_buf())
+        .install(
+            source_root.abs(),
+            PluginId::parse("sample@test").expect("plugin id should parse"),
+        )
+        .unwrap();
+
+    assert!(result.installed_path.join("commands/review.md").is_file());
 }
 
 #[tokio::test]
@@ -1930,6 +2082,7 @@ async fn load_plugin_skills_dedupes_overlapping_manifest_roots() {
         /*restriction_product*/ None,
         &SkillConfigRules::default(),
         /*plugin_skill_snapshots*/ None,
+        Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
     )
     .await;
 
@@ -1950,40 +2103,6 @@ async fn load_plugin_skills_dedupes_overlapping_manifest_roots() {
             canonical_skill_path("skills/abc/SKILL.md"),
             canonical_skill_path("skills/edk/SKILL.md")
         ]
-    );
-    assert_eq!(
-        outcome.plugins()[0].mcp_servers,
-        HashMap::from([(
-            "custom".to_string(),
-            McpServerConfig {
-                transport: McpServerTransportConfig::StreamableHttp {
-                    url: "https://custom.example/mcp".to_string(),
-                    bearer_token_env_var: None,
-                    http_headers: None,
-                    env_http_headers: None,
-                },
-                environment_id: "local".to_string(),
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                startup: codex_config::McpServerStartupMode::Auto,
-                sharing: codex_config::McpServerSharingMode::Auto,
-                disabled_reason: None,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            },
-        )])
-    );
-    assert_eq!(
-        outcome.plugins()[0].apps,
-        vec![app_declaration("custom-app", "connector_custom")]
     );
 }
 
@@ -2890,6 +3009,10 @@ async fn install_plugin_writes_marketplace_manifest_fallback_when_missing_plugin
         "review skill",
     )
     .unwrap();
+    write_file(
+        &plugin_root.join("commands/review.md"),
+        "---\ndescription: Review code\n---\nReview the current change.\n",
+    );
     fs::write(
         repo_root.join(".agents/plugins/marketplace.json"),
         r#"{
@@ -2905,6 +3028,7 @@ async fn install_plugin_writes_marketplace_manifest_fallback_when_missing_plugin
       "skills": [
         "./skills/thermo-nuclear-code-quality-review"
       ],
+      "commands": ["./commands/review.md"],
       "category": "code-review"
     }
   ]
@@ -2970,6 +3094,14 @@ async fn install_plugin_writes_marketplace_manifest_fallback_when_missing_plugin
         serde_json::json!({ "name": "Byron Grogan" })
     );
     assert_eq!(fallback_json["category"], "code-review");
+    assert_eq!(
+        fs::read_to_string(
+            installed_path
+                .join(".codex-plugin/migrated-command-skills/source-command-review/SKILL.md")
+        )
+        .unwrap(),
+        "---\nname: \"source-command-review\"\ndescription: \"Review code\"\n---\n\n# source-command-review\n\nUse this skill when the user asks to run the migrated source command `review`.\n\n## Command Template\n\nReview the current change.\n"
+    );
 }
 
 #[tokio::test]
@@ -5862,6 +5994,7 @@ async fn load_plugins_ignores_project_config_files() {
         /*plugin_skill_snapshots*/ None,
         Some(Product::Codex),
         /*remote_global_catalog_active*/ false,
+        Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
     )
     .await;
 
@@ -5913,4 +6046,93 @@ async fn plugin_hooks_for_layer_stack_loads_configured_plugin_hooks() {
         "hooks/hooks.json"
     );
     assert_eq!(outcome.hook_load_warnings, Vec::<String>::new());
+}
+
+#[test]
+fn remote_installed_plugins_cache_refresh_coalesces_materializations() {
+    let tmp = TempDir::new().unwrap();
+    let manager = std::sync::Arc::new(PluginsManager::new(tmp.path().to_path_buf()));
+    let materialization_callback_count =
+        std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let unrelated_callback_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    manager
+        .remote_installed_plugins_cache_refresh_state
+        .write()
+        .expect("refresh state lock")
+        .in_flight = true;
+    let materialization = |name: &str| RemotePluginMaterialization {
+        plugin_id: PluginId::new(
+            name.to_string(),
+            REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
+        )
+        .expect("valid plugin id"),
+        scope: crate::remote::RemotePluginScope::Workspace,
+        discoverability: Some(crate::remote::RemotePluginShareDiscoverability::Listed),
+        authenticated_account_id: Some("account-123".to_string()),
+    };
+    let change = |name: &str| EffectivePluginsChange {
+        materialized_remote_plugins: vec![materialization(name)],
+    };
+    let callback = |count: std::sync::Arc<std::sync::atomic::AtomicUsize>| {
+        let callback: EffectivePluginsChangedCallback = std::sync::Arc::new(move |_change| {
+            count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        });
+        callback
+    };
+    let request =
+        |change, on_effective_plugins_changed| RemoteInstalledPluginsCacheRefreshRequest {
+            service_config: RemotePluginServiceConfig {
+                chatgpt_base_url: "https://example.com".to_string(),
+            },
+            auth: None,
+            notify: RemoteInstalledPluginsCacheRefreshNotify::IfCacheChanged,
+            on_effective_plugins_changed: Some(on_effective_plugins_changed),
+            change,
+        };
+
+    manager.schedule_remote_installed_plugins_cache_refresh(request(
+        change("beta"),
+        callback(std::sync::Arc::clone(&materialization_callback_count)),
+    ));
+    manager.schedule_remote_installed_plugins_cache_refresh(request(
+        change("alpha"),
+        callback(std::sync::Arc::clone(&unrelated_callback_count)),
+    ));
+
+    let state = manager
+        .remote_installed_plugins_cache_refresh_state
+        .read()
+        .expect("refresh state lock");
+    let request = state.requested.as_ref().expect("pending refresh");
+    assert_eq!(
+        request.change,
+        EffectivePluginsChange {
+            materialized_remote_plugins: vec![materialization("alpha"), materialization("beta"),],
+        }
+    );
+    request
+        .on_effective_plugins_changed
+        .as_ref()
+        .expect("pending callback")(request.change.clone());
+    assert_eq!(
+        materialization_callback_count.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    assert_eq!(
+        unrelated_callback_count.load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+}
+
+#[test]
+fn plugin_install_error_preserves_store_io_sub_error_type() {
+    let error = PluginInstallError::Store(PluginStoreError::Io {
+        context: "failed to copy plugin file",
+        source: std::io::Error::other("copy failed"),
+    });
+
+    assert_eq!(
+        error.sub_error_type(),
+        Some("failed_to_copy_plugin_file".to_string())
+    );
 }
