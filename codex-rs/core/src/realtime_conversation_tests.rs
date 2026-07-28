@@ -7,6 +7,7 @@ use super::realtime_delegation_from_handoff;
 use super::realtime_request_headers;
 use super::realtime_text_from_handoff_request;
 use super::wrap_realtime_delegation_input;
+use crate::context::REALTIME_DELEGATION_MAX_ESTIMATED_TOKENS;
 use crate::context::RealtimeDelegationSource;
 use async_channel::bounded;
 use codex_api::RealtimeEventParser;
@@ -14,6 +15,7 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::CodexResponseHandoffMode;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeTranscriptEntry;
+use codex_utils_string::approx_token_count;
 use pretty_assertions::assert_eq;
 use std::time::Instant;
 
@@ -142,6 +144,31 @@ fn wraps_realtime_delegation_input_with_xml_escaping_without_transcript() {
         ),
         "<realtime_delegation>\n  <input>use a &lt; b &amp;&amp; c &gt; d</input>\n</realtime_delegation>"
     );
+}
+
+#[test]
+fn bounds_oversized_realtime_delegation_and_preserves_transcript_tail() {
+    let input = "delegate & verify <everything> ".repeat(2_000);
+    let transcript_tail = "assistant: newest transcript tail";
+    let transcript_delta = format!(
+        "{}\n{transcript_tail}",
+        "user: old & verbose <transcript>".repeat(4_000)
+    );
+
+    let rendered = wrap_realtime_delegation_input(
+        &input,
+        Some(&transcript_delta),
+        RealtimeDelegationSource::Handoff,
+    );
+
+    assert!(
+        approx_token_count(&rendered) <= REALTIME_DELEGATION_MAX_ESTIMATED_TOKENS,
+        "expected bounded realtime delegation, got {} estimated tokens",
+        approx_token_count(&rendered)
+    );
+    assert!(rendered.contains("input truncated"));
+    assert!(rendered.contains("earlier transcript truncated"));
+    assert!(rendered.contains(transcript_tail));
 }
 
 #[tokio::test]

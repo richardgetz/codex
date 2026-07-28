@@ -75,6 +75,8 @@ pub use permissions_instructions::ApprovalPromptContext;
 pub use permissions_instructions::PermissionsInstructions;
 pub(crate) use personality_spec_instructions::PersonalitySpecInstructions;
 pub(crate) use plugin_instructions::PluginInstructions;
+#[cfg(test)]
+pub(crate) use realtime_delegation::REALTIME_DELEGATION_MAX_ESTIMATED_TOKENS;
 pub(crate) use realtime_delegation::RealtimeDelegation;
 pub(crate) use realtime_delegation::RealtimeDelegationSource;
 pub(crate) use realtime_end_instructions::RealtimeEndInstructions;

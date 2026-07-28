@@ -9637,6 +9637,114 @@ async fn build_initial_context_filters_skills_by_unified_mode_enablement() {
     assert!(!developer_texts.contains("Keep active notes."));
 }
 
+struct HostSkillsWorldStateTestContributor;
+
+impl codex_extension_api::ContextContributor for HostSkillsWorldStateTestContributor {
+    fn contribute_world_state<'a>(
+        &'a self,
+        input: codex_extension_api::WorldStateContributionInput<'a>,
+    ) -> codex_extension_api::ExtensionFuture<
+        'a,
+        Vec<codex_extension_api::WorldStateSectionContribution>,
+    > {
+        Box::pin(async move {
+            let body = input
+                .turn_store
+                .get::<HostSkillsSnapshot>()
+                .map(|snapshot| {
+                    snapshot
+                        .outcome()
+                        .skills
+                        .iter()
+                        .map(|skill| format!("{}: {}", skill.name, skill.description))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+            let snapshot = json!({ "body": body });
+            vec![codex_extension_api::WorldStateSectionContribution::new(
+                "host_skills_filter_test",
+                snapshot,
+                move |_| {
+                    Some(codex_extension_api::RenderedWorldStateFragment::new(
+                        "developer",
+                        ("<host_skills_filter_test>", "</host_skills_filter_test>"),
+                        body.clone(),
+                    ))
+                },
+            )]
+        })
+    }
+}
+
+#[tokio::test]
+async fn build_initial_context_filters_host_skills_before_world_state_extensions() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.enablement.modes.insert(
+                ModeKind::Plan,
+                codex_config::ModeEnablementConfig {
+                    skills: Some(codex_config::EnablementFilterConfig {
+                        mode: codex_config::EnablementFilterMode::Include,
+                        items: vec!["agent-state".to_string()],
+                    }),
+                    ..Default::default()
+                },
+            );
+        },
+    )
+    .await;
+    let mut session = match Arc::try_unwrap(session) {
+        Ok(session) => session,
+        Err(_) => panic!("session should not have additional strong references"),
+    };
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    builder.prompt_contributor(Arc::new(HostSkillsWorldStateTestContributor));
+    session.services.extensions = Arc::new(builder.build());
+    let mut turn_context = Arc::try_unwrap(turn_context)
+        .expect("turn context should not have additional strong references");
+    turn_context.mode = ModeKind::Plan;
+
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills = vec![
+        SkillMetadata {
+            name: "agent-state".to_string(),
+            description: "Track supervised work.".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/agent-state/SKILL.md").abs(),
+            scope: SkillScope::Repo,
+            plugin_id: None,
+        },
+        SkillMetadata {
+            name: "scratchpad".to_string(),
+            description: "Keep active notes.".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/scratchpad/SKILL.md").abs(),
+            scope: SkillScope::Repo,
+            plugin_id: None,
+        },
+    ];
+    turn_context.turn_skills = TurnSkillsContext::new(HostSkillsSnapshot::new(Arc::new(outcome)));
+    turn_context
+        .extension_data
+        .insert(turn_context.turn_skills.snapshot.clone());
+    let turn_context = Arc::new(turn_context);
+
+    let initial_context = build_initial_context(&session, &turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context).join("\n");
+
+    assert!(developer_texts.contains("Track supervised work."));
+    assert!(!developer_texts.contains("Keep active notes."));
+}
+
 #[tokio::test]
 async fn build_initial_context_injects_builtin_scratchpad_in_enabled_modes() {
     let (session, mut turn_context) = make_session_and_context().await;

@@ -12,6 +12,7 @@ use crate::context::world_state::PermissionsState;
 use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::RealtimeState;
 use crate::context::world_state::WorldState;
+use codex_core_skills::HostSkillsSnapshot;
 use codex_extension_api::WorldStateContributionInput;
 use codex_features::Feature;
 
@@ -143,6 +144,21 @@ impl Session {
             .iter()
             .map(|root| root.selected_root().clone())
             .collect::<Vec<_>>();
+        let skills_outcome = turn_context.turn_skills.snapshot.outcome();
+        let mut filtered_skills_outcome = skills_outcome.clone();
+        filtered_skills_outcome.skills = crate::skills::filter_skills_for_mode(
+            &turn_context.config,
+            turn_context.mode,
+            &skills_outcome.skills,
+        )
+        .into_iter()
+        .cloned()
+        .collect();
+        turn_context
+            .extension_data
+            .insert(HostSkillsSnapshot::new(std::sync::Arc::new(
+                filtered_skills_outcome,
+            )));
         for contributor in self.services.extensions.context_contributors() {
             for section in contributor
                 .contribute_world_state(WorldStateContributionInput {
