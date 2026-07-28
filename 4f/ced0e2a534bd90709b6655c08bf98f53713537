@@ -1,0 +1,21 @@
+intent:
+  id: pr88-core-context-4fced0e2a
+change_type: fix
+scope: codex-core context and mode enablement
+summary: Bound realtime delegation model context and enforce mode-scoped skills for WorldState extensions.
+decision: Filter the turn-scoped HostSkillsSnapshot before extension contributors run, and cap the fully rendered realtime delegation fragment at 8192 estimated tokens while preserving the newest transcript tail.
+constraints:
+  - Preserve fork-specific mode enablement behavior for skills, MCPs, and plugins.
+  - Preserve existing small realtime delegation XML output and incremental history behavior.
+  - Account for XML escaping and wrapper bytes within the hard context cap.
+  - Preserve enable_mcp_approvals=false behavior without changing approval plumbing.
+intent_priority: must
+code_locations:
+  - codex-rs/core/src/session/world_state.rs
+  - codex-rs/core/src/context/realtime_delegation.rs
+  - codex-rs/core/src/session/tests.rs
+  - codex-rs/core/src/realtime_conversation_tests.rs
+requested_by: "@richardgetz"
+recorded_by:
+  agent: codex-cli
+  model: gpt-5
