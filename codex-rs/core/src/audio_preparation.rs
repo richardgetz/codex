@@ -195,8 +195,9 @@ fn audio_duration_seconds(audio_url: &str) -> Option<f64> {
             .zip(format.media_info().duration)
     });
     let (time_base, duration) = timing?;
+    let numerator = time_base.numer.get(); // codespell:ignore numer
     let duration_seconds =
-        duration.get() as f64 * f64::from(time_base.numer.get()) / f64::from(time_base.denom.get());
+        duration.get() as f64 * f64::from(numerator) / f64::from(time_base.denom.get());
     duration_seconds.is_finite().then_some(duration_seconds)
 }
 
