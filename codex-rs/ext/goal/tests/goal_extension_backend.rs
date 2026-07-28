@@ -1250,8 +1250,8 @@ impl GoalExtensionHarness {
         let token_usage = TokenUsageInfo {
             total_token_usage: usage.clone(),
             last_token_usage: TokenUsage::default(),
-            usage_by_service_tier: Default::default(),
             model_context_window: None,
+            usage_by_service_tier: Default::default(),
         };
         for contributor in self.registry.token_usage_contributors() {
             contributor
@@ -1344,6 +1344,7 @@ fn tool_call(tool_name: &str, call_id: &str, arguments: serde_json::Value) -> To
         call_id: call_id.to_string(),
         tool_name: codex_extension_api::ToolName::plain(tool_name),
         model: "gpt-test".to_string(),
+        codex_turn_metadata: None,
         truncation_policy: TruncationPolicy::Bytes(1024),
         conversation_history: codex_extension_api::ConversationHistory::default(),
         turn_item_emitter: Arc::new(NoopTurnItemEmitter),
@@ -1443,7 +1444,7 @@ fn token_usage(
     TokenUsage {
         input_tokens,
         cached_input_tokens,
-        cache_write_tokens: 0,
+        cache_write_input_tokens: 0,
         output_tokens,
         reasoning_output_tokens,
         total_tokens,

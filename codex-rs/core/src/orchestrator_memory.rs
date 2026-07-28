@@ -206,10 +206,7 @@ pub(crate) fn maybe_learn_from_completed_turn(
     turn_context: &Arc<TurnContext>,
     last_agent_message: Option<String>,
 ) {
-    if !should_use(
-        turn_context.config.as_ref(),
-        turn_context.collaboration_mode.mode,
-    ) {
+    if !should_use(turn_context.config.as_ref(), turn_context.mode) {
         return;
     }
 

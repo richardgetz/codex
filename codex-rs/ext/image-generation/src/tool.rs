@@ -8,8 +8,6 @@ use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
-use codex_core::context::extension_image_generation_output_hint;
-use codex_core::image_generation_artifact_path;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
@@ -52,6 +50,8 @@ use serde_json::Value;
 
 use crate::IMAGE_GEN_NAMESPACE;
 use crate::IMAGEGEN_TOOL_NAME;
+use crate::artifact::image_generation_artifact_path;
+use crate::artifact::image_generation_output_hint;
 use crate::backend::CodexImagesBackend;
 
 const IMAGE_MODEL: &str = "gpt-image-2";
@@ -217,7 +217,7 @@ impl ImageGenerationTool {
             .await;
         let output_hint = saved_path.as_ref().and_then(|output_path| {
             let output_dir = output_path.parent()?;
-            extension_image_generation_output_hint(output_dir.display(), output_path.display())
+            image_generation_output_hint(output_dir.display(), output_path.display())
         });
         Ok(Box::new(GeneratedImageOutput {
             result,
@@ -327,7 +327,6 @@ async fn request_for_call_args(
     }))
 }
 
-/// Selects edit context using the hosted imagegen anchor and truncation behavior.
 fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
     let mut function_call_ids = HashSet::new();
     let mut custom_tool_call_ids = HashSet::new();
@@ -357,38 +356,15 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
         }
     }
 
-    let latest_uploaded_images = history.iter().enumerate().rev().find_map(|(index, item)| {
-        let ResponseItem::Message { role, content, .. } = item else {
-            return None;
-        };
-        if role != "user" {
-            return None;
-        }
-        let images = content
-            .iter()
-            .filter_map(|item| match item {
-                ContentItem::InputImage { image_url, .. } => Some(ImageUrl {
-                    image_url: image_url.clone(),
-                }),
-                ContentItem::InputText { .. }
-                | ContentItem::OutputText { .. }
-                | ContentItem::EncryptedContent { .. } => None,
-            })
-            .collect::<Vec<_>>();
-        (!images.is_empty()).then_some((index, images))
-    });
-    let has_user_anchor = latest_uploaded_images.is_some();
-    let (user_images, follow_up_start) = latest_uploaded_images
-        .map_or_else(|| (Vec::new(), 0), |(index, images)| (images, index + 1));
-    let mut generated_images = Vec::new();
-    for item in &history[follow_up_start..] {
+    let mut images = Vec::with_capacity(count);
+    'history: for item in history.iter().rev() {
+        let mut image_urls = Vec::new();
         match item {
-            ResponseItem::Message { content, .. } if !has_user_anchor => {
-                generated_images.extend(content.iter().filter_map(|item| match item {
-                    ContentItem::InputImage { image_url, .. } => Some(ImageUrl {
-                        image_url: image_url.clone(),
-                    }),
+            ResponseItem::Message { content, .. } => {
+                image_urls.extend(content.iter().rev().filter_map(|item| match item {
+                    ContentItem::InputImage { image_url, .. } => Some(image_url.clone()),
                     ContentItem::InputText { .. }
+                    | ContentItem::InputAudio { .. }
                     | ContentItem::OutputText { .. }
                     | ContentItem::EncryptedContent { .. } => None,
                 }));
@@ -396,22 +372,17 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
             ResponseItem::FunctionCallOutput {
                 call_id, output, ..
             } if function_call_ids.contains(call_id.as_str()) => {
-                generated_images
-                    .extend(output_image_urls(output).map(|image_url| ImageUrl { image_url }));
+                image_urls.extend(output_image_urls(output));
             }
             ResponseItem::CustomToolCallOutput {
                 call_id, output, ..
             } if custom_tool_call_ids.contains(call_id.as_str()) => {
-                generated_images
-                    .extend(output_image_urls(output).map(|image_url| ImageUrl { image_url }));
+                image_urls.extend(output_image_urls(output));
             }
             ResponseItem::ImageGenerationCall { result, .. } if !result.is_empty() => {
-                generated_images.push(ImageUrl {
-                    image_url: format!("data:image/png;base64,{result}"),
-                });
+                image_urls.push(format!("data:image/png;base64,{result}"));
             }
-            ResponseItem::Message { .. }
-            | ResponseItem::AdditionalTools { .. }
+            ResponseItem::AdditionalTools { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::AgentMessage { .. }
             | ResponseItem::LocalShellCall { .. }
@@ -428,38 +399,28 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => {}
         }
+        for image_url in image_urls {
+            images.push(ImageUrl { image_url });
+            if images.len() == count {
+                break 'history;
+            }
+        }
     }
-    truncate_images(user_images, generated_images, count)
+    images.reverse();
+    images
 }
 
-/// Truncates edit inputs while preserving the newest generated image when possible.
-fn truncate_images(
-    mut user_images: Vec<ImageUrl>,
-    mut generated_images: Vec<ImageUrl>,
-    count: usize,
-) -> Vec<ImageUrl> {
-    let mut excess = (user_images.len() + generated_images.len()).saturating_sub(count);
-    let drop_generated = excess.min(generated_images.len().saturating_sub(1));
-    generated_images.drain(..drop_generated);
-    excess -= drop_generated;
-    let drop_user = excess.min(user_images.len());
-    user_images.drain(..drop_user);
-    excess -= drop_user;
-    generated_images.drain(..excess);
-
-    user_images.extend(generated_images);
-    user_images
-}
-
-/// Extracts image URLs from a tool output in conversation order.
+/// Extracts image URLs from a tool output in newest-first order.
 fn output_image_urls(output: &FunctionCallOutputPayload) -> impl Iterator<Item = String> + '_ {
     output
         .content_items()
         .into_iter()
         .flatten()
+        .rev()
         .filter_map(|item| match item {
             FunctionCallOutputContentItem::InputImage { image_url, .. } => Some(image_url.clone()),
             FunctionCallOutputContentItem::InputText { .. }
+            | FunctionCallOutputContentItem::InputAudio { .. }
             | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
         })
 }

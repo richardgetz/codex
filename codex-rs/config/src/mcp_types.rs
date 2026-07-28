@@ -432,8 +432,6 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
         let environment_id =
             environment_id.unwrap_or_else(|| DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string());
 
-        validate_remote_stdio_cwd(&transport, &environment_id)?;
-
         Ok(Self {
             transport,
             auth: auth.unwrap_or_default(),
@@ -480,29 +478,6 @@ fn is_default_startup_mode(value: &McpServerStartupMode) -> bool {
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_default_sharing_mode(value: &McpServerSharingMode) -> bool {
     *value == McpServerSharingMode::Auto
-}
-
-fn validate_remote_stdio_cwd(
-    transport: &McpServerTransportConfig,
-    environment_id: &str,
-) -> Result<(), String> {
-    if environment_id == DEFAULT_MCP_SERVER_ENVIRONMENT_ID {
-        return Ok(());
-    }
-    let McpServerTransportConfig::Stdio { cwd, .. } = transport else {
-        return Ok(());
-    };
-    let Some(cwd) = cwd else {
-        return Err(format!(
-            "remote stdio MCP servers require an absolute cwd when environment_id is `{environment_id}`"
-        ));
-    };
-    if cwd.infer_absolute_path_convention().is_some() {
-        return Ok(());
-    }
-    Err(format!(
-        "remote stdio MCP servers require an absolute cwd when environment_id is `{environment_id}`, got `{cwd}`"
-    ))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]

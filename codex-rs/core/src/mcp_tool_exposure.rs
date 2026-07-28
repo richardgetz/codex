@@ -1,44 +1,38 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_connectors::AppToolPolicyInput;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo as McpToolInfo;
 use codex_mcp::tool_is_model_visible;
-use codex_tools::ToolsConfig;
+use codex_tools::ToolExposure;
 use tracing::instrument;
+use tracing::warn;
 
 use crate::config::Config;
 use crate::connectors;
-
-pub(crate) struct McpToolExposure {
-    pub(crate) direct_tools: Vec<McpToolInfo>,
-    pub(crate) deferred_tools: Option<Vec<McpToolInfo>>,
-}
+use crate::tools::handlers::McpHandler;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::override_tool_exposure;
 
 #[instrument(level = "trace", skip_all)]
-pub(crate) fn build_mcp_tool_exposure(
+pub(crate) fn build_mcp_tool_runtimes(
     all_mcp_tools: &[McpToolInfo],
     connectors: Option<&[connectors::AppInfo]>,
     explicitly_enabled_connectors: &[connectors::AppInfo],
     explicitly_referenced_mcp_servers: &HashSet<String>,
     config: &Config,
-    tools_config: &ToolsConfig,
-) -> McpToolExposure {
-    let mut deferred_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
+    search_tool_enabled: bool,
+    namespace_tools_enabled: bool,
+) -> Vec<Arc<dyn CoreToolRuntime>> {
+    let mut exposed_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
     if let Some(connectors) = connectors {
-        deferred_tools.extend(filter_codex_apps_mcp_tools(
+        exposed_tools.extend(filter_codex_apps_mcp_tools(
             all_mcp_tools,
             connectors,
             config,
         ));
-    }
-
-    if !tools_config.search_tool || !tools_config.namespace_tools {
-        return McpToolExposure {
-            direct_tools: deferred_tools,
-            deferred_tools: None,
-        };
     }
 
     let mut direct_tools =
@@ -51,12 +45,27 @@ pub(crate) fn build_mcp_tool_exposure(
         .iter()
         .map(McpToolInfo::canonical_tool_name)
         .collect::<HashSet<_>>();
-    deferred_tools.retain(|tool| !direct_tool_names.contains(&tool.canonical_tool_name()));
-
-    McpToolExposure {
-        direct_tools,
-        deferred_tools: (!deferred_tools.is_empty()).then_some(deferred_tools),
-    }
+    exposed_tools
+        .into_iter()
+        .filter_map(|tool| {
+            let tool_name = tool.canonical_tool_name();
+            let exposure = if search_tool_enabled && !direct_tool_names.contains(&tool_name) {
+                ToolExposure::Deferred
+            } else {
+                ToolExposure::Direct
+            };
+            match McpHandler::new(tool, namespace_tools_enabled) {
+                Ok(handler) => {
+                    let handler: Arc<dyn CoreToolRuntime> = Arc::new(handler);
+                    Some(override_tool_exposure(handler, exposure))
+                }
+                Err(err) => {
+                    warn!("Skipping MCP tool `{tool_name}`: failed to build tool spec: {err}");
+                    None
+                }
+            }
+        })
+        .collect()
 }
 
 fn filter_explicitly_referenced_non_app_mcp_tools(

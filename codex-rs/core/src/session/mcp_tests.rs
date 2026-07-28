@@ -245,10 +245,7 @@ fn guardian_elicitation_review_request_declines_unsupported_opt_in_shapes() {
 #[test]
 fn guardian_decisions_map_to_elicitation_responses_without_session_state() {
     assert_eq!(
-        mcp_elicitation_response_from_guardian_decision_parts(
-            ReviewDecision::Approved,
-            /*denial_message*/ None,
-        ),
+        mcp_elicitation_response_from_guardian_decision(ReviewDecision::Approved),
         ElicitationResponse {
             action: ElicitationAction::Accept,
             content: Some(json!({})),
@@ -258,10 +255,9 @@ fn guardian_decisions_map_to_elicitation_responses_without_session_state() {
         }
     );
     assert_eq!(
-        mcp_elicitation_response_from_guardian_decision_parts(
-            ReviewDecision::Denied,
-            Some("Denied by Guardian".to_string()),
-        ),
+        mcp_elicitation_response_from_guardian_decision(ReviewDecision::denied(
+            "Denied by Guardian",
+        )),
         ElicitationResponse {
             action: ElicitationAction::Decline,
             content: None,
@@ -272,10 +268,7 @@ fn guardian_decisions_map_to_elicitation_responses_without_session_state() {
         }
     );
     assert_eq!(
-        mcp_elicitation_response_from_guardian_decision_parts(
-            ReviewDecision::TimedOut,
-            /*denial_message*/ None,
-        ),
+        mcp_elicitation_response_from_guardian_decision(ReviewDecision::TimedOut),
         ElicitationResponse {
             action: ElicitationAction::Decline,
             content: None,
@@ -286,10 +279,7 @@ fn guardian_decisions_map_to_elicitation_responses_without_session_state() {
         }
     );
     assert_eq!(
-        mcp_elicitation_response_from_guardian_decision_parts(
-            ReviewDecision::Abort,
-            /*denial_message*/ None,
-        ),
+        mcp_elicitation_response_from_guardian_decision(ReviewDecision::Abort),
         ElicitationResponse {
             action: ElicitationAction::Cancel,
             content: None,

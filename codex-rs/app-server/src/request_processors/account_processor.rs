@@ -1,9 +1,11 @@
+use super::bedrock_auth::clear_user_model_provider_if_bedrock;
+use super::bedrock_auth::set_user_model_provider_to_bedrock;
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
 use crate::external_auth::ExternalAuthBridge;
 use chrono::DateTime;
 use codex_login::oauth_client_id;
-use codex_protocol::account::AmazonBedrockCredentialSource;
+use codex_model_provider::is_supported_amazon_bedrock_region;
 use codex_protocol::auth::AuthMode as ProtocolAuthMode;
 
 mod rate_limit_resets;
@@ -65,7 +67,7 @@ fn account_from_auth(auth: Option<&CodexAuth>) -> Option<Account> {
         Some(auth) => match auth.auth_mode() {
             ProtocolAuthMode::ApiKey => Some(Account::ApiKey {}),
             ProtocolAuthMode::BedrockApiKey => Some(Account::AmazonBedrock {
-                credential_source: AmazonBedrockCredentialSource::CodexManaged,
+                uses_codex_managed_credentials: true,
             }),
             ProtocolAuthMode::Chatgpt
             | ProtocolAuthMode::ChatgptAuthTokens
@@ -254,6 +256,20 @@ impl AccountRequestProcessor {
         }
     }
 
+    async fn load_latest_config(&self) -> Config {
+        match self
+            .config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+        {
+            Ok(config) => config,
+            Err(err) => {
+                tracing::warn!("failed to reload config, using startup config: {err}");
+                self.config.as_ref().clone()
+            }
+        }
+    }
+
     async fn maybe_refresh_plugin_caches_for_current_config(
         config_manager: &ConfigManager,
         thread_manager: &Arc<ThreadManager>,
@@ -278,7 +294,7 @@ impl AccountRequestProcessor {
                     .maybe_start_remote_plugin_caches_refresh(
                         &config.plugins_config_input(),
                         auth,
-                        Some(Arc::new(move || {
+                        Some(Arc::new(move |_change| {
                             Self::spawn_effective_plugins_changed_task(
                                 Arc::clone(&refresh_thread_manager),
                                 refresh_config_manager.clone(),
@@ -356,6 +372,10 @@ impl AccountRequestProcessor {
                 )
                 .await;
             }
+            LoginAccountParams::AmazonBedrock { api_key, region } => {
+                self.login_amazon_bedrock_v2(request_id, api_key, region)
+                    .await;
+            }
         }
         Ok(())
     }
@@ -412,6 +432,67 @@ impl AccountRequestProcessor {
             .login_api_key_common(&params)
             .await
             .map(|()| LoginAccountResponse::ApiKey {});
+        let logged_in = result.is_ok();
+        self.outgoing.send_result(request_id, result).await;
+
+        if logged_in {
+            self.send_login_success_notifications(/*login_id*/ None)
+                .await;
+        }
+    }
+
+    async fn login_amazon_bedrock_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        api_key: String,
+        region: String,
+    ) {
+        let result = async {
+            if self.auth_manager.is_external_chatgpt_auth_active() {
+                return Err(self.external_auth_active_error());
+            }
+            if matches!(
+                self.config.forced_login_method,
+                Some(ForcedLoginMethod::Chatgpt)
+            ) {
+                return Err(invalid_request(
+                    "Amazon Bedrock login is disabled. Use ChatGPT login instead.",
+                ));
+            }
+
+            let api_key = api_key.trim();
+            if api_key.is_empty() {
+                return Err(invalid_request("Amazon Bedrock API key must not be empty."));
+            }
+            let region = region.trim();
+            if !is_supported_amazon_bedrock_region(region) {
+                return Err(invalid_request(format!(
+                    "Amazon Bedrock Mantle does not support region `{region}`"
+                )));
+            }
+
+            {
+                let mut guard = self.active_login.lock().await;
+                if let Some(active) = guard.take() {
+                    drop(active);
+                }
+            }
+
+            set_user_model_provider_to_bedrock(&self.config_manager).await?;
+            let auth_storage_home = self.auth_manager.auth_storage_home();
+            let auth_credentials_store_mode = self.auth_manager.auth_credentials_store_mode();
+            login_with_bedrock_api_key(
+                &auth_storage_home,
+                api_key,
+                region,
+                auth_credentials_store_mode,
+                self.config.auth_keyring_backend_kind(),
+            )
+            .map_err(|err| internal_error(format!("failed to save Amazon Bedrock auth: {err}")))?;
+            self.auth_manager.reload().await;
+            Ok(LoginAccountResponse::AmazonBedrock {})
+        }
+        .await;
         let logged_in = result.is_ok();
         self.outgoing.send_result(request_id, result).await;
 
@@ -819,6 +900,17 @@ impl AccountRequestProcessor {
     }
 
     async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
+        let managed_bedrock_auth = matches!(
+            self.auth_manager.auth_cached(),
+            Some(CodexAuth::BedrockApiKey(_))
+        );
+        let config = self.load_latest_config().await;
+        if config.model_provider.is_amazon_bedrock() && !managed_bedrock_auth {
+            return Err(invalid_request(
+                "cannot log out while Amazon Bedrock is using AWS-managed credentials; manage those credentials through AWS or switch model providers before logging out Codex authentication",
+            ));
+        }
+
         // Cancel any active login attempt.
         {
             let mut guard = self.active_login.lock().await;
@@ -832,6 +924,10 @@ impl AccountRequestProcessor {
             Err(err) => {
                 return Err(internal_error(format!("logout failed: {err}")));
             }
+        }
+
+        if managed_bedrock_auth {
+            clear_user_model_provider_if_bedrock(&self.config_manager).await?;
         }
 
         Self::maybe_refresh_plugin_caches_for_current_config(
@@ -901,7 +997,8 @@ impl AccountRequestProcessor {
         // Determine whether auth is required based on the active model provider.
         // If a custom provider is configured with `requires_openai_auth == false`,
         // then no auth step is required; otherwise, default to requiring auth.
-        let requires_openai_auth = self.config.model_provider.requires_openai_auth;
+        let config = self.load_latest_config().await;
+        let requires_openai_auth = config.model_provider.requires_openai_auth;
 
         let response = if !requires_openai_auth {
             GetAuthStatusResponse {
@@ -969,10 +1066,9 @@ impl AccountRequestProcessor {
 
         self.refresh_token_if_requested(do_refresh).await;
 
-        let provider = create_model_provider(
-            self.config.model_provider.clone(),
-            Some(self.auth_manager.clone()),
-        );
+        let config = self.load_latest_config().await;
+        let provider =
+            create_model_provider(config.model_provider, Some(self.auth_manager.clone()));
         let account_state = match provider.account_state() {
             Ok(account_state) => account_state,
             Err(err) => return Err(invalid_request(err.to_string())),

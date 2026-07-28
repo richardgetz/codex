@@ -17,6 +17,7 @@ use codex_core_api::AskForApproval;
 use codex_core_api::AuthCredentialsStoreMode;
 use codex_core_api::AuthManager;
 use codex_core_api::AutoCompactTokenLimitScope;
+use codex_core_api::CodexAppsToolsCache;
 use codex_core_api::CodexHomeUserInstructionsProvider;
 use codex_core_api::CodexThread;
 use codex_core_api::Config;
@@ -40,7 +41,6 @@ use codex_core_api::Notice;
 use codex_core_api::OAuthCredentialsStoreMode;
 use codex_core_api::OPENAI_PROVIDER_ID;
 use codex_core_api::Op;
-use codex_core_api::OrchestratorConfig;
 use codex_core_api::OrchestratorMemoryConfig;
 use codex_core_api::OtelConfig;
 use codex_core_api::PermissionProfile;
@@ -68,6 +68,7 @@ use codex_core_api::UserInput;
 use codex_core_api::UserPreferencesMemoryConfig;
 use codex_core_api::WebSearchMode;
 use codex_core_api::arg0_dispatch_or_else;
+use codex_core_api::build_models_manager;
 use codex_core_api::built_in_model_providers;
 use codex_core_api::find_codex_home;
 use codex_core_api::init_state_db;
@@ -145,7 +146,9 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     });
     let thread_manager = ThreadManager::new(
         &config,
-        auth_manager,
+        Arc::clone(&auth_manager),
+        build_models_manager(&config, auth_manager),
+        CodexAppsToolsCache::default(),
         SessionSource::Exec,
         environment_manager,
         Arc::new(extensions.build()),
@@ -234,6 +237,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
         tui_status_line_use_colors: true,
+        tui_status_token_usage: Default::default(),
         tui_terminal_title: None,
         tui_theme: None,
         tui_raw_output_mode: false,
@@ -242,6 +246,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         tui_keymap: TuiKeymap::default(),
         tui_session_picker_view: SessionPickerViewMode::Dense,
+        tui_resume_cwd: None,
         tui_vim_mode_default: false,
         cwd: cwd.clone(),
         workspace_roots: vec![cwd],
@@ -255,8 +260,10 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         project_doc_max_bytes: 32 * 1024,
         project_doc_fallback_filenames: Vec::new(),
         tool_output_token_limit: None,
+        agents_enabled: true,
         agent_max_threads: Some(6),
-        agent_job_max_runtime_seconds: None,
+        agent_default_subagent_model: None,
+        agent_default_subagent_reasoning_effort: None,
         agent_interrupt_message_enabled: false,
         agent_max_depth: 1,
         agent_roles: BTreeMap::new(),
@@ -268,7 +275,6 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         schedule: ScheduleConfig::default(),
         resume: ResumeConfig::default(),
         accounts: AccountsConfig::default(),
-        orchestrator: OrchestratorConfig::default(),
         thread_control: ThreadControlConfig::default(),
         codex_home: codex_home.clone(),
         sqlite_home: codex_home.to_path_buf(),
@@ -288,7 +294,6 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         model_reasoning_effort: None,
         plan_mode_reasoning_effort: None,
         model_reasoning_summary: None,
-        model_supports_reasoning_summaries: None,
         model_catalog: None,
         model_verbosity: None,
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),

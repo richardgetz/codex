@@ -15,3 +15,6 @@ workspace = true
 [dependencies]
 codex-protocol = { workspace = true }
 codex-utils-string = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
