@@ -1,0 +1,26 @@
+intent:
+  id: intent/2026-07-29/stable-rust-v0.146.0
+change_type: chore
+scope: stable-release
+summary: Merge upstream rust-v0.146.0 into the fork stable line while preserving intentional fork behavior.
+decision: Use a stable-based merge, adapt fork MCP, app-server, state, account, memory, scratchpad, TUI, and release integrations to upstream shapes, and clarify that only semantic conflicts with intentional fork behavior require user input.
+constraints:
+  - Preserve fork-owned features, fixes, public contracts, and must-level intent.
+  - Keep shipped migration checksums unchanged and renumber incoming collisions.
+  - Keep generated schemas and Cargo/Bazel locks aligned.
+  - Do not change sandbox environment-variable behavior.
+  - Do not merge upstream main or intentionally drop fork behavior.
+intent_priority: must
+code_locations:
+  - .codex/skills/fork-stable-release/SKILL.md
+  - codex-rs/core
+  - codex-rs/codex-mcp
+  - codex-rs/app-server
+  - codex-rs/state
+  - codex-rs/login
+  - codex-rs/tui
+  - .github
+requested_by: '@rick'
+recorded_by:
+  agent: codex-cli
+  model: gpt-5
