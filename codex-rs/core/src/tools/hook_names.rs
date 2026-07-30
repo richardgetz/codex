@@ -25,6 +25,14 @@ impl HookToolName {
         }
     }
 
+    pub(crate) fn with_matcher_alias(mut self, alias: impl Into<String>) -> Self {
+        let alias = alias.into();
+        if alias != self.name && !self.matcher_aliases.contains(&alias) {
+            self.matcher_aliases.push(alias);
+        }
+        self
+    }
+
     /// Returns the hook identity for file edits performed through `apply_patch`.
     ///
     /// The serialized name remains `apply_patch` so logs and policies can key

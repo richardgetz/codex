@@ -11,6 +11,7 @@ use codex_analytics::SkillInvocation;
 use codex_analytics::build_track_events_context;
 use codex_extension_api::SkillInvocationInput;
 use codex_extension_api::SkillInvocationKind;
+use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::request_user_input::RequestUserInputArgs;
@@ -251,6 +252,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
         skill_scope: candidate.scope,
         skill_path: candidate.path_to_skills_md.to_path_buf(),
         plugin_id: candidate.plugin_id,
+        remote_plugin_id: candidate.remote_plugin_id,
         invocation_type: InvocationType::Implicit,
     };
     let skill_scope = match invocation.skill_scope {
@@ -273,6 +275,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     if !inserted {
         return;
     }
+    let skill_name_tag = sanitize_metric_tag_value(skill_name.as_str());
 
     for contributor in sess.services.extensions.skill_invocation_contributors() {
         contributor
@@ -292,7 +295,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
         /*inc*/ 1,
         &[
             ("status", "ok"),
-            ("skill", skill_name.as_str()),
+            ("skill", skill_name_tag.as_str()),
             ("invoke_type", "implicit"),
         ],
     );

@@ -33,6 +33,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::responses::strip_response_item_ids_from_json;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::stdio_server_bin;
@@ -206,6 +207,7 @@ async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Res
             return Ok(());
         }
     };
+    let recovery_server_bin = rmcp_test_server_bin.clone();
     let codex_home = Arc::new(TempDir::new()?);
     let mut builder = test_codex()
         .with_model("gpt-5.4")
@@ -278,6 +280,8 @@ async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Res
     let rollout_path = test.codex.rollout_path().context("rollout path")?;
     assert_eq!(first_turn_mock.requests().len(), 2);
     drop(test);
+    let recovery_home = Arc::clone(&codex_home);
+    let recovery_rollout_path = rollout_path.clone();
 
     let retry_mock = mount_sse_sequence(
         &server,
@@ -333,6 +337,115 @@ async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Res
         !output_text.contains("unsupported call"),
         "placeholder handler should answer instead of falling back to unsupported call: {output_text}"
     );
+    drop(test);
+
+    let initialize_barrier = recovery_home.path().join("allow-rmcp-initialize");
+    let barrier_for_config = initialize_barrier.to_string_lossy().into_owned();
+    let recovery_call_id = "recovered-mcp-call";
+    let recovery_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-5"),
+                ev_function_call_with_namespace(
+                    recovery_call_id,
+                    unavailable_tool_namespace,
+                    unavailable_tool_name,
+                    r#"{"message":"recovered"}"#,
+                ),
+                ev_completed("resp-5"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-6"),
+                ev_assistant_message("msg-3", "recovered"),
+                ev_completed("resp-6"),
+            ]),
+        ],
+    )
+    .await;
+    let mut recovery_builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::UnavailableDummyTools)
+                .expect("unavailable dummy tools should be enabled for this test");
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                server_name.to_string(),
+                McpServerConfig {
+                    auth: Default::default(),
+                    transport: McpServerTransportConfig::Stdio {
+                        command: recovery_server_bin,
+                        args: Vec::new(),
+                        env: Some(HashMap::from([(
+                            "MCP_TEST_INITIALIZE_BARRIER_FILE".to_string(),
+                            barrier_for_config,
+                        )])),
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    startup: codex_config::McpServerStartupMode::Lazy,
+                    sharing: codex_config::McpServerSharingMode::Auto,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(1)),
+                    tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        });
+    let recovered = Arc::new(
+        recovery_builder
+            .resume(&server, recovery_home, recovery_rollout_path)
+            .await?,
+    );
+    let recovered_for_turn = Arc::clone(&recovered);
+    let recovery_turn = tokio::spawn(async move {
+        recovered_for_turn
+            .submit_turn("retry after the rmcp server becomes available")
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while recovery_mock.requests().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the model should call the captured placeholder before MCP initialization completes");
+    std::fs::write(&initialize_barrier, "ready")?;
+    recovery_turn
+        .await
+        .expect("recovery turn should not panic")?;
+
+    let requests = recovery_mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        !tool_names(&requests[0].body_json())
+            .iter()
+            .any(|name| name == unavailable_tool_display_name),
+        "the first request should carry the historical placeholder, not a ready MCP tool"
+    );
+    let recovered_output = requests[1]
+        .function_call_output_text(recovery_call_id)
+        .context("recovered MCP output present")?;
+    assert!(
+        recovered_output.contains("ECHOING: recovered"),
+        "expected the captured placeholder to recover the real MCP tool, got {recovered_output:?}"
+    );
 
     Ok(())
 }
@@ -385,9 +498,12 @@ async fn namespaced_custom_tool_call_preserves_namespace_through_dispatch_and_re
         .map(str::to_string)
         .expect("custom tool call should include turn metadata");
     assert_eq!(
-        (custom_tool_calls, request.custom_tool_call_output(call_id),),
         (
-            vec![json!({
+            strip_response_item_ids_from_json(Value::Array(custom_tool_calls)),
+            strip_response_item_ids_from_json(request.custom_tool_call_output(call_id)),
+        ),
+        (
+            Value::Array(vec![json!({
                 "type": "custom_tool_call",
                 "call_id": call_id,
                 "namespace": namespace,
@@ -396,7 +512,7 @@ async fn namespaced_custom_tool_call_preserves_namespace_through_dispatch_and_re
                 "internal_chat_message_metadata_passthrough": {
                     "turn_id": turn_id,
                 },
-            })],
+            })]),
             json!({
                 "type": "custom_tool_call_output",
                 "call_id": call_id,
@@ -612,6 +728,7 @@ async fn shell_command_enforces_glob_deny_read_policy() -> Result<()> {
                         pattern: format!("{}/**/*.env", config.cwd.as_path().display()),
                     },
                     access: FileSystemAccessMode::Deny,
+                    missing_path_behavior: None,
                 });
             config
                 .permissions

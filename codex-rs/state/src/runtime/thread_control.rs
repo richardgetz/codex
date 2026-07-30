@@ -183,14 +183,18 @@ mod tests {
     use chrono::TimeZone;
     use chrono::Utc;
     use codex_protocol::ThreadId;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
     async fn thread_control_round_trips_targets_and_release_state() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
         let thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000011").expect("thread id");
         let target_thread_ids = vec![

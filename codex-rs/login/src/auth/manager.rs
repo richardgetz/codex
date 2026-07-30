@@ -1,5 +1,5 @@
 use chrono::Utc;
-use reqwest::StatusCode;
+use http::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 #[cfg(test)]
@@ -59,6 +59,8 @@ use crate::token_data::parse_jwt_expiration;
 use codex_config::account_registry;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_http_client::HttpClient;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::PlanType as InternalPlanType;
 use codex_protocol::auth::RefreshTokenFailedError;
@@ -257,7 +259,7 @@ impl CodexAuth {
         chatgpt_base_url: Option<&str>,
         keyring_backend_kind: AuthKeyringBackendKind,
         agent_identity_authapi_base_url: Option<&str>,
-        auth_route_config: Option<&AuthRouteConfig>,
+        auth_route_config: &AuthRouteConfig,
     ) -> std::io::Result<Self> {
         let auth_mode = auth_dot_json.resolved_mode();
         if auth_mode == AuthMode::ApiKey {
@@ -357,7 +359,7 @@ impl CodexAuth {
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<&str>,
         keyring_backend_kind: AuthKeyringBackendKind,
-        auth_route_config: Option<&AuthRouteConfig>,
+        auth_route_config: &AuthRouteConfig,
     ) -> std::io::Result<Option<Self>> {
         let agent_identity_authapi_base_url =
             agent_identity_authapi_base_url(chatgpt_base_url).ok();
@@ -377,7 +379,7 @@ impl CodexAuth {
     pub async fn from_agent_identity_jwt(
         jwt: &str,
         chatgpt_base_url: Option<&str>,
-        auth_route_config: Option<&AuthRouteConfig>,
+        auth_route_config: &AuthRouteConfig,
     ) -> std::io::Result<Self> {
         let agent_identity_authapi_base_url = agent_identity_authapi_base_url(chatgpt_base_url)?;
         Self::from_agent_identity_jwt_with_authapi_base_url(
@@ -393,7 +395,7 @@ impl CodexAuth {
         jwt: &str,
         chatgpt_base_url: Option<&str>,
         agent_identity_authapi_base_url: &str,
-        auth_route_config: Option<&AuthRouteConfig>,
+        auth_route_config: &AuthRouteConfig,
     ) -> std::io::Result<Self> {
         let base_url = chatgpt_base_url
             .unwrap_or(ChatGptEnvironment::default().chatgpt_base_url())
@@ -412,7 +414,7 @@ impl CodexAuth {
 
     pub async fn from_personal_access_token(
         access_token: &str,
-        auth_route_config: Option<&AuthRouteConfig>,
+        auth_route_config: &AuthRouteConfig,
     ) -> std::io::Result<Self> {
         Ok(Self::PersonalAccessToken(
             PersonalAccessTokenAuth::load(access_token, auth_route_config).await?,
@@ -636,7 +638,7 @@ impl CodexAuth {
         policy: AgentIdentityAuthPolicy,
         agent_identity_authapi_base_url: Option<&str>,
         forced_chatgpt_workspace_id: Option<Vec<String>>,
-        auth_route_config: Option<&AuthRouteConfig>,
+        auth_route_config: &AuthRouteConfig,
         session_source: SessionSource,
     ) -> std::io::Result<Option<AgentIdentityAuth>> {
         match self {
@@ -666,7 +668,7 @@ impl CodexAuth {
         &self,
         agent_identity_authapi_base_url: &str,
         forced_chatgpt_workspace_id: Option<Vec<String>>,
-        auth_route_config: Option<&AuthRouteConfig>,
+        auth_route_config: &AuthRouteConfig,
         session_source: SessionSource,
     ) -> std::io::Result<AgentIdentityAuth> {
         let binding =
@@ -884,7 +886,7 @@ pub async fn logout_with_revoke(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
-    auth_route_config: Option<&AuthRouteConfig>,
+    auth_route_config: &AuthRouteConfig,
 ) -> std::io::Result<bool> {
     let auth_dot_json = match load_auth_dot_json(
         codex_home,
@@ -939,7 +941,7 @@ pub async fn login_with_access_token(
     forced_chatgpt_workspace_id: Option<&[String]>,
     chatgpt_base_url: Option<&str>,
     keyring_backend_kind: AuthKeyringBackendKind,
-    auth_route_config: Option<&AuthRouteConfig>,
+    auth_route_config: &AuthRouteConfig,
 ) -> std::io::Result<()> {
     let auth_dot_json = match classify_codex_access_token(access_token) {
         CodexAccessToken::PersonalAccessToken(access_token) => {
@@ -1052,7 +1054,7 @@ pub struct AuthConfig {
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub chatgpt_base_url: Option<String>,
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
-    pub auth_route_config: Option<AuthRouteConfig>,
+    pub auth_route_config: AuthRouteConfig,
 }
 
 /// Enforces configured login restrictions using auth-owned HTTP settings.
@@ -1078,7 +1080,7 @@ async fn enforce_login_restrictions_with_agent_identity_authapi_base_url(
         config.chatgpt_base_url.as_deref(),
         config.keyring_backend_kind,
         agent_identity_authapi_base_url,
-        config.auth_route_config.as_ref(),
+        &config.auth_route_config,
     )
     .await?
     else {
@@ -1227,7 +1229,7 @@ async fn load_auth(
     chatgpt_base_url: Option<&str>,
     keyring_backend_kind: AuthKeyringBackendKind,
     agent_identity_authapi_base_url: Option<&str>,
-    auth_route_config: Option<&AuthRouteConfig>,
+    auth_route_config: &AuthRouteConfig,
 ) -> std::io::Result<Option<CodexAuth>> {
     // API key via env var takes precedence over any other auth method.
     if enable_codex_api_key_env && let Some(api_key) = read_codex_api_key_from_env() {
@@ -1786,7 +1788,7 @@ pub struct AuthManager {
     agent_identity_lock: Semaphore,
     agent_identity_bootstrap_cooldown: Mutex<AgentIdentityBootstrapCooldown>,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
-    auth_route_config: Option<AuthRouteConfig>,
+    auth_route_config: AuthRouteConfig,
 }
 
 /// Configuration view required to construct a shared [`AuthManager`].
@@ -1815,7 +1817,7 @@ pub trait AuthManagerConfig {
     fn chatgpt_base_url(&self) -> String;
 
     /// Returns route-selection settings for auth-owned clients.
-    fn auth_route_config(&self) -> Option<AuthRouteConfig>;
+    fn auth_route_config(&self) -> AuthRouteConfig;
 }
 
 impl Debug for AuthManager {
@@ -1857,7 +1859,7 @@ impl AuthManager {
         forced_chatgpt_workspace_id: Option<Vec<String>>,
         chatgpt_base_url: Option<String>,
         keyring_backend_kind: AuthKeyringBackendKind,
-        auth_route_config: Option<AuthRouteConfig>,
+        auth_route_config: AuthRouteConfig,
     ) -> Self {
         let agent_identity_authapi_base_url =
             agent_identity_authapi_base_url(chatgpt_base_url.as_deref()).ok();
@@ -1869,7 +1871,7 @@ impl AuthManager {
             chatgpt_base_url.as_deref(),
             keyring_backend_kind,
             agent_identity_authapi_base_url.as_deref(),
-            auth_route_config.as_ref(),
+            &auth_route_config,
         )
         .await
         .ok()
@@ -1920,7 +1922,7 @@ impl AuthManager {
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
-            auth_route_config: None,
+            auth_route_config: crate::test_support::transport_default_auth_route_config(),
         })
     }
 
@@ -1946,7 +1948,7 @@ impl AuthManager {
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
-            auth_route_config: None,
+            auth_route_config: crate::test_support::transport_default_auth_route_config(),
         })
     }
 
@@ -1980,7 +1982,7 @@ impl AuthManager {
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
-            auth_route_config: None,
+            auth_route_config: crate::test_support::transport_default_auth_route_config(),
         })
     }
 
@@ -2006,7 +2008,11 @@ impl AuthManager {
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
             )),
-            auth_route_config: None,
+            // External bearer auth refreshes by running the provider's command and never makes
+            // auth-owned HTTP requests, so this route is intentionally inert.
+            auth_route_config: AuthRouteConfig::from_http_client_factory(HttpClientFactory::new(
+                OutboundProxyPolicy::ReqwestDefault,
+            )),
         })
     }
 
@@ -2091,7 +2097,7 @@ impl AuthManager {
                     policy,
                     self.agent_identity_authapi_base_url.as_deref(),
                     forced_chatgpt_workspace_id,
-                    self.auth_route_config.as_ref(),
+                    &self.auth_route_config,
                     session_source,
                 )
                 .await;
@@ -2110,7 +2116,7 @@ impl AuthManager {
             policy,
             self.agent_identity_authapi_base_url.as_deref(),
             self.forced_chatgpt_workspace_id(),
-            self.auth_route_config.as_ref(),
+            &self.auth_route_config,
             session_source,
         )
         .await
@@ -2241,7 +2247,7 @@ impl AuthManager {
             self.chatgpt_base_url.as_deref(),
             self.keyring_backend_kind,
             self.agent_identity_authapi_base_url.as_deref(),
-            self.auth_route_config.as_ref(),
+            &self.auth_route_config,
         )
         .await
         .ok()
@@ -2420,7 +2426,7 @@ impl AuthManager {
         forced_chatgpt_workspace_id: Option<Vec<String>>,
         chatgpt_base_url: Option<String>,
         keyring_backend_kind: AuthKeyringBackendKind,
-        auth_route_config: Option<AuthRouteConfig>,
+        auth_route_config: AuthRouteConfig,
     ) -> Arc<Self> {
         Arc::new(
             Self::new(
@@ -2607,8 +2613,7 @@ impl AuthManager {
         let auth_dot_json = self
             .auth_cached()
             .and_then(|auth| auth.get_current_auth_json());
-        if let Err(err) =
-            revoke_auth_tokens(auth_dot_json.as_ref(), self.auth_route_config.as_ref()).await
+        if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref(), &self.auth_route_config).await
         {
             tracing::warn!("failed to revoke auth tokens during logout: {err}");
         }

@@ -58,6 +58,7 @@ impl ReadMcpResourceHandler {
             ..
         } = invocation;
         let turn = std::sync::Arc::clone(&step_context.turn);
+        let mcp = &step_context.mcp;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -85,12 +86,8 @@ impl ReadMcpResourceHandler {
 
         let payload_result: Result<ReadResourcePayload, FunctionCallError> = async {
             ensure_model_can_access_mcp_server(turn.as_ref(), &server)?;
-            let result = session
-                .read_resource_with_reconnect(
-                    turn.as_ref(),
-                    &server,
-                    ReadResourceRequestParams::new(uri.clone()),
-                )
+            let result = mcp
+                .read_resource(&server, ReadResourceRequestParams::new(uri.clone()))
                 .await
                 .map_err(|err| {
                     FunctionCallError::RespondToModel(format!("resources/read failed: {err:#}"))

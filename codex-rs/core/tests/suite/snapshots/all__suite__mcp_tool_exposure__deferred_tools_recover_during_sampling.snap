@@ -1,0 +1,39 @@
+---
+source: core/tests/suite/mcp_tool_exposure.rs
+expression: "format_labeled_requests_snapshot(\"Deferred namespaces appear after Apps recovers between sampling requests.\",\n&[(\"Apps unavailable\", &requests[0]), (\"Apps recovered\", &requests[1]),],)"
+---
+Scenario: Deferred namespaces appear after Apps recovers between sampling requests.
+
+## Apps unavailable
+00:message/developer[6]:
+    [01] <conventional_commits>\n## Conventional Commits\nWhen creating or reviewing git commit messages,...
+    [02] <git_intent_notes>\n## Git Intent Notes\nFor code changes, preserve the why in git notes under `...
+    [03] <scratchpad_instructions>\n## Built-in Scratchpad\nThe built-in `scratchpad` tool namespace is a...
+    [04] <fork_help>\n## Rick Fork Guidance\nThis build includes fork-only behavior beyond upstream/mainl...
+    [05] <PERMISSIONS_INSTRUCTIONS>
+    [06] <tools>
+         Deferred tool namespaces:
+         - multi_agent_v1: Tools for spawning and managing sub-agents.
+         </tools>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:use an app after it recovers
+
+## Apps recovered
+00:message/developer[6]:
+    [01] <conventional_commits>\n## Conventional Commits\nWhen creating or reviewing git commit messages,...
+    [02] <git_intent_notes>\n## Git Intent Notes\nFor code changes, preserve the why in git notes under `...
+    [03] <scratchpad_instructions>\n## Built-in Scratchpad\nThe built-in `scratchpad` tool namespace is a...
+    [04] <fork_help>\n## Rick Fork Guidance\nThis build includes fork-only behavior beyond upstream/mainl...
+    [05] <PERMISSIONS_INSTRUCTIONS>
+    [06] <tools>
+         Deferred tool namespaces:
+         - multi_agent_v1: Tools for spawning and managing sub-agents.
+         </tools>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:use an app after it recovers
+03:function_call/request_user_input
+04:function_call_output:{"answers":{"continue":{"answers":["Yes (Recommended)"]}}}
+05:message/developer:<tools>
+Added deferred tool namespaces:
+- mcp__codex_apps__calendar: Plan events and manage your calendar.
+</tools>

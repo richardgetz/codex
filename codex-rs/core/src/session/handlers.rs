@@ -37,7 +37,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::InterAgentCommunication;
-use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeConversationListVoicesResponseEvent;
 use codex_protocol::protocol::RealtimeVoicesList;
@@ -49,7 +48,6 @@ use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsOverrides;
-use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -177,32 +175,12 @@ async fn thread_settings_update(
 }
 
 pub(crate) async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
-    let (snapshot, reasoning_summary) = {
+    let snapshot = {
         let state = sess.state.lock().await;
-        let session_configuration = &state.session_configuration;
-        (
-            session_configuration.thread_config_snapshot(),
-            session_configuration.model_reasoning_summary,
-        )
+        state.session_configuration.thread_config_snapshot()
     };
-    let cwd = snapshot.cwd().clone();
     EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
-        thread_settings: ThreadSettingsSnapshot {
-            model: snapshot.model,
-            model_provider_id: snapshot.model_provider_id,
-            service_tier: snapshot.service_tier,
-            approval_policy: snapshot.approval_policy,
-            approvals_reviewer: snapshot.approvals_reviewer,
-            permission_profile: snapshot.permission_profile,
-            active_permission_profile: snapshot.active_permission_profile,
-            cwd,
-            reasoning_effort: snapshot.reasoning_effort,
-            reasoning_summary,
-            personality: snapshot.personality,
-            collaboration_mode: snapshot.collaboration_mode,
-            memory_policy: snapshot.memory_policy,
-            user_preferences_memory_policy: snapshot.user_preferences_memory_policy,
-        },
+        thread_settings: snapshot.into_thread_settings_snapshot(),
     })
 }
 
@@ -265,11 +243,6 @@ pub(super) async fn user_input_or_turn_inner(
                     .set_responsesapi_client_metadata(responsesapi_client_metadata);
             }
             current_context.session_telemetry.user_prompt(&items);
-            sess.refresh_mcp_servers_if_requested(
-                &current_context,
-                Some(sess.mcp_elicitation_reviewer()),
-            )
-            .await;
             let additional_context_input = {
                 let mut state = sess.state.lock().await;
                 state.additional_context.merge(additional_context)
@@ -300,9 +273,9 @@ pub(super) async fn user_input_or_turn_inner(
                     }),
                 )
                 .await;
-                let (completed_at, duration_ms) = current_context
+                let (completed_at, duration_ms, _) = current_context
                     .turn_timing_state
-                    .completed_at_and_duration_ms()
+                    .complete_profile_and_duration_ms()
                     .await;
                 sess.send_event(
                     current_context.as_ref(),
@@ -351,7 +324,7 @@ pub async fn inter_agent_communication(
         .enqueue_mailbox_communication(communication)
         .await;
     crate::agent_communication::emit_agent_communication_receive(&sub_id);
-    if trigger_turn {
+    if trigger_turn || sess.has_outstanding_durable_sleep() {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
             .await;
     }
@@ -498,9 +471,9 @@ pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: Dy
     sess.notify_dynamic_tool_response(&id, response).await;
 }
 
-pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerRefreshConfig) {
-    let mut guard = sess.pending_mcp_server_refresh_config.lock().await;
-    *guard = Some(refresh_config);
+pub fn refresh_mcp_servers(sess: &Session) {
+    sess.services.mcp_runtime.reconnect_on_next_refresh();
+    sess.request_mcp_runtime_refresh();
 }
 
 pub async fn reload_user_config(sess: &Arc<Session>) {
@@ -1181,7 +1154,12 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Err(err) = sess.services.code_mode_service.shutdown().await {
         warn!("failed to shutdown code mode session: {err}");
     }
-    sess.services.mcp_runtime.shutdown().await;
+    sess.stop_mcp_prewarm_worker().await;
+    {
+        let _refresh = sess.mcp_refresh.acquire().await;
+        sess.mcp_refresh.close();
+        sess.services.mcp_runtime.shutdown().await;
+    }
     sess.guardian_review_session.shutdown().await;
 
     crate::hook_runtime::run_session_end_hooks(sess).await;
@@ -1253,8 +1231,6 @@ pub async fn review(
 ) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
     sess.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
-        .await;
-    sess.refresh_mcp_servers_if_requested(&turn_context, Some(sess.mcp_elicitation_reviewer()))
         .await;
     #[allow(deprecated)]
     match resolve_review_request(review_request, &turn_context.cwd) {
@@ -1373,8 +1349,8 @@ pub(super) async fn submission_loop(
                     dynamic_tool_response(&sess, id, response).await;
                     false
                 }
-                Op::RefreshMcpServers { config } => {
-                    refresh_mcp_servers(&sess, config).await;
+                Op::RefreshMcpServers => {
+                    refresh_mcp_servers(&sess);
                     false
                 }
                 Op::ReloadUserConfig => {

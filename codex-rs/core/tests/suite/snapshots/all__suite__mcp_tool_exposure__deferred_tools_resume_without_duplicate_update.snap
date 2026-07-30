@@ -1,0 +1,36 @@
+---
+source: core/tests/suite/mcp_tool_exposure.rs
+expression: "format_labeled_requests_snapshot(\"Persisted deferred tools remain unchanged after resuming the thread.\",\n&[(\"Before resume\", &requests[0]), (\"After resume\", &requests[1]),],)"
+---
+Scenario: Persisted deferred tools remain unchanged after resuming the thread.
+
+## Before resume
+00:message/developer[6]:
+    [01] <conventional_commits>\n## Conventional Commits\nWhen creating or reviewing git commit messages,...
+    [02] <git_intent_notes>\n## Git Intent Notes\nFor code changes, preserve the why in git notes under `...
+    [03] <scratchpad_instructions>\n## Built-in Scratchpad\nThe built-in `scratchpad` tool namespace is a...
+    [04] <fork_help>\n## Rick Fork Guidance\nThis build includes fork-only behavior beyond upstream/mainl...
+    [05] <PERMISSIONS_INSTRUCTIONS>
+    [06] <tools>
+         Deferred tool namespaces:
+         - mcp__codex_apps__calendar: Plan events and manage your calendar.
+         </tools>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:inspect deferred tools before resume
+
+## After resume
+00:message/developer[6]:
+    [01] <conventional_commits>\n## Conventional Commits\nWhen creating or reviewing git commit messages,...
+    [02] <git_intent_notes>\n## Git Intent Notes\nFor code changes, preserve the why in git notes under `...
+    [03] <scratchpad_instructions>\n## Built-in Scratchpad\nThe built-in `scratchpad` tool namespace is a...
+    [04] <fork_help>\n## Rick Fork Guidance\nThis build includes fork-only behavior beyond upstream/mainl...
+    [05] <PERMISSIONS_INSTRUCTIONS>
+    [06] <tools>
+         Deferred tool namespaces:
+         - mcp__codex_apps__calendar: Plan events and manage your calendar.
+         </tools>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:inspect deferred tools before resume
+03:message/assistant:done
+04:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+05:message/user:inspect unchanged deferred tools after resume

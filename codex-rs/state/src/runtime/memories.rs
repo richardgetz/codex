@@ -195,6 +195,7 @@ SELECT
     threads.tokens_used,
     threads.first_user_message,
     threads.archived_at,
+    threads.is_pinned,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
@@ -208,6 +209,7 @@ FROM threads
                 allowed_sources,
                 model_providers: None,
                 cwd_filters: None,
+                is_pinned: None,
                 anchor: None,
                 sort_key: SortKey::UpdatedAt,
                 sort_direction: SortDirection::Desc,
@@ -569,6 +571,7 @@ SELECT
     threads.tokens_used,
     threads.first_user_message,
     threads.archived_at,
+    threads.is_pinned,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
@@ -1674,6 +1677,7 @@ mod tests {
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::ThreadHistoryMode;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use sqlx::Row;
     use std::sync::Arc;
@@ -1700,9 +1704,12 @@ mod tests {
     #[tokio::test]
     async fn stage1_claim_skips_when_up_to_date() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         let metadata = test_thread_metadata(&codex_home, thread_id, codex_home.join("a"));
@@ -1768,9 +1775,12 @@ mod tests {
     #[tokio::test]
     async fn stage1_running_stale_can_be_stolen_but_fresh_running_is_skipped() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
@@ -1823,9 +1833,12 @@ mod tests {
     #[tokio::test]
     async fn stage1_concurrent_claim_for_same_thread_is_conflict_safe() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         runtime
@@ -1891,9 +1904,12 @@ mod tests {
     #[tokio::test]
     async fn stage1_concurrent_claims_respect_running_cap() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
@@ -1959,9 +1975,12 @@ mod tests {
     #[tokio::test]
     async fn claim_stage1_jobs_filters_by_age_idle_and_current_thread() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let now = Utc::now();
         let fresh_at = now - Duration::hours(1);
@@ -2049,9 +2068,12 @@ mod tests {
     #[tokio::test]
     async fn claim_stage1_jobs_bounds_state_scan_before_memory_probes() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let now = Utc::now();
         let eligible_newer_at = now - Duration::hours(13);
@@ -2164,9 +2186,12 @@ mod tests {
     #[tokio::test]
     async fn claim_stage1_jobs_skips_threads_without_enabled_memory() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let now = Utc::now();
         let eligible_at = now - Duration::hours(13);
@@ -2260,9 +2285,12 @@ mod tests {
     #[tokio::test]
     async fn clear_memory_data_clears_rows_and_preserves_thread_memory_modes() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let now = Utc::now() - Duration::hours(13);
         let worker_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("worker id");
@@ -2369,9 +2397,12 @@ mod tests {
     #[tokio::test]
     async fn claim_stage1_jobs_enforces_global_running_cap() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let current_thread_id =
             ThreadId::from_string(&Uuid::new_v4().to_string()).expect("current thread id");
@@ -2496,9 +2527,12 @@ WHERE kind = 'memory_stage1'
     #[tokio::test]
     async fn claim_stage1_jobs_processes_two_full_batches_across_startup_passes() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let current_thread_id =
             ThreadId::from_string(&Uuid::new_v4().to_string()).expect("current thread id");
@@ -2583,9 +2617,12 @@ WHERE kind = 'memory_stage1'
     #[tokio::test]
     async fn delete_thread_removes_stage1_output_and_enqueues_phase2_when_selected() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
@@ -2708,9 +2745,12 @@ WHERE kind = ? AND job_key = ?
     #[tokio::test]
     async fn mark_stage1_job_succeeded_no_output_skips_phase2_when_output_was_already_absent() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
@@ -2783,9 +2823,12 @@ WHERE kind = ? AND job_key = ?
     #[tokio::test]
     async fn mark_stage1_job_succeeded_no_output_enqueues_phase2_when_deleting_output() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
@@ -2908,9 +2951,12 @@ WHERE kind = ? AND job_key = ?
     #[tokio::test]
     async fn stage1_retry_exhaustion_does_not_block_newer_watermark() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
@@ -3004,9 +3050,12 @@ WHERE kind = ? AND job_key = ?
     #[tokio::test]
     async fn phase2_global_lock_respects_success_cooldown() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
@@ -3066,9 +3115,12 @@ WHERE kind = ? AND job_key = ?
     #[tokio::test]
     async fn phase2_global_lock_can_be_claimed_after_retry_budget_is_exhausted() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         runtime
             .enqueue_global_consolidation(/*input_watermark*/ 100)
@@ -3136,9 +3188,12 @@ WHERE kind = ? AND job_key = ?
     #[tokio::test]
     async fn list_stage1_outputs_for_global_returns_latest_outputs() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         let thread_id_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
@@ -3239,9 +3294,12 @@ WHERE kind = ? AND job_key = ?
     #[tokio::test]
     async fn list_stage1_outputs_for_global_skips_empty_payloads() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id_non_empty =
             ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
@@ -3308,9 +3366,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn list_stage1_outputs_for_global_includes_paginated_and_skips_polluted_threads() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id_enabled =
             ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
@@ -3375,9 +3436,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn get_phase2_input_selection_returns_current_selected_rows() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
         let thread_id_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
@@ -3490,9 +3554,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn get_phase2_input_selection_excludes_polluted_previous_selection() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id_enabled =
             ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
@@ -3583,9 +3650,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn mark_thread_memory_mode_polluted_enqueues_phase2_for_selected_threads() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
@@ -3672,9 +3742,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn mark_thread_memory_mode_polluted_enqueues_phase2_when_already_polluted() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
@@ -3767,9 +3840,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn get_phase2_input_selection_returns_regenerated_selected_rows() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
@@ -3886,9 +3962,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn get_phase2_input_selection_uses_current_ranking_after_refreshes() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
         let thread_id_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
@@ -4029,9 +4108,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn mark_global_phase2_job_succeeded_updates_selected_snapshot_timestamp() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
@@ -4179,9 +4261,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn mark_global_phase2_job_succeeded_only_marks_exact_selected_snapshots() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
@@ -4299,9 +4384,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn record_stage1_output_usage_updates_usage_metadata() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id a");
         let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id b");
@@ -4418,9 +4506,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn get_phase2_input_selection_prioritizes_usage_count_then_recent_usage() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let now = Utc::now();
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
@@ -4514,9 +4605,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn get_phase2_input_selection_excludes_stale_used_memories_but_keeps_fresh_never_used() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let now = Utc::now();
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
@@ -4610,9 +4704,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn get_phase2_input_selection_prefers_recent_thread_updates_over_recent_generation() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
         let older_thread =
@@ -4696,9 +4793,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn prune_stage1_outputs_for_retention_prunes_stale_unselected_rows_only() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
         let stale_unused =
@@ -4838,9 +4938,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn prune_stage1_outputs_for_retention_respects_batch_limit() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
         let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread a");
@@ -4916,9 +5019,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn mark_stage1_job_succeeded_enqueues_global_consolidation() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id a");
         let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id b");
@@ -5011,9 +5117,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn phase2_global_lock_allows_only_one_fresh_runner() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         runtime
             .enqueue_global_consolidation(/*input_watermark*/ 200)
@@ -5044,9 +5153,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn phase2_global_lock_creates_missing_job_row() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner a");
         let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
@@ -5094,9 +5206,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn phase2_global_lock_stale_lease_allows_takeover() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         runtime
             .enqueue_global_consolidation(/*input_watermark*/ 300)
@@ -5169,9 +5284,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn enqueue_global_consolidation_keeps_phase2_input_watermark_monotonic() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         runtime
             .enqueue_global_consolidation(/*input_watermark*/ 500)
@@ -5233,9 +5351,12 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn phase2_failure_fallback_updates_unowned_running_job() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         runtime
             .enqueue_global_consolidation(/*input_watermark*/ 400)

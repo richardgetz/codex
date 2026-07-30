@@ -17,7 +17,10 @@ use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeTranscriptEntry;
 use codex_utils_string::approx_token_count;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Instant;
+use tokio::sync::Mutex;
 
 #[test]
 fn prefers_handoff_input_transcript_over_active_transcript() {
@@ -174,15 +177,18 @@ fn bounds_oversized_realtime_delegation_and_preserves_transcript_tail() {
 #[tokio::test]
 async fn clears_active_handoff_explicitly() {
     let (tx, _rx) = bounded(1);
-    let state = RealtimeHandoffState::new(
-        tx,
-        /*client_managed_handoffs*/ false,
-        /*codex_responses_as_items*/ false,
-        /*codex_response_item_prefix*/ None,
-        CodexResponseHandoffMode::Thinking,
-        RealtimeSessionKind::V1,
-        /*event_parser*/ RealtimeEventParser::V1,
-    );
+    let state = RealtimeHandoffState {
+        output_tx: tx,
+        last_output: Arc::new(Mutex::new(None)),
+        stream: Arc::new(Mutex::new(Default::default())),
+        client_managed_handoffs: false,
+        codex_responses_as_items: false,
+        codex_response_item_prefix: None,
+        codex_response_handoff_mode: CodexResponseHandoffMode::Thinking,
+        codex_response_handoff_channel_prefixes: Arc::new(BTreeMap::new()),
+        session_kind: RealtimeSessionKind::V1,
+        event_parser: RealtimeEventParser::V1,
+    };
 
     state.stream.lock().await.active_handoff = Some("handoff_1".to_string());
     assert_eq!(

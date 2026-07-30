@@ -95,14 +95,18 @@ mod tests {
     use super::test_support::test_thread_metadata;
     use super::test_support::unique_temp_dir;
     use codex_protocol::ThreadId;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
     async fn inbound_messages_are_claimed_once_per_target_thread() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
         let source_thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000101").expect("source");
         let target_thread_id =

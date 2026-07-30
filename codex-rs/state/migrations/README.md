@@ -22,3 +22,12 @@ the upstream migration at the next unused version:
 
 The SQL should still be reviewed for object-name conflicts, but a version
 collision alone does not imply the schema changes conflict.
+
+The `rust-v0.146.0` refresh keeps the already-shipped fork migrations at
+`0043_upstream_threads_name.sql` and `0044_upstream_drop_agent_jobs.sql`. The
+incoming upstream migrations are appended as:
+
+```text
+0045_upstream_threads_is_pinned.sql
+0046_upstream_external_agent_config_imports_provider_id.sql
+```

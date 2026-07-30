@@ -59,7 +59,7 @@ impl ListMcpResourceTemplatesHandler {
             ..
         } = invocation;
         let turn = std::sync::Arc::clone(&step_context.turn);
-        let manager = step_context.mcp.manager();
+        let mcp = &step_context.mcp;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -91,8 +91,8 @@ impl ListMcpResourceTemplatesHandler {
                 let params = cursor
                     .clone()
                     .map(|value| PaginatedRequestParams::default().with_cursor(Some(value)));
-                let result = session
-                    .list_resource_templates_with_reconnect(turn.as_ref(), &server_name, params)
+                let result = mcp
+                    .list_resource_templates(&server_name, params)
                     .await
                     .map_err(|err| {
                         FunctionCallError::RespondToModel(format!(
@@ -110,7 +110,7 @@ impl ListMcpResourceTemplatesHandler {
                     ));
                 }
 
-                let templates = manager
+                let templates = mcp
                     .list_all_resource_templates(|server_name| {
                         model_can_access_mcp_server(turn.as_ref(), server_name)
                     })
