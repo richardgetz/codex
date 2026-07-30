@@ -624,6 +624,63 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn directory_app_merge_preserves_first_party_type_from_later_duplicate() -> anyhow::Result<()> {
+        let response: DirectoryListResponse = serde_json::from_value(serde_json::json!({
+            "apps": [{
+                "id": "alpha",
+                "name": "Alpha",
+                "appMetadata": {
+                    "firstPartyRequiresInstall": true
+                }
+            }, {
+                "id": "alpha",
+                "name": "",
+                "appMetadata": {
+                    "firstPartyType": "openai"
+                }
+            }],
+            "next_token": null
+        }))?;
+
+        let app_info = directory_app_to_app_info(merge_directory_apps(response.apps).remove(0));
+
+        assert_eq!(
+            serde_json::to_value(app_info)?,
+            serde_json::json!({
+                "id": "alpha",
+                "name": "Alpha",
+                "description": null,
+                "logoUrl": null,
+                "logoUrlDark": null,
+                "iconAssets": null,
+                "iconDarkAssets": null,
+                "distributionChannel": null,
+                "branding": null,
+                "appMetadata": {
+                    "review": null,
+                    "categories": null,
+                    "subCategories": null,
+                    "seoDescription": null,
+                    "screenshots": null,
+                    "developer": null,
+                    "version": null,
+                    "versionId": null,
+                    "versionNotes": null,
+                    "firstPartyType": "openai",
+                    "firstPartyRequiresInstall": true,
+                    "showInComposerWhenUnlinked": null
+                },
+                "labels": null,
+                "installUrl": null,
+                "isAccessible": false,
+                "isEnabled": true,
+                "pluginDisplayNames": []
+            })
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     #[expect(
         clippy::await_holding_invalid_type,

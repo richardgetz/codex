@@ -275,7 +275,7 @@ async fn app_server_mcp_startup_does_not_block_slash_new() {
         .set_composer_text("/new".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::NewSession));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::NewSession { .. }));
 }
 
 #[tokio::test]
@@ -325,6 +325,8 @@ async fn mcp_startup_complete_preserves_review_status() {
     chat.on_guardian_assessment(GuardianAssessmentEvent {
         id: "guardian-1".to_string(),
         target_item_id: Some("guardian-target-1".to_string()),
+        plugin_id: None,
+        script_path: None,
         turn_id: "turn-1".to_string(),
         started_at_ms: 0,
         completed_at_ms: None,

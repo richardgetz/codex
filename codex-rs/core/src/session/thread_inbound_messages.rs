@@ -70,6 +70,7 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::Op;
     use codex_protocol::user_input::UserInput;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
     use tokio::time::timeout;
@@ -79,10 +80,12 @@ mod tests {
     async fn thread_inbound_message_poller_injects_queued_user_input() {
         let codex_home =
             std::env::temp_dir().join(format!("codex-core-thread-inbox-test-{}", Uuid::new_v4()));
-        let runtime =
-            codex_state::StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-                .await
-                .expect("initialize runtime");
+        let runtime = codex_state::StateRuntime::init(
+            codex_state::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
         let thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000201").expect("thread id");
         let now = chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, /*nsecs*/ 0)
@@ -108,6 +111,7 @@ mod tests {
                 name: None,
                 title: "target".to_string(),
                 preview: None,
+                is_pinned: false,
                 sandbox_policy: "read-only".to_string(),
                 approval_mode: "on-request".to_string(),
                 tokens_used: 0,

@@ -60,7 +60,19 @@ impl McpHandler {
     }
 
     fn hook_tool_name(&self) -> HookToolName {
-        HookToolName::new(hook_mcp_tool_name(&self.tool_info.canonical_tool_name()))
+        let canonical_tool_name = self.tool_info.canonical_tool_name();
+        let hook_tool_name = HookToolName::new(hook_mcp_tool_name(&canonical_tool_name));
+        let legacy_name = canonical_tool_name.name.trim_start_matches('_').to_string();
+        if legacy_name == canonical_tool_name.name {
+            return hook_tool_name;
+        }
+        HookToolName::with_matcher_alias(
+            hook_tool_name,
+            hook_mcp_tool_name(&ToolName::namespaced(
+                canonical_tool_name.namespace.unwrap_or_default(),
+                legacy_name,
+            )),
+        )
     }
 }
 
@@ -533,6 +545,21 @@ mod tests {
                 tool_name: HookToolName::new("mcp__foo__exec_command"),
                 tool_input: json!({ "message": "hello" }),
             })
+        );
+    }
+
+    #[test]
+    fn mcp_hook_name_accepts_legacy_apps_name_without_a_leading_tool_underscore() {
+        let handler = McpHandler::new(
+            tool_info("codex_apps", "mcp__codex_apps__calendar", "_extract_text"),
+            /*namespace_tools_enabled*/ true,
+        )
+        .expect("MCP tool spec should build");
+
+        assert_eq!(
+            handler.hook_tool_name(),
+            HookToolName::new("mcp__codex_apps__calendar___extract_text")
+                .with_matcher_alias("mcp__codex_apps__calendar__extract_text")
         );
     }
 

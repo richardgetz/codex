@@ -116,7 +116,6 @@ pub(crate) enum AppCommand {
     SetUserPreferencesMemoryPolicy {
         policy: UserPreferencesMemoryBucketPolicy,
     },
-    Shutdown,
     Review {
         target: ReviewTarget,
     },
@@ -312,12 +311,6 @@ impl AppCommand {
     pub(crate) fn set_scratchpad_continuous_policy(enabled: bool) -> Self {
         Self::SetScratchpadContinuousPolicy { enabled }
     }
-
-    #[allow(dead_code)]
-    pub(crate) fn shutdown() -> Self {
-        Self::Shutdown
-    }
-
     pub(crate) fn review(target: ReviewTarget) -> Self {
         Self::Review { target }
     }

@@ -122,7 +122,21 @@ For this repo, also keep `codex-rs/state/migrations/README.md` and
 
 ## Conflict Policy
 
-Resolve conflicts locally when they are narrow and clearly mechanical, especially:
+Resolve conflicts locally regardless of how many files or crates are involved.
+Conflict count and spread are not reasons to ask for permission or abandon the
+stable-based merge. Mainline releases routinely change broad shared surfaces,
+and the purpose of this workflow is to keep those upstream fixes and features
+flowing into the fork.
+
+Treat a conflict as requiring user input only when it is a **semantic conflict
+with intentional fork behavior**: the resolution would change, drop, redesign,
+or make incompatible a fork-owned feature, fix, public contract, or recorded
+must-level intent. Textual overlap alone is not a semantic conflict.
+
+For conflicts outside intentional fork behavior, adopt and integrate the
+upstream result autonomously. For conflicts that overlap fork-owned code, adapt
+the fork implementation to the new upstream shape while preserving its
+documented behavior and intent. This applies especially to:
 
 - workspace dependency wiring
 - crate manifest updates that only need to keep both upstream and fork dependencies
@@ -132,11 +146,19 @@ Resolve conflicts locally when they are narrow and clearly mechanical, especiall
 
 Stop and ask the user before proceeding when any of the following happens:
 
-- conflicts spread outside the maintained fork layer or the fork contract is no longer clear
-- more than a few files conflict across unrelated crates
-- upstream changed versioning or release metadata semantics enough that the fork patch is no longer obviously correct
-- replaying the fork commits would require new product decisions instead of straightforward adaptation
+- the fork contract or recorded intent is unclear enough that preserving it
+  would require guessing
+- upstream changed versioning, release metadata, or another shared contract in a
+  way that makes a fork-owned behavior incompatible rather than merely in need
+  of adaptation
+- preserving the fork behavior would require a new product decision instead of
+  a straightforward adaptation
 - the audit shows a previously maintained stable surface that now needs to be intentionally dropped or redesigned
+
+Do not stop merely because upstream refactored the surrounding code, renamed or
+moved APIs, touched unrelated crates, or produced a large number of merge
+conflicts. Resolve those changes, prove both upstream and fork behavior, and
+record the adaptation in the preservation audit.
 
 ## Upstream And Fork Preservation Audit
 
