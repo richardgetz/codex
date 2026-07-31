@@ -5670,6 +5670,7 @@ fn token_usage_notification(
                 reasoning_output_tokens: 0,
             },
             usage_by_service_tier: Default::default(),
+            usage_by_service_tier_and_context_length: Default::default(),
             model_context_window,
         },
     })

@@ -21705,6 +21705,16 @@
             },
             "default": {},
             "type": "object"
+          },
+          "usageByServiceTierAndContextLength": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/definitions/v2/TokenUsageBreakdown"
+              },
+              "type": "object"
+            },
+            "default": {},
+            "type": "object"
           }
         },
         "required": [

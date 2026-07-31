@@ -2606,6 +2606,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             total_tokens: 7,
         },
         usage_by_service_tier: Default::default(),
+        usage_by_service_tier_and_context_length: Default::default(),
         model_context_window: Some(1_000),
     };
     let info2 = TokenUsageInfo {
@@ -2626,6 +2627,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             total_tokens: 35,
         },
         usage_by_service_tier: Default::default(),
+        usage_by_service_tier_and_context_length: Default::default(),
         model_context_window: Some(2_000),
     };
 
@@ -2716,6 +2718,7 @@ async fn recompute_token_usage_updates_model_context_window() {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             usage_by_service_tier: Default::default(),
+            usage_by_service_tier_and_context_length: Default::default(),
             model_context_window: Some(258_400),
         }));
     }
@@ -2833,6 +2836,13 @@ async fn record_token_usage_info_notifies_extension_contributors() {
                     TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
                     first_usage.clone(),
                 )]),
+                usage_by_service_tier_and_context_length: std::collections::BTreeMap::from([(
+                    TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
+                    std::collections::BTreeMap::from([(
+                        first_usage.context_length().to_string(),
+                        first_usage.clone(),
+                    )]),
+                )]),
                 model_context_window: turn_context.model_context_window(),
             },
             saw_session_store: true,
@@ -2843,9 +2853,16 @@ async fn record_token_usage_info_notifies_extension_contributors() {
             thread_level_id: session.thread_id.to_string(),
             turn_level_id: turn_context.sub_id.clone(),
             token_usage: TokenUsageInfo {
-                total_token_usage: expected_total_usage,
+                total_token_usage: expected_total_usage.clone(),
                 last_token_usage: second_usage,
                 usage_by_service_tier: expected_usage_by_service_tier,
+                usage_by_service_tier_and_context_length: std::collections::BTreeMap::from([(
+                    TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
+                    std::collections::BTreeMap::from([(
+                        expected_total_usage.context_length().to_string(),
+                        expected_total_usage.clone(),
+                    )]),
+                )]),
                 model_context_window: turn_context.model_context_window(),
             },
             saw_session_store: true,
@@ -13098,6 +13115,7 @@ async fn set_total_token_usage(sess: &Session, total_token_usage: TokenUsage) {
         total_token_usage,
         last_token_usage: TokenUsage::default(),
         usage_by_service_tier: Default::default(),
+        usage_by_service_tier_and_context_length: Default::default(),
         model_context_window: None,
     }));
 }

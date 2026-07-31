@@ -2002,6 +2002,7 @@ where
                 Ok(ResponseEvent::Completed {
                     response_id,
                     token_usage,
+                    service_tier,
                     end_turn,
                 }) => {
                     feedback_tags!(last_model_response_id = &response_id);
@@ -2024,6 +2025,7 @@ where
                         .send(Ok(ResponseEvent::Completed {
                             response_id,
                             token_usage,
+                            service_tier,
                             end_turn,
                         }))
                         .await

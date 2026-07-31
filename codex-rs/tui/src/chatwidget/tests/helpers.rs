@@ -372,6 +372,7 @@ pub(super) fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUs
         total_token_usage: usage(total_tokens),
         last_token_usage: usage(total_tokens),
         usage_by_service_tier: Default::default(),
+        usage_by_service_tier_and_context_length: Default::default(),
         model_context_window: Some(context_window),
     }
 }
@@ -411,6 +412,21 @@ pub(super) fn handle_token_count(chat: &mut ChatWidget, info: Option<TokenUsageI
                                 .into_iter()
                                 .map(|(service_tier, usage)| {
                                     (service_tier, token_usage_breakdown(usage))
+                                })
+                                .collect(),
+                            usage_by_service_tier_and_context_length: info
+                                .usage_by_service_tier_and_context_length
+                                .into_iter()
+                                .map(|(service_tier, context_usages)| {
+                                    (
+                                        service_tier,
+                                        context_usages
+                                            .into_iter()
+                                            .map(|(context_length, usage)| {
+                                                (context_length, token_usage_breakdown(usage))
+                                            })
+                                            .collect(),
+                                    )
                                 })
                                 .collect(),
                             model_context_window: info.model_context_window,

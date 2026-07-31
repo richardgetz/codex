@@ -2,6 +2,8 @@ use crate::token_usage::TokenUsage;
 use codex_config::types::TuiStatusTokenUsage;
 use codex_config::types::TuiStatusTokenUsageRate;
 use codex_config::types::TuiStatusTokenUsageServiceTierRate;
+use codex_protocol::protocol::TOKEN_USAGE_LONG_CONTEXT;
+use codex_protocol::protocol::TOKEN_USAGE_SHORT_CONTEXT;
 use codex_protocol::protocol::TOKEN_USAGE_STANDARD_SERVICE_TIER;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
@@ -36,12 +38,31 @@ struct ResolvedRate {
     output_usd_per_1m: f64,
 }
 
+#[cfg(test)]
 pub(crate) fn compose_status_token_usage_cost(
     config: &TuiStatusTokenUsage,
     model_provider_id: &str,
     model: &str,
     usage: &TokenUsage,
     usage_by_service_tier: &BTreeMap<String, TokenUsage>,
+) -> Option<StatusTokenUsageCostData> {
+    compose_status_token_usage_cost_with_context_length(
+        config,
+        model_provider_id,
+        model,
+        usage,
+        usage_by_service_tier,
+        &BTreeMap::new(),
+    )
+}
+
+pub(crate) fn compose_status_token_usage_cost_with_context_length(
+    config: &TuiStatusTokenUsage,
+    model_provider_id: &str,
+    model: &str,
+    usage: &TokenUsage,
+    usage_by_service_tier: &BTreeMap<String, TokenUsage>,
+    usage_by_service_tier_and_context_length: &BTreeMap<String, BTreeMap<String, TokenUsage>>,
 ) -> Option<StatusTokenUsageCostData> {
     if !config.enabled || usage.is_zero() {
         return None;
@@ -58,6 +79,7 @@ pub(crate) fn compose_status_token_usage_cost(
         model,
         usage,
         usage_by_service_tier,
+        usage_by_service_tier_and_context_length,
     );
 
     Some(StatusTokenUsageCostData {
@@ -165,6 +187,82 @@ fn cost_for_usage_by_service_tier(
     model: &str,
     usage: &TokenUsage,
     usage_by_service_tier: &BTreeMap<String, TokenUsage>,
+    usage_by_service_tier_and_context_length: &BTreeMap<String, BTreeMap<String, TokenUsage>>,
+) -> Option<StatusTokenUsageCostBreakdown> {
+    if usage_by_service_tier_and_context_length.is_empty() {
+        return cost_for_usage_by_service_tier_short(
+            config,
+            model_provider_id,
+            model,
+            usage,
+            usage_by_service_tier,
+        );
+    }
+
+    let mut total_cost = StatusTokenUsageCostBreakdown::default();
+    let mut covered_usage = TokenUsage::default();
+    let mut covered_usage_by_service_tier = BTreeMap::new();
+    for (service_tier, context_usages) in usage_by_service_tier_and_context_length {
+        for (context_length, context_usage) in context_usages {
+            let context_length = ContextLength::from_key(context_length)?;
+            let rate = rates_for_model(
+                config,
+                model_provider_id,
+                model,
+                service_tier,
+                context_length,
+            )?;
+            total_cost.add_assign(cost_for_usage(context_usage, rate));
+            add_usage(&mut covered_usage, context_usage);
+            add_usage(
+                covered_usage_by_service_tier
+                    .entry(service_tier.clone())
+                    .or_default(),
+                context_usage,
+            );
+        }
+    }
+
+    for (service_tier, tier_usage) in usage_by_service_tier {
+        let covered = covered_usage_by_service_tier
+            .get(service_tier)
+            .cloned()
+            .unwrap_or_default();
+        let unbucketed_usage = unbucketed_usage(tier_usage, &covered);
+        if !unbucketed_usage.is_zero() {
+            let rate = rates_for_model(
+                config,
+                model_provider_id,
+                model,
+                service_tier,
+                ContextLength::Short,
+            )?;
+            total_cost.add_assign(cost_for_usage(&unbucketed_usage, rate));
+            add_usage(&mut covered_usage, &unbucketed_usage);
+        }
+    }
+
+    let unbucketed_usage = unbucketed_usage(usage, &covered_usage);
+    if !unbucketed_usage.is_zero() {
+        let rate = rates_for_model(
+            config,
+            model_provider_id,
+            model,
+            TOKEN_USAGE_STANDARD_SERVICE_TIER,
+            ContextLength::Short,
+        )?;
+        total_cost.add_assign(cost_for_usage(&unbucketed_usage, rate));
+    }
+
+    Some(total_cost)
+}
+
+fn cost_for_usage_by_service_tier_short(
+    config: &TuiStatusTokenUsage,
+    model_provider_id: &str,
+    model: &str,
+    usage: &TokenUsage,
+    usage_by_service_tier: &BTreeMap<String, TokenUsage>,
 ) -> Option<StatusTokenUsageCostBreakdown> {
     if usage_by_service_tier.is_empty() {
         let rate = rates_for_model(
@@ -172,6 +270,7 @@ fn cost_for_usage_by_service_tier(
             model_provider_id,
             model,
             TOKEN_USAGE_STANDARD_SERVICE_TIER,
+            ContextLength::Short,
         )?;
         return Some(cost_for_usage(usage, rate));
     }
@@ -179,7 +278,13 @@ fn cost_for_usage_by_service_tier(
     let mut total_cost = StatusTokenUsageCostBreakdown::default();
     let mut covered_usage = TokenUsage::default();
     for (service_tier, tier_usage) in usage_by_service_tier {
-        let rate = rates_for_model(config, model_provider_id, model, service_tier)?;
+        let rate = rates_for_model(
+            config,
+            model_provider_id,
+            model,
+            service_tier,
+            ContextLength::Short,
+        )?;
         total_cost.add_assign(cost_for_usage(tier_usage, rate));
         add_usage(&mut covered_usage, tier_usage);
     }
@@ -191,6 +296,7 @@ fn cost_for_usage_by_service_tier(
             model_provider_id,
             model,
             TOKEN_USAGE_STANDARD_SERVICE_TIER,
+            ContextLength::Short,
         )?;
         total_cost.add_assign(cost_for_usage(&unbucketed_usage, rate));
     }
@@ -252,12 +358,30 @@ fn unbucketed_usage(total: &TokenUsage, covered: &TokenUsage) -> TokenUsage {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContextLength {
+    Short,
+    Long,
+}
+
+impl ContextLength {
+    fn from_key(key: &str) -> Option<Self> {
+        match key {
+            TOKEN_USAGE_SHORT_CONTEXT => Some(Self::Short),
+            TOKEN_USAGE_LONG_CONTEXT => Some(Self::Long),
+            _ => None,
+        }
+    }
+}
+
 fn rates_for_model(
     config: &TuiStatusTokenUsage,
     model_provider_id: &str,
     model: &str,
     service_tier: &str,
+    context_length: ContextLength,
 ) -> Option<ResolvedRate> {
+    let service_tier = canonical_service_tier(service_tier);
     if let Some(rate) = config.model_rates.get(model) {
         if is_standard_service_tier(service_tier) {
             return Some(rate.into());
@@ -265,13 +389,22 @@ fn rates_for_model(
         return rate.service_tiers.get(service_tier).map(Into::into);
     }
 
-    built_in_rate_for_model(model_provider_id, model, service_tier)
+    built_in_rate_for_model(model_provider_id, model, service_tier, context_length)
+}
+
+fn canonical_service_tier(service_tier: &str) -> &str {
+    match service_tier {
+        "fast" => "priority",
+        "batch" => "flex",
+        _ => service_tier,
+    }
 }
 
 fn built_in_rate_for_model(
     model_provider_id: &str,
     model: &str,
     service_tier: &str,
+    context_length: ContextLength,
 ) -> Option<ResolvedRate> {
     if model_provider_id != "openai" {
         return None;
@@ -283,100 +416,194 @@ fn built_in_rate_for_model(
     } else {
         service_tier
     };
-    match (model.as_str(), service_tier) {
+    match (model.as_str(), service_tier, context_length) {
         // Keep this table aligned with public OpenAI API processing rates.
         // Unknown or newly added models still render tokens without cost until rates
         // are added here or supplied through config overrides.
-        ("gpt-5.3-codex", TOKEN_USAGE_STANDARD_SERVICE_TIER) => Some(rate(
+        (
+            "gpt-5.3-codex",
+            TOKEN_USAGE_STANDARD_SERVICE_TIER,
+            ContextLength::Short | ContextLength::Long,
+        ) => Some(rate(
             /*input_usd_per_1m*/ 1.75, /*cached_input_usd_per_1m*/ 0.175,
             /*output_usd_per_1m*/ 14.0,
         )),
-        ("gpt-5.4", TOKEN_USAGE_STANDARD_SERVICE_TIER) => Some(rate(
+        ("gpt-5.4", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Short) => Some(rate(
             /*input_usd_per_1m*/ 2.5, /*cached_input_usd_per_1m*/ 0.25,
             /*output_usd_per_1m*/ 15.0,
         )),
-        ("gpt-5.4-mini", TOKEN_USAGE_STANDARD_SERVICE_TIER) => {
+        (
+            "gpt-5.4-mini",
+            TOKEN_USAGE_STANDARD_SERVICE_TIER,
+            ContextLength::Short | ContextLength::Long,
+        ) => {
             Some(rate(
                 /*input_usd_per_1m*/ 0.75, /*cached_input_usd_per_1m*/ 0.075,
                 /*output_usd_per_1m*/ 4.5,
             ))
         }
-        ("gpt-5.4-nano", TOKEN_USAGE_STANDARD_SERVICE_TIER) => {
+        (
+            "gpt-5.4-nano",
+            TOKEN_USAGE_STANDARD_SERVICE_TIER,
+            ContextLength::Short | ContextLength::Long,
+        ) => {
             Some(rate(
                 /*input_usd_per_1m*/ 0.20, /*cached_input_usd_per_1m*/ 0.02,
                 /*output_usd_per_1m*/ 1.25,
             ))
         }
-        ("gpt-5.5", TOKEN_USAGE_STANDARD_SERVICE_TIER) => Some(rate(
+        ("gpt-5.5", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Short) => Some(rate(
             /*input_usd_per_1m*/ 5.0, /*cached_input_usd_per_1m*/ 0.50,
             /*output_usd_per_1m*/ 30.0,
         )),
-        ("gpt-5.6" | "gpt-5.6-sol", TOKEN_USAGE_STANDARD_SERVICE_TIER) => {
+        ("gpt-5.6" | "gpt-5.6-sol", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Short) => {
             Some(rate_with_cache_write(
                 /*input_usd_per_1m*/ 5.0, /*cached_input_usd_per_1m*/ 0.50,
                 /*cache_write_usd_per_1m*/ 6.25, /*output_usd_per_1m*/ 30.0,
             ))
         }
-        ("gpt-5.6-terra", TOKEN_USAGE_STANDARD_SERVICE_TIER) => Some(rate_with_cache_write(
-            /*input_usd_per_1m*/ 2.50, /*cached_input_usd_per_1m*/ 0.25,
-            /*cache_write_usd_per_1m*/ 3.125, /*output_usd_per_1m*/ 15.0,
+        ("gpt-5.6-terra", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 2.0, /*cached_input_usd_per_1m*/ 0.20,
+                /*cache_write_usd_per_1m*/ 2.50, /*output_usd_per_1m*/ 12.0,
+            ))
+        }
+        ("gpt-5.6-luna", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 0.20, /*cached_input_usd_per_1m*/ 0.02,
+                /*cache_write_usd_per_1m*/ 0.25, /*output_usd_per_1m*/ 1.20,
+            ))
+        }
+        ("gpt-5.4", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Long) => Some(rate(
+            /*input_usd_per_1m*/ 5.0, /*cached_input_usd_per_1m*/ 0.50,
+            /*output_usd_per_1m*/ 22.5,
         )),
-        ("gpt-5.6-luna", TOKEN_USAGE_STANDARD_SERVICE_TIER) => Some(rate_with_cache_write(
-            /*input_usd_per_1m*/ 1.0, /*cached_input_usd_per_1m*/ 0.10,
-            /*cache_write_usd_per_1m*/ 1.25, /*output_usd_per_1m*/ 6.0,
+        ("gpt-5.5", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Long) => Some(rate(
+            /*input_usd_per_1m*/ 10.0, /*cached_input_usd_per_1m*/ 1.0,
+            /*output_usd_per_1m*/ 45.0,
         )),
-        ("gpt-5.4", "priority") => Some(rate(
+        ("gpt-5.6" | "gpt-5.6-sol", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Long) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 10.0, /*cached_input_usd_per_1m*/ 1.0,
+                /*cache_write_usd_per_1m*/ 12.50, /*output_usd_per_1m*/ 45.0,
+            ))
+        }
+        ("gpt-5.6-terra", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Long) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 4.0, /*cached_input_usd_per_1m*/ 0.40,
+                /*cache_write_usd_per_1m*/ 5.0, /*output_usd_per_1m*/ 18.0,
+            ))
+        }
+        ("gpt-5.6-luna", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Long) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 0.40, /*cached_input_usd_per_1m*/ 0.04,
+                /*cache_write_usd_per_1m*/ 0.50, /*output_usd_per_1m*/ 1.80,
+            ))
+        }
+        ("gpt-5.4", "priority" | "fast", ContextLength::Short) => Some(rate(
             /*input_usd_per_1m*/ 5.0, /*cached_input_usd_per_1m*/ 0.50,
             /*output_usd_per_1m*/ 30.0,
         )),
-        ("gpt-5.4-mini", "priority") => Some(rate(
+        ("gpt-5.3-codex", "priority" | "fast", ContextLength::Short) => Some(rate(
+            /*input_usd_per_1m*/ 3.5, /*cached_input_usd_per_1m*/ 0.35,
+            /*output_usd_per_1m*/ 28.0,
+        )),
+        ("gpt-5.4-mini", "priority" | "fast", ContextLength::Short) => Some(rate(
             /*input_usd_per_1m*/ 1.50, /*cached_input_usd_per_1m*/ 0.15,
             /*output_usd_per_1m*/ 9.0,
         )),
-        ("gpt-5.5", "priority") => Some(rate(
+        ("gpt-5.5", "priority" | "fast", ContextLength::Short) => Some(rate(
             /*input_usd_per_1m*/ 12.50, /*cached_input_usd_per_1m*/ 1.25,
             /*output_usd_per_1m*/ 75.0,
         )),
-        ("gpt-5.6" | "gpt-5.6-sol", "priority") => Some(rate_with_cache_write(
-            /*input_usd_per_1m*/ 10.0, /*cached_input_usd_per_1m*/ 1.0,
-            /*cache_write_usd_per_1m*/ 12.50, /*output_usd_per_1m*/ 60.0,
-        )),
-        ("gpt-5.6-terra", "priority") => Some(rate_with_cache_write(
-            /*input_usd_per_1m*/ 5.0, /*cached_input_usd_per_1m*/ 0.50,
-            /*cache_write_usd_per_1m*/ 6.25, /*output_usd_per_1m*/ 30.0,
-        )),
-        ("gpt-5.6-luna", "priority") => Some(rate_with_cache_write(
-            /*input_usd_per_1m*/ 2.0, /*cached_input_usd_per_1m*/ 0.20,
-            /*cache_write_usd_per_1m*/ 2.50, /*output_usd_per_1m*/ 12.0,
-        )),
-        ("gpt-5.4", "flex") => Some(rate(
+        ("gpt-5.6" | "gpt-5.6-sol", "priority" | "fast", ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 10.0, /*cached_input_usd_per_1m*/ 1.0,
+                /*cache_write_usd_per_1m*/ 12.50, /*output_usd_per_1m*/ 60.0,
+            ))
+        }
+        ("gpt-5.6-terra", "priority" | "fast", ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 4.0, /*cached_input_usd_per_1m*/ 0.40,
+                /*cache_write_usd_per_1m*/ 5.0, /*output_usd_per_1m*/ 24.0,
+            ))
+        }
+        ("gpt-5.6-luna", "priority" | "fast", ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 0.40, /*cached_input_usd_per_1m*/ 0.04,
+                /*cache_write_usd_per_1m*/ 0.50, /*output_usd_per_1m*/ 2.40,
+            ))
+        }
+        ("gpt-5.4", "priority" | "fast", ContextLength::Long)
+        | ("gpt-5.4-mini", "priority" | "fast", ContextLength::Long)
+        | ("gpt-5.5", "priority" | "fast", ContextLength::Long)
+        | ("gpt-5.6" | "gpt-5.6-sol", "priority" | "fast", ContextLength::Long)
+        | ("gpt-5.6-terra", "priority" | "fast", ContextLength::Long)
+        | ("gpt-5.6-luna", "priority" | "fast", ContextLength::Long) => None,
+        ("gpt-5.4", "flex" | "batch", ContextLength::Short) => Some(rate(
             /*input_usd_per_1m*/ 1.25, /*cached_input_usd_per_1m*/ 0.13,
             /*output_usd_per_1m*/ 7.50,
         )),
-        ("gpt-5.4-mini", "flex") => Some(rate(
-            /*input_usd_per_1m*/ 0.375, /*cached_input_usd_per_1m*/ 0.0375,
-            /*output_usd_per_1m*/ 2.25,
-        )),
-        ("gpt-5.4-nano", "flex") => Some(rate(
-            /*input_usd_per_1m*/ 0.10, /*cached_input_usd_per_1m*/ 0.01,
-            /*output_usd_per_1m*/ 0.625,
-        )),
-        ("gpt-5.5", "flex") => Some(rate(
+        ("gpt-5.4-mini", "flex" | "batch", ContextLength::Short | ContextLength::Long) => {
+            Some(rate(
+                /*input_usd_per_1m*/ 0.375, /*cached_input_usd_per_1m*/ 0.0375,
+                /*output_usd_per_1m*/ 2.25,
+            ))
+        }
+        ("gpt-5.4-nano", "flex" | "batch", ContextLength::Short | ContextLength::Long) => {
+            Some(rate(
+                /*input_usd_per_1m*/ 0.10, /*cached_input_usd_per_1m*/ 0.01,
+                /*output_usd_per_1m*/ 0.625,
+            ))
+        }
+        ("gpt-5.5", "flex" | "batch", ContextLength::Short) => Some(rate(
             /*input_usd_per_1m*/ 2.50, /*cached_input_usd_per_1m*/ 0.25,
             /*output_usd_per_1m*/ 15.0,
         )),
-        ("gpt-5.6" | "gpt-5.6-sol", "flex" | "batch") => Some(rate_with_cache_write(
+        ("gpt-5.6" | "gpt-5.6-sol", "flex" | "batch", ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 2.50, /*cached_input_usd_per_1m*/ 0.25,
+                /*cache_write_usd_per_1m*/ 3.125, /*output_usd_per_1m*/ 15.0,
+            ))
+        }
+        ("gpt-5.6-terra", "flex" | "batch", ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 1.0, /*cached_input_usd_per_1m*/ 0.10,
+                /*cache_write_usd_per_1m*/ 1.25, /*output_usd_per_1m*/ 6.0,
+            ))
+        }
+        ("gpt-5.6-luna", "flex" | "batch", ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 0.10, /*cached_input_usd_per_1m*/ 0.01,
+                /*cache_write_usd_per_1m*/ 0.125, /*output_usd_per_1m*/ 0.60,
+            ))
+        }
+        ("gpt-5.4", "flex" | "batch", ContextLength::Long) => Some(rate(
             /*input_usd_per_1m*/ 2.50, /*cached_input_usd_per_1m*/ 0.25,
-            /*cache_write_usd_per_1m*/ 3.125, /*output_usd_per_1m*/ 15.0,
+            /*output_usd_per_1m*/ 11.25,
         )),
-        ("gpt-5.6-terra", "flex" | "batch") => Some(rate_with_cache_write(
-            /*input_usd_per_1m*/ 1.25, /*cached_input_usd_per_1m*/ 0.125,
-            /*cache_write_usd_per_1m*/ 1.5625, /*output_usd_per_1m*/ 7.50,
+        ("gpt-5.5", "flex" | "batch", ContextLength::Long) => Some(rate(
+            /*input_usd_per_1m*/ 5.0, /*cached_input_usd_per_1m*/ 0.50,
+            /*output_usd_per_1m*/ 22.50,
         )),
-        ("gpt-5.6-luna", "flex" | "batch") => Some(rate_with_cache_write(
-            /*input_usd_per_1m*/ 0.50, /*cached_input_usd_per_1m*/ 0.05,
-            /*cache_write_usd_per_1m*/ 0.625, /*output_usd_per_1m*/ 3.0,
-        )),
+        ("gpt-5.6" | "gpt-5.6-sol", "flex" | "batch", ContextLength::Long) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 5.0, /*cached_input_usd_per_1m*/ 0.50,
+                /*cache_write_usd_per_1m*/ 6.25, /*output_usd_per_1m*/ 22.50,
+            ))
+        }
+        ("gpt-5.6-terra", "flex" | "batch", ContextLength::Long) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 2.0, /*cached_input_usd_per_1m*/ 0.20,
+                /*cache_write_usd_per_1m*/ 2.50, /*output_usd_per_1m*/ 9.0,
+            ))
+        }
+        ("gpt-5.6-luna", "flex" | "batch", ContextLength::Long) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 0.20, /*cached_input_usd_per_1m*/ 0.02,
+                /*cache_write_usd_per_1m*/ 0.25, /*output_usd_per_1m*/ 0.90,
+            ))
+        }
         _ => None,
     }
 }
@@ -613,16 +840,156 @@ mod tests {
 
         assert_eq!(
             span_text(data.summary_spans()),
-            "1.5M API-equivalent tokens  ~$4.81"
+            "1.5M API-equivalent tokens  ~$3.84"
         );
         assert_eq!(
             span_text(data.input_spans()),
-            "1.0M total, 200.0K cached, 100.0K cache writes, 700.0K billable  ~$1.06"
+            "1.0M total, 200.0K cached, 100.0K cache writes, 700.0K billable  ~$0.84"
         );
         assert_eq!(
             span_text(data.output_spans()),
-            "500.0K total, 100.0K reasoning  ~$3.75"
+            "500.0K total, 100.0K reasoning  ~$3.00"
         );
+    }
+
+    #[test]
+    fn cost_uses_long_context_rates_from_per_response_usage_buckets() {
+        let config = TuiStatusTokenUsage {
+            enabled: true,
+            model_rates: BTreeMap::new(),
+        };
+        let usage = TokenUsage {
+            input_tokens: 1_000_000,
+            cached_input_tokens: 200_000,
+            cache_write_tokens: 100_000,
+            output_tokens: 500_000,
+            reasoning_output_tokens: 100_000,
+            total_tokens: 1_500_000,
+        };
+        let usage_by_service_tier =
+            BTreeMap::from([(TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(), usage.clone())]);
+        let usage_by_service_tier_and_context_length = BTreeMap::from([(
+            TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
+            BTreeMap::from([(TOKEN_USAGE_LONG_CONTEXT.to_string(), usage.clone())]),
+        )]);
+
+        let data = compose_status_token_usage_cost_with_context_length(
+            &config,
+            "openai",
+            "gpt-5.6-terra",
+            &usage,
+            &usage_by_service_tier,
+            &usage_by_service_tier_and_context_length,
+        )
+        .expect("usage should render");
+
+        assert_eq!(
+            span_text(data.summary_spans()),
+            "1.5M API-equivalent tokens  ~$12.38"
+        );
+        assert_eq!(
+            span_text(data.input_spans()),
+            "1.0M total, 200.0K cached, 100.0K cache writes, 700.0K billable  ~$3.38"
+        );
+        assert_eq!(
+            span_text(data.output_spans()),
+            "500.0K total, 100.0K reasoning  ~$9.00"
+        );
+    }
+
+    #[test]
+    fn cost_does_not_double_count_tier_aggregate_after_context_bucketing() {
+        let config = TuiStatusTokenUsage {
+            enabled: true,
+            model_rates: BTreeMap::new(),
+        };
+        let long_usage = TokenUsage {
+            input_tokens: 1_000_000,
+            output_tokens: 100_000,
+            total_tokens: 1_100_000,
+            ..TokenUsage::default()
+        };
+        let short_usage = TokenUsage {
+            input_tokens: 500_000,
+            output_tokens: 50_000,
+            total_tokens: 550_000,
+            ..TokenUsage::default()
+        };
+        let usage = TokenUsage {
+            input_tokens: long_usage.input_tokens + short_usage.input_tokens,
+            cached_input_tokens: long_usage.cached_input_tokens + short_usage.cached_input_tokens,
+            cache_write_tokens: long_usage.cache_write_tokens + short_usage.cache_write_tokens,
+            output_tokens: long_usage.output_tokens + short_usage.output_tokens,
+            reasoning_output_tokens: long_usage.reasoning_output_tokens
+                + short_usage.reasoning_output_tokens,
+            total_tokens: long_usage.total_tokens + short_usage.total_tokens,
+        };
+        let usage_by_service_tier =
+            BTreeMap::from([(TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(), usage.clone())]);
+        let usage_by_service_tier_and_context_length = BTreeMap::from([(
+            TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
+            BTreeMap::from([(TOKEN_USAGE_LONG_CONTEXT.to_string(), long_usage)]),
+        )]);
+
+        let data = compose_status_token_usage_cost_with_context_length(
+            &config,
+            "openai",
+            "gpt-5.4",
+            &usage,
+            &usage_by_service_tier,
+            &usage_by_service_tier_and_context_length,
+        )
+        .expect("usage should render");
+
+        assert_eq!(
+            span_text(data.summary_spans()),
+            "1.6M API-equivalent tokens  ~$9.25"
+        );
+    }
+
+    #[test]
+    fn models_without_long_context_surcharge_reuse_short_rates() {
+        let config = TuiStatusTokenUsage {
+            enabled: true,
+            model_rates: BTreeMap::new(),
+        };
+        let usage = TokenUsage {
+            input_tokens: 100_000,
+            output_tokens: 10_000,
+            total_tokens: 110_000,
+            ..TokenUsage::default()
+        };
+        let usage_by_service_tier =
+            BTreeMap::from([(TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(), usage.clone())]);
+        let short_buckets = BTreeMap::from([(
+            TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
+            BTreeMap::from([(TOKEN_USAGE_SHORT_CONTEXT.to_string(), usage.clone())]),
+        )]);
+        let long_buckets = BTreeMap::from([(
+            TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
+            BTreeMap::from([(TOKEN_USAGE_LONG_CONTEXT.to_string(), usage.clone())]),
+        )]);
+
+        let short = compose_status_token_usage_cost_with_context_length(
+            &config,
+            "openai",
+            "gpt-5.4-mini",
+            &usage,
+            &usage_by_service_tier,
+            &short_buckets,
+        )
+        .expect("short-context usage should render");
+        let long = compose_status_token_usage_cost_with_context_length(
+            &config,
+            "openai",
+            "gpt-5.4-mini",
+            &usage,
+            &usage_by_service_tier,
+            &long_buckets,
+        )
+        .expect("long-context usage should render");
+
+        assert_eq!(short.cost, long.cost);
     }
 
     #[test]
@@ -648,7 +1015,7 @@ mod tests {
             reasoning_output_tokens: 100_000,
             total_tokens: 1_500_000,
         };
-        let usage_by_service_tier = BTreeMap::from([("priority".to_string(), usage.clone())]);
+        let usage_by_service_tier = BTreeMap::from([("fast".to_string(), usage.clone())]);
 
         let data = compose_status_token_usage_cost(
             &config,

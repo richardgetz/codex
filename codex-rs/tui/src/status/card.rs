@@ -48,7 +48,7 @@ use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
 use super::remote_connection::RemoteConnectionStatus;
 use super::token_usage_cost::StatusTokenUsageCostData;
-use super::token_usage_cost::compose_status_token_usage_cost;
+use super::token_usage_cost::compose_status_token_usage_cost_with_context_length;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
 use crate::wrapping::word_wrap_lines;
@@ -347,12 +347,17 @@ impl StatusHistoryCell {
         let usage_by_service_tier = token_info
             .map(|info| &info.usage_by_service_tier)
             .unwrap_or(&empty_usage_by_service_tier);
-        let token_usage_cost = compose_status_token_usage_cost(
+        let empty_usage_by_service_tier_and_context_length = std::collections::BTreeMap::new();
+        let usage_by_service_tier_and_context_length = token_info
+            .map(|info| &info.usage_by_service_tier_and_context_length)
+            .unwrap_or(&empty_usage_by_service_tier_and_context_length);
+        let token_usage_cost = compose_status_token_usage_cost_with_context_length(
             &config.tui_status_token_usage,
             &config.model_provider_id,
             &model_name,
             total_usage,
             usage_by_service_tier,
+            usage_by_service_tier_and_context_length,
         );
         let rate_limits = if rate_limits.len() <= 1 {
             compose_rate_limit_data(rate_limits.first(), now)

@@ -1609,6 +1609,9 @@ pub struct ThreadTokenUsage {
     pub last: TokenUsageBreakdown,
     #[serde(default)]
     pub usage_by_service_tier: BTreeMap<String, TokenUsageBreakdown>,
+    #[serde(default)]
+    pub usage_by_service_tier_and_context_length:
+        BTreeMap<String, BTreeMap<String, TokenUsageBreakdown>>,
     // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
@@ -1744,6 +1747,19 @@ impl From<CoreTokenUsageInfo> for ThreadTokenUsage {
                 .usage_by_service_tier
                 .into_iter()
                 .map(|(service_tier, usage)| (service_tier, usage.into()))
+                .collect(),
+            usage_by_service_tier_and_context_length: value
+                .usage_by_service_tier_and_context_length
+                .into_iter()
+                .map(|(service_tier, context_usages)| {
+                    (
+                        service_tier,
+                        context_usages
+                            .into_iter()
+                            .map(|(context_length, usage)| (context_length, usage.into()))
+                            .collect(),
+                    )
+                })
                 .collect(),
             model_context_window: value.model_context_window,
         }

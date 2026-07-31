@@ -2760,6 +2760,7 @@ async fn try_run_sampling_request(
             ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                service_tier,
                 end_turn,
             } => {
                 flush_assistant_text_segments_all(
@@ -2778,7 +2779,11 @@ async fn try_run_sampling_request(
                 )
                 .await;
                 let budget_result = sess
-                    .record_token_usage_info(&turn_context, token_usage.as_ref())
+                    .record_token_usage_info_with_service_tier(
+                        &turn_context,
+                        token_usage.as_ref(),
+                        service_tier.as_deref(),
+                    )
                     .await;
                 should_emit_token_count = true;
                 should_emit_turn_diff = true;

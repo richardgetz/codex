@@ -1256,6 +1256,7 @@ impl GoalExtensionHarness {
             last_token_usage: TokenUsage::default(),
             model_context_window: None,
             usage_by_service_tier: Default::default(),
+            usage_by_service_tier_and_context_length: Default::default(),
         };
         for contributor in self.registry.token_usage_contributors() {
             contributor

@@ -4496,6 +4496,7 @@ mod tests {
                 total_tokens: 23,
             },
             usage_by_service_tier: Default::default(),
+            usage_by_service_tier_and_context_length: Default::default(),
             model_context_window: Some(4096),
         };
         let rate_limits = RateLimitSnapshot {

@@ -265,10 +265,7 @@ impl ContextManager {
         if let Some(service_tier) = service_tier
             && let Some(info) = self.token_info.as_mut()
         {
-            info.usage_by_service_tier
-                .entry(service_tier.to_string())
-                .or_default()
-                .add_assign(usage);
+            info.add_service_tier_usage(usage, service_tier);
         }
     }
 
