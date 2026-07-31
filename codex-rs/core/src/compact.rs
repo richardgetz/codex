@@ -737,6 +737,7 @@ async fn drain_to_completed(
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                service_tier,
                 ..
             }) => {
                 sess.send_event(
@@ -747,8 +748,12 @@ async fn drain_to_completed(
                     }),
                 )
                 .await;
-                sess.update_token_usage_info(turn_context, token_usage.as_ref())
-                    .await?;
+                sess.update_token_usage_info_with_service_tier(
+                    turn_context,
+                    token_usage.as_ref(),
+                    service_tier.as_deref(),
+                )
+                .await?;
                 return Ok(());
             }
             Ok(_) => continue,

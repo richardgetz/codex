@@ -2454,6 +2454,7 @@ async fn thread_resume_token_usage_replay_can_belong_to_interrupted_turn() -> Re
                         total_tokens: 130,
                     },
                     usage_by_service_tier: Default::default(),
+                    usage_by_service_tier_and_context_length: Default::default(),
                     model_context_window: Some(200_000),
                 }),
                 rate_limits: None,

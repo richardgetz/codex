@@ -60,6 +60,8 @@ pub(crate) struct TokenUsageInfo {
     pub(crate) total_token_usage: TokenUsage,
     pub(crate) last_token_usage: TokenUsage,
     pub(crate) usage_by_service_tier: BTreeMap<String, TokenUsage>,
+    pub(crate) usage_by_service_tier_and_context_length:
+        BTreeMap<String, BTreeMap<String, TokenUsage>>,
     pub(crate) model_context_window: Option<i64>,
 }
 

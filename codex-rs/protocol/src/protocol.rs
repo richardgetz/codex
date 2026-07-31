@@ -2159,6 +2159,9 @@ pub struct TokenUsage {
 }
 
 pub const TOKEN_USAGE_STANDARD_SERVICE_TIER: &str = "standard";
+pub const TOKEN_USAGE_SHORT_CONTEXT: &str = "short";
+pub const TOKEN_USAGE_LONG_CONTEXT: &str = "long";
+pub const TOKEN_USAGE_LONG_CONTEXT_THRESHOLD: i64 = 272_000;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct TokenUsageInfo {
@@ -2166,6 +2169,8 @@ pub struct TokenUsageInfo {
     pub last_token_usage: TokenUsage,
     #[serde(default)]
     pub usage_by_service_tier: BTreeMap<String, TokenUsage>,
+    #[serde(default)]
+    pub usage_by_service_tier_and_context_length: BTreeMap<String, BTreeMap<String, TokenUsage>>,
     // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
@@ -2187,6 +2192,7 @@ impl TokenUsageInfo {
                 total_token_usage: TokenUsage::default(),
                 last_token_usage: TokenUsage::default(),
                 usage_by_service_tier: BTreeMap::new(),
+                usage_by_service_tier_and_context_length: BTreeMap::new(),
                 model_context_window,
             },
         };
@@ -2203,11 +2209,21 @@ impl TokenUsageInfo {
         self.total_token_usage.add_assign(last);
         self.last_token_usage = last.clone();
         if let Some(service_tier) = service_tier {
-            self.usage_by_service_tier
-                .entry(service_tier.to_string())
-                .or_default()
-                .add_assign(last);
+            self.add_service_tier_usage(last, service_tier);
         }
+    }
+
+    pub fn add_service_tier_usage(&mut self, usage: &TokenUsage, service_tier: &str) {
+        self.usage_by_service_tier
+            .entry(service_tier.to_string())
+            .or_default()
+            .add_assign(usage);
+        self.usage_by_service_tier_and_context_length
+            .entry(service_tier.to_string())
+            .or_default()
+            .entry(usage.context_length().to_string())
+            .or_default()
+            .add_assign(usage);
     }
 
     pub fn fill_to_context_window(&mut self, context_window: i64) {
@@ -2224,6 +2240,7 @@ impl TokenUsageInfo {
             ..TokenUsage::default()
         };
         self.usage_by_service_tier.clear();
+        self.usage_by_service_tier_and_context_length.clear();
     }
 
     pub fn full_context_window(context_window: i64) -> Self {
@@ -2231,6 +2248,7 @@ impl TokenUsageInfo {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             usage_by_service_tier: BTreeMap::new(),
+            usage_by_service_tier_and_context_length: BTreeMap::new(),
             model_context_window: Some(context_window),
         };
         info.fill_to_context_window(context_window);
@@ -2317,6 +2335,15 @@ const BASELINE_TOKENS: i64 = 12000;
 impl TokenUsage {
     pub fn is_zero(&self) -> bool {
         self.total_tokens == 0
+    }
+
+    /// Classify exact upstream usage using the pricing page's context-length boundary.
+    pub fn context_length(&self) -> &'static str {
+        if self.input_tokens > TOKEN_USAGE_LONG_CONTEXT_THRESHOLD {
+            TOKEN_USAGE_LONG_CONTEXT
+        } else {
+            TOKEN_USAGE_SHORT_CONTEXT
+        }
     }
 
     pub fn cached_input(&self) -> i64 {
@@ -6461,6 +6488,7 @@ mod tests {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             usage_by_service_tier: BTreeMap::new(),
+            usage_by_service_tier_and_context_length: BTreeMap::new(),
             model_context_window: Some(258_400),
         });
         let last = Some(TokenUsage {
@@ -6479,11 +6507,27 @@ mod tests {
     }
 
     #[test]
+    fn token_usage_context_length_uses_strict_long_context_boundary() {
+        let at_boundary = TokenUsage {
+            input_tokens: TOKEN_USAGE_LONG_CONTEXT_THRESHOLD,
+            ..TokenUsage::default()
+        };
+        let above_boundary = TokenUsage {
+            input_tokens: TOKEN_USAGE_LONG_CONTEXT_THRESHOLD + 1,
+            ..TokenUsage::default()
+        };
+
+        assert_eq!(at_boundary.context_length(), TOKEN_USAGE_SHORT_CONTEXT);
+        assert_eq!(above_boundary.context_length(), TOKEN_USAGE_LONG_CONTEXT);
+    }
+
+    #[test]
     fn token_usage_info_new_or_append_preserves_context_window_when_not_provided() {
         let initial = Some(TokenUsageInfo {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             usage_by_service_tier: BTreeMap::new(),
+            usage_by_service_tier_and_context_length: BTreeMap::new(),
             model_context_window: Some(258_400),
         });
         let last = Some(TokenUsage {

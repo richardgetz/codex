@@ -22,6 +22,16 @@
           },
           "default": {},
           "type": "object"
+        },
+        "usageByServiceTierAndContextLength": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "$ref": "#/definitions/TokenUsageBreakdown"
+            },
+            "type": "object"
+          },
+          "default": {},
+          "type": "object"
         }
       },
       "required": [

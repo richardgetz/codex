@@ -3098,6 +3098,7 @@ mod tests {
                     },
                     last_token_usage: codex_protocol::protocol::TokenUsage::default(),
                     usage_by_service_tier: Default::default(),
+                    usage_by_service_tier_and_context_length: Default::default(),
                     model_context_window: None,
                 }),
                 rate_limits: None,

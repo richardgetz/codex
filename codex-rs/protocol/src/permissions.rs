@@ -3173,6 +3173,7 @@ mod tests {
                 pattern: "/tmp/project/**/*.env".to_string(),
             },
             access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
         };
         let mut existing = FileSystemSandboxPolicy::restricted(vec![deny_entry.clone()]);
         existing.glob_scan_max_depth = Some(2);
@@ -3186,6 +3187,7 @@ mod tests {
                     value: FileSystemSpecialPath::Root,
                 },
                 access: FileSystemAccessMode::Write,
+                missing_path_behavior: None,
             },
             deny_entry,
         ]);
@@ -3200,6 +3202,7 @@ mod tests {
                 pattern: "secrets/**/*.json".to_string(),
             },
             access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
         }]);
 
         assert_eq!(

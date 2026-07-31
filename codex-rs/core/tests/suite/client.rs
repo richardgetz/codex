@@ -3470,6 +3470,18 @@ async fn token_count_includes_rate_limits_snapshot() {
                         "total_tokens": 123
                     }
                 },
+                "usage_by_service_tier_and_context_length": {
+                    "standard": {
+                        "short": {
+                            "input_tokens": 123,
+                            "cached_input_tokens": 0,
+                            "cache_write_input_tokens": 0,
+                            "output_tokens": 0,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 123
+                        }
+                    }
+                },
                 // Default model is gpt-5.4 in tests → 95% usable context window
                 "model_context_window": 258400
             },

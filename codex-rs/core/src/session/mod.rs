@@ -984,7 +984,11 @@ fn service_tier_supported_by_model(service_tier: &str, model_info: &ModelInfo) -
 
 fn token_usage_service_tier(service_tier: Option<&str>) -> &str {
     match service_tier {
-        Some(service_tier) if service_tier != SERVICE_TIER_DEFAULT_REQUEST_VALUE => service_tier,
+        Some(service_tier)
+            if !service_tier.eq_ignore_ascii_case(SERVICE_TIER_DEFAULT_REQUEST_VALUE) =>
+        {
+            service_tier
+        }
         Some(_) | None => TOKEN_USAGE_STANDARD_SERVICE_TIER,
     }
 }
@@ -4337,8 +4341,26 @@ impl Session {
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
     ) -> CodexResult<()> {
+        self.update_token_usage_info_with_service_tier(
+            turn_context,
+            token_usage,
+            /*effective_service_tier*/ None,
+        )
+        .await
+    }
+
+    pub(crate) async fn update_token_usage_info_with_service_tier(
+        &self,
+        turn_context: &TurnContext,
+        token_usage: Option<&TokenUsage>,
+        effective_service_tier: Option<&str>,
+    ) -> CodexResult<()> {
         let result = self
-            .record_token_usage_info(turn_context, token_usage)
+            .record_token_usage_info_with_service_tier(
+                turn_context,
+                token_usage,
+                effective_service_tier,
+            )
             .await;
         self.send_token_count_event(turn_context).await;
         result
@@ -4349,11 +4371,22 @@ impl Session {
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
     ) -> CodexResult<()> {
+        self.record_token_usage_info_with_service_tier(turn_context, token_usage, None)
+            .await
+    }
+
+    pub(crate) async fn record_token_usage_info_with_service_tier(
+        &self,
+        turn_context: &TurnContext,
+        token_usage: Option<&TokenUsage>,
+        effective_service_tier: Option<&str>,
+    ) -> CodexResult<()> {
         if let Some(token_usage) = token_usage {
             let token_info = {
                 let mut state = self.state.lock().await;
-                let service_tier =
-                    token_usage_service_tier(turn_context.config.service_tier.as_deref());
+                let service_tier = token_usage_service_tier(
+                    effective_service_tier.or(turn_context.config.service_tier.as_deref()),
+                );
                 state.update_token_info_from_usage(
                     token_usage,
                     Some(service_tier),
@@ -4399,6 +4432,7 @@ impl Session {
                 total_token_usage: TokenUsage::default(),
                 last_token_usage: TokenUsage::default(),
                 usage_by_service_tier: Default::default(),
+                usage_by_service_tier_and_context_length: Default::default(),
                 model_context_window: None,
             });
 
