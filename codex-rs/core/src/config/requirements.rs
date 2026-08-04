@@ -31,6 +31,7 @@ pub(super) fn apply_to_config(
     apply_exact!(model_catalog_json);
     apply_exact!(check_for_update_on_startup);
     apply_exact!(allow_login_shell);
+    apply_exact!(allow_browser);
     apply_feedback_requirement(
         &mut config.feedback,
         requirements.feedback.as_ref(),

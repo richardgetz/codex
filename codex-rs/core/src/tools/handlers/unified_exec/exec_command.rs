@@ -9,6 +9,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::browser_exception_allowed;
 use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
@@ -21,6 +22,7 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
+use crate::tools::runtimes::resolve_direct_playwright_cli_script;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
@@ -32,6 +34,7 @@ use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
+use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_shell_command::shell_detect::detect_shell_type;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -236,7 +239,39 @@ impl ExecCommandHandler {
             turn.config.permissions.allow_login_shell,
         )
         .map_err(FunctionCallError::RespondToModel)?;
-        let command = resolved_command.command;
+        // Resolve sticky session/turn permissions before selecting the browser
+        // exception so an existing writable grant cannot invalidate the path
+        // validation below.
+        let requested_additional_permissions = args.additional_permissions.clone();
+        let permission_cwd = native_cwd.as_ref().unwrap_or(&turn.config.cwd);
+        let effective_additional_permissions = apply_granted_turn_permissions(
+            context.session.as_ref(),
+            &turn_environment.environment_id,
+            permission_cwd.as_path(),
+            args.sandbox_permissions,
+            requested_additional_permissions.clone(),
+        )
+        .await;
+        let browser_command = if turn.config.permissions.allow_browser
+            && !environment.is_remote()
+            && browser_exception_allowed(&effective_additional_permissions)
+        {
+            let file_system_sandbox_policy = effective_file_system_sandbox_policy(
+                &turn.config.permissions.file_system_sandbox_policy(),
+                effective_additional_permissions
+                    .additional_permissions
+                    .as_ref(),
+            );
+            resolve_direct_playwright_cli_script(
+                &args.cmd,
+                turn.config.permissions.playwright_cli_path.as_ref(),
+                &file_system_sandbox_policy,
+                native_cwd.as_ref().unwrap_or(&turn.config.cwd),
+            )
+        } else {
+            None
+        };
+        let command = browser_command.unwrap_or(resolved_command.command);
         let shell_type = resolved_command.shell_type;
         let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
 
@@ -245,24 +280,12 @@ impl ExecCommandHandler {
             yield_time_ms,
             max_output_tokens,
             sandbox_permissions,
-            additional_permissions,
             justification,
             prefix_rule,
             ..
         } = args;
         let exec_permission_approvals_enabled =
             session.features().enabled(Feature::ExecPermissionApprovals);
-        let requested_additional_permissions = additional_permissions.clone();
-        // TODO(anp): Make permission matching operate on PathUri for remote environments.
-        let permission_cwd = native_cwd.as_ref().unwrap_or(&turn.config.cwd);
-        let effective_additional_permissions = apply_granted_turn_permissions(
-            context.session.as_ref(),
-            &turn_environment.environment_id,
-            permission_cwd.as_path(),
-            sandbox_permissions,
-            additional_permissions,
-        )
-        .await;
         let additional_permissions_allowed = exec_permission_approvals_enabled
             || (session.features().enabled(Feature::RequestPermissionsTool)
                 && effective_additional_permissions.permissions_preapproved);

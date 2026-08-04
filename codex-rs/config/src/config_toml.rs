@@ -217,6 +217,15 @@ pub struct ConfigToml {
     /// shell.
     pub allow_login_shell: Option<bool>,
 
+    /// Allow direct `playwright-cli` invocations to run outside the process
+    /// sandbox. This is disabled by default and does not change sandboxing for
+    /// other shell commands.
+    pub allow_browser: Option<bool>,
+
+    /// Optional absolute path for `playwright-cli` when it is not available
+    /// through the process `PATH`.
+    pub playwright_cli_path: Option<AbsolutePathBuf>,
+
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
 

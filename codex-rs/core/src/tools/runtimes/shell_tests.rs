@@ -1,5 +1,6 @@
 use super::*;
 use codex_exec_server::Environment;
+use codex_sandboxing::SandboxablePreference;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -45,10 +46,23 @@ async fn approval_key_uses_path_uri_and_includes_environment_id() {
             cwd: PathUri::from_abs_path(&cwd),
             sandbox_permissions: request.sandbox_permissions,
             additional_permissions: request.additional_permissions.clone(),
+            allow_browser: false,
         }]
     );
+    let browser_runtime =
+        ShellRuntime::for_browser_command(ShellRuntimeBackend::ShellCommandClassic);
+    assert_ne!(original_key, browser_runtime.approval_keys(&request));
     request.turn_environment.environment_id = "other".to_string();
     let other_key = runtime.approval_keys(&request);
 
     assert_ne!(original_key, other_key);
+}
+
+#[test]
+fn browser_runtime_forbids_the_process_sandbox() {
+    let normal = ShellRuntime::for_shell_command(ShellRuntimeBackend::ShellCommandClassic);
+    let browser = ShellRuntime::for_browser_command(ShellRuntimeBackend::ShellCommandClassic);
+
+    assert_eq!(normal.sandbox_preference(), SandboxablePreference::Auto);
+    assert_eq!(browser.sandbox_preference(), SandboxablePreference::Forbid);
 }

@@ -91,6 +91,7 @@ pub struct UnifiedExecApprovalKey {
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
+    pub allow_browser: bool,
 }
 
 /// Runtime adapter that keeps policy and sandbox orchestration on the
@@ -98,6 +99,7 @@ pub struct UnifiedExecApprovalKey {
 pub struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecProcessManager,
     shell_mode: UnifiedExecShellMode,
+    allow_browser: bool,
 }
 
 fn unified_exec_options(
@@ -139,13 +141,31 @@ impl<'a> UnifiedExecRuntime<'a> {
         Self {
             manager,
             shell_mode,
+            allow_browser: false,
+        }
+    }
+
+    /// Creates a runtime for the explicitly enabled direct Playwright CLI
+    /// exception, which must not inherit the normal process sandbox.
+    pub fn for_browser_command(
+        manager: &'a UnifiedExecProcessManager,
+        shell_mode: UnifiedExecShellMode,
+    ) -> Self {
+        Self {
+            manager,
+            shell_mode,
+            allow_browser: true,
         }
     }
 }
 
 impl Sandboxable for UnifiedExecRuntime<'_> {
     fn sandbox_preference(&self) -> SandboxablePreference {
-        SandboxablePreference::Auto
+        if self.allow_browser {
+            SandboxablePreference::Forbid
+        } else {
+            SandboxablePreference::Auto
+        }
     }
 
     fn escalate_on_failure(&self) -> bool {
@@ -164,6 +184,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             tty: req.tty,
             sandbox_permissions: req.sandbox_permissions,
             additional_permissions: req.additional_permissions.clone(),
+            allow_browser: self.allow_browser,
         }]
     }
 
@@ -396,7 +417,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         };
         #[cfg(not(unix))]
         let runtime_path_prepends = RuntimePathPrepends::default();
-        let command = if environment_is_remote {
+        let command = if self.allow_browser || environment_is_remote {
             base_command.to_vec()
         } else {
             maybe_wrap_shell_lc_with_snapshot(
@@ -408,19 +429,25 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 &runtime_path_prepends,
             )
         };
-        let command = disable_powershell_profile_for_elevated_windows_sandbox(
-            &command,
-            Some(&req.shell_type),
-            attempt.sandbox,
-            attempt.windows_sandbox_level,
-        );
-        let command = if matches!(req.shell_type, ShellType::PowerShell) {
-            prefix_powershell_script_with_utf8(&command)
-        } else {
+        let command = if self.allow_browser {
             command
+        } else {
+            let command = disable_powershell_profile_for_elevated_windows_sandbox(
+                &command,
+                Some(&req.shell_type),
+                attempt.sandbox,
+                attempt.windows_sandbox_level,
+            );
+            if matches!(req.shell_type, ShellType::PowerShell) {
+                prefix_powershell_script_with_utf8(&command)
+            } else {
+                command
+            }
         };
 
-        if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
+        if !self.allow_browser
+            && let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode
+        {
             let command = build_unified_exec_sandbox_command(
                 &command,
                 &req.cwd,
@@ -525,9 +552,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
 mod tests {
     use super::*;
     use crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
+    use crate::tools::sandboxing::Sandboxable;
     use crate::tools::sandboxing::ToolRuntime;
     use codex_exec_server::Environment;
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+    use codex_sandboxing::SandboxablePreference;
     use codex_tools::ZshForkConfig;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_path_uri::PathUri;
@@ -580,10 +609,24 @@ mod tests {
         );
         request.turn_environment.environment_id = "remote".to_string();
         let original_key = runtime.approval_keys(&request);
+        let browser_runtime =
+            UnifiedExecRuntime::for_browser_command(&manager, UnifiedExecShellMode::Direct);
+        assert_ne!(original_key, browser_runtime.approval_keys(&request));
         request.turn_environment.environment_id = "other".to_string();
         let other_key = runtime.approval_keys(&request);
 
         assert_ne!(original_key, other_key);
+    }
+
+    #[test]
+    fn browser_runtime_forbids_the_process_sandbox() {
+        let manager = UnifiedExecProcessManager::default();
+        let normal = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
+        let browser =
+            UnifiedExecRuntime::for_browser_command(&manager, UnifiedExecShellMode::Direct);
+
+        assert_eq!(normal.sandbox_preference(), SandboxablePreference::Auto);
+        assert_eq!(browser.sandbox_preference(), SandboxablePreference::Forbid);
     }
 
     #[tokio::test]

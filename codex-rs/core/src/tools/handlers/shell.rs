@@ -16,16 +16,19 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::browser_exception_allowed;
 use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::runtimes::resolve_direct_playwright_cli_script;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
+use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_tools::ToolName;
 use codex_utils_path_uri::PathUri;
 
@@ -96,6 +99,25 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         additional_permissions,
     )
     .await;
+    let browser_command = if turn.config.permissions.allow_browser
+        && !turn_environment.environment.is_remote()
+        && browser_exception_allowed(&effective_additional_permissions)
+    {
+        let file_system_sandbox_policy = effective_file_system_sandbox_policy(
+            &turn.config.permissions.file_system_sandbox_policy(),
+            effective_additional_permissions
+                .additional_permissions
+                .as_ref(),
+        );
+        resolve_direct_playwright_cli_script(
+            &hook_command,
+            turn.config.permissions.playwright_cli_path.as_ref(),
+            &file_system_sandbox_policy,
+            &exec_params.cwd,
+        )
+    } else {
+        None
+    };
     let additional_permissions_allowed = exec_permission_approvals_enabled
         || (session.features().enabled(Feature::RequestPermissionsTool)
             && effective_additional_permissions.permissions_preapproved);
@@ -118,6 +140,16 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         |permissions| Ok(Some(permissions)),
     )
     .map_err(FunctionCallError::RespondToModel)?;
+
+    let allow_browser = browser_command.is_some();
+    let exec_params = if let Some(command) = browser_command {
+        ExecParams {
+            command,
+            ..exec_params
+        }
+    } else {
+        exec_params
+    };
 
     // Approval policy guard for explicit escalation in non-OnRequest modes.
     // Sticky turn permissions have already been approved, so they should
@@ -209,7 +241,11 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         exec_approval_requirement,
     };
     let mut orchestrator = ToolOrchestrator::new();
-    let mut runtime = ShellRuntime::for_shell_command(shell_runtime_backend);
+    let mut runtime = if allow_browser {
+        ShellRuntime::for_browser_command(shell_runtime_backend)
+    } else {
+        ShellRuntime::for_shell_command(shell_runtime_backend)
+    };
     let tool_ctx = ToolCtx {
         session: session.clone(),
         turn: turn.clone(),

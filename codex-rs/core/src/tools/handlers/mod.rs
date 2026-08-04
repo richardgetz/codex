@@ -238,6 +238,18 @@ pub(super) struct EffectiveAdditionalPermissions {
     pub permissions_preapproved: bool,
 }
 
+pub(super) fn browser_exception_allowed(
+    effective_additional_permissions: &EffectiveAdditionalPermissions,
+) -> bool {
+    effective_additional_permissions
+        .additional_permissions
+        .is_none()
+        && matches!(
+            effective_additional_permissions.sandbox_permissions,
+            SandboxPermissions::UseDefault
+        )
+}
+
 pub(super) fn implicit_granted_permissions(
     sandbox_permissions: SandboxPermissions,
     additional_permissions: Option<&AdditionalPermissionProfile>,
@@ -318,6 +330,7 @@ fn permissions_are_preapproved(
 #[cfg(test)]
 mod tests {
     use super::EffectiveAdditionalPermissions;
+    use super::browser_exception_allowed;
     use super::implicit_granted_permissions;
     use super::normalize_and_validate_additional_permissions;
     use super::permissions_are_preapproved;
@@ -417,6 +430,34 @@ mod tests {
         );
 
         assert_eq!(implicit_permissions, Some(granted_permissions));
+    }
+
+    #[test]
+    fn browser_exception_rejects_effective_additional_permissions() {
+        let with_sticky_permissions = EffectiveAdditionalPermissions {
+            sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
+            additional_permissions: Some(network_permissions()),
+            permissions_preapproved: true,
+        };
+        let without_sticky_permissions = EffectiveAdditionalPermissions {
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            permissions_preapproved: false,
+        };
+
+        assert!(!browser_exception_allowed(&with_sticky_permissions));
+        assert!(browser_exception_allowed(&without_sticky_permissions));
+    }
+
+    #[test]
+    fn browser_exception_rejects_escalated_sandbox_permissions() {
+        assert!(!browser_exception_allowed(
+            &EffectiveAdditionalPermissions {
+                sandbox_permissions: SandboxPermissions::RequireEscalated,
+                additional_permissions: None,
+                permissions_preapproved: false,
+            }
+        ));
     }
 
     #[test]

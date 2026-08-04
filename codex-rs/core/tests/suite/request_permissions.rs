@@ -41,6 +41,9 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::OnceLock;
 use test_case::test_case;
 
 fn absolute_path(path: &Path) -> AbsolutePathBuf {
@@ -1516,6 +1519,164 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls_without_i
         fs::read_to_string(&outside_write)?,
         "sticky-shell-feature-independent-ok"
     );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn sticky_permissions_do_not_select_the_browser_runtime() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let permission_profile = workspace_write_excluding_tmp();
+    let permission_profile_for_config = workspace_write_excluding_tmp();
+    let playwright_cli_path = Arc::new(OnceLock::<PathBuf>::new());
+    let path_for_hook = Arc::clone(&playwright_cli_path);
+    let path_for_config = Arc::clone(&playwright_cli_path);
+    let mut builder = test_codex()
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config
+                .permissions
+                .set_permission_profile(permission_profile_for_config)
+                .expect("set permission profile");
+            config.permissions.allow_browser = true;
+            config
+                .features
+                .enable(Feature::RequestPermissionsTool)
+                .expect("test config should allow feature update");
+        })
+        .with_pre_build_hook(move |home| {
+            let path = home.join("playwright-cli");
+            fs::write(&path, "#!/bin/sh\nprintf 'playwright-cli:%s\\n' \"$*\"\n")
+                .expect("write test Playwright CLI");
+            let mut permissions = fs::metadata(&path)
+                .expect("read test Playwright CLI metadata")
+                .permissions();
+            std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+            fs::set_permissions(&path, permissions).expect("make test Playwright CLI executable");
+            path_for_hook
+                .set(path)
+                .expect("set test Playwright CLI path");
+        })
+        .with_config(move |config| {
+            config.permissions.playwright_cli_path = Some(absolute_path(
+                path_for_config
+                    .get()
+                    .expect("test Playwright CLI path should be initialized"),
+            ));
+        });
+    let test = builder.build(&server).await?;
+    let playwright_cli_path = playwright_cli_path
+        .get()
+        .expect("test Playwright CLI path should be initialized")
+        .clone();
+    let requested_permissions = requested_directory_write_permissions(
+        playwright_cli_path
+            .parent()
+            .expect("test Playwright CLI should have a parent directory"),
+    );
+    let normalized_requested_permissions = normalized_directory_write_permissions(
+        playwright_cli_path
+            .parent()
+            .expect("test Playwright CLI should have a parent directory"),
+    )?;
+    let command = "playwright-cli open https://example.com";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-sticky-browser-1"),
+                request_permissions_tool_event(
+                    "permissions-call",
+                    "Allow writing the Playwright CLI directory",
+                    &requested_permissions,
+                )?,
+                ev_completed("resp-sticky-browser-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-sticky-browser-2"),
+                shell_command_event("shell-call", command)?,
+                ev_completed("resp-sticky-browser-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-sticky-browser-3"),
+                exec_command_event("exec-call", command)?,
+                ev_completed("resp-sticky-browser-3"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-sticky-browser-4"),
+                ev_assistant_message("msg-sticky-browser-1", "done"),
+                ev_completed("resp-sticky-browser-4"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "grant permissions and run both browser command paths",
+        approval_policy,
+        permission_profile,
+    )
+    .await?;
+    let granted_permissions = expect_request_permissions_event(&test, "permissions-call").await;
+    assert_eq!(
+        granted_permissions,
+        normalized_requested_permissions.clone()
+    );
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: "permissions-call".to_string(),
+            response: RequestPermissionsResponse {
+                permissions: normalized_requested_permissions,
+                scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
+            },
+        })
+        .await?;
+
+    let shell_begin = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecCommandBegin(begin) if begin.call_id == "shell-call"
+        )
+    })
+    .await;
+    let exec_begin = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecCommandBegin(begin) if begin.call_id == "exec-call"
+        )
+    })
+    .await;
+    for begin in [shell_begin, exec_begin] {
+        let EventMsg::ExecCommandBegin(begin) = begin else {
+            unreachable!("event predicate only accepts ExecCommandBegin");
+        };
+        assert!(begin.command.iter().any(|arg| arg == "-c" || arg == "-lc"));
+        assert_ne!(
+            begin.command.first(),
+            Some(&playwright_cli_path.to_string_lossy().into_owned())
+        );
+    }
+    wait_for_completion(&test).await;
+
+    for call_id in ["shell-call", "exec-call"] {
+        let output = responses
+            .function_call_output_text(call_id)
+            .map(|output| json!({ "output": output }))
+            .expect("expected browser command output");
+        let result = parse_result(&output);
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(
+            result.stdout.trim(),
+            "playwright-cli:open https://example.com"
+        );
+    }
 
     Ok(())
 }

@@ -5756,6 +5756,10 @@
       ],
       "description": "Agent-related settings (thread limits, etc.)."
     },
+    "allow_browser": {
+      "description": "Allow direct `playwright-cli` invocations to run outside the process sandbox. This is disabled by default and does not change sandboxing for other shell commands.",
+      "type": "boolean"
+    },
     "allow_login_shell": {
       "description": "Whether the model may request a login shell for shell-based tools. Default to `true`\n\nIf `true`, the model may request a login shell (`login = true`), and omitting `login` defaults to using a login shell. If `false`, the model can never use a login shell: `login = true` requests are rejected, and omitting `login` defaults to a non-login shell.",
       "type": "boolean"
@@ -6574,6 +6578,14 @@
     },
     "plan_mode_reasoning_effort": {
       "$ref": "#/definitions/ReasoningEffort"
+    },
+    "playwright_cli_path": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Optional absolute path for `playwright-cli` when it is not available through the process `PATH`."
     },
     "plugins": {
       "additionalProperties": {

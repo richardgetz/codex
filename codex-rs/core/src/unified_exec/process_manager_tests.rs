@@ -24,6 +24,48 @@ fn unified_exec_env_injects_defaults() {
     assert_eq!(env, expected);
 }
 
+#[tokio::test]
+async fn browser_runtime_requires_default_sandbox_permissions() {
+    let (_session, turn, _rx_event) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    let turn_environment = turn
+        .environments
+        .primary()
+        .cloned()
+        .expect("primary environment");
+    let mut request = ExecCommandRequest {
+        command: vec!["playwright-cli".to_string(), "open".to_string()],
+        shell_type: crate::shell::ShellType::Sh,
+        hook_command: "playwright-cli open".to_string(),
+        process_id: 123,
+        yield_time_ms: 1000,
+        max_output_tokens: None,
+        #[allow(deprecated)]
+        cwd: turn.cwd.clone().into(),
+        #[allow(deprecated)]
+        sandbox_cwd: turn.cwd.clone().into(),
+        turn_environment,
+        shell_mode: codex_tools::UnifiedExecShellMode::Direct,
+        network: None,
+        tty: false,
+        sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+        additional_permissions: None,
+        additional_permissions_preapproved: false,
+        justification: None,
+        prefix_rule: None,
+    };
+
+    assert!(browser_runtime_allowed(&request));
+    request.sandbox_permissions = crate::sandboxing::SandboxPermissions::RequireEscalated;
+    assert!(!browser_runtime_allowed(&request));
+    request.sandbox_permissions = crate::sandboxing::SandboxPermissions::UseDefault;
+    request.additional_permissions_preapproved = true;
+    assert!(!browser_runtime_allowed(&request));
+    request.additional_permissions_preapproved = false;
+    request.additional_permissions = Some(Default::default());
+    assert!(!browser_runtime_allowed(&request));
+}
+
 #[test]
 fn unified_exec_env_overrides_existing_values() {
     let mut base = HashMap::new();

@@ -591,6 +591,12 @@ pub struct Permissions {
     /// requests are rejected, and omitting `login` defaults to a non-login
     /// shell.
     pub allow_login_shell: bool,
+    /// Whether direct `playwright-cli` invocations may run outside the process
+    /// sandbox. Default to `false`.
+    pub allow_browser: bool,
+    /// Optional absolute path for `playwright-cli` when it is not available
+    /// through the process `PATH`.
+    pub playwright_cli_path: Option<AbsolutePathBuf>,
     /// Policy used to build process environments for shell/unified exec.
     pub shell_environment_policy: ShellEnvironmentPolicy,
     /// Effective Windows sandbox mode derived from `[windows].sandbox` or
@@ -615,6 +621,8 @@ impl Permissions {
             workspace_roots: Vec::new(),
             network: None,
             allow_login_shell: true,
+            allow_browser: false,
+            playwright_cli_path: None,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
@@ -4146,6 +4154,8 @@ impl Config {
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
+        let allow_browser = cfg.allow_browser.unwrap_or(false);
+        let playwright_cli_path = cfg.playwright_cli_path;
 
         let history = cfg.history.unwrap_or_default();
 
@@ -4612,6 +4622,8 @@ impl Config {
                 workspace_roots,
                 network,
                 allow_login_shell,
+                allow_browser,
+                playwright_cli_path,
                 shell_environment_policy,
                 windows_sandbox_mode,
                 windows_sandbox_private_desktop,
