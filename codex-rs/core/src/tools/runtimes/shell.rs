@@ -89,6 +89,7 @@ pub(crate) enum ShellRuntimeBackend {
 
 pub struct ShellRuntime {
     backend: ShellRuntimeBackend,
+    allow_browser: bool,
 }
 
 #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
@@ -98,11 +99,22 @@ pub(crate) struct ApprovalKey {
     cwd: PathUri,
     sandbox_permissions: SandboxPermissions,
     additional_permissions: Option<AdditionalPermissionProfile>,
+    allow_browser: bool,
 }
 
 impl ShellRuntime {
     pub(crate) fn for_shell_command(backend: ShellRuntimeBackend) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            allow_browser: false,
+        }
+    }
+
+    pub(crate) fn for_browser_command(backend: ShellRuntimeBackend) -> Self {
+        Self {
+            backend,
+            allow_browser: true,
+        }
     }
 
     fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
@@ -116,7 +128,11 @@ impl ShellRuntime {
 
 impl Sandboxable for ShellRuntime {
     fn sandbox_preference(&self) -> SandboxablePreference {
-        SandboxablePreference::Auto
+        if self.allow_browser {
+            SandboxablePreference::Forbid
+        } else {
+            SandboxablePreference::Auto
+        }
     }
     fn escalate_on_failure(&self) -> bool {
         true
@@ -133,6 +149,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
             cwd: PathUri::from_abs_path(&req.cwd),
             sandbox_permissions: req.sandbox_permissions,
             additional_permissions: req.additional_permissions.clone(),
+            allow_browser: self.allow_browser,
         }]
     }
 
@@ -284,27 +301,35 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         };
         #[cfg(not(unix))]
         let runtime_path_prepends = RuntimePathPrepends::default();
-        let command = maybe_wrap_shell_lc_with_snapshot(
-            &req.command,
-            shell,
-            shell_snapshot_location.as_ref(),
-            &explicit_env_overrides,
-            &env,
-            &runtime_path_prepends,
-        );
-        let command = disable_powershell_profile_for_elevated_windows_sandbox(
-            &command,
-            req.shell_type.as_ref(),
-            attempt.sandbox,
-            attempt.windows_sandbox_level,
-        );
-        let command = if matches!(shell.shell_type, ShellType::PowerShell) {
-            prefix_powershell_script_with_utf8(&command)
+        let command = if self.allow_browser {
+            req.command.clone()
         } else {
+            maybe_wrap_shell_lc_with_snapshot(
+                &req.command,
+                shell,
+                shell_snapshot_location.as_ref(),
+                &explicit_env_overrides,
+                &env,
+                &runtime_path_prepends,
+            )
+        };
+        let command = if self.allow_browser {
             command
+        } else {
+            let command = disable_powershell_profile_for_elevated_windows_sandbox(
+                &command,
+                req.shell_type.as_ref(),
+                attempt.sandbox,
+                attempt.windows_sandbox_level,
+            );
+            if matches!(shell.shell_type, ShellType::PowerShell) {
+                prefix_powershell_script_with_utf8(&command)
+            } else {
+                command
+            }
         };
 
-        if self.backend == ShellRuntimeBackend::ShellCommandZshFork {
+        if !self.allow_browser && self.backend == ShellRuntimeBackend::ShellCommandZshFork {
             match zsh_fork_backend::maybe_run_shell_command(req, attempt, ctx, &command).await? {
                 Some(out) => return Ok(out),
                 None => {

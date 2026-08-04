@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use codex_protocol::protocol::EventMsg;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -10,10 +11,15 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_host_windows;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event_match;
 use serde_json::json;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::OnceLock;
 use test_case::test_case;
 
 #[cfg(windows)]
@@ -152,6 +158,82 @@ async fn output_without_login() -> anyhow::Result<()> {
 
     let output = harness.function_call_stdout(call_id).await;
     assert_shell_command_output(&output, "hello, world")?;
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn allow_browser_runs_direct_playwright_cli_without_shell_wrapper() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let playwright_cli_path = Arc::new(OnceLock::<PathBuf>::new());
+    let path_for_hook = Arc::clone(&playwright_cli_path);
+    let path_for_config = Arc::clone(&playwright_cli_path);
+    let harness = shell_command_harness_with(move |builder| {
+        builder
+            .with_model("gpt-5.4")
+            .with_pre_build_hook(move |home| {
+                let path = home.join("playwright-cli");
+                std::fs::write(&path, "#!/bin/sh\nprintf 'playwright-cli:%s\\n' \"$*\"\n")
+                    .expect("write test Playwright CLI");
+                let mut permissions = std::fs::metadata(&path)
+                    .expect("read test Playwright CLI metadata")
+                    .permissions();
+                std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+                std::fs::set_permissions(&path, permissions)
+                    .expect("make test Playwright CLI executable");
+                path_for_hook
+                    .set(path)
+                    .expect("set test Playwright CLI path");
+            })
+            .with_config(move |config| {
+                config.permissions.allow_browser = true;
+                config.permissions.playwright_cli_path = Some(
+                    codex_utils_absolute_path::AbsolutePathBuf::try_from(
+                        path_for_config
+                            .get()
+                            .expect("test Playwright CLI path should be initialized")
+                            .clone(),
+                    )
+                    .expect("test Playwright CLI path should be absolute"),
+                );
+            })
+    })
+    .await?;
+
+    let call_id = "shell-command-browser";
+    mount_shell_responses(
+        &harness,
+        call_id,
+        "playwright-cli open https://example.com",
+        None,
+    )
+    .await;
+    harness.submit("run the browser command").await?;
+
+    let begin = wait_for_event_match(&harness.test().codex, |event| match event {
+        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    let output = harness.function_call_stdout(call_id).await;
+    assert_shell_command_output(&output, "playwright-cli:open https://example.com")?;
+    assert_eq!(
+        begin.command,
+        vec![
+            playwright_cli_path
+                .get()
+                .expect("test Playwright CLI path should be initialized")
+                .canonicalize()
+                .expect("canonicalize test Playwright CLI path")
+                .to_string_lossy()
+                .into_owned(),
+            "open".to_string(),
+            "https://example.com".to_string(),
+        ]
+    );
 
     Ok(())
 }

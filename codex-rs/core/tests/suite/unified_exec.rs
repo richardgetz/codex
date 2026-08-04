@@ -48,9 +48,115 @@ use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
+use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::time::Duration;
 
 const UNIFIED_EXEC_LAGGED_OUTPUT_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn allow_browser_runs_direct_playwright_cli_with_unified_exec() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses a POSIX-only command fixture");
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let playwright_cli_path = Arc::new(OnceLock::<PathBuf>::new());
+    let path_for_hook = Arc::clone(&playwright_cli_path);
+    let path_for_config = Arc::clone(&playwright_cli_path);
+    let mut builder = test_codex()
+        .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+        })
+        .with_pre_build_hook(move |home| {
+            let path = home.join("playwright-cli");
+            fs::write(&path, "#!/bin/sh\nprintf 'playwright-cli:%s\\n' \"$*\"\n")
+                .expect("write test Playwright CLI");
+            let mut permissions = fs::metadata(&path)
+                .expect("read test Playwright CLI metadata")
+                .permissions();
+            std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+            fs::set_permissions(&path, permissions).expect("make test Playwright CLI executable");
+            path_for_hook
+                .set(path)
+                .expect("set test Playwright CLI path");
+        })
+        .with_config(move |config| {
+            config.permissions.allow_browser = true;
+            config.permissions.playwright_cli_path = Some(
+                codex_utils_absolute_path::AbsolutePathBuf::try_from(
+                    path_for_config
+                        .get()
+                        .expect("test Playwright CLI path should be initialized")
+                        .clone(),
+                )
+                .expect("test Playwright CLI path should be absolute"),
+            );
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    let call_id = "unified-exec-browser";
+    let args = json!({
+        "cmd": "playwright-cli open https://example.com",
+        "yield_time_ms": 1000,
+    });
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "finished"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "run the browser command",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let begin = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    let end = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ExecCommandEnd(event) if event.call_id == call_id => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        begin.command,
+        vec![
+            playwright_cli_path
+                .get()
+                .expect("test Playwright CLI path should be initialized")
+                .canonicalize()
+                .expect("canonicalize test Playwright CLI path")
+                .to_string_lossy()
+                .into_owned(),
+            "open".to_string(),
+            "https://example.com".to_string(),
+        ]
+    );
+    assert!(
+        end.aggregated_output
+            .contains("playwright-cli:open https://example.com")
+    );
+
+    Ok(())
+}
 
 fn extract_output_text(item: &Value) -> Option<&str> {
     item.get("output").and_then(|value| match value {

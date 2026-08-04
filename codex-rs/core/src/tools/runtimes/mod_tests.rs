@@ -21,6 +21,7 @@ use codex_network_proxy::PROXY_ENV_KEYS;
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -31,6 +32,185 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use tempfile::tempdir;
+
+#[cfg(unix)]
+#[test]
+fn direct_playwright_cli_command_requires_one_plain_command() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = tempdir().expect("create temporary Playwright directory");
+    let executable_path = temp_dir.path().join("playwright-cli");
+    std::fs::write(&executable_path, "#!/bin/sh\n").expect("write Playwright executable");
+    let mut permissions = std::fs::metadata(&executable_path)
+        .expect("read Playwright executable metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&executable_path, permissions)
+        .expect("make Playwright executable executable");
+    let configured_path = AbsolutePathBuf::from_absolute_path(&executable_path)
+        .expect("configured Playwright path should be absolute");
+    let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())
+        .expect("temporary Playwright directory should be absolute");
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::read_only();
+
+    assert!(is_direct_playwright_cli_command(
+        &[
+            "/bin/zsh".to_string(),
+            "-c".to_string(),
+            "playwright-cli open 'https://example.com/?a=1&b=2'".to_string(),
+        ],
+        Some(&configured_path),
+        &file_system_sandbox_policy,
+        &cwd,
+    ));
+    assert!(is_direct_playwright_cli_command(
+        &[
+            "/bin/zsh".to_string(),
+            "-c".to_string(),
+            format!("{} open", configured_path.as_path().display()),
+        ],
+        Some(&configured_path),
+        &file_system_sandbox_policy,
+        &cwd,
+    ));
+    assert!(!is_direct_playwright_cli_command(
+        &[
+            "/bin/zsh".to_string(),
+            "-c".to_string(),
+            "/usr/local/bin/playwright-cli open".to_string(),
+        ],
+        Some(&configured_path),
+        &file_system_sandbox_policy,
+        &cwd,
+    ));
+    let invalid_configured_path =
+        AbsolutePathBuf::from_absolute_path("/opt/homebrew/bin/not-playwright-cli")
+            .expect("configured Playwright path should be absolute");
+    assert!(!is_direct_playwright_cli_command(
+        &["playwright-cli".to_string(), "open".to_string()],
+        Some(&invalid_configured_path),
+        &file_system_sandbox_policy,
+        &cwd,
+    ));
+    assert!(!is_direct_playwright_cli_command(
+        &[
+            "/bin/zsh".to_string(),
+            "-c".to_string(),
+            "./playwright-cli open".to_string(),
+        ],
+        Some(&configured_path),
+        &file_system_sandbox_policy,
+        &cwd,
+    ));
+    assert!(!is_direct_playwright_cli_command(
+        &[
+            "/bin/zsh".to_string(),
+            "-c".to_string(),
+            "playwright-cli open && rm -rf /".to_string(),
+        ],
+        Some(&configured_path),
+        &file_system_sandbox_policy,
+        &cwd,
+    ));
+    assert!(!is_direct_playwright_cli_command(
+        &[
+            "/bin/zsh".to_string(),
+            "-c".to_string(),
+            "playwright-cli --raw snapshot | jq .".to_string(),
+        ],
+        Some(&configured_path),
+        &file_system_sandbox_policy,
+        &cwd,
+    ));
+    assert!(!is_direct_playwright_cli_command(
+        &[
+            "/bin/zsh".to_string(),
+            "-c".to_string(),
+            "env playwright-cli open".to_string(),
+        ],
+        Some(&configured_path),
+        &file_system_sandbox_policy,
+        &cwd,
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_playwright_cli_script_drops_the_shell_wrapper() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = tempdir().expect("create temporary Playwright directory");
+    let executable_path = temp_dir.path().join("playwright-cli");
+    std::fs::write(&executable_path, "#!/bin/sh\n").expect("write Playwright executable");
+    let mut permissions = std::fs::metadata(&executable_path)
+        .expect("read Playwright executable metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&executable_path, permissions)
+        .expect("make Playwright executable executable");
+    let configured_path = AbsolutePathBuf::from_absolute_path(&executable_path)
+        .expect("configured Playwright path should be absolute");
+    let canonical_path = AbsolutePathBuf::from_absolute_path(
+        executable_path
+            .canonicalize()
+            .expect("canonicalize Playwright executable"),
+    )
+    .expect("canonical Playwright path should be absolute");
+    let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())
+        .expect("temporary Playwright directory should be absolute");
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::read_only();
+
+    assert_eq!(
+        resolve_direct_playwright_cli_script(
+            "playwright-cli open https://example.com",
+            Some(&configured_path),
+            &file_system_sandbox_policy,
+            &cwd,
+        ),
+        Some(vec![
+            canonical_path.as_path().display().to_string(),
+            "open".to_string(),
+            "https://example.com".to_string(),
+        ])
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_playwright_cli_rejects_agent_writable_configured_path() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = tempdir().expect("create temporary Playwright directory");
+    let executable_path = temp_dir.path().join("playwright-cli");
+    std::fs::write(&executable_path, "#!/bin/sh\n").expect("write Playwright executable");
+    let mut permissions = std::fs::metadata(&executable_path)
+        .expect("read Playwright executable metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&executable_path, permissions)
+        .expect("make Playwright executable executable");
+    let configured_path = AbsolutePathBuf::from_absolute_path(&executable_path)
+        .expect("configured Playwright path should be absolute");
+    let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())
+        .expect("temporary Playwright directory should be absolute");
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::workspace_write(&[], false, false);
+
+    assert!(!is_direct_playwright_cli_command(
+        &["playwright-cli".to_string(), "open".to_string()],
+        Some(&configured_path),
+        &file_system_sandbox_policy,
+        &cwd,
+    ));
+    assert_eq!(
+        resolve_direct_playwright_cli_script(
+            "playwright-cli open https://example.com",
+            Some(&configured_path),
+            &file_system_sandbox_policy,
+            &cwd,
+        ),
+        None
+    );
+}
 
 struct StaticReloader;
 

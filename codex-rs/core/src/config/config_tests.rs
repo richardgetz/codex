@@ -10279,6 +10279,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         model_catalog_json: None,
         check_for_update_on_startup: None,
         allow_login_shell: None,
+        allow_browser: None,
         feedback: None,
         allowed_approval_policies: None,
         allowed_approvals_reviewers: None,
@@ -10796,6 +10797,38 @@ allow_login_shell = false
     .await?;
 
     assert!(!config.permissions.allow_login_shell);
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_loads_allow_browser_from_toml() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let playwright_cli_path = if cfg!(windows) {
+        r"C:\Program Files\nodejs\playwright-cli.cmd"
+    } else {
+        "/opt/homebrew/bin/playwright-cli"
+    };
+    let cfg: ConfigToml = toml::from_str(&format!(
+        "model = \"gpt-5.4\"\nallow_browser = true\nplaywright_cli_path = {playwright_cli_path:?}\n"
+    ))
+    .expect("TOML deserialization should succeed for allow_browser");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(config.permissions.allow_browser);
+    assert_eq!(
+        config
+            .permissions
+            .playwright_cli_path
+            .as_ref()
+            .map(AbsolutePathBuf::as_path),
+        Some(std::path::Path::new(playwright_cli_path)),
+    );
     Ok(())
 }
 
@@ -13350,6 +13383,7 @@ async fn exact_requirements_apply_to_runtime_config() -> std::io::Result<()> {
         r#"
 check_for_update_on_startup = true
 allow_login_shell = true
+allow_browser = true
 
 [feedback]
 enabled = true
@@ -13368,6 +13402,7 @@ log_dir = {:?}
 model_catalog_json = {:?}
 check_for_update_on_startup = false
 allow_login_shell = false
+allow_browser = false
 
 [feedback]
 enabled = false
@@ -13386,11 +13421,17 @@ sandbox_private_desktop = false
     assert_eq!(config.model_catalog, Some(catalog));
     assert!(!config.check_for_update_on_startup);
     assert!(!config.permissions.allow_login_shell);
+    assert!(!config.permissions.allow_browser);
     assert!(!config.feedback_enabled);
     assert!(!config.permissions.windows_sandbox_private_desktop);
     assert!(config.startup_warnings.iter().any(|warning| {
         warning.contains("Configured value for `check_for_update_on_startup` is overridden")
     }));
+    assert!(
+        config.startup_warnings.iter().any(|warning| {
+            warning.contains("Configured value for `allow_browser` is overridden")
+        })
+    );
     Ok(())
 }
 

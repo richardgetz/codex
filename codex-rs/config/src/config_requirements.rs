@@ -152,6 +152,7 @@ pub struct ConfigRequirements {
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
     pub check_for_update_on_startup: Option<Sourced<bool>>,
     pub allow_login_shell: Option<Sourced<bool>>,
+    pub allow_browser: Option<Sourced<bool>>,
     pub feedback: Option<Sourced<FeedbackConfigToml>>,
     pub approval_policy: ConstrainedWithSource<AskForApproval>,
     pub approvals_reviewer: ConstrainedWithSource<ApprovalsReviewer>,
@@ -186,6 +187,7 @@ impl Default for ConfigRequirements {
             model_catalog_json: None,
             check_for_update_on_startup: None,
             allow_login_shell: None,
+            allow_browser: None,
             feedback: None,
             approval_policy: ConstrainedWithSource::new(
                 Constrained::allow_any_from_default(),
@@ -878,6 +880,7 @@ pub struct ConfigRequirementsToml {
     pub model_catalog_json: Option<AbsolutePathBuf>,
     pub check_for_update_on_startup: Option<bool>,
     pub allow_login_shell: Option<bool>,
+    pub allow_browser: Option<bool>,
     pub feedback: Option<FeedbackConfigToml>,
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
@@ -969,6 +972,7 @@ pub struct ConfigRequirementsWithSources {
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
     pub check_for_update_on_startup: Option<Sourced<bool>>,
     pub allow_login_shell: Option<Sourced<bool>>,
+    pub allow_browser: Option<Sourced<bool>>,
     pub feedback: Option<Sourced<FeedbackConfigToml>>,
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_approvals_reviewers: Option<Sourced<Vec<ApprovalsReviewer>>>,
@@ -1020,6 +1024,7 @@ impl ConfigRequirementsWithSources {
             model_catalog_json: _,
             check_for_update_on_startup: _,
             allow_login_shell: _,
+            allow_browser: _,
             feedback: _,
             allowed_approval_policies: _,
             allowed_approvals_reviewers: _,
@@ -1066,6 +1071,7 @@ impl ConfigRequirementsWithSources {
                 model_catalog_json,
                 check_for_update_on_startup,
                 allow_login_shell,
+                allow_browser,
                 feedback,
                 allowed_approval_policies,
                 allowed_approvals_reviewers,
@@ -1109,6 +1115,7 @@ impl ConfigRequirementsWithSources {
             model_catalog_json,
             check_for_update_on_startup,
             allow_login_shell,
+            allow_browser,
             feedback,
             allowed_approval_policies,
             allowed_approvals_reviewers,
@@ -1141,6 +1148,7 @@ impl ConfigRequirementsWithSources {
             model_catalog_json: model_catalog_json.map(|sourced| sourced.value),
             check_for_update_on_startup: check_for_update_on_startup.map(|sourced| sourced.value),
             allow_login_shell: allow_login_shell.map(|sourced| sourced.value),
+            allow_browser: allow_browser.map(|sourced| sourced.value),
             feedback: feedback.map(|sourced| sourced.value),
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
             allowed_approvals_reviewers: allowed_approvals_reviewers.map(|sourced| sourced.value),
@@ -1240,6 +1248,7 @@ impl ConfigRequirementsToml {
             && self.model_catalog_json.is_none()
             && self.check_for_update_on_startup.is_none()
             && self.allow_login_shell.is_none()
+            && self.allow_browser.is_none()
             && self
                 .feedback
                 .as_ref()
@@ -1319,6 +1328,7 @@ impl ConfigRequirementsToml {
         apply_exact!(model_catalog_json);
         apply_exact!(check_for_update_on_startup);
         apply_exact!(allow_login_shell);
+        apply_exact!(allow_browser);
 
         if let Some(enabled) = self.feedback.as_ref().and_then(|feedback| feedback.enabled) {
             config.feedback.get_or_insert_default().enabled = Some(enabled);
@@ -1337,7 +1347,7 @@ impl ConfigRequirementsToml {
 
     /// Returns the exact managed field affected by editing `segments`.
     pub fn exact_requirement_for_config_path(&self, segments: &[String]) -> Option<&'static str> {
-        let managed_fields: [(bool, &[&str], &'static str); 7] = [
+        let managed_fields: [(bool, &[&str], &'static str); 8] = [
             (self.sqlite_home.is_some(), &["sqlite_home"], "sqlite_home"),
             (self.log_dir.is_some(), &["log_dir"], "log_dir"),
             (
@@ -1354,6 +1364,11 @@ impl ConfigRequirementsToml {
                 self.allow_login_shell.is_some(),
                 &["allow_login_shell"],
                 "allow_login_shell",
+            ),
+            (
+                self.allow_browser.is_some(),
+                &["allow_browser"],
+                "allow_browser",
             ),
             (
                 self.feedback
@@ -1421,6 +1436,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             model_catalog_json,
             check_for_update_on_startup,
             allow_login_shell,
+            allow_browser,
             feedback,
             allowed_approval_policies,
             allowed_approvals_reviewers,
@@ -1749,6 +1765,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             model_catalog_json,
             check_for_update_on_startup,
             allow_login_shell,
+            allow_browser,
             feedback,
             approval_policy,
             approvals_reviewer,
@@ -1834,6 +1851,7 @@ mod tests {
             model_catalog_json: Some(managed_path),
             check_for_update_on_startup: Some(false),
             allow_login_shell: Some(false),
+            allow_browser: Some(false),
             feedback: Some(FeedbackConfigToml {
                 enabled: Some(false),
             }),
@@ -1852,6 +1870,7 @@ mod tests {
                 Some("check_for_update_on_startup"),
             ),
             (&["allow_login_shell"], Some("allow_login_shell")),
+            (&["allow_browser"], Some("allow_browser")),
             (&["feedback", "enabled"], Some("feedback.enabled")),
             (
                 &["windows", "sandbox_private_desktop"],
@@ -1903,6 +1922,7 @@ mod tests {
             model_catalog_json,
             check_for_update_on_startup,
             allow_login_shell,
+            allow_browser,
             feedback,
             allowed_approval_policies,
             allowed_approvals_reviewers,
@@ -1938,6 +1958,8 @@ mod tests {
             check_for_update_on_startup: check_for_update_on_startup
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allow_login_shell: allow_login_shell
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allow_browser: allow_browser
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feedback: feedback.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_approval_policies: allowed_approval_policies
@@ -2206,6 +2228,7 @@ mod tests {
             model_catalog_json: Some(model_catalog_json.clone()),
             check_for_update_on_startup: Some(false),
             allow_login_shell: Some(false),
+            allow_browser: Some(false),
             feedback: Some(feedback.clone()),
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_approvals_reviewers: Some(allowed_approvals_reviewers.clone()),
@@ -2247,6 +2270,7 @@ mod tests {
                     source.clone(),
                 )),
                 allow_login_shell: Some(Sourced::new(/*value*/ false, source.clone())),
+                allow_browser: Some(Sourced::new(/*value*/ false, source.clone())),
                 feedback: Some(Sourced::new(feedback, source.clone())),
                 allowed_approval_policies: Some(Sourced::new(
                     allowed_approval_policies,

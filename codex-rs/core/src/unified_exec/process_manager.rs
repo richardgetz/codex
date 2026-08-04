@@ -29,6 +29,7 @@ use crate::tools::events::ToolEventStage;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::runtimes::is_direct_playwright_cli_command;
 use crate::tools::runtimes::is_managed_proxy_env_var;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
@@ -205,6 +206,14 @@ fn exec_server_params_for_request(
         managed_network: request.exec_server_managed_network.clone(),
         network_proxy: request.exec_server_network_proxy.clone(),
     }
+}
+
+fn browser_runtime_allowed(request: &ExecCommandRequest) -> bool {
+    matches!(
+        request.sandbox_permissions,
+        crate::sandboxing::SandboxPermissions::UseDefault
+    ) && request.additional_permissions.is_none()
+        && !request.additional_permissions_preapproved
 }
 
 /// Borrowed process state prepared for a `write_stdin` or poll operation.
@@ -1171,7 +1180,25 @@ impl UnifiedExecProcessManager {
             local_policy_env,
         };
         let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime = UnifiedExecRuntime::new(self, request.shell_mode.clone());
+        let file_system_sandbox_policy =
+            context.turn.config.permissions.file_system_sandbox_policy();
+        let browser_cwd = request.cwd.to_abs_path().ok();
+        let allow_browser = context.turn.config.permissions.allow_browser
+            && !request.turn_environment.environment.is_remote()
+            && browser_runtime_allowed(request)
+            && browser_cwd.as_ref().is_some_and(|cwd| {
+                is_direct_playwright_cli_command(
+                    &request.command,
+                    context.turn.config.permissions.playwright_cli_path.as_ref(),
+                    &file_system_sandbox_policy,
+                    cwd,
+                )
+            });
+        let mut runtime = if allow_browser {
+            UnifiedExecRuntime::for_browser_command(self, request.shell_mode.clone())
+        } else {
+            UnifiedExecRuntime::new(self, request.shell_mode.clone())
+        };
         let exec_approval_requirement = context
             .session
             .services

@@ -211,6 +211,7 @@ fn populate_merged_regular_fields_with_sources(
         model_catalog_json,
         check_for_update_on_startup,
         allow_login_shell,
+        allow_browser,
         feedback,
         allowed_approval_policies,
         allowed_approvals_reviewers,
@@ -247,6 +248,7 @@ fn populate_merged_regular_fields_with_sources(
         &["check_for_update_on_startup"]
     );
     set_sourced!(allow_login_shell, &["allow_login_shell"]);
+    set_sourced!(allow_browser, &["allow_browser"]);
     set_sourced!(feedback, &["feedback"]);
     set_sourced!(allowed_approval_policies, &["allowed_approval_policies"]);
     set_sourced!(
