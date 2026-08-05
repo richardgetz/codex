@@ -74,6 +74,9 @@ jobs:
       # submodules through SecureTransport/libgit2, especially libwebrtc's
       # libyuv submodule from chromium.googlesource.com.
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      # Standard public macOS runners have less memory than the former larger
+      # runners, so cap Cargo parallelism for release builds to avoid pressure.
+      CARGO_BUILD_JOBS: ${{ startsWith(matrix.runner, 'macos-') && '2' || '' }}
 
     strategy:
       fail-fast: false
