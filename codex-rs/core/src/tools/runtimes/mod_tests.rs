@@ -53,85 +53,90 @@ fn direct_playwright_cli_command_requires_one_plain_command() {
         .expect("temporary Playwright directory should be absolute");
     let file_system_sandbox_policy = FileSystemSandboxPolicy::read_only();
 
-    assert!(is_direct_playwright_cli_command(
-        &[
-            "/bin/zsh".to_string(),
-            "-c".to_string(),
-            "playwright-cli open 'https://example.com/?a=1&b=2'".to_string(),
-        ],
-        Some(&configured_path),
-        &file_system_sandbox_policy,
-        &cwd,
-    ));
-    assert!(is_direct_playwright_cli_command(
-        &[
-            "/bin/zsh".to_string(),
-            "-c".to_string(),
-            format!("{} open", configured_path.as_path().display()),
-        ],
-        Some(&configured_path),
-        &file_system_sandbox_policy,
-        &cwd,
-    ));
-    assert!(!is_direct_playwright_cli_command(
-        &[
-            "/bin/zsh".to_string(),
-            "-c".to_string(),
-            "/usr/local/bin/playwright-cli open".to_string(),
-        ],
-        Some(&configured_path),
-        &file_system_sandbox_policy,
-        &cwd,
-    ));
+    assert!(
+        resolve_direct_playwright_cli_script(
+            "playwright-cli open 'https://example.com/?a=1&b=2'",
+            Some(&configured_path),
+            &file_system_sandbox_policy,
+            &cwd,
+        )
+        .is_some()
+    );
+    assert!(
+        resolve_direct_playwright_cli_script(
+            &format!("{} open", configured_path.as_path().display()),
+            Some(&configured_path),
+            &file_system_sandbox_policy,
+            &cwd,
+        )
+        .is_some()
+    );
+    assert!(
+        resolve_direct_playwright_cli_script(
+            "/usr/local/bin/playwright-cli open",
+            Some(&configured_path),
+            &file_system_sandbox_policy,
+            &cwd,
+        )
+        .is_none()
+    );
     let invalid_configured_path =
         AbsolutePathBuf::from_absolute_path("/opt/homebrew/bin/not-playwright-cli")
             .expect("configured Playwright path should be absolute");
-    assert!(!is_direct_playwright_cli_command(
-        &["playwright-cli".to_string(), "open".to_string()],
-        Some(&invalid_configured_path),
-        &file_system_sandbox_policy,
-        &cwd,
-    ));
-    assert!(!is_direct_playwright_cli_command(
-        &[
-            "/bin/zsh".to_string(),
-            "-c".to_string(),
-            "./playwright-cli open".to_string(),
-        ],
-        Some(&configured_path),
-        &file_system_sandbox_policy,
-        &cwd,
-    ));
-    assert!(!is_direct_playwright_cli_command(
-        &[
-            "/bin/zsh".to_string(),
-            "-c".to_string(),
-            "playwright-cli open && rm -rf /".to_string(),
-        ],
-        Some(&configured_path),
-        &file_system_sandbox_policy,
-        &cwd,
-    ));
-    assert!(!is_direct_playwright_cli_command(
-        &[
-            "/bin/zsh".to_string(),
-            "-c".to_string(),
-            "playwright-cli --raw snapshot | jq .".to_string(),
-        ],
-        Some(&configured_path),
-        &file_system_sandbox_policy,
-        &cwd,
-    ));
-    assert!(!is_direct_playwright_cli_command(
-        &[
-            "/bin/zsh".to_string(),
-            "-c".to_string(),
-            "env playwright-cli open".to_string(),
-        ],
-        Some(&configured_path),
-        &file_system_sandbox_policy,
-        &cwd,
-    ));
+    assert!(
+        resolve_direct_playwright_cli_script(
+            "playwright-cli open",
+            Some(&invalid_configured_path),
+            &file_system_sandbox_policy,
+            &cwd,
+        )
+        .is_none()
+    );
+    assert!(
+        resolve_direct_playwright_cli_script(
+            "./playwright-cli open",
+            Some(&configured_path),
+            &file_system_sandbox_policy,
+            &cwd,
+        )
+        .is_none()
+    );
+    assert!(
+        resolve_direct_playwright_cli_script(
+            "playwright-cli open && rm -rf /",
+            Some(&configured_path),
+            &file_system_sandbox_policy,
+            &cwd,
+        )
+        .is_none()
+    );
+    assert!(
+        resolve_direct_playwright_cli_script(
+            "playwright-cli --raw snapshot | jq .",
+            Some(&configured_path),
+            &file_system_sandbox_policy,
+            &cwd,
+        )
+        .is_none()
+    );
+    assert!(
+        resolve_direct_playwright_cli_script(
+            "env playwright-cli open",
+            Some(&configured_path),
+            &file_system_sandbox_policy,
+            &cwd,
+        )
+        .is_none()
+    );
+    assert!(
+        resolve_direct_playwright_cli_script(
+            "/bin/sh -c 'echo not playwright'",
+            None,
+            &file_system_sandbox_policy,
+            &cwd,
+        )
+        .is_none()
+    );
 }
 
 #[cfg(unix)]
@@ -177,6 +182,46 @@ fn direct_playwright_cli_script_drops_the_shell_wrapper() {
 
 #[cfg(unix)]
 #[test]
+fn canonical_playwright_cli_target_remains_a_direct_command() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = tempdir().expect("create temporary Playwright directory");
+    let target_path = temp_dir.path().join("playwright-cli.js");
+    std::fs::write(&target_path, "#!/bin/sh\n").expect("write Playwright target");
+    let mut permissions = std::fs::metadata(&target_path)
+        .expect("read Playwright target metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&target_path, permissions).expect("make Playwright target executable");
+    let canonical_target_path = target_path
+        .canonicalize()
+        .expect("canonicalize Playwright target");
+
+    let executable_path = temp_dir.path().join("playwright-cli");
+    std::os::unix::fs::symlink(&target_path, &executable_path)
+        .expect("create Playwright CLI symlink");
+    let configured_path = AbsolutePathBuf::from_absolute_path(&executable_path)
+        .expect("configured Playwright path should be absolute");
+    let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())
+        .expect("temporary Playwright directory should be absolute");
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::read_only();
+    assert_eq!(
+        resolve_direct_playwright_cli_script(
+            "playwright-cli open https://example.com",
+            Some(&configured_path),
+            &file_system_sandbox_policy,
+            &cwd,
+        ),
+        Some(vec![
+            canonical_target_path.to_string_lossy().into_owned(),
+            "open".to_string(),
+            "https://example.com".to_string(),
+        ])
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn direct_playwright_cli_rejects_agent_writable_configured_path() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -195,12 +240,6 @@ fn direct_playwright_cli_rejects_agent_writable_configured_path() {
         .expect("temporary Playwright directory should be absolute");
     let file_system_sandbox_policy = FileSystemSandboxPolicy::workspace_write(&[], false, false);
 
-    assert!(!is_direct_playwright_cli_command(
-        &["playwright-cli".to_string(), "open".to_string()],
-        Some(&configured_path),
-        &file_system_sandbox_policy,
-        &cwd,
-    ));
     assert_eq!(
         resolve_direct_playwright_cli_script(
             "playwright-cli open https://example.com",

@@ -26,7 +26,6 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxType;
-use codex_shell_command::bash::parse_shell_lc_plain_commands;
 use codex_shell_command::bash::parse_shell_script_into_commands;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -71,43 +70,6 @@ pub(crate) fn resolve_direct_playwright_cli_script(
     {
         let _ = (script, configured_path, file_system_sandbox_policy, cwd);
         None
-    }
-}
-
-/// Return whether a command is exactly one direct Playwright CLI invocation.
-pub(crate) fn is_direct_playwright_cli_command(
-    command: &[String],
-    configured_path: Option<&AbsolutePathBuf>,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &AbsolutePathBuf,
-) -> bool {
-    #[cfg(unix)]
-    {
-        if let Some(commands) = parse_shell_lc_plain_commands(command)
-            && let [single_command] = commands.as_slice()
-        {
-            return resolve_playwright_cli_words(
-                single_command,
-                configured_path,
-                file_system_sandbox_policy,
-                cwd.as_path(),
-            )
-            .is_some();
-        }
-
-        resolve_playwright_cli_words(
-            command,
-            configured_path,
-            file_system_sandbox_policy,
-            cwd.as_path(),
-        )
-        .is_some()
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = (command, configured_path, file_system_sandbox_policy, cwd);
-        false
     }
 }
 
