@@ -120,9 +120,6 @@ fn resolve_playwright_cli_words(
 ) -> Option<Vec<String>> {
     let program = command.first()?;
     let program_name = Path::new(program).file_name()?.to_str()?;
-    if program_name != "playwright-cli" {
-        return None;
-    }
 
     if configured_path.is_some_and(|path| {
         path.as_path()
@@ -130,6 +127,27 @@ fn resolve_playwright_cli_words(
             .and_then(|name| name.to_str())
             .is_none_or(|name| name != "playwright-cli")
     }) {
+        return None;
+    }
+
+    // The first browser check may canonicalize a symlink such as
+    // `/opt/homebrew/bin/playwright-cli` to a target named `playwright-cli.js`.
+    // Re-resolve that target here so unified exec does not put an already
+    // validated Playwright invocation back through the normal sandbox.
+    let canonical_cli_path = if program_name == "playwright-cli" {
+        None
+    } else {
+        let candidate_path = configured_path
+            .map(|path| path.as_path().to_path_buf())
+            .or_else(|| which::which("playwright-cli").ok())?;
+        Some(resolve_playwright_cli_path(
+            &candidate_path,
+            file_system_sandbox_policy,
+            cwd,
+            configured_path.is_none(),
+        )?)
+    };
+    if program_name != "playwright-cli" && canonical_cli_path.as_deref() != Some(program) {
         return None;
     }
 

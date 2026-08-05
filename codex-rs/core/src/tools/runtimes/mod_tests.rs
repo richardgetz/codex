@@ -177,6 +177,44 @@ fn direct_playwright_cli_script_drops_the_shell_wrapper() {
 
 #[cfg(unix)]
 #[test]
+fn canonical_playwright_cli_target_remains_a_direct_command() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = tempdir().expect("create temporary Playwright directory");
+    let target_path = temp_dir.path().join("playwright-cli.js");
+    std::fs::write(&target_path, "#!/bin/sh\n").expect("write Playwright target");
+    let mut permissions = std::fs::metadata(&target_path)
+        .expect("read Playwright target metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&target_path, permissions).expect("make Playwright target executable");
+
+    let executable_path = temp_dir.path().join("playwright-cli");
+    std::os::unix::fs::symlink(&target_path, &executable_path)
+        .expect("create Playwright CLI symlink");
+    let configured_path = AbsolutePathBuf::from_absolute_path(&executable_path)
+        .expect("configured Playwright path should be absolute");
+    let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())
+        .expect("temporary Playwright directory should be absolute");
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::read_only();
+    let command = resolve_direct_playwright_cli_script(
+        "playwright-cli open https://example.com",
+        Some(&configured_path),
+        &file_system_sandbox_policy,
+        &cwd,
+    )
+    .expect("symlinked Playwright CLI should resolve");
+
+    assert!(is_direct_playwright_cli_command(
+        &command,
+        Some(&configured_path),
+        &file_system_sandbox_policy,
+        &cwd,
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn direct_playwright_cli_rejects_agent_writable_configured_path() {
     use std::os::unix::fs::PermissionsExt;
 
