@@ -26,7 +26,6 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxType;
-use codex_shell_command::bash::parse_shell_lc_plain_commands;
 use codex_shell_command::bash::parse_shell_script_into_commands;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -74,43 +73,6 @@ pub(crate) fn resolve_direct_playwright_cli_script(
     }
 }
 
-/// Return whether a command is exactly one direct Playwright CLI invocation.
-pub(crate) fn is_direct_playwright_cli_command(
-    command: &[String],
-    configured_path: Option<&AbsolutePathBuf>,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &AbsolutePathBuf,
-) -> bool {
-    #[cfg(unix)]
-    {
-        if let Some(commands) = parse_shell_lc_plain_commands(command)
-            && let [single_command] = commands.as_slice()
-        {
-            return resolve_playwright_cli_words(
-                single_command,
-                configured_path,
-                file_system_sandbox_policy,
-                cwd.as_path(),
-            )
-            .is_some();
-        }
-
-        resolve_playwright_cli_words(
-            command,
-            configured_path,
-            file_system_sandbox_policy,
-            cwd.as_path(),
-        )
-        .is_some()
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = (command, configured_path, file_system_sandbox_policy, cwd);
-        false
-    }
-}
-
 #[cfg(unix)]
 fn resolve_playwright_cli_words(
     command: &[String],
@@ -120,6 +82,9 @@ fn resolve_playwright_cli_words(
 ) -> Option<Vec<String>> {
     let program = command.first()?;
     let program_name = Path::new(program).file_name()?.to_str()?;
+    if program_name != "playwright-cli" {
+        return None;
+    }
 
     if configured_path.is_some_and(|path| {
         path.as_path()
@@ -127,27 +92,6 @@ fn resolve_playwright_cli_words(
             .and_then(|name| name.to_str())
             .is_none_or(|name| name != "playwright-cli")
     }) {
-        return None;
-    }
-
-    // The first browser check may canonicalize a symlink such as
-    // `/opt/homebrew/bin/playwright-cli` to a target named `playwright-cli.js`.
-    // Re-resolve that target here so unified exec does not put an already
-    // validated Playwright invocation back through the normal sandbox.
-    let canonical_cli_path = if program_name == "playwright-cli" {
-        None
-    } else {
-        let candidate_path = configured_path
-            .map(|path| path.as_path().to_path_buf())
-            .or_else(|| which::which("playwright-cli").ok())?;
-        Some(resolve_playwright_cli_path(
-            &candidate_path,
-            file_system_sandbox_policy,
-            cwd,
-            configured_path.is_none(),
-        )?)
-    };
-    if program_name != "playwright-cli" && canonical_cli_path.as_deref() != Some(program) {
         return None;
     }
 

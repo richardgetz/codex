@@ -29,8 +29,8 @@ use crate::tools::events::ToolEventStage;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::orchestrator::ToolOrchestrator;
-use crate::tools::runtimes::is_direct_playwright_cli_command;
 use crate::tools::runtimes::is_managed_proxy_env_var;
+use crate::tools::runtimes::resolve_direct_playwright_cli_script;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -1187,12 +1187,13 @@ impl UnifiedExecProcessManager {
             && !request.turn_environment.environment.is_remote()
             && browser_runtime_allowed(request)
             && browser_cwd.as_ref().is_some_and(|cwd| {
-                is_direct_playwright_cli_command(
-                    &request.command,
+                resolve_direct_playwright_cli_script(
+                    &request.hook_command,
                     context.turn.config.permissions.playwright_cli_path.as_ref(),
                     &file_system_sandbox_policy,
                     cwd,
                 )
+                .is_some()
             });
         let mut runtime = if allow_browser {
             UnifiedExecRuntime::for_browser_command(self, request.shell_mode.clone())
