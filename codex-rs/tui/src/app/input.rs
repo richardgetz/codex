@@ -93,6 +93,10 @@ impl App {
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
+        if self.handle_realtime_voice_key(app_server, key_event).await {
+            return;
+        }
+
         // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
         // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
         // agent-switch shortcuts when the composer is empty so we never steal the expected
@@ -266,6 +270,100 @@ impl App {
         };
     }
 
+    async fn handle_realtime_voice_key(
+        &mut self,
+        app_server: &mut AppServerSession,
+        key_event: KeyEvent,
+    ) -> bool {
+        if !self.config.realtime.enabled || !is_realtime_voice_key(key_event) {
+            return false;
+        }
+
+        match key_event.kind {
+            KeyEventKind::Press | KeyEventKind::Repeat => {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_input_muted(false);
+                    return true;
+                }
+
+                let Some(thread_id) = self.active_thread_id.or(self.chat_widget.thread_id()) else {
+                    self.chat_widget.add_error_message(
+                        "Voice input is unavailable until a thread starts.".to_string(),
+                    );
+                    return true;
+                };
+
+                let (session, sdp) = match RealtimeVoiceSession::start(&self.config.realtime_audio)
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to start live voice input: {err}"));
+                        return true;
+                    }
+                };
+                let params = ThreadRealtimeStartParams {
+                    thread_id: thread_id.to_string(),
+                    client_managed_handoffs: None,
+                    flush_transcript_tail_on_session_end: Some(true),
+                    codex_responses_as_items: Some(false),
+                    codex_response_item_prefix: None,
+                    codex_response_handoff_mode: None,
+                    codex_response_handoff_channel_prefixes: None,
+                    model: Some("gpt-live-1-codex".to_string()),
+                    output_modality: RealtimeOutputModality::Audio,
+                    include_startup_context: Some(false),
+                    initial_items: None,
+                    prompt: None,
+                    realtime_session_id: None,
+                    transport: Some(ThreadRealtimeStartTransport::Webrtc { sdp }),
+                    version: Some(RealtimeConversationVersion::V3),
+                    voice: Some(self.config.realtime.voice.unwrap_or(RealtimeVoice::Sol)),
+                };
+                if let Err(err) = app_server.thread_realtime_start_with_params(params).await {
+                    session.close().await;
+                    self.chat_widget
+                        .add_error_message(format!("Failed to start live voice input: {err}"));
+                    return true;
+                }
+                self.realtime_voice_session = Some(session);
+                true
+            }
+            KeyEventKind::Release => {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_input_muted(true);
+                }
+                true
+            }
+        }
+    }
+
+    pub(super) async fn stop_realtime_voice(&mut self, app_server: &mut AppServerSession) {
+        let Some(session) = self.realtime_voice_session.take() else {
+            return;
+        };
+        if let Some(thread_id) = self.active_thread_id.or(self.chat_widget.thread_id()) {
+            let _ = app_server.thread_realtime_stop(thread_id).await;
+        }
+        session.close().await;
+    }
+
+    pub(super) fn handle_realtime_voice_notification(&mut self, notification: &ServerNotification) {
+        match notification {
+            ServerNotification::ThreadRealtimeSdp(notification) => {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.apply_remote_sdp(notification.sdp.clone());
+                }
+            }
+            ServerNotification::ThreadRealtimeError(_)
+            | ServerNotification::ThreadRealtimeClosed(_) => {
+                self.realtime_voice_session.take();
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {
         !self.chat_widget.side_conversation_active()
             && self.chat_widget.is_normal_backtrack_mode()
@@ -295,9 +393,19 @@ impl App {
     }
 }
 
+fn is_realtime_voice_key(key_event: KeyEvent) -> bool {
+    matches!(key_event.code, KeyCode::Modifier(ModifierKeyCode::RightAlt))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_support::make_test_app;
+    use super::is_realtime_voice_key;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyEventKind;
+    use crossterm::event::KeyModifiers;
+    use crossterm::event::ModifierKeyCode;
 
     #[tokio::test]
     async fn app_keymap_shortcuts_are_disabled_while_keymap_view_is_active() {
@@ -308,5 +416,21 @@ mod tests {
         app.chat_widget.open_keymap_debug(&keymap);
 
         assert!(!app.app_keymap_shortcuts_available());
+    }
+
+    #[test]
+    fn realtime_voice_uses_right_alt_modifier_key() {
+        let right_alt = KeyEvent {
+            code: KeyCode::Modifier(ModifierKeyCode::RightAlt),
+            kind: KeyEventKind::Press,
+            ..KeyEvent::new(KeyCode::Null, KeyModifiers::NONE)
+        };
+        let character = KeyEvent {
+            kind: KeyEventKind::Press,
+            ..KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)
+        };
+
+        assert!(is_realtime_voice_key(right_alt));
+        assert!(!is_realtime_voice_key(character));
     }
 }

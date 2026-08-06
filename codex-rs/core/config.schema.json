@@ -3103,6 +3103,10 @@
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
+        "enabled": {
+          "description": "Enables the native live voice push-to-talk shortcut in the TUI.",
+          "type": "boolean"
+        },
         "transport": {
           "$ref": "#/definitions/RealtimeTransport"
         },

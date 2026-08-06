@@ -750,9 +750,12 @@ pub enum RealtimeTransport {
 pub use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 pub use codex_protocol::protocol::RealtimeVoice;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeConfig {
+    /// Enables the native live voice push-to-talk shortcut in the TUI.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     pub version: RealtimeWsVersion,
     #[serde(rename = "type")]
     pub session_type: RealtimeWsMode,
@@ -760,9 +763,23 @@ pub struct RealtimeConfig {
     pub voice: Option<RealtimeVoice>,
 }
 
+impl Default for RealtimeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            version: RealtimeWsVersion::default(),
+            session_type: RealtimeWsMode::default(),
+            transport: RealtimeTransport::default(),
+            voice: None,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeToml {
+    /// Enables the native live voice push-to-talk shortcut in the TUI.
+    pub enabled: Option<bool>,
     pub version: Option<RealtimeWsVersion>,
     #[serde(rename = "type")]
     pub session_type: Option<RealtimeWsMode>,

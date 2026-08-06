@@ -13211,6 +13211,7 @@ async fn realtime_loads_from_config_toml() -> std::io::Result<()> {
     let cfg: ConfigToml = toml::from_str(
         r#"
 [realtime]
+enabled = false
 version = "v2"
 type = "transcription"
 transport = "webrtc"
@@ -13222,6 +13223,7 @@ voice = "cedar"
     assert_eq!(
         cfg.realtime,
         Some(RealtimeToml {
+            enabled: Some(false),
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
             transport: Some(RealtimeTransport::WebRtc),
@@ -13240,6 +13242,7 @@ voice = "cedar"
     assert_eq!(
         config.realtime,
         RealtimeConfig {
+            enabled: false,
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,
             transport: RealtimeTransport::WebRtc,

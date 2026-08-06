@@ -1587,6 +1587,9 @@ impl App {
     }
 
     pub(super) fn handle_thread_event_now(&mut self, event: ThreadBufferedEvent) {
+        if let ThreadBufferedEvent::Notification(notification) = &event {
+            self.handle_realtime_voice_notification(notification);
+        }
         let needs_refresh = matches!(
             &event,
             ThreadBufferedEvent::Notification(ServerNotification::TurnStarted(_))

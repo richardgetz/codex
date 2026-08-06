@@ -24,6 +24,7 @@ pub(super) async fn make_test_app() -> App {
         workspace_command_runner: None,
         launch_cwd: config.cwd.to_path_buf(),
         config,
+        realtime_voice_session: None,
         state_db: None,
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),

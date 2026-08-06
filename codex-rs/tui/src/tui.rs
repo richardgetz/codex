@@ -405,13 +405,14 @@ fn flush_terminal_input_buffer() {
 pub(crate) fn flush_terminal_input_buffer() {}
 
 /// Initialize the terminal (inline viewport; history stays in normal scrollback)
-pub(crate) fn init() -> Result<InitializedTerminal> {
+pub(crate) fn init(realtime_voice_enabled: bool) -> Result<InitializedTerminal> {
     if !stdin().is_terminal() {
         return Err(std::io::Error::other("stdin is not a terminal"));
     }
     if !stdout().is_terminal() {
         return Err(std::io::Error::other("stdout is not a terminal"));
     }
+    keyboard_modes::set_realtime_voice_enabled(realtime_voice_enabled);
     set_modes()?;
 
     flush_terminal_input_buffer();

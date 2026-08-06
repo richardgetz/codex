@@ -1455,6 +1455,19 @@ impl AppServerSession {
         Ok(())
     }
 
+    pub(crate) async fn thread_realtime_start_with_params(
+        &mut self,
+        params: ThreadRealtimeStartParams,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadRealtimeStartResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadRealtimeStart { request_id, params })
+            .await
+            .wrap_err("thread/realtime/start failed in TUI")?;
+        Ok(())
+    }
+
     pub(crate) async fn thread_realtime_audio(
         &mut self,
         thread_id: ThreadId,
