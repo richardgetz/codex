@@ -1,3 +1,4 @@
+use super::continuous_loopback::ScratchpadLoopbackLimiter;
 use super::input_queue::InputQueue;
 use super::mcp_refresh::McpRefresh;
 use super::*;
@@ -7,6 +8,7 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
+use codex_config::types::ScratchpadLoopbackConfig;
 use codex_extension_api::ExtensionDataInit;
 use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_memories_read::memory_root;
@@ -24,6 +26,7 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
+use std::time::Instant;
 use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
 use tokio::sync::SemaphorePermit;
@@ -58,6 +61,8 @@ pub(crate) struct Session {
     pub(super) mcp_prewarm_task: std::sync::Mutex<Option<JoinHandle<()>>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    /// Tracks recent automatic scratchpad loopbacks for this loaded thread.
+    pub(crate) scratchpad_loopback_limiter: std::sync::Mutex<ScratchpadLoopbackLimiter>,
     pub(crate) input_queue: InputQueue,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
@@ -498,6 +503,28 @@ impl SessionConfiguration {
 }
 
 impl Session {
+    /// Reserve an automatic scratchpad loopback using the current session config.
+    ///
+    /// Holding the session-state lock while reserving the limiter slot makes a
+    /// config reload and a loopback admission linearizable with one another.
+    pub(crate) async fn try_record_scratchpad_loopback(
+        &self,
+        now: Instant,
+    ) -> (bool, ScratchpadLoopbackConfig) {
+        let state = self.state.lock().await;
+        let loopback_config = state
+            .session_configuration
+            .original_config_do_not_use
+            .scratchpad
+            .loopback;
+        let loopback_allowed = self
+            .scratchpad_loopback_limiter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .try_record_at(now, loopback_config);
+        (loopback_allowed, loopback_config)
+    }
+
     pub(crate) async fn memory_write_enabled(&self) -> bool {
         let state = self.state.lock().await;
         state.session_configuration.memory_policy.normalized().write
@@ -1295,6 +1322,9 @@ impl Session {
                 mcp_prewarm_task: std::sync::Mutex::new(None),
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
+                scratchpad_loopback_limiter: std::sync::Mutex::new(
+                    ScratchpadLoopbackLimiter::default(),
+                ),
                 input_queue: InputQueue::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,

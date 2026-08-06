@@ -41,6 +41,7 @@ use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_config::types::ScratchpadLoopbackConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::SkillMetadata;
@@ -1742,6 +1743,28 @@ disabled_tools = [
             ToolSuggestDisabledTool::connector("calendar"),
             ToolSuggestDisabledTool::plugin("slack@openai-curated"),
         ]
+    );
+}
+
+#[tokio::test]
+async fn reload_user_config_layer_updates_scratchpad_loopback_config() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        "[scratchpad.loopback]\nmax_loopbacks = 7\nwindow_minutes = 9\n",
+    )
+    .expect("write user config");
+
+    session.reload_user_config_layer().await;
+
+    assert_eq!(
+        session.get_config().await.scratchpad.loopback,
+        ScratchpadLoopbackConfig {
+            max_loopbacks: 7,
+            window: Duration::from_secs(9 * 60),
+        }
     );
 }
 
@@ -6515,6 +6538,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         mcp_prewarm_task: std::sync::Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        scratchpad_loopback_limiter: std::sync::Mutex::new(Default::default()),
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
@@ -8715,6 +8739,7 @@ where
         mcp_prewarm_task: std::sync::Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        scratchpad_loopback_limiter: std::sync::Mutex::new(Default::default()),
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,

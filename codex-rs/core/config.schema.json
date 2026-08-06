@@ -3378,6 +3378,26 @@
       },
       "type": "object"
     },
+    "ScratchpadLoopbackToml": {
+      "additionalProperties": false,
+      "description": "Continuous scratchpad loopback limits loaded from config.toml.",
+      "properties": {
+        "max_loopbacks": {
+          "description": "Maximum automatic loopbacks allowed during the rolling window.",
+          "format": "uint",
+          "maximum": 1024.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "window_minutes": {
+          "description": "Rolling window for the maximum loopback count, in minutes.",
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "ScratchpadModeToml": {
       "additionalProperties": false,
       "description": "Built-in scratchpad behavior for one collaboration mode.",
@@ -3450,6 +3470,14 @@
             }
           ],
           "description": "Optional agent fanout policy for disconnected scratchpad next_steps."
+        },
+        "loopback": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ScratchpadLoopbackToml"
+            }
+          ],
+          "description": "Limit automatic continuous scratchpad loopbacks to a rolling window."
         },
         "modes": {
           "additionalProperties": {

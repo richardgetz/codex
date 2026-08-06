@@ -67,6 +67,7 @@ use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::TurnCodexErrorFact;
 use codex_async_utils::OrCancelExt;
 use codex_config::types::MemoriesScope;
+use codex_config::types::ScratchpadToml;
 use codex_connectors::connector_runtime_context_key;
 use codex_core_skills::injection::HostSkillsCatalogInWorldState;
 use codex_exec_server::Environment;
@@ -224,6 +225,7 @@ pub(crate) use capacity_retry::wait_for_active_turn_model_capacity_retry;
 mod code_mode_warning;
 mod config_lock;
 pub(crate) mod context_window;
+mod continuous_loopback;
 mod handlers;
 pub(crate) use handlers::thread_settings_applied_event;
 mod inject;
@@ -1987,6 +1989,7 @@ impl Session {
                 .with_user_layer_from(&next_config.config_layer_stack);
             config.tool_suggest =
                 resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);
+            config.scratchpad.loopback = next_config.scratchpad.loopback;
             config.mcp_servers = next_config.mcp_servers.clone();
             config.mcp_oauth_credentials_store_mode = next_config.mcp_oauth_credentials_store_mode;
             if let Err(err) = config.features.set_enabled(
@@ -2137,6 +2140,23 @@ impl Session {
             }
             config.tool_suggest =
                 resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);
+            let scratchpad_toml: Option<ScratchpadToml> = match config
+                .config_layer_stack
+                .effective_config()
+                .get("scratchpad")
+            {
+                Some(value) => match value.clone().try_into() {
+                    Ok(scratchpad) => Some(scratchpad),
+                    Err(err) => {
+                        warn!(
+                            "failed to deserialize scratchpad config while reloading layer: {err}"
+                        );
+                        return;
+                    }
+                },
+                None => None,
+            };
+            config.scratchpad = scratchpad_toml.unwrap_or_default().into();
             config
         };
         self.services.skills_service.clear_cache();

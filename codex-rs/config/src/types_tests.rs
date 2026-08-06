@@ -1,5 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::time::Duration;
 
 #[test]
 fn deserialize_skill_config_with_name_selector() {
@@ -226,6 +227,37 @@ fn scratchpad_rollback_defaults_allows_disable_and_clamps_retention() {
         })),
         ScratchpadRollbackConfig {
             max_user_turn_checkpoints: 1024,
+        }
+    );
+}
+
+#[test]
+fn scratchpad_loopback_defaults_to_five_in_five_minutes_and_clamps_values() {
+    assert_eq!(
+        ScratchpadLoopbackConfig::from(None),
+        ScratchpadLoopbackConfig {
+            max_loopbacks: 5,
+            window: Duration::from_secs(5 * 60),
+        }
+    );
+    assert_eq!(
+        ScratchpadLoopbackConfig::from(Some(ScratchpadLoopbackToml {
+            max_loopbacks: Some(0),
+            window_minutes: Some(0),
+        })),
+        ScratchpadLoopbackConfig {
+            max_loopbacks: 1,
+            window: Duration::from_secs(60),
+        }
+    );
+    assert_eq!(
+        ScratchpadLoopbackConfig::from(Some(ScratchpadLoopbackToml {
+            max_loopbacks: Some(2048),
+            window_minutes: Some(9),
+        })),
+        ScratchpadLoopbackConfig {
+            max_loopbacks: 1024,
+            window: Duration::from_secs(9 * 60),
         }
     );
 }

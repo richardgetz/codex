@@ -324,6 +324,21 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
   The feature defaults to disabled; `delay_minutes` defaults to `5` and must
   be at least `1` when configured through `config.toml`.
+- Automatic continuous scratchpad loopbacks are bounded by a rolling window.
+  The default allows five loopbacks in a five-minute rolling window, then stops
+  the current automatic continuation on the next attempt. A later turn can
+  proceed once an older loopback has left the window. Configure the limit and
+  window in `config.toml`:
+
+  ```toml
+  [scratchpad.loopback]
+  max_loopbacks = 5
+  window_minutes = 5
+  ```
+
+  `max_loopbacks` is clamped to `1` through `1024`, and `window_minutes` is
+  clamped to at least `1`. The limit is tracked for the loaded thread session;
+  changing either value while reloading config starts a fresh in-memory window.
 - Scratchpads include `communication_policy` for durable communication
   preferences; channel failure alone is not treated as permission to stop or
   fall back to a final response.
@@ -445,6 +460,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   [scratchpad.capacity_retry]
   enabled = false
   delay_minutes = 5
+
+  [scratchpad.loopback]
+  max_loopbacks = 5
+  window_minutes = 5
 
   [scratchpad.fanout]
   enabled = false
