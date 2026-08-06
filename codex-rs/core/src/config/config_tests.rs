@@ -81,6 +81,8 @@ use codex_config::types::ScratchpadCapacityRetryToml;
 use codex_config::types::ScratchpadConfig;
 use codex_config::types::ScratchpadFanoutConfig;
 use codex_config::types::ScratchpadFanoutToml;
+use codex_config::types::ScratchpadLoopbackConfig;
+use codex_config::types::ScratchpadLoopbackToml;
 use codex_config::types::ScratchpadModeToml;
 use codex_config::types::ScratchpadRollbackConfig;
 use codex_config::types::ScratchpadRollbackToml;
@@ -860,6 +862,10 @@ outcomes_enabled = true
 enabled = true
 delay_minutes = 7
 
+[scratchpad.loopback]
+max_loopbacks = 7
+window_minutes = 9
+
 [scratchpad.rollback]
 max_user_turn_checkpoints = 12
 
@@ -899,6 +905,10 @@ recover_after_compaction = false
             capacity_retry: Some(ScratchpadCapacityRetryToml {
                 enabled: Some(true),
                 delay_minutes: Some(7),
+            }),
+            loopback: Some(ScratchpadLoopbackToml {
+                max_loopbacks: Some(7),
+                window_minutes: Some(9),
             }),
             fanout: Some(ScratchpadFanoutToml {
                 enabled: Some(true),
@@ -1066,6 +1076,10 @@ max_agents = 5
 
 [scratchpad.rollback]
 max_user_turn_checkpoints = 11
+
+[scratchpad.loopback]
+max_loopbacks = 7
+window_minutes = 9
 "#,
         )
         .expect("TOML deserialization should succeed"),
@@ -1095,6 +1109,13 @@ max_user_turn_checkpoints = 11
         config.scratchpad.rollback,
         ScratchpadRollbackConfig {
             max_user_turn_checkpoints: 11,
+        }
+    );
+    assert_eq!(
+        config.scratchpad.loopback,
+        ScratchpadLoopbackConfig {
+            max_loopbacks: 7,
+            window: std::time::Duration::from_secs(9 * 60),
         }
     );
     assert_eq!(

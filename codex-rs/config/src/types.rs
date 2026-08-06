@@ -705,6 +705,8 @@ pub struct ScratchpadToml {
     pub view: Option<ScratchpadViewToml>,
     /// Retry model-capacity errors while the thread's continuous policy is enabled.
     pub capacity_retry: Option<ScratchpadCapacityRetryToml>,
+    /// Limit automatic continuous scratchpad loopbacks to a rolling window.
+    pub loopback: Option<ScratchpadLoopbackToml>,
     /// Collaboration-mode-specific overrides.
     #[serde(
         default,
@@ -751,6 +753,52 @@ impl From<Option<ScratchpadCapacityRetryToml>> for ScratchpadCapacityRetryConfig
         Self {
             enabled: toml.enabled.unwrap_or(defaults.enabled),
             delay: std::time::Duration::from_secs(delay_minutes.saturating_mul(60)),
+        }
+    }
+}
+
+/// Continuous scratchpad loopback limits loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ScratchpadLoopbackToml {
+    /// Maximum automatic loopbacks allowed during the rolling window.
+    #[schemars(range(min = 1, max = 1024))]
+    pub max_loopbacks: Option<usize>,
+    /// Rolling window for the maximum loopback count, in minutes.
+    #[schemars(range(min = 1))]
+    pub window_minutes: Option<u64>,
+}
+
+/// Effective continuous scratchpad loopback limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScratchpadLoopbackConfig {
+    pub max_loopbacks: usize,
+    pub window: std::time::Duration,
+}
+
+impl Default for ScratchpadLoopbackConfig {
+    fn default() -> Self {
+        Self {
+            max_loopbacks: 5,
+            window: std::time::Duration::from_secs(5 * 60),
+        }
+    }
+}
+
+impl From<Option<ScratchpadLoopbackToml>> for ScratchpadLoopbackConfig {
+    fn from(toml: Option<ScratchpadLoopbackToml>) -> Self {
+        let defaults = Self::default();
+        let Some(toml) = toml else {
+            return defaults;
+        };
+        let max_loopbacks = toml
+            .max_loopbacks
+            .unwrap_or(defaults.max_loopbacks)
+            .clamp(1, 1024);
+        let window_minutes = toml.window_minutes.unwrap_or(5).max(1);
+        Self {
+            max_loopbacks,
+            window: std::time::Duration::from_secs(window_minutes.saturating_mul(60)),
         }
     }
 }
@@ -929,6 +977,7 @@ pub struct ScratchpadConfig {
     pub rollback: ScratchpadRollbackConfig,
     pub view: ScratchpadViewConfig,
     pub capacity_retry: ScratchpadCapacityRetryConfig,
+    pub loopback: ScratchpadLoopbackConfig,
 }
 
 impl Default for ScratchpadConfig {
@@ -951,6 +1000,7 @@ impl Default for ScratchpadConfig {
             rollback: ScratchpadRollbackConfig::default(),
             view: ScratchpadViewConfig::default(),
             capacity_retry: ScratchpadCapacityRetryConfig::default(),
+            loopback: ScratchpadLoopbackConfig::default(),
         }
     }
 }
@@ -1006,6 +1056,7 @@ impl From<ScratchpadToml> for ScratchpadConfig {
             rollback: toml.rollback.into(),
             view: toml.view.into(),
             capacity_retry: toml.capacity_retry.into(),
+            loopback: toml.loopback.into(),
         }
     }
 }

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use crate::SkillInjections;
 use crate::build_skill_injections;
@@ -446,21 +447,46 @@ pub(crate) async fn run_turn(
                         super::continuous_run_policy_enabled(scratchpad)
                             && super::scratchpad_has_continuous_work(scratchpad)
                     }) {
-                        let message = ResponseItem::Message {
-                            id: None,
-                            role: "user".to_string(),
-                            content: vec![ContentItem::InputText {
-                                text: build_continuous_run_block_message(&scratchpad),
-                            }],
-                            phase: None,
-                            internal_chat_message_metadata_passthrough: None,
+                        let (loopback_allowed, loopback_config) =
+                            sess.try_record_scratchpad_loopback(Instant::now()).await;
+                        if loopback_allowed {
+                            let message = ResponseItem::Message {
+                                id: None,
+                                role: "user".to_string(),
+                                content: vec![ContentItem::InputText {
+                                    text: build_continuous_run_block_message(&scratchpad),
+                                }],
+                                phase: None,
+                                internal_chat_message_metadata_passthrough: None,
+                            };
+                            sess.record_conversation_items(
+                                &turn_context,
+                                std::slice::from_ref(&message),
+                            )
+                            .await;
+                            continue;
+                        }
+                        let max_loopbacks = loopback_config.max_loopbacks;
+                        let loopback_unit = if max_loopbacks == 1 {
+                            "loopback"
+                        } else {
+                            "loopbacks"
                         };
-                        sess.record_conversation_items(
+                        let window_minutes = loopback_config.window.as_secs() / 60;
+                        let window_unit = if window_minutes == 1 {
+                            "minute"
+                        } else {
+                            "minutes"
+                        };
+                        sess.send_event(
                             &turn_context,
-                            std::slice::from_ref(&message),
+                            EventMsg::Warning(WarningEvent {
+                                message: format!(
+                                    "Continuous scratchpad loopback limit reached ({max_loopbacks} {loopback_unit} in {window_minutes} {window_unit}); stopping automatic continuation."
+                                ),
+                            }),
                         )
                         .await;
-                        continue;
                     }
                     let stop_outcome = run_turn_stop_hooks(
                         &sess,

@@ -175,6 +175,10 @@ stable/mainline is pulled in.
     after the configured delay only while the thread's scratchpad continuous
     policy remains enabled; the wait is interruptible and rechecks the live
     policy before retrying.
+  - Config: `[scratchpad.loopback]`, with `max_loopbacks = 5` and
+    `window_minutes = 5` by default. Continuous mode stops before another
+    automatic loopback when the configured rolling-window limit is reached;
+    the limit is tracked for the loaded thread session.
   - Scratchpads support standalone `communication_policy` fields for durable
     communication preferences; channel failure alone must not force a final
     response while the main work can continue.
