@@ -34,6 +34,30 @@ fn realtime_controls_write_to_their_config_paths() {
         }
     );
     assert_eq!(
+        build_realtime_speaker_edit("Clip-On Speaker"),
+        ConfigEdit {
+            key_path: "audio.speaker".to_string(),
+            value: serde_json::json!("Clip-On Speaker"),
+            merge_strategy: MergeStrategy::Replace,
+        }
+    );
+    assert_eq!(
+        build_realtime_microphone_alias_edit("airpods", "Clip-On Mic"),
+        ConfigEdit {
+            key_path: "audio.microphone_aliases.\"airpods\"".to_string(),
+            value: serde_json::json!("Clip-On Mic"),
+            merge_strategy: MergeStrategy::Replace,
+        }
+    );
+    assert_eq!(
+        build_realtime_speaker_alias_edit("desk", "Clip-On Speaker"),
+        ConfigEdit {
+            key_path: "audio.speaker_aliases.\"desk\"".to_string(),
+            value: serde_json::json!("Clip-On Speaker"),
+            merge_strategy: MergeStrategy::Replace,
+        }
+    );
+    assert_eq!(
         build_realtime_voice_edit("arbor"),
         ConfigEdit {
             key_path: "realtime.voice".to_string(),

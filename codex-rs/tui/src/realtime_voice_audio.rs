@@ -54,6 +54,18 @@ pub(crate) fn list_input_devices() -> Result<Vec<String>> {
     Ok(devices)
 }
 
+pub(crate) fn list_output_devices() -> Result<Vec<String>> {
+    let host = cpal::default_host();
+    let mut devices = host
+        .output_devices()
+        .context("listing realtime speakers")?
+        .map(|device| device.to_string())
+        .collect::<Vec<_>>();
+    devices.sort();
+    devices.dedup();
+    Ok(devices)
+}
+
 pub(crate) fn select_output_device(
     host: &cpal::Host,
     requested: Option<&str>,

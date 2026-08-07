@@ -148,6 +148,34 @@ pub(crate) fn build_realtime_microphone_edit(microphone: &str) -> ConfigEdit {
     replace_config_value("audio.microphone", serde_json::json!(microphone))
 }
 
+pub(crate) fn build_realtime_speaker_edit(speaker: &str) -> ConfigEdit {
+    replace_config_value("audio.speaker", serde_json::json!(speaker))
+}
+
+fn quoted_config_key_segment(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+pub(crate) fn build_realtime_microphone_alias_edit(alias: &str, microphone: &str) -> ConfigEdit {
+    replace_config_value(
+        format!(
+            "audio.microphone_aliases.\"{}\"",
+            quoted_config_key_segment(alias)
+        ),
+        serde_json::json!(microphone),
+    )
+}
+
+pub(crate) fn build_realtime_speaker_alias_edit(alias: &str, speaker: &str) -> ConfigEdit {
+    replace_config_value(
+        format!(
+            "audio.speaker_aliases.\"{}\"",
+            quoted_config_key_segment(alias)
+        ),
+        serde_json::json!(speaker),
+    )
+}
+
 pub(crate) fn build_realtime_voice_edit(voice: &str) -> ConfigEdit {
     replace_config_value("realtime.voice", serde_json::json!(voice))
 }
