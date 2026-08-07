@@ -94,6 +94,45 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   - `codex --disable enable_mcp_approvals`
 - `codex features list` marks Rick-owned features with `(rick)`.
 
+### GPT-Live voice in the native TUI
+
+- The fork includes a native live voice mode that matches the Codex desktop
+  app's GPT-Live path: native microphone/speaker capture, Opus audio over
+  WebRTC, and app-server `thread/realtime/start` signaling. It uses
+  `gpt-live-1-codex`, realtime V3, audio output, and does not use the legacy
+  Whisper, `audio.append`, or `audio.flush` dictation path.
+- Voice is enabled by default. The default macOS push-to-talk binding is Right
+  Option (`right-option`); hold it to speak and release it to send. The default
+  voice is Arbor. Native devices currently need a 48 kHz format.
+- The runtime controls are fork-only:
+  - `/mic` toggles the microphone.
+  - `/mic on`, `/mic off`, and `/mic status` explicitly enable, disable, or
+    inspect the session microphone mode.
+  - `/mic hot` keeps the microphone live; `/mic push` returns to push-to-talk.
+  - `/mic hotkey` captures and persists the next key as the push-to-talk key.
+  - `/mic devices` lists input devices; `/mic device <name>` selects and
+    persists one for the next voice session.
+  - `/voice status` shows the selected voice, `/voice list` asks app-server for
+    the available GPT-Live voices, and `/voice <name>` validates and persists a
+    selection for the next voice session.
+- Configuration is persisted in `config.toml`:
+
+  ```toml
+  [realtime]
+  enabled = true
+  voice = "arbor"
+  hotkey = "right-option"
+
+  [audio]
+  # Optional; omit either value to use the system default.
+  microphone = "Clip-On Mic"
+  speaker = "Desk Speakers"
+  ```
+
+  Set `[realtime].enabled = false` to disable the voice feature and its hotkey
+  entirely. `/mic off` is a session-level mode change and does not rewrite that
+  config gate. Voice and device changes apply to the next voice session.
+
 ### Commit and intent guidance
 
 - Conventional Commits guidance is first-class and enabled by default.
