@@ -135,6 +135,7 @@ struct RealtimeHandoffState {
     output_tx: Sender<RealtimeOutbound>,
     last_output: Arc<Mutex<Option<RealtimeHandoffOutput>>>,
     stream: Arc<Mutex<RealtimeHandoffStreamState>>,
+    suppress_non_final_output: Arc<AtomicBool>,
     client_managed_handoffs: bool,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
@@ -432,6 +433,11 @@ struct RealtimeInputChannels {
 }
 
 impl RealtimeHandoffState {
+    fn suppresses_output(&self, phase: Option<&MessagePhase>) -> bool {
+        self.suppress_non_final_output.load(Ordering::Relaxed)
+            && matches!(phase, Some(MessagePhase::Commentary))
+    }
+
     fn streams_handoff_append(&self) -> bool {
         self.event_parser == RealtimeEventParser::FramelessBidi
             && !self.client_managed_handoffs
@@ -503,6 +509,28 @@ impl RealtimeConversationManager {
         )
     }
 
+    /// Suppress commentary generated after an automatic internal continuation while preserving a
+    /// final answer for the active GPT-Live handoff.
+    pub(crate) async fn suppress_non_final_handoff_output(&self) {
+        let guard = self.state.lock().await;
+        if let Some(state) = guard.as_ref() {
+            state
+                .handoff
+                .suppress_non_final_output
+                .store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) async fn reset_handoff_output_suppression(&self) {
+        let guard = self.state.lock().await;
+        if let Some(state) = guard.as_ref() {
+            state
+                .handoff
+                .suppress_non_final_output
+                .store(false, Ordering::Relaxed);
+        }
+    }
+
     async fn start(&self, start: RealtimeStart) -> CodexResult<RealtimeStartOutput> {
         let previous_state = {
             let mut guard = self.state.lock().await;
@@ -552,6 +580,7 @@ impl RealtimeConversationManager {
             output_tx: handoff_output_tx,
             last_output: Arc::new(Mutex::new(None)),
             stream: Arc::new(Mutex::new(RealtimeHandoffStreamState::default())),
+            suppress_non_final_output: Arc::new(AtomicBool::new(false)),
             client_managed_handoffs,
             codex_responses_as_items,
             codex_response_item_prefix,
@@ -755,6 +784,9 @@ impl RealtimeConversationManager {
         } else {
             phase
         };
+        if handoff.suppresses_output(phase.as_ref()) {
+            return Ok(());
+        }
         let is_commentary = matches!(phase, Some(MessagePhase::Commentary));
         let active_handoff = handoff.stream.lock().await.active_handoff.clone();
         let output = match active_handoff {
@@ -831,6 +863,9 @@ impl RealtimeConversationManager {
             return;
         };
         if !handoff.streams_handoff_append() {
+            return;
+        }
+        if handoff.suppresses_output(phase.as_ref()) {
             return;
         }
         let flush_delay = {

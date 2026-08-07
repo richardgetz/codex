@@ -2426,6 +2426,10 @@ impl Session {
     }
 
     async fn maybe_clear_realtime_handoff_for_event(&self, msg: &EventMsg) {
+        if matches!(msg, EventMsg::TurnAborted(_)) {
+            self.conversation.reset_handoff_output_suppression().await;
+            return;
+        }
         if !matches!(msg, EventMsg::TurnComplete(_)) {
             return;
         }
@@ -2433,6 +2437,7 @@ impl Session {
             debug!("failed to finalize realtime handoff output: {err}");
         }
         self.conversation.clear_active_handoff().await;
+        self.conversation.reset_handoff_output_suppression().await;
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {

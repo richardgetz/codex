@@ -450,6 +450,7 @@ pub(crate) async fn run_turn(
                         let (loopback_allowed, loopback_config) =
                             sess.try_record_scratchpad_loopback(Instant::now()).await;
                         if loopback_allowed {
+                            sess.conversation.suppress_non_final_handoff_output().await;
                             let message = ResponseItem::Message {
                                 id: None,
                                 role: "user".to_string(),

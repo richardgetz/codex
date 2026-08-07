@@ -13,69 +13,88 @@ impl ChatWidget {
         }
 
         self.ensure_realtime_transcript_cell(role);
-        if let Some(cell) = self.transcript.realtime_transcript_cell.as_ref() {
-            cell.append(delta);
-            self.bump_active_cell_revision();
-            self.request_redraw();
-        }
+        let Some(cell) = self.realtime_transcript_cell(role) else {
+            return;
+        };
+        cell.append(delta);
+        self.bump_active_cell_revision();
+        self.request_redraw();
     }
 
     pub(super) fn handle_realtime_transcript_done(&mut self, role: &str, text: &str) {
         let Some(role) = RealtimeTranscriptRole::from_wire(role) else {
             return;
         };
-        if text.is_empty()
-            && !self
-                .transcript
-                .realtime_transcript_cell
-                .as_ref()
-                .is_some_and(|cell| cell.role() == role)
-        {
+        if text.is_empty() && self.realtime_transcript_cell(role).is_none() {
             return;
         }
 
         self.ensure_realtime_transcript_cell(role);
-        if let Some(cell) = self.transcript.realtime_transcript_cell.as_ref() {
-            if !text.is_empty() {
+        if !text.is_empty() {
+            if let Some(cell) = self.realtime_transcript_cell(role) {
                 cell.set_text(text);
             }
-            self.bump_active_cell_revision();
-            self.flush_realtime_transcript_cell();
-            self.request_redraw();
         }
+        self.bump_active_cell_revision();
+        self.flush_realtime_transcript_cell(role);
+        self.request_redraw();
     }
 
     pub(super) fn finish_realtime_transcript_stream(&mut self) {
-        if self.transcript.realtime_transcript_cell.is_some() {
-            self.flush_realtime_transcript_cell();
+        if self.transcript.realtime_user_transcript_cell.is_some()
+            || self.transcript.realtime_assistant_transcript_cell.is_some()
+        {
+            self.flush_realtime_transcript_cell(RealtimeTranscriptRole::User);
+            self.flush_realtime_transcript_cell(RealtimeTranscriptRole::Assistant);
             self.request_redraw();
         }
     }
 
     fn ensure_realtime_transcript_cell(&mut self, role: RealtimeTranscriptRole) {
-        let has_matching_cell = self
-            .transcript
-            .realtime_transcript_cell
-            .as_ref()
-            .is_some_and(|cell| cell.role() == role);
-        if has_matching_cell {
+        if self.realtime_transcript_cell(role).is_some() {
             return;
         }
 
-        if self.transcript.realtime_transcript_cell.is_some() {
-            self.flush_realtime_transcript_cell();
-        } else if self.stream_controller.is_none() && self.plan_stream_controller.is_none() {
+        if self.transcript.realtime_user_transcript_cell.is_none()
+            && self.transcript.realtime_assistant_transcript_cell.is_none()
+            && self.stream_controller.is_none()
+            && self.plan_stream_controller.is_none()
+        {
             // The session header and other non-streaming active cells should remain before the
             // realtime transcript, but never interrupt an in-flight normal assistant stream.
             self.flush_active_cell();
         }
-        self.transcript.realtime_transcript_cell =
+        *self.realtime_transcript_cell_mut(role) =
             Some(crate::history_cell::RealtimeTranscriptCell::new(role));
         self.bump_active_cell_revision();
     }
 
-    fn flush_realtime_transcript_cell(&mut self) {
-        let Some(cell) = self.transcript.realtime_transcript_cell.take() else {
+    fn realtime_transcript_cell(
+        &self,
+        role: RealtimeTranscriptRole,
+    ) -> Option<&crate::history_cell::RealtimeTranscriptCell> {
+        match role {
+            RealtimeTranscriptRole::User => self.transcript.realtime_user_transcript_cell.as_ref(),
+            RealtimeTranscriptRole::Assistant => {
+                self.transcript.realtime_assistant_transcript_cell.as_ref()
+            }
+        }
+    }
+
+    fn realtime_transcript_cell_mut(
+        &mut self,
+        role: RealtimeTranscriptRole,
+    ) -> &mut Option<crate::history_cell::RealtimeTranscriptCell> {
+        match role {
+            RealtimeTranscriptRole::User => &mut self.transcript.realtime_user_transcript_cell,
+            RealtimeTranscriptRole::Assistant => {
+                &mut self.transcript.realtime_assistant_transcript_cell
+            }
+        }
+    }
+
+    fn flush_realtime_transcript_cell(&mut self, role: RealtimeTranscriptRole) {
+        let Some(cell) = self.realtime_transcript_cell_mut(role).take() else {
             return;
         };
         self.transcript.bump_active_cell_revision();

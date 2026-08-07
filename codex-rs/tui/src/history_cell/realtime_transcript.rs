@@ -48,14 +48,10 @@ impl RealtimeTranscriptCell {
         }
     }
 
-    pub(crate) fn role(&self) -> RealtimeTranscriptRole {
-        self.role
-    }
-
     pub(crate) fn append(&self, delta: &str) {
         match self.text.lock() {
-            Ok(mut text) => text.push_str(delta),
-            Err(poisoned) => poisoned.into_inner().push_str(delta),
+            Ok(mut text) => append_transcript_delta(&mut text, delta),
+            Err(poisoned) => append_transcript_delta(&mut poisoned.into_inner(), delta),
         }
     }
 
@@ -72,6 +68,20 @@ impl RealtimeTranscriptCell {
             Err(poisoned) => poisoned.into_inner().clone(),
         }
     }
+}
+
+fn append_transcript_delta(text: &mut String, delta: &str) {
+    if delta.is_empty() || text == delta {
+        return;
+    }
+    if delta.starts_with(text.as_str()) {
+        *text = delta.to_string();
+        return;
+    }
+    if text.ends_with(delta) {
+        return;
+    }
+    text.push_str(delta);
 }
 
 impl HistoryCell for RealtimeTranscriptCell {

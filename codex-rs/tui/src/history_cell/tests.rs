@@ -85,6 +85,20 @@ fn realtime_transcript_cell_renders_live_user_and_assistant_text() {
 • hello back from live voice");
 }
 
+#[test]
+fn realtime_transcript_cell_replaces_cumulative_or_duplicate_deltas() {
+    let cell = RealtimeTranscriptCell::new(RealtimeTranscriptRole::User);
+    cell.append("hello ");
+    cell.append("hello ");
+    cell.append("hello from the microphone");
+    cell.append("hello from the microphone");
+
+    assert_eq!(
+        render_lines(&cell.display_lines(/*width*/ 80)),
+        vec!["› hello from the microphone"]
+    );
+}
+
 fn stdio_server_config(
     command: &str,
     args: Vec<&str>,

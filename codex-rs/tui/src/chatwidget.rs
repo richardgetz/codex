@@ -207,6 +207,15 @@ const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
 const PARENT_OWNED_INPUT_MESSAGE: &str =
     "This sub-agent is controlled by its parent. Direct input is disabled.";
 
+fn is_realtime_delegation_input(item: &UserInput) -> bool {
+    matches!(
+        item,
+        UserInput::Text { text, .. }
+            if text.contains("<realtime_delegation>")
+                || text.contains("&lt;realtime_delegation&gt;")
+    )
+}
+
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
 /// Apple Terminal, Warp, and VSCode integrated terminals intercept or silently
@@ -1311,6 +1320,16 @@ impl ChatWidget {
     }
 
     fn on_committed_user_message(&mut self, items: &[UserInput], from_replay: bool) {
+        if items.iter().any(is_realtime_delegation_input) {
+            // Realtime handoffs and transcript-tail flushes are internal context envelopes. The
+            // live GPT-Live transcript is already rendered through realtime notifications, so
+            // showing this model-facing wrapper would duplicate the voice conversation and expose
+            // implementation details in the TUI.
+            if !from_replay {
+                self.transcript.realtime_turn_active = true;
+            }
+            return;
+        }
         let display = Self::user_message_display_from_inputs(items);
         if from_replay {
             if self.review.is_review_mode {
@@ -1928,10 +1947,13 @@ impl ChatWidget {
     /// the main viewport updates.
     pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
         let cell = self.transcript.active_cell.as_ref();
+        let has_realtime_transcript = self.transcript.realtime_user_transcript_cell.is_some()
+            || self.transcript.realtime_assistant_transcript_cell.is_some();
         let hook_cell = self.active_hook_cell.as_ref();
         let token_activity_cell = self.pending_token_activity_output();
         let rate_limit_reset_hint = self.pending_rate_limit_reset_hint();
         if cell.is_none()
+            && !has_realtime_transcript
             && hook_cell.is_none()
             && token_activity_cell.is_none()
             && rate_limit_reset_hint.is_none()
@@ -1965,9 +1987,15 @@ impl ChatWidget {
         if let Some(cell) = self.transcript.active_cell.as_ref() {
             lines.extend(cell.transcript_hyperlink_lines(width));
         }
-        if let Some(cell) = self.transcript.realtime_transcript_cell.as_ref() {
-            let realtime_lines = cell.transcript_hyperlink_lines(width);
-            if !realtime_lines.is_empty() && !lines.is_empty() {
+        let realtime_lines = self
+            .transcript
+            .realtime_user_transcript_cell
+            .iter()
+            .chain(self.transcript.realtime_assistant_transcript_cell.iter())
+            .flat_map(|cell| cell.transcript_hyperlink_lines(width))
+            .collect::<Vec<_>>();
+        if !realtime_lines.is_empty() {
+            if !lines.is_empty() {
                 lines.push(HyperlinkLine::from(""));
             }
             lines.extend(realtime_lines);

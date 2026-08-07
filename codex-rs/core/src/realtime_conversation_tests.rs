@@ -181,6 +181,7 @@ async fn clears_active_handoff_explicitly() {
         output_tx: tx,
         last_output: Arc::new(Mutex::new(None)),
         stream: Arc::new(Mutex::new(Default::default())),
+        suppress_non_final_output: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         client_managed_handoffs: false,
         codex_responses_as_items: false,
         codex_response_item_prefix: None,
@@ -198,6 +199,28 @@ async fn clears_active_handoff_explicitly() {
 
     state.stream.lock().await.active_handoff = None;
     assert_eq!(state.stream.lock().await.active_handoff.clone(), None);
+}
+
+#[test]
+fn internal_continuation_suppression_keeps_final_realtime_output() {
+    let (tx, _rx) = bounded(1);
+    let state = RealtimeHandoffState {
+        output_tx: tx,
+        last_output: Arc::new(Mutex::new(None)),
+        stream: Arc::new(Mutex::new(Default::default())),
+        suppress_non_final_output: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        client_managed_handoffs: false,
+        codex_responses_as_items: false,
+        codex_response_item_prefix: None,
+        codex_response_handoff_mode: CodexResponseHandoffMode::Thinking,
+        codex_response_handoff_channel_prefixes: Arc::new(BTreeMap::new()),
+        session_kind: RealtimeSessionKind::V1,
+        event_parser: RealtimeEventParser::V1,
+    };
+
+    assert!(state.suppresses_output(Some(&MessagePhase::Commentary)));
+    assert!(!state.suppresses_output(Some(&MessagePhase::FinalAnswer)));
+    assert!(!state.suppresses_output(None));
 }
 
 #[test]
