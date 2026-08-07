@@ -186,7 +186,7 @@ jobs:
           # V8 graph too slowly for PR gating. Fork PRs skip this prebuilt path
           # below; the lint package job above still validates the linter itself.
           - name: macOS
-            runner: macos-15-xlarge
+            runner: macos-15
             timeout_minutes: 30
           - name: Windows
             runner: windows-latest
