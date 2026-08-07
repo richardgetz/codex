@@ -1,7 +1,13 @@
 //! TUI handling for GPT-Live transcript notifications.
 
 use super::*;
+use crate::history_cell::RealtimeTranscriptHistoryCell;
+use crate::history_cell::RealtimeTranscriptHistoryEntry;
 use crate::history_cell::RealtimeTranscriptRole;
+
+const DEFAULT_REALTIME_HISTORY_LIMIT: usize = 5;
+const MAX_REALTIME_HISTORY_LIMIT: usize = 20;
+const MAX_REALTIME_HISTORY_ENTRIES: usize = 40;
 
 impl ChatWidget {
     pub(super) fn handle_realtime_transcript_delta(&mut self, role: &str, delta: &str) {
@@ -25,19 +31,94 @@ impl ChatWidget {
         let Some(role) = RealtimeTranscriptRole::from_wire(role) else {
             return;
         };
-        if text.is_empty() && self.realtime_transcript_cell(role).is_none() {
+        let active_text = self
+            .realtime_transcript_cell(role)
+            .map(crate::history_cell::RealtimeTranscriptCell::text);
+        if text.is_empty() && active_text.is_none() {
+            return;
+        }
+        if active_text.is_none()
+            && self
+                .transcript
+                .realtime_history
+                .back()
+                .is_some_and(|entry| entry.is_same_transcript(role, text.trim()))
+        {
             return;
         }
 
         self.ensure_realtime_transcript_cell(role);
-        if !text.is_empty() {
-            if let Some(cell) = self.realtime_transcript_cell(role) {
-                cell.set_text(text);
-            }
+        if !text.is_empty()
+            && let Some(cell) = self.realtime_transcript_cell(role)
+        {
+            cell.set_text(text);
         }
+        let completed_text = if text.is_empty() {
+            active_text.as_deref().unwrap_or_default()
+        } else {
+            text
+        };
+        self.record_realtime_transcript(role, completed_text);
         self.bump_active_cell_revision();
         self.flush_realtime_transcript_cell(role);
         self.request_redraw();
+    }
+
+    pub(super) fn add_realtime_history_output(&mut self, requested_limit: Option<usize>) {
+        let limit = requested_limit
+            .unwrap_or(DEFAULT_REALTIME_HISTORY_LIMIT)
+            .clamp(1, MAX_REALTIME_HISTORY_LIMIT);
+        let entries = self
+            .transcript
+            .realtime_history
+            .iter()
+            .rev()
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if entries.is_empty() {
+            self.add_info_message(
+                "No completed GPT-Live transcript entries yet.".to_string(),
+                Some("Use /voice history [count] after speaking in realtime.".to_string()),
+            );
+            return;
+        }
+
+        let count = entries.len();
+        let header = crate::history_cell::PlainHistoryCell::new(vec![
+            vec![
+                "• ".dim(),
+                format!("Recent GPT-Live transcript ({count} entries)").bold(),
+            ]
+            .into(),
+        ]);
+        self.add_to_history(crate::history_cell::CompositeHistoryCell::new(vec![
+            Box::new(header),
+            Box::new(RealtimeTranscriptHistoryCell::new(
+                entries.into_iter().rev().collect(),
+            )),
+        ]));
+        self.request_redraw();
+    }
+
+    fn record_realtime_transcript(&mut self, role: RealtimeTranscriptRole, text: &str) {
+        let text = text.trim();
+        if text.is_empty()
+            || self
+                .transcript
+                .realtime_history
+                .back()
+                .is_some_and(|entry| entry.is_same_transcript(role, text))
+        {
+            return;
+        }
+        self.transcript
+            .realtime_history
+            .push_back(RealtimeTranscriptHistoryEntry::new(role, text));
+        while self.transcript.realtime_history.len() > MAX_REALTIME_HISTORY_ENTRIES {
+            self.transcript.realtime_history.pop_front();
+        }
     }
 
     pub(super) fn finish_realtime_transcript_stream(&mut self) {

@@ -151,11 +151,35 @@ async fn mic_slash_command_dispatches_mode_controls() {
         ))
     );
 
+    chat.dispatch_command_with_args(SlashCommand::Mic, "change".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::ChangeMicrophone
+        ))
+    );
+
     chat.dispatch_command_with_args(SlashCommand::Mic, "devices".to_string(), Vec::new());
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::RealtimeMicControl(
             RealtimeMicCommand::ListDevices
+        ))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "speakers".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::ListSpeakers
+        ))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "speaker change".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::ChangeSpeaker
         ))
     );
 
@@ -170,6 +194,67 @@ async fn mic_slash_command_dispatches_mode_controls() {
             if name == "Clip-On Mic"
     );
 
+    chat.dispatch_command_with_args(
+        SlashCommand::Mic,
+        "speaker Clip-On Speaker".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::SetSpeaker(name)))
+            if name == "Clip-On Speaker"
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "aliases".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::ListMicrophoneAliases
+        ))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "speaker aliases".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::ListSpeakerAliases
+        ))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "alias AirPods".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::SetMicrophoneAlias { alias, device: None }
+        )) if alias == "AirPods"
+    );
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Mic,
+        "speaker alias desk Desk Speakers".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::SetSpeakerAlias { alias, device: Some(device) }
+        )) if alias == "desk" && device == "Desk Speakers"
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "AirPods".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::SetMicrophone(name)))
+            if name == "AirPods"
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "speaker desk".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::SetSpeaker(name)))
+            if name == "desk"
+    );
+
     chat.dispatch_command(SlashCommand::Voice);
     assert_matches!(
         rx.try_recv(),
@@ -180,6 +265,18 @@ async fn mic_slash_command_dispatches_mode_controls() {
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::List))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Voice, "on".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::On))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Voice, "off".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Off))
     );
 
     chat.dispatch_command_with_args(SlashCommand::Voice, "arbor".to_string(), Vec::new());

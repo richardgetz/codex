@@ -42,9 +42,24 @@ const CONTINUOUS_USAGE: &str = "Usage: /continuous [on|off|status]";
 const OUTCOMES_USAGE: &str = "Usage: /outcomes [on|off|status|report]";
 const SCRATCHPAD_ABSORB_USAGE: &str = "Usage: /scratchpad-absorb <scratchpad_id> [--exclude-pending] [--exclude-blocked] [--exclude-notes] [--exclude-outcomes] [--exclude-delegations] [--exclude-artifacts] [--exclude-worktrees] [--exclude-completed] [--exclude-next-steps] [--exclude-git-refs]";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
-const MIC_USAGE: &str = "Usage: /mic [on|off|status|hot|push|hotkey|devices|device <name>]";
-const VOICE_USAGE: &str = "Usage: /voice [status|list|<voice>]";
+const MIC_USAGE: &str = "Usage: /mic [on|off|status|hot|push|hotkey|change|devices|aliases|alias <name> [device]|device <name>|speakers|speaker change|speaker aliases|speaker alias <name> [device]|speaker <name>]";
+const VOICE_USAGE: &str = "Usage: /voice [on|off|status|list|history [count]|<voice>]";
+const VOICE_HISTORY_USAGE: &str = "Usage: /voice history [count] (count: 1-20)";
 const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
+
+fn realtime_alias_args(value: &str) -> Option<(String, Option<String>)> {
+    let mut parts = value.trim().splitn(2, char::is_whitespace);
+    let alias = parts.next()?.trim();
+    if alias.is_empty() {
+        return None;
+    }
+    let device = parts
+        .next()
+        .map(str::trim)
+        .filter(|device| !device.is_empty())
+        .map(str::to_string);
+    Some((alias.to_string(), device))
+}
 
 fn scratchpad_update_event_from_value(value: &serde_json::Value) -> Option<ScratchpadUpdateEvent> {
     Some(ScratchpadUpdateEvent {
@@ -1375,9 +1390,54 @@ impl ChatWidget {
                     "hotkey" => self.app_event_tx.send(AppEvent::RealtimeMicControl(
                         RealtimeMicCommand::CaptureHotkey,
                     )),
+                    "change" => self.app_event_tx.send(AppEvent::RealtimeMicControl(
+                        RealtimeMicCommand::ChangeMicrophone,
+                    )),
                     "devices" | "list" => self.app_event_tx.send(AppEvent::RealtimeMicControl(
                         RealtimeMicCommand::ListDevices,
                     )),
+                    "aliases" | "alias list" => self.app_event_tx.send(
+                        AppEvent::RealtimeMicControl(RealtimeMicCommand::ListMicrophoneAliases),
+                    ),
+                    "speaker change" | "output change" => self.app_event_tx.send(
+                        AppEvent::RealtimeMicControl(RealtimeMicCommand::ChangeSpeaker),
+                    ),
+                    "speakers" | "outputs" | "speaker list" | "output list" => {
+                        self.app_event_tx.send(AppEvent::RealtimeMicControl(
+                            RealtimeMicCommand::ListSpeakers,
+                        ))
+                    }
+                    "speaker aliases" | "output aliases" | "speaker alias list"
+                    | "output alias list" => self.app_event_tx.send(AppEvent::RealtimeMicControl(
+                        RealtimeMicCommand::ListSpeakerAliases,
+                    )),
+                    _ if normalized.starts_with("speaker alias ")
+                        || normalized.starts_with("output alias ") =>
+                    {
+                        let prefix = if normalized.starts_with("speaker alias ") {
+                            "speaker alias "
+                        } else {
+                            "output alias "
+                        };
+                        match realtime_alias_args(&trimmed[prefix.len()..]) {
+                            Some((alias, device)) => {
+                                self.app_event_tx.send(AppEvent::RealtimeMicControl(
+                                    RealtimeMicCommand::SetSpeakerAlias { alias, device },
+                                ))
+                            }
+                            None => self.add_error_message(MIC_USAGE.to_string()),
+                        }
+                    }
+                    _ if normalized.starts_with("alias ") => {
+                        match realtime_alias_args(&trimmed["alias ".len()..]) {
+                            Some((alias, device)) => {
+                                self.app_event_tx.send(AppEvent::RealtimeMicControl(
+                                    RealtimeMicCommand::SetMicrophoneAlias { alias, device },
+                                ))
+                            }
+                            None => self.add_error_message(MIC_USAGE.to_string()),
+                        }
+                    }
                     _ if normalized.starts_with("device ") || normalized.starts_with("use ") => {
                         let name = trimmed
                             .split_once(char::is_whitespace)
@@ -1390,23 +1450,67 @@ impl ChatWidget {
                             None => self.add_error_message(MIC_USAGE.to_string()),
                         }
                     }
+                    _ if normalized.starts_with("speaker ")
+                        || normalized.starts_with("output ") =>
+                    {
+                        let name = trimmed
+                            .split_once(char::is_whitespace)
+                            .map(|(_, name)| name.trim())
+                            .filter(|name| !name.is_empty());
+                        match name {
+                            Some(name) => self.app_event_tx.send(AppEvent::RealtimeMicControl(
+                                RealtimeMicCommand::SetSpeaker(name.to_string()),
+                            )),
+                            None => self.add_error_message(MIC_USAGE.to_string()),
+                        }
+                    }
+                    _ if !trimmed.is_empty() => {
+                        self.app_event_tx.send(AppEvent::RealtimeMicControl(
+                            RealtimeMicCommand::SetMicrophone(trimmed.to_string()),
+                        ))
+                    }
                     _ => self.add_error_message(MIC_USAGE.to_string()),
                 }
             }
-            SlashCommand::Voice => match trimmed.to_ascii_lowercase().as_str() {
-                "" | "status" => self
-                    .app_event_tx
-                    .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Status)),
-                "list" | "voices" => self
-                    .app_event_tx
-                    .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::List)),
-                _ => match realtime_voice_from_name(trimmed) {
-                    Some(voice) => self.app_event_tx.send(AppEvent::RealtimeVoiceControl(
-                        RealtimeVoiceCommand::Set(voice),
-                    )),
-                    None => self.add_error_message(VOICE_USAGE.to_string()),
-                },
-            },
+            SlashCommand::Voice => {
+                let normalized = trimmed.to_ascii_lowercase();
+                match normalized.as_str() {
+                    "" | "status" => self
+                        .app_event_tx
+                        .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Status)),
+                    "on" => self
+                        .app_event_tx
+                        .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::On)),
+                    "off" => self
+                        .app_event_tx
+                        .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Off)),
+                    "list" | "voices" => self
+                        .app_event_tx
+                        .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::List)),
+                    "history" | "recent" => self.add_realtime_history_output(None),
+                    _ if normalized.starts_with("history ")
+                        || normalized.starts_with("recent ") =>
+                    {
+                        let mut parts = trimmed.split_whitespace();
+                        let _command = parts.next();
+                        match (parts.next(), parts.next()) {
+                            (Some(count), None) => match count.parse::<usize>() {
+                                Ok(count @ 1..=20) => {
+                                    self.add_realtime_history_output(Some(count));
+                                }
+                                _ => self.add_error_message(VOICE_HISTORY_USAGE.to_string()),
+                            },
+                            _ => self.add_error_message(VOICE_HISTORY_USAGE.to_string()),
+                        }
+                    }
+                    _ => match realtime_voice_from_name(trimmed) {
+                        Some(voice) => self.app_event_tx.send(AppEvent::RealtimeVoiceControl(
+                            RealtimeVoiceCommand::Set(voice),
+                        )),
+                        None => self.add_error_message(VOICE_USAGE.to_string()),
+                    },
+                }
+            }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
                     return;

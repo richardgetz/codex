@@ -2,6 +2,8 @@
 
 use super::HistoryCell;
 use crate::history_cell::RealtimeTranscriptCell;
+use crate::history_cell::RealtimeTranscriptHistoryEntry;
+use std::collections::VecDeque;
 
 #[derive(Default)]
 pub(super) struct TranscriptState {
@@ -16,6 +18,8 @@ pub(super) struct TranscriptState {
     /// transcript is delivered separately. Keep only the latter in the TUI so one voice turn does
     /// not appear twice.
     pub(super) realtime_turn_active: bool,
+    /// Bounded completed GPT-Live transcript entries available through `/voice history`.
+    pub(super) realtime_history: VecDeque<RealtimeTranscriptHistoryEntry>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
     pub(super) active_cell_revision: u64,
     /// Raw markdown of the most recently completed agent response.

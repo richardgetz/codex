@@ -110,11 +110,21 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
     inspect the session microphone mode.
   - `/mic hot` keeps the microphone live; `/mic push` returns to push-to-talk.
   - `/mic hotkey` captures and persists the next key as the push-to-talk key.
-  - `/mic devices` lists input devices; `/mic device <name>` selects and
-    persists one for the next voice session.
-  - `/voice status` shows the selected voice, `/voice list` asks app-server for
-    the available GPT-Live voices, and `/voice <name>` validates and persists a
-    selection for the next voice session.
+  - `/mic change` opens an arrow-key picker for input devices; `/mic devices`
+    lists them, and `/mic device <name>` remains available as a typed
+    compatibility form.
+  - `/mic speaker change` (or `/mic output change`) opens the matching picker
+    for GPT-Live output devices; `/mic speakers` lists them, and `/mic speaker
+    <name>` remains available as a typed compatibility form.
+  - `/voice on` and `/voice off` are aliases for enabling or disabling the
+    session microphone mode. `/voice status` shows the selected voice and
+    current voice state, `/voice list` asks app-server for the available
+    GPT-Live voices, and `/voice <name>` validates and persists a selection for
+    the next voice session.
+  - `/voice history` shows the most recent completed GPT-Live user and assistant
+    transcript entries after they have scrolled out of view. Use
+    `/voice history <count>` for 1-20 entries; this is bounded session-local
+    history and does not send anything back to GPT-Live.
 - Configuration is persisted in `config.toml`:
 
   ```toml
@@ -122,16 +132,49 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   enabled = true
   voice = "arbor"
   hotkey = "right-option"
+  # Optional GPT-Live behavior controls.
+  enable_preambles = false
+  # Optional; clearly read-only handoffs use this effort, otherwise inherit the session effort.
+  non_substantive_reasoning_effort = "low"
+  acknowledgement_sound = true
+  acknowledgement_sound_file = "/absolute/path/to/cue.wav"
+  # Optional; consumes one voice per new Codex launch, in order.
+  voice_rotation = ["arbor", "marin"]
 
   [audio]
   # Optional; omit either value to use the system default.
   microphone = "Clip-On Mic"
   speaker = "Desk Speakers"
+
+  [audio.microphone_aliases]
+  airpods = "Clip-On Mic"
+
+  [audio.speaker_aliases]
+  desk = "Desk Speakers"
   ```
 
   Set `[realtime].enabled = false` to disable the voice feature and its hotkey
   entirely. `/mic off` is a session-level mode change and does not rewrite that
-  config gate. Voice and device changes apply to the next voice session.
+  config gate. `enable_preambles = false` sends the exact V3 session prompt that
+  suppresses filler acknowledgements and progress preambles while leaving the
+  GPT-Live transport unchanged. The acknowledgement cue is local to the TUI,
+  independent of the model prompt, and can use the built-in sound or a mono/
+  stereo PCM/float WAV up to one second. Voice and device changes apply to the
+  next voice session. When `voice_rotation` is set, its cursor is stored under
+  `<codex_home>/realtime_voice_rotation.json`; the configured list takes
+  precedence only at startup and does not rewrite `config.toml`. The optional
+  `non_substantive_reasoning_effort` setting is applied entirely by the CLI at
+  the existing GPT-Live `delegation.created` handoff boundary. It lowers effort
+  only for clearly read-only/informational handoffs; ambiguous or substantive
+  requests, and internal transcript-tail cleanup, inherit the normal session
+  effort. Omitting it preserves the existing behavior and requires no
+  GPT-Live backend change. Device aliases are case-insensitive and persistent:
+  `/mic alias airpods` names the currently selected microphone, `/mic alias
+  airpods <device>` names an explicit device, and `/mic airpods` selects it.
+  Speaker aliases use `/mic speaker alias desk <device>` and `/mic speaker desk`.
+  `/mic aliases`, `/mic speaker aliases`, `/mic devices`, and `/mic speakers`
+  show the configured aliases alongside the enumerated devices; `/mic change`
+  and `/mic speaker change` provide arrow-key selection.
 
 ### Commit and intent guidance
 

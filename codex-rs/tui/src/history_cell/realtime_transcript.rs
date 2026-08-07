@@ -33,6 +33,65 @@ impl RealtimeTranscriptRole {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RealtimeTranscriptHistoryEntry {
+    role: RealtimeTranscriptRole,
+    text: String,
+}
+
+impl RealtimeTranscriptHistoryEntry {
+    pub(crate) fn new(role: RealtimeTranscriptRole, text: impl Into<String>) -> Self {
+        Self {
+            role,
+            text: text.into(),
+        }
+    }
+
+    pub(crate) fn is_same_transcript(&self, role: RealtimeTranscriptRole, text: &str) -> bool {
+        self.role == role && self.text == text
+    }
+}
+
+/// A dynamically wrapped view of recent GPT-Live transcript entries.
+#[derive(Debug)]
+pub(crate) struct RealtimeTranscriptHistoryCell {
+    entries: Vec<RealtimeTranscriptHistoryEntry>,
+}
+
+impl RealtimeTranscriptHistoryCell {
+    pub(crate) fn new(entries: Vec<RealtimeTranscriptHistoryEntry>) -> Self {
+        Self { entries }
+    }
+}
+
+impl HistoryCell for RealtimeTranscriptHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        for entry in &self.entries {
+            let text = sanitize_user_text(&entry.text);
+            if text.is_empty() {
+                continue;
+            }
+            lines.extend(adaptive_wrap_lines(
+                text.trim_end_matches(['\r', '\n'])
+                    .split('\n')
+                    .map(|line| Line::from(line.to_string()).style(entry.role.style())),
+                RtOptions::new(width.saturating_sub(3).max(1) as usize)
+                    .initial_indent(entry.role.prefix())
+                    .subsequent_indent("  ".into()),
+            ));
+        }
+        lines
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        self.entries
+            .iter()
+            .flat_map(|entry| raw_lines_from_source(sanitize_user_text(&entry.text).as_str()))
+            .collect()
+    }
+}
+
 /// A mutable history cell used while GPT-Live is sending a transcript part.
 #[derive(Debug)]
 pub(crate) struct RealtimeTranscriptCell {
@@ -62,7 +121,7 @@ impl RealtimeTranscriptCell {
         }
     }
 
-    fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         match self.text.lock() {
             Ok(text) => text.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),

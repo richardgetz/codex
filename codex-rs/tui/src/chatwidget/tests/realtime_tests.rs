@@ -51,6 +51,17 @@ async fn realtime_transcript_notifications_render_live_and_finalize() {
         }
         other => panic!("expected finalized user transcript cell, got {other:?}"),
     }
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            ThreadRealtimeTranscriptDoneNotification {
+                thread_id: thread_id.to_string(),
+                role: "user".to_string(),
+                text: "hello from the microphone".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    assert!(rx.try_recv().is_err());
     assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
 
     chat.handle_server_notification(
@@ -89,6 +100,48 @@ async fn realtime_transcript_notifications_render_live_and_finalize() {
             );
         }
         other => panic!("expected finalized assistant transcript cell, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn voice_history_command_renders_recent_transcript_entries() {
+    let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            ThreadRealtimeTranscriptDoneNotification {
+                thread_id: thread_id.to_string(),
+                role: "user".to_string(),
+                text: "what did you change?".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            ThreadRealtimeTranscriptDoneNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                text: "I added a voice history command.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    while rx.try_recv().is_ok() {}
+
+    chat.dispatch_command_with_args(SlashCommand::Voice, "history 2".to_string(), Vec::new());
+
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            let rendered = render_lines(cell.as_ref());
+            insta::assert_snapshot!("voice_history_command", rendered);
+            assert!(rendered.contains("Recent GPT-Live transcript (2 entries)"));
+            assert!(rendered.contains("› what did you change?"));
+            assert!(rendered.contains("• I added a voice history command."));
+        }
+        other => panic!("expected realtime history output, got {other:?}"),
     }
 }
 
