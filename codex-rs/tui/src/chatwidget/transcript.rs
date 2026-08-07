@@ -1,10 +1,13 @@
 //! Transcript and active-cell bookkeeping for `ChatWidget`.
 
 use super::HistoryCell;
+use crate::history_cell::RealtimeTranscriptCell;
 
 #[derive(Default)]
 pub(super) struct TranscriptState {
     pub(super) active_cell: Option<Box<dyn HistoryCell>>,
+    /// A realtime voice transcript can stream alongside a normal assistant response.
+    pub(super) realtime_transcript_cell: Option<RealtimeTranscriptCell>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
     pub(super) active_cell_revision: u64,
     /// Raw markdown of the most recently completed agent response.

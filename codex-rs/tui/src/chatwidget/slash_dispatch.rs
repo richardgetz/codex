@@ -14,6 +14,7 @@ use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::goal_display::GOAL_USAGE;
 use crate::goal_files::GoalDraft;
+use crate::realtime_voice::RealtimeMicCommand;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -39,6 +40,7 @@ const CONTINUOUS_USAGE: &str = "Usage: /continuous [on|off|status]";
 const OUTCOMES_USAGE: &str = "Usage: /outcomes [on|off|status|report]";
 const SCRATCHPAD_ABSORB_USAGE: &str = "Usage: /scratchpad-absorb <scratchpad_id> [--exclude-pending] [--exclude-blocked] [--exclude-notes] [--exclude-outcomes] [--exclude-delegations] [--exclude-artifacts] [--exclude-worktrees] [--exclude-completed] [--exclude-next-steps] [--exclude-git-refs]";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
+const MIC_USAGE: &str = "Usage: /mic [status|hot|push]";
 const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
 
 fn scratchpad_update_event_from_value(value: &serde_json::Value) -> Option<ScratchpadUpdateEvent> {
@@ -1000,6 +1002,10 @@ impl ChatWidget {
                     );
                 }
             }
+            SlashCommand::Mic => {
+                self.app_event_tx
+                    .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::Toggle));
+            }
             SlashCommand::Usage => {
                 if self.ensure_usage_command_available() {
                     self.open_usage_menu();
@@ -1340,6 +1346,18 @@ impl ChatWidget {
                     self.emit_raw_output_mode_changed(/*enabled*/ false);
                 }
                 _ => self.add_error_message(RAW_USAGE.to_string()),
+            },
+            SlashCommand::Mic => match trimmed.to_ascii_lowercase().as_str() {
+                "status" => self
+                    .app_event_tx
+                    .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::Status)),
+                "hot" => self
+                    .app_event_tx
+                    .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::Hot)),
+                "push" => self
+                    .app_event_tx
+                    .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::Push)),
+                _ => self.add_error_message(MIC_USAGE.to_string()),
             },
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
@@ -1685,6 +1703,7 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Ide
             | SlashCommand::Status
+            | SlashCommand::Mic
             | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps

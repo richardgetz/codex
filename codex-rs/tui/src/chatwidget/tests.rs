@@ -251,6 +251,8 @@ mod plan_mode;
 #[path = "tests/plugin_catalog_tests.rs"]
 mod plugin_catalog;
 mod popups_and_settings;
+#[path = "tests/realtime_tests.rs"]
+mod realtime;
 mod review_mode;
 mod side;
 mod slash_commands;

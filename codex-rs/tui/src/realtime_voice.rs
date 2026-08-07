@@ -50,6 +50,39 @@ pub(crate) const INPUT_BUFFER_FRAMES: usize = 30 * 1_000 / 20;
 pub(crate) const INPUT_PREROLL_FRAMES: usize = 100 / 20;
 pub(crate) const INPUT_SIGNAL_THRESHOLD: i16 = 98;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RealtimeMicMode {
+    Disabled,
+    PushToTalk,
+    Hot,
+}
+
+impl RealtimeMicMode {
+    pub(crate) fn from_config_enabled(enabled: bool) -> Self {
+        if enabled {
+            Self::PushToTalk
+        } else {
+            Self::Disabled
+        }
+    }
+
+    pub(crate) fn status_label(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::PushToTalk => "enabled (push-to-talk; hold Right Option)",
+            Self::Hot => "enabled (hot mic; always listening)",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RealtimeMicCommand {
+    Toggle,
+    Status,
+    Hot,
+    Push,
+}
+
 /// A native live voice peer that follows the desktop app's WebRTC media shape.
 pub(crate) struct RealtimeVoiceSession {
     peer_connection: Arc<RTCPeerConnection>,

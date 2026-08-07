@@ -65,6 +65,8 @@ use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
 use crate::multi_agents::sub_agent_activity_display;
 use crate::pager_overlay::Overlay;
+use crate::realtime_voice::RealtimeMicCommand;
+use crate::realtime_voice::RealtimeMicMode;
 use crate::realtime_voice::RealtimeVoiceSession;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
@@ -533,6 +535,7 @@ pub(crate) struct App {
     workspace_command_runner: Option<WorkspaceCommandRunner>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
+    realtime_mic_mode: RealtimeMicMode,
     realtime_voice_session: Option<RealtimeVoiceSession>,
     launch_cwd: PathBuf,
     pub(crate) state_db: Option<StateDbHandle>,
@@ -1046,6 +1049,7 @@ See the Codex keymap documentation for supported actions and examples."
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
+        let realtime_mic_mode = RealtimeMicMode::from_config_enabled(config.realtime.enabled);
         let mut app = Self {
             model_catalog,
             session_telemetry: session_telemetry.clone(),
@@ -1053,6 +1057,7 @@ See the Codex keymap documentation for supported actions and examples."
             chat_widget,
             workspace_command_runner: Some(workspace_command_runner),
             config,
+            realtime_mic_mode,
             realtime_voice_session: None,
             launch_cwd,
             state_db,

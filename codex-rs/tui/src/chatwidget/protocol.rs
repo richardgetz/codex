@@ -205,6 +205,27 @@ impl ChatWidget {
                     self.on_shutdown_complete();
                 }
             }
+            ServerNotification::ThreadRealtimeStarted(_) => {
+                if !from_replay {
+                    self.finish_realtime_transcript_stream();
+                }
+            }
+            ServerNotification::ThreadRealtimeTranscriptDelta(notification) => {
+                if !from_replay {
+                    self.handle_realtime_transcript_delta(&notification.role, &notification.delta);
+                }
+            }
+            ServerNotification::ThreadRealtimeTranscriptDone(notification) => {
+                if !from_replay {
+                    self.handle_realtime_transcript_done(&notification.role, &notification.text);
+                }
+            }
+            ServerNotification::ThreadRealtimeError(_)
+            | ServerNotification::ThreadRealtimeClosed(_) => {
+                if !from_replay {
+                    self.finish_realtime_transcript_stream();
+                }
+            }
             ServerNotification::ServerRequestResolved(_)
             | ServerNotification::AccountUpdated(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
@@ -231,14 +252,9 @@ impl ChatWidget {
             | ServerNotification::TurnModerationMetadata(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
-            | ServerNotification::ThreadRealtimeStarted(_)
             | ServerNotification::ThreadRealtimeItemAdded(_)
             | ServerNotification::ThreadRealtimeOutputAudioDelta(_)
-            | ServerNotification::ThreadRealtimeError(_)
-            | ServerNotification::ThreadRealtimeClosed(_)
             | ServerNotification::ThreadRealtimeSdp(_)
-            | ServerNotification::ThreadRealtimeTranscriptDelta(_)
-            | ServerNotification::ThreadRealtimeTranscriptDone(_)
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_) => {}

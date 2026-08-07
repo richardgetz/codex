@@ -394,6 +394,7 @@ pub(crate) use self::rate_limits::fallback_limit_label;
 use self::rate_limits::is_app_server_cyber_policy_error;
 mod reset_credits;
 pub(crate) use self::rate_limits::limit_label_for_window;
+mod realtime_transcript;
 mod reasoning_shortcuts;
 mod rendering;
 mod replay;
@@ -1963,6 +1964,13 @@ impl ChatWidget {
         let mut lines = Vec::new();
         if let Some(cell) = self.transcript.active_cell.as_ref() {
             lines.extend(cell.transcript_hyperlink_lines(width));
+        }
+        if let Some(cell) = self.transcript.realtime_transcript_cell.as_ref() {
+            let realtime_lines = cell.transcript_hyperlink_lines(width);
+            if !realtime_lines.is_empty() && !lines.is_empty() {
+                lines.push(HyperlinkLine::from(""));
+            }
+            lines.extend(realtime_lines);
         }
         if let Some(hook_cell) = self.active_hook_cell.as_ref() {
             // Compute hook lines first so hidden hooks do not add a separator.

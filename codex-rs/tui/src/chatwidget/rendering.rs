@@ -13,6 +13,14 @@ impl ChatWidget {
             })),
             None => RenderableItem::Owned(Box::new(())),
         };
+        let realtime_transcript_renderable = match &self.transcript.realtime_transcript_cell {
+            Some(cell) => RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
+                child: cell,
+                top: 1,
+                right: active_cell_right_reserve,
+            })),
+            None => RenderableItem::Owned(Box::new(())),
+        };
         let active_hook_cell_renderable = match &self.active_hook_cell {
             Some(cell) if cell.should_render() => {
                 RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
@@ -25,6 +33,7 @@ impl ChatWidget {
         };
         let mut flex = FlexRenderable::new();
         flex.push(/*flex*/ 1, active_cell_renderable);
+        flex.push(/*flex*/ 0, realtime_transcript_renderable);
         flex.push(/*flex*/ 0, active_hook_cell_renderable);
         if let Some(cell) = self.pending_token_activity_output() {
             flex.push(

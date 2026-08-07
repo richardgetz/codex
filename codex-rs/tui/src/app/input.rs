@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::app_backtrack::SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE;
+use color_eyre::eyre::eyre;
 
 impl App {
     pub(super) async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
@@ -279,6 +280,14 @@ impl App {
             return false;
         }
 
+        if self.realtime_mic_mode == RealtimeMicMode::Disabled {
+            return false;
+        }
+
+        if self.realtime_mic_mode != RealtimeMicMode::PushToTalk {
+            return true;
+        }
+
         match key_event.kind {
             KeyEventKind::Press | KeyEventKind::Repeat => {
                 if let Some(session) = &self.realtime_voice_session {
@@ -286,48 +295,11 @@ impl App {
                     return true;
                 }
 
-                let Some(thread_id) = self.active_thread_id.or(self.chat_widget.thread_id()) else {
-                    self.chat_widget.add_error_message(
-                        "Voice input is unavailable until a thread starts.".to_string(),
-                    );
-                    return true;
-                };
-
-                let (session, sdp) =
-                    match RealtimeVoiceSession::start(&self.config.realtime_audio).await {
-                        Ok(result) => result,
-                        Err(err) => {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to start live voice input: {err:#}"
-                            ));
-                            return true;
-                        }
-                    };
-                let params = ThreadRealtimeStartParams {
-                    thread_id: thread_id.to_string(),
-                    client_managed_handoffs: None,
-                    flush_transcript_tail_on_session_end: Some(true),
-                    codex_responses_as_items: Some(false),
-                    codex_response_item_prefix: None,
-                    codex_response_handoff_mode: None,
-                    codex_response_handoff_channel_prefixes: None,
-                    model: Some("gpt-live-1-codex".to_string()),
-                    output_modality: RealtimeOutputModality::Audio,
-                    include_startup_context: Some(false),
-                    initial_items: None,
-                    prompt: None,
-                    realtime_session_id: None,
-                    transport: Some(ThreadRealtimeStartTransport::Webrtc { sdp }),
-                    version: Some(RealtimeConversationVersion::V3),
-                    voice: Some(self.config.realtime.voice.unwrap_or(RealtimeVoice::Sol)),
-                };
-                if let Err(err) = app_server.thread_realtime_start_with_params(params).await {
-                    session.close().await;
+                if let Err(err) = self.start_realtime_voice_session(app_server).await {
                     self.chat_widget
                         .add_error_message(format!("Failed to start live voice input: {err:#}"));
                     return true;
                 }
-                self.realtime_voice_session = Some(session);
                 true
             }
             KeyEventKind::Release => {
@@ -337,6 +309,120 @@ impl App {
                 true
             }
         }
+    }
+
+    async fn start_realtime_voice_session(
+        &mut self,
+        app_server: &mut AppServerSession,
+    ) -> Result<()> {
+        if self.realtime_voice_session.is_some() {
+            return Ok(());
+        }
+
+        let Some(thread_id) = self.active_thread_id.or(self.chat_widget.thread_id()) else {
+            return Err(eyre!("Voice input is unavailable until a thread starts."));
+        };
+
+        let (session, sdp) = RealtimeVoiceSession::start(&self.config.realtime_audio)
+            .await
+            .map_err(|err| eyre!("{err:#}"))?;
+        let params = ThreadRealtimeStartParams {
+            thread_id: thread_id.to_string(),
+            client_managed_handoffs: None,
+            flush_transcript_tail_on_session_end: Some(true),
+            codex_responses_as_items: Some(false),
+            codex_response_item_prefix: None,
+            codex_response_handoff_mode: None,
+            codex_response_handoff_channel_prefixes: None,
+            model: Some("gpt-live-1-codex".to_string()),
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: Some(false),
+            initial_items: None,
+            prompt: None,
+            realtime_session_id: None,
+            transport: Some(ThreadRealtimeStartTransport::Webrtc { sdp }),
+            version: Some(RealtimeConversationVersion::V3),
+            voice: Some(self.config.realtime.voice.unwrap_or(RealtimeVoice::Sol)),
+        };
+        if let Err(err) = app_server.thread_realtime_start_with_params(params).await {
+            session.close().await;
+            return Err(err);
+        }
+        self.realtime_voice_session = Some(session);
+        Ok(())
+    }
+
+    pub(super) async fn handle_realtime_mic_command(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        command: RealtimeMicCommand,
+    ) {
+        if command == RealtimeMicCommand::Status {
+            let status = if self.config.realtime.enabled {
+                self.realtime_mic_mode.status_label().to_string()
+            } else {
+                "disabled by config ([realtime].enabled = false)".to_string()
+            };
+            self.chat_widget
+                .add_info_message(format!("Microphone is {status}."), None);
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
+        if !self.config.realtime.enabled {
+            self.chat_widget.add_error_message(
+                "Microphone is disabled by config. Set `[realtime].enabled = true` to use `/mic`."
+                    .to_string(),
+            );
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
+        let target_mode = match command {
+            RealtimeMicCommand::Toggle => match self.realtime_mic_mode {
+                RealtimeMicMode::Disabled => RealtimeMicMode::PushToTalk,
+                RealtimeMicMode::PushToTalk | RealtimeMicMode::Hot => RealtimeMicMode::Disabled,
+            },
+            RealtimeMicCommand::Status => unreachable!("status handled above"),
+            RealtimeMicCommand::Hot => RealtimeMicMode::Hot,
+            RealtimeMicCommand::Push => RealtimeMicMode::PushToTalk,
+        };
+        let previous_mode = self.realtime_mic_mode;
+        self.realtime_mic_mode = target_mode;
+
+        let result = match target_mode {
+            RealtimeMicMode::Disabled => {
+                self.stop_realtime_voice(app_server).await;
+                Ok(())
+            }
+            RealtimeMicMode::PushToTalk => {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_input_muted(true);
+                }
+                Ok(())
+            }
+            RealtimeMicMode::Hot => {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_input_muted(false);
+                    Ok(())
+                } else {
+                    self.start_realtime_voice_session(app_server).await
+                }
+            }
+        };
+
+        if let Err(err) = result {
+            self.realtime_mic_mode = previous_mode;
+            self.chat_widget
+                .add_error_message(format!("Failed to enable hot microphone: {err:#}"));
+        } else {
+            self.chat_widget.add_info_message(
+                format!("Microphone is now {}.", target_mode.status_label()),
+                None,
+            );
+        }
+        tui.frame_requester().schedule_frame();
     }
 
     pub(super) async fn stop_realtime_voice(&mut self, app_server: &mut AppServerSession) {

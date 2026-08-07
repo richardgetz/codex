@@ -57,6 +57,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 
 use crate::history_cell::HistoryCell;
+use crate::realtime_voice::RealtimeMicCommand;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RestorablePermissionSelection {
@@ -191,6 +192,9 @@ pub(crate) enum KeymapEditIntent {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
+    /// Change or report the session-local realtime microphone mode.
+    RealtimeMicControl(RealtimeMicCommand),
+
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.

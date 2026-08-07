@@ -4889,6 +4889,7 @@ async fn make_test_app() -> App {
     let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
+    let realtime_mic_mode = RealtimeMicMode::from_config_enabled(config.realtime.enabled);
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
@@ -4900,6 +4901,7 @@ async fn make_test_app() -> App {
         workspace_command_runner: None,
         launch_cwd: config.cwd.to_path_buf(),
         config,
+        realtime_mic_mode,
         realtime_voice_session: None,
         state_db: None,
         cli_kv_overrides: Vec::new(),
@@ -4957,6 +4959,7 @@ async fn make_test_app_with_channels() -> (
     let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
+    let realtime_mic_mode = RealtimeMicMode::from_config_enabled(config.realtime.enabled);
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
@@ -4969,6 +4972,7 @@ async fn make_test_app_with_channels() -> (
             workspace_command_runner: None,
             launch_cwd: config.cwd.to_path_buf(),
             config,
+            realtime_mic_mode,
             realtime_voice_session: None,
             state_db: None,
             cli_kv_overrides: Vec::new(),

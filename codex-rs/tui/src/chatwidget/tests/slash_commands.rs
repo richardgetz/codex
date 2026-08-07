@@ -1,5 +1,6 @@
 use super::*;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
+use crate::realtime_voice::RealtimeMicCommand;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 
@@ -99,6 +100,35 @@ fn expect_token_activity_refresh(rx: &mut tokio::sync::mpsc::UnboundedReceiver<A
         Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
         other => panic!("expected token activity refresh request, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn mic_slash_command_dispatches_mode_controls() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Mic);
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::Toggle))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "status".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::Status))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "hot".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::Hot))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "push".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::Push))
+    );
 }
 
 fn next_add_to_history_event(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> String {

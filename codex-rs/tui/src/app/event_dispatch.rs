@@ -308,6 +308,10 @@ impl App {
             AppEvent::BeginThreadSwitchHistoryReplayBuffer => {
                 self.begin_thread_switch_history_replay_buffer();
             }
+            AppEvent::RealtimeMicControl(command) => {
+                self.handle_realtime_mic_command(tui, app_server, command)
+                    .await;
+            }
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell);
             }
