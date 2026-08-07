@@ -42,6 +42,18 @@ pub(crate) fn select_input_device(
     }
 }
 
+pub(crate) fn list_input_devices() -> Result<Vec<String>> {
+    let host = cpal::default_host();
+    let mut devices = host
+        .input_devices()
+        .context("listing realtime microphones")?
+        .map(|device| device.to_string())
+        .collect::<Vec<_>>();
+    devices.sort();
+    devices.dedup();
+    Ok(devices)
+}
+
 pub(crate) fn select_output_device(
     host: &cpal::Host,
     requested: Option<&str>,

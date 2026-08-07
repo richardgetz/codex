@@ -13216,6 +13216,7 @@ version = "v2"
 type = "transcription"
 transport = "webrtc"
 voice = "cedar"
+hotkey = "f13"
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -13228,6 +13229,7 @@ voice = "cedar"
             session_type: Some(RealtimeWsMode::Transcription),
             transport: Some(RealtimeTransport::WebRtc),
             voice: Some(RealtimeVoice::Cedar),
+            hotkey: Some("f13".to_string()),
         })
     );
 
@@ -13247,6 +13249,7 @@ voice = "cedar"
             session_type: RealtimeWsMode::Transcription,
             transport: RealtimeTransport::WebRtc,
             voice: Some(RealtimeVoice::Cedar),
+            hotkey: Some("f13".to_string()),
         }
     );
     Ok(())

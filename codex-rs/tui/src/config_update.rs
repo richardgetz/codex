@@ -144,6 +144,18 @@ pub(crate) fn build_oss_provider_edit(provider: &str) -> ConfigEdit {
     replace_config_value("oss_provider", serde_json::json!(provider))
 }
 
+pub(crate) fn build_realtime_microphone_edit(microphone: &str) -> ConfigEdit {
+    replace_config_value("audio.microphone", serde_json::json!(microphone))
+}
+
+pub(crate) fn build_realtime_voice_edit(voice: &str) -> ConfigEdit {
+    replace_config_value("realtime.voice", serde_json::json!(voice))
+}
+
+pub(crate) fn build_realtime_hotkey_edit(hotkey: &str) -> ConfigEdit {
+    replace_config_value("realtime.hotkey", serde_json::json!(hotkey))
+}
+
 pub(crate) async fn write_config_batch(
     request_handle: AppServerRequestHandle,
     edits: Vec<ConfigEdit>,

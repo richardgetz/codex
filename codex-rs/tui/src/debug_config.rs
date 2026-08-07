@@ -948,6 +948,7 @@ interrupt_message = false
             default_permissions: None,
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
+            allow_browser: Some(false),
             allow_managed_hooks_only: Some(true),
             allow_appshots: Some(false),
             allow_remote_control: Some(false),

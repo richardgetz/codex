@@ -15,6 +15,8 @@ use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::goal_display::GOAL_USAGE;
 use crate::goal_files::GoalDraft;
 use crate::realtime_voice::RealtimeMicCommand;
+use crate::realtime_voice::RealtimeVoiceCommand;
+use crate::realtime_voice::realtime_voice_from_name;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -40,7 +42,8 @@ const CONTINUOUS_USAGE: &str = "Usage: /continuous [on|off|status]";
 const OUTCOMES_USAGE: &str = "Usage: /outcomes [on|off|status|report]";
 const SCRATCHPAD_ABSORB_USAGE: &str = "Usage: /scratchpad-absorb <scratchpad_id> [--exclude-pending] [--exclude-blocked] [--exclude-notes] [--exclude-outcomes] [--exclude-delegations] [--exclude-artifacts] [--exclude-worktrees] [--exclude-completed] [--exclude-next-steps] [--exclude-git-refs]";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
-const MIC_USAGE: &str = "Usage: /mic [status|hot|push]";
+const MIC_USAGE: &str = "Usage: /mic [on|off|status|hot|push|hotkey|devices|device <name>]";
+const VOICE_USAGE: &str = "Usage: /voice [status|list|<voice>]";
 const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
 
 fn scratchpad_update_event_from_value(value: &serde_json::Value) -> Option<ScratchpadUpdateEvent> {
@@ -1006,6 +1009,10 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::Toggle));
             }
+            SlashCommand::Voice => {
+                self.app_event_tx
+                    .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Status));
+            }
             SlashCommand::Usage => {
                 if self.ensure_usage_command_available() {
                     self.open_usage_menu();
@@ -1347,17 +1354,58 @@ impl ChatWidget {
                 }
                 _ => self.add_error_message(RAW_USAGE.to_string()),
             },
-            SlashCommand::Mic => match trimmed.to_ascii_lowercase().as_str() {
-                "status" => self
+            SlashCommand::Mic => {
+                let normalized = trimmed.to_ascii_lowercase();
+                match normalized.as_str() {
+                    "on" => self
+                        .app_event_tx
+                        .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::On)),
+                    "off" => self
+                        .app_event_tx
+                        .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::Off)),
+                    "status" => self
+                        .app_event_tx
+                        .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::Status)),
+                    "hot" => self
+                        .app_event_tx
+                        .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::Hot)),
+                    "push" => self
+                        .app_event_tx
+                        .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::Push)),
+                    "hotkey" => self.app_event_tx.send(AppEvent::RealtimeMicControl(
+                        RealtimeMicCommand::CaptureHotkey,
+                    )),
+                    "devices" | "list" => self.app_event_tx.send(AppEvent::RealtimeMicControl(
+                        RealtimeMicCommand::ListDevices,
+                    )),
+                    _ if normalized.starts_with("device ") || normalized.starts_with("use ") => {
+                        let name = trimmed
+                            .split_once(char::is_whitespace)
+                            .map(|(_, name)| name.trim())
+                            .filter(|name| !name.is_empty());
+                        match name {
+                            Some(name) => self.app_event_tx.send(AppEvent::RealtimeMicControl(
+                                RealtimeMicCommand::SetMicrophone(name.to_string()),
+                            )),
+                            None => self.add_error_message(MIC_USAGE.to_string()),
+                        }
+                    }
+                    _ => self.add_error_message(MIC_USAGE.to_string()),
+                }
+            }
+            SlashCommand::Voice => match trimmed.to_ascii_lowercase().as_str() {
+                "" | "status" => self
                     .app_event_tx
-                    .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::Status)),
-                "hot" => self
+                    .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Status)),
+                "list" | "voices" => self
                     .app_event_tx
-                    .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::Hot)),
-                "push" => self
-                    .app_event_tx
-                    .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::Push)),
-                _ => self.add_error_message(MIC_USAGE.to_string()),
+                    .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::List)),
+                _ => match realtime_voice_from_name(trimmed) {
+                    Some(voice) => self.app_event_tx.send(AppEvent::RealtimeVoiceControl(
+                        RealtimeVoiceCommand::Set(voice),
+                    )),
+                    None => self.add_error_message(VOICE_USAGE.to_string()),
+                },
             },
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
@@ -1704,6 +1752,7 @@ impl ChatWidget {
             SlashCommand::Ide
             | SlashCommand::Status
             | SlashCommand::Mic
+            | SlashCommand::Voice
             | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps

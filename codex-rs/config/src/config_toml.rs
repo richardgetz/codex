@@ -761,6 +761,8 @@ pub struct RealtimeConfig {
     pub session_type: RealtimeWsMode,
     pub transport: RealtimeTransport,
     pub voice: Option<RealtimeVoice>,
+    /// Push-to-talk key specification, such as `right-option` or `f13`.
+    pub hotkey: Option<String>,
 }
 
 impl Default for RealtimeConfig {
@@ -771,6 +773,7 @@ impl Default for RealtimeConfig {
             session_type: RealtimeWsMode::default(),
             transport: RealtimeTransport::default(),
             voice: None,
+            hotkey: None,
         }
     }
 }
@@ -785,6 +788,7 @@ pub struct RealtimeToml {
     pub session_type: Option<RealtimeWsMode>,
     pub transport: Option<RealtimeTransport>,
     pub voice: Option<RealtimeVoice>,
+    pub hotkey: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

@@ -98,6 +98,8 @@ use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
 use codex_app_server_protocol::ThreadRealtimeAudioChunk;
+use codex_app_server_protocol::ThreadRealtimeListVoicesParams;
+use codex_app_server_protocol::ThreadRealtimeListVoicesResponse;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadRealtimeStartResponse;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
@@ -150,6 +152,7 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::SubAgentSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -1502,6 +1505,19 @@ impl AppServerSession {
             .await
             .wrap_err("thread/realtime/stop failed in TUI")?;
         Ok(())
+    }
+
+    pub(crate) async fn thread_realtime_list_voices(&mut self) -> Result<RealtimeVoicesList> {
+        let request_id = self.next_request_id();
+        let response: ThreadRealtimeListVoicesResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadRealtimeListVoices {
+                request_id,
+                params: ThreadRealtimeListVoicesParams {},
+            })
+            .await
+            .wrap_err("thread/realtime/listVoices failed in TUI")?;
+        Ok(response.voices)
     }
 
     pub(crate) async fn reject_server_request(

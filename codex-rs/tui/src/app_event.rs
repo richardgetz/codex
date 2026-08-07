@@ -58,6 +58,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 
 use crate::history_cell::HistoryCell;
 use crate::realtime_voice::RealtimeMicCommand;
+use crate::realtime_voice::RealtimeVoiceCommand;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RestorablePermissionSelection {
@@ -194,6 +195,9 @@ pub(crate) enum KeymapEditIntent {
 pub(crate) enum AppEvent {
     /// Change or report the session-local realtime microphone mode.
     RealtimeMicControl(RealtimeMicCommand),
+
+    /// List, report, or persist the realtime voice used by new sessions.
+    RealtimeVoiceControl(RealtimeVoiceCommand),
 
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,

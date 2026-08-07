@@ -1,6 +1,7 @@
 use super::*;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::realtime_voice::RealtimeMicCommand;
+use crate::realtime_voice::RealtimeVoiceCommand;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 
@@ -128,6 +129,65 @@ async fn mic_slash_command_dispatches_mode_controls() {
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::Push))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "on".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::On))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "off".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::Off))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "hotkey".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::CaptureHotkey
+        ))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "devices".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::ListDevices
+        ))
+    );
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Mic,
+        "device Clip-On Mic".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::SetMicrophone(name)))
+            if name == "Clip-On Mic"
+    );
+
+    chat.dispatch_command(SlashCommand::Voice);
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Status))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Voice, "list".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::List))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Voice, "arbor".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Set(
+            codex_protocol::protocol::RealtimeVoice::Arbor
+        )))
     );
 }
 

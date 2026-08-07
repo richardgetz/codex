@@ -312,6 +312,10 @@ impl App {
                 self.handle_realtime_mic_command(tui, app_server, command)
                     .await;
             }
+            AppEvent::RealtimeVoiceControl(command) => {
+                self.handle_realtime_voice_command(tui, app_server, command)
+                    .await;
+            }
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell);
             }

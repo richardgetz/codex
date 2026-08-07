@@ -7,7 +7,12 @@
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::config_toml::RealtimeAudioConfig;
+use codex_protocol::protocol::RealtimeVoice;
 use cpal::traits::StreamTrait;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
+use crossterm::event::ModifierKeyCode;
 use opus::Application;
 use opus::Channels;
 use opus::Encoder;
@@ -49,12 +54,14 @@ pub(crate) const MAX_OUTPUT_SAMPLES: usize = SAMPLE_RATE as usize * 2;
 pub(crate) const INPUT_BUFFER_FRAMES: usize = 30 * 1_000 / 20;
 pub(crate) const INPUT_PREROLL_FRAMES: usize = 100 / 20;
 pub(crate) const INPUT_SIGNAL_THRESHOLD: i16 = 98;
+pub(crate) const DEFAULT_REALTIME_HOTKEY: &str = "right-option";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RealtimeMicMode {
     Disabled,
     PushToTalk,
     Hot,
+    CaptureHotkey,
 }
 
 impl RealtimeMicMode {
@@ -69,18 +76,104 @@ impl RealtimeMicMode {
     pub(crate) fn status_label(self) -> &'static str {
         match self {
             Self::Disabled => "disabled",
-            Self::PushToTalk => "enabled (push-to-talk; hold Right Option)",
+            Self::PushToTalk => "enabled (push-to-talk)",
             Self::Hot => "enabled (hot mic; always listening)",
+            Self::CaptureHotkey => "waiting for a push-to-talk key",
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RealtimeMicCommand {
     Toggle,
+    On,
+    Off,
     Status,
     Hot,
     Push,
+    CaptureHotkey,
+    ListDevices,
+    SetMicrophone(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RealtimeVoiceCommand {
+    List,
+    Status,
+    Set(RealtimeVoice),
+}
+
+pub(crate) fn realtime_voice_from_name(name: &str) -> Option<RealtimeVoice> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "alloy" => Some(RealtimeVoice::Alloy),
+        "arbor" => Some(RealtimeVoice::Arbor),
+        "ash" => Some(RealtimeVoice::Ash),
+        "ballad" => Some(RealtimeVoice::Ballad),
+        "breeze" => Some(RealtimeVoice::Breeze),
+        "cedar" => Some(RealtimeVoice::Cedar),
+        "coral" => Some(RealtimeVoice::Coral),
+        "cove" => Some(RealtimeVoice::Cove),
+        "echo" => Some(RealtimeVoice::Echo),
+        "ember" => Some(RealtimeVoice::Ember),
+        "juniper" => Some(RealtimeVoice::Juniper),
+        "maple" => Some(RealtimeVoice::Maple),
+        "marin" => Some(RealtimeVoice::Marin),
+        "sage" => Some(RealtimeVoice::Sage),
+        "shimmer" => Some(RealtimeVoice::Shimmer),
+        "sol" => Some(RealtimeVoice::Sol),
+        "spruce" => Some(RealtimeVoice::Spruce),
+        "vale" => Some(RealtimeVoice::Vale),
+        "verse" => Some(RealtimeVoice::Verse),
+        _ => None,
+    }
+}
+
+pub(crate) fn realtime_hotkey_matches(spec: Option<&str>, event: KeyEvent) -> bool {
+    let expected = spec.unwrap_or(DEFAULT_REALTIME_HOTKEY).trim();
+    realtime_hotkey_spec_from_event(event)
+        .is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
+}
+
+pub(crate) fn realtime_hotkey_spec_from_event(event: KeyEvent) -> Option<String> {
+    let key = match event.code {
+        KeyCode::Modifier(ModifierKeyCode::RightAlt) => "right-option".to_string(),
+        KeyCode::Modifier(ModifierKeyCode::LeftAlt) => "left-option".to_string(),
+        KeyCode::Enter => "enter".to_string(),
+        KeyCode::Tab => "tab".to_string(),
+        KeyCode::Backspace => "backspace".to_string(),
+        KeyCode::Esc => "esc".to_string(),
+        KeyCode::Delete => "delete".to_string(),
+        KeyCode::Up => "up".to_string(),
+        KeyCode::Down => "down".to_string(),
+        KeyCode::Left => "left".to_string(),
+        KeyCode::Right => "right".to_string(),
+        KeyCode::Home => "home".to_string(),
+        KeyCode::End => "end".to_string(),
+        KeyCode::PageUp => "page-up".to_string(),
+        KeyCode::PageDown => "page-down".to_string(),
+        KeyCode::Char(' ') => "space".to_string(),
+        KeyCode::Char(character) if !character.is_control() => {
+            character.to_ascii_lowercase().to_string()
+        }
+        KeyCode::F(number) => format!("f{number}"),
+        _ => return None,
+    };
+    if key == "right-option" || key == "left-option" {
+        return Some(key);
+    }
+
+    let mut parts = Vec::new();
+    if event.modifiers.contains(KeyModifiers::CONTROL) {
+        parts.push("ctrl");
+    }
+    if event.modifiers.contains(KeyModifiers::ALT) {
+        parts.push("alt");
+    }
+    if event.modifiers.contains(KeyModifiers::SHIFT) {
+        parts.push("shift");
+    }
+    parts.push(key.as_str());
+    Some(parts.join("-"))
 }
 
 /// A native live voice peer that follows the desktop app's WebRTC media shape.

@@ -1907,7 +1907,9 @@ fn selected_and_resumed_threads_use_server_capability_for_v1_and_v2_children() -
         assert!(backfill.completed);
         assert_eq!(
             backfill.refreshed_thread_ids,
-            [child_thread_ids[1]].into_iter().collect()
+            [child_thread_ids[1]]
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>()
         );
         assert_eq!(
             app.agent_navigation.get(&child_thread_ids[0]),

@@ -3107,6 +3107,9 @@
           "description": "Enables the native live voice push-to-talk shortcut in the TUI.",
           "type": "boolean"
         },
+        "hotkey": {
+          "type": "string"
+        },
         "transport": {
           "$ref": "#/definitions/RealtimeTransport"
         },
