@@ -3086,8 +3086,22 @@
         "microphone": {
           "type": "string"
         },
+        "microphone_aliases": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Case-insensitive short names mapped to concrete microphone device names.",
+          "type": "object"
+        },
         "speaker": {
           "type": "string"
+        },
+        "speaker_aliases": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Case-insensitive short names mapped to concrete speaker device names.",
+          "type": "object"
         }
       },
       "type": "object"
@@ -3103,12 +3117,36 @@
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
+        "acknowledgement_sound": {
+          "description": "Plays a local acknowledgement cue when push-to-talk input is released.",
+          "type": "boolean"
+        },
+        "acknowledgement_sound_file": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional absolute path to a WAV file used instead of the built-in acknowledgement cue."
+        },
+        "enable_preambles": {
+          "description": "Allows GPT-Live to use brief conversational acknowledgements and progress preambles.",
+          "type": "boolean"
+        },
         "enabled": {
           "description": "Enables the native live voice push-to-talk shortcut in the TUI.",
           "type": "boolean"
         },
         "hotkey": {
           "type": "string"
+        },
+        "non_substantive_reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Optional reasoning effort for clearly read-only realtime handoffs. When omitted, the active session effort is inherited."
         },
         "transport": {
           "$ref": "#/definitions/RealtimeTransport"
@@ -3121,6 +3159,13 @@
         },
         "voice": {
           "$ref": "#/definitions/RealtimeVoice"
+        },
+        "voice_rotation": {
+          "description": "Optional voices selected in round-robin order for new Codex processes.",
+          "items": {
+            "$ref": "#/definitions/RealtimeVoice"
+          },
+          "type": "array"
         }
       },
       "type": "object"

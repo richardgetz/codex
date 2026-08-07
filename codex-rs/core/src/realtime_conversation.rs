@@ -1500,14 +1500,17 @@ async fn handle_start_inner(
             }
             let maybe_routed_text = match &event {
                 RealtimeEvent::HandoffRequested(handoff) => {
-                    realtime_delegation_from_handoff(handoff)
+                    realtime_delegation_with_routing_input(handoff)
+                        .map(|(text, input)| (text, RealtimeDelegationSource::Handoff, Some(input)))
                 }
                 _ => None,
             };
-            if let Some(text) = maybe_routed_text {
+            if let Some((text, source, routing_input)) = maybe_routed_text {
                 debug!(text = %text, "[realtime-text] realtime conversation text output");
                 let sess_for_routed_text = Arc::clone(&sess_clone);
-                sess_for_routed_text.route_realtime_text_input(text).await;
+                sess_for_routed_text
+                    .route_realtime_text_input(text, source, routing_input)
+                    .await;
             }
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationRealtime(
@@ -1518,7 +1521,13 @@ async fn handle_start_inner(
                 .await;
         }
         if let Ok(text) = transcript_tail_rx.recv().await {
-            sess_clone.route_realtime_text_input(text).await;
+            sess_clone
+                .route_realtime_text_input(
+                    text,
+                    RealtimeDelegationSource::TranscriptTailFlush,
+                    /*routing_input*/ None,
+                )
+                .await;
         }
         if fanout_realtime_active.swap(false, Ordering::Relaxed) {
             match end {
@@ -1576,13 +1585,21 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
         .or_else(|| realtime_transcript_delta_from_handoff(handoff))
 }
 
+#[cfg(test)]
 fn realtime_delegation_from_handoff(handoff: &RealtimeHandoffRequested) -> Option<String> {
+    realtime_delegation_with_routing_input(handoff).map(|(text, _input)| text)
+}
+
+fn realtime_delegation_with_routing_input(
+    handoff: &RealtimeHandoffRequested,
+) -> Option<(String, String)> {
     let input = realtime_text_from_handoff_request(handoff)?;
-    Some(wrap_realtime_delegation_input(
+    let text = wrap_realtime_delegation_input(
         &input,
         realtime_transcript_delta_from_handoff(handoff).as_deref(),
         RealtimeDelegationSource::Handoff,
-    ))
+    );
+    Some((text, input))
 }
 
 fn wrap_realtime_delegation_input(

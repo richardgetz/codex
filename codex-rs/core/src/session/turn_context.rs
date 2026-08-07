@@ -909,7 +909,7 @@ impl Session {
             .await)
     }
 
-    async fn new_turn_from_configuration(
+    pub(crate) async fn new_turn_from_configuration(
         &self,
         sub_id: String,
         session_configuration: SessionConfiguration,

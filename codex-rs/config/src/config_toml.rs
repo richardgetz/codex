@@ -728,6 +728,10 @@ impl ProjectConfig {
 pub struct RealtimeAudioConfig {
     pub microphone: Option<String>,
     pub speaker: Option<String>,
+    /// Case-insensitive short names mapped to concrete microphone device names.
+    pub microphone_aliases: BTreeMap<String, String>,
+    /// Case-insensitive short names mapped to concrete speaker device names.
+    pub speaker_aliases: BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
@@ -756,11 +760,24 @@ pub struct RealtimeConfig {
     /// Enables the native live voice push-to-talk shortcut in the TUI.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Allows GPT-Live to use brief conversational acknowledgements and progress preambles.
+    #[serde(default = "default_true")]
+    pub enable_preambles: bool,
+    /// Optional reasoning effort for clearly read-only realtime handoffs. When omitted, the
+    /// active session effort is inherited.
+    pub non_substantive_reasoning_effort: Option<ReasoningEffort>,
+    /// Plays a local acknowledgement cue when push-to-talk input is released.
+    #[serde(default)]
+    pub acknowledgement_sound: bool,
+    /// Optional absolute path to a WAV file used instead of the built-in acknowledgement cue.
+    pub acknowledgement_sound_file: Option<AbsolutePathBuf>,
     pub version: RealtimeWsVersion,
     #[serde(rename = "type")]
     pub session_type: RealtimeWsMode,
     pub transport: RealtimeTransport,
     pub voice: Option<RealtimeVoice>,
+    /// Optional voices selected in round-robin order for new Codex processes.
+    pub voice_rotation: Option<Vec<RealtimeVoice>>,
     /// Push-to-talk key specification, such as `right-option` or `f13`.
     pub hotkey: Option<String>,
 }
@@ -769,10 +786,15 @@ impl Default for RealtimeConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            enable_preambles: true,
+            non_substantive_reasoning_effort: None,
+            acknowledgement_sound: false,
+            acknowledgement_sound_file: None,
             version: RealtimeWsVersion::default(),
             session_type: RealtimeWsMode::default(),
             transport: RealtimeTransport::default(),
             voice: None,
+            voice_rotation: None,
             hotkey: None,
         }
     }
@@ -783,11 +805,22 @@ impl Default for RealtimeConfig {
 pub struct RealtimeToml {
     /// Enables the native live voice push-to-talk shortcut in the TUI.
     pub enabled: Option<bool>,
+    /// Allows GPT-Live to use brief conversational acknowledgements and progress preambles.
+    pub enable_preambles: Option<bool>,
+    /// Optional reasoning effort for clearly read-only realtime handoffs. When omitted, the
+    /// active session effort is inherited.
+    pub non_substantive_reasoning_effort: Option<ReasoningEffort>,
+    /// Plays a local acknowledgement cue when push-to-talk input is released.
+    pub acknowledgement_sound: Option<bool>,
+    /// Optional absolute path to a WAV file used instead of the built-in acknowledgement cue.
+    pub acknowledgement_sound_file: Option<AbsolutePathBuf>,
     pub version: Option<RealtimeWsVersion>,
     #[serde(rename = "type")]
     pub session_type: Option<RealtimeWsMode>,
     pub transport: Option<RealtimeTransport>,
     pub voice: Option<RealtimeVoice>,
+    /// Optional voices selected in round-robin order for new Codex processes.
+    pub voice_rotation: Option<Vec<RealtimeVoice>>,
     pub hotkey: Option<String>,
 }
 
@@ -796,6 +829,10 @@ pub struct RealtimeToml {
 pub struct RealtimeAudioToml {
     pub microphone: Option<String>,
     pub speaker: Option<String>,
+    /// Case-insensitive short names mapped to concrete microphone device names.
+    pub microphone_aliases: Option<BTreeMap<String, String>>,
+    /// Case-insensitive short names mapped to concrete speaker device names.
+    pub speaker_aliases: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]

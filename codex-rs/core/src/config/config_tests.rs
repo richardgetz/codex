@@ -13212,10 +13212,15 @@ async fn realtime_loads_from_config_toml() -> std::io::Result<()> {
         r#"
 [realtime]
 enabled = false
+enable_preambles = false
+non_substantive_reasoning_effort = "low"
+acknowledgement_sound = true
+acknowledgement_sound_file = "/tmp/codex-ding.wav"
 version = "v2"
 type = "transcription"
 transport = "webrtc"
 voice = "cedar"
+voice_rotation = ["arbor", "marin"]
 hotkey = "f13"
 "#,
     )
@@ -13225,10 +13230,19 @@ hotkey = "f13"
         cfg.realtime,
         Some(RealtimeToml {
             enabled: Some(false),
+            enable_preambles: Some(false),
+            non_substantive_reasoning_effort: Some(ReasoningEffort::Low),
+            acknowledgement_sound: Some(true),
+            acknowledgement_sound_file: Some(
+                codex_utils_absolute_path::test_support::test_path_buf("/tmp/codex-ding.wav")
+                    .try_into()
+                    .expect("absolute test path"),
+            ),
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
             transport: Some(RealtimeTransport::WebRtc),
             voice: Some(RealtimeVoice::Cedar),
+            voice_rotation: Some(vec![RealtimeVoice::Arbor, RealtimeVoice::Marin]),
             hotkey: Some("f13".to_string()),
         })
     );
@@ -13245,10 +13259,19 @@ hotkey = "f13"
         config.realtime,
         RealtimeConfig {
             enabled: false,
+            enable_preambles: false,
+            non_substantive_reasoning_effort: Some(ReasoningEffort::Low),
+            acknowledgement_sound: true,
+            acknowledgement_sound_file: Some(
+                codex_utils_absolute_path::test_support::test_path_buf("/tmp/codex-ding.wav")
+                    .try_into()
+                    .expect("absolute test path"),
+            ),
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,
             transport: RealtimeTransport::WebRtc,
             voice: Some(RealtimeVoice::Cedar),
+            voice_rotation: Some(vec![RealtimeVoice::Arbor, RealtimeVoice::Marin]),
             hotkey: Some("f13".to_string()),
         }
     );
@@ -13262,6 +13285,12 @@ async fn realtime_audio_loads_from_config_toml() -> std::io::Result<()> {
 [audio]
 microphone = "USB Mic"
 speaker = "Desk Speakers"
+
+[audio.microphone_aliases]
+airpods = "USB Mic"
+
+[audio.speaker_aliases]
+desk = "Desk Speakers"
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -13272,6 +13301,20 @@ speaker = "Desk Speakers"
         .expect("realtime audio config should be present");
     assert_eq!(realtime_audio.microphone.as_deref(), Some("USB Mic"));
     assert_eq!(realtime_audio.speaker.as_deref(), Some("Desk Speakers"));
+    assert_eq!(
+        realtime_audio.microphone_aliases,
+        Some(std::collections::BTreeMap::from([(
+            "airpods".to_string(),
+            "USB Mic".to_string(),
+        )]))
+    );
+    assert_eq!(
+        realtime_audio.speaker_aliases,
+        Some(std::collections::BTreeMap::from([(
+            "desk".to_string(),
+            "Desk Speakers".to_string(),
+        )]))
+    );
 
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(
@@ -13285,6 +13328,14 @@ speaker = "Desk Speakers"
     assert_eq!(
         config.realtime_audio.speaker.as_deref(),
         Some("Desk Speakers")
+    );
+    assert_eq!(
+        config.realtime_audio.microphone_aliases,
+        std::collections::BTreeMap::from([("airpods".to_string(), "USB Mic".to_string())])
+    );
+    assert_eq!(
+        config.realtime_audio.speaker_aliases,
+        std::collections::BTreeMap::from([("desk".to_string(), "Desk Speakers".to_string())])
     );
     Ok(())
 }
