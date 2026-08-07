@@ -69,6 +69,7 @@ use crate::realtime_voice::RealtimeMicCommand;
 use crate::realtime_voice::RealtimeMicMode;
 use crate::realtime_voice::RealtimeVoiceCommand;
 use crate::realtime_voice::RealtimeVoiceSession;
+use crate::realtime_voice_rotation::select_startup_voice;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
@@ -862,6 +863,9 @@ impl App {
         let requires_openai_auth = bootstrap.requires_openai_auth;
         let status_account_display = bootstrap.status_account_display.clone();
         let initial_plan_type = bootstrap.plan_type;
+        if let Some(voice) = select_startup_voice(&config.realtime, config.codex_home.as_path()) {
+            config.realtime.voice = Some(voice);
+        }
         let session_bootstrap_config = config.clone();
         let session_bootstrap_model = session_bootstrap_config
             .model

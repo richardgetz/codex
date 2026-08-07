@@ -41,10 +41,15 @@ use crate::realtime_voice_audio::build_input_stream;
 use crate::realtime_voice_audio::build_output_stream;
 use crate::realtime_voice_audio::encode_input_frames;
 use crate::realtime_voice_audio::install_remote_audio_handler;
+use crate::realtime_voice_audio::list_input_devices;
+use crate::realtime_voice_audio::list_output_devices;
 use crate::realtime_voice_audio::select_input_config;
 use crate::realtime_voice_audio::select_input_device;
 use crate::realtime_voice_audio::select_output_config;
 use crate::realtime_voice_audio::select_output_device;
+use crate::realtime_voice_devices::resolve_device_name;
+use crate::realtime_voice_sound::RealtimeAcknowledgementSound;
+use crate::realtime_voice_sound::load_acknowledgement_sound;
 
 pub(crate) const SAMPLE_RATE: u32 = 48_000;
 pub(crate) const FRAME_SAMPLES: usize = 960;
@@ -55,6 +60,11 @@ pub(crate) const INPUT_BUFFER_FRAMES: usize = 30 * 1_000 / 20;
 pub(crate) const INPUT_PREROLL_FRAMES: usize = 100 / 20;
 pub(crate) const INPUT_SIGNAL_THRESHOLD: i16 = 98;
 pub(crate) const DEFAULT_REALTIME_HOTKEY: &str = "right-option";
+pub(crate) const REALTIME_NO_PREAMBLES_PROMPT: &str = "You are in a live voice conversation. Do not produce conversational backchannels, acknowledgements, filler, or progress preambles, including phrases such as 'mm-hmm', 'ah', 'okay', 'let me check', or 'I will take a look'. After the user's turn, begin directly with the substantive answer or action. Do not announce that you are checking, thinking, or about to respond. If more information is needed, ask the substantive question directly.";
+
+pub(crate) fn realtime_start_prompt(enable_preambles: bool) -> Option<Option<String>> {
+    (!enable_preambles).then(|| Some(REALTIME_NO_PREAMBLES_PROMPT.to_string()))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RealtimeMicMode {
@@ -92,12 +102,28 @@ pub(crate) enum RealtimeMicCommand {
     Hot,
     Push,
     CaptureHotkey,
+    ChangeMicrophone,
     ListDevices,
+    ChangeSpeaker,
+    ListSpeakers,
     SetMicrophone(String),
+    SetSpeaker(String),
+    ListMicrophoneAliases,
+    ListSpeakerAliases,
+    SetMicrophoneAlias {
+        alias: String,
+        device: Option<String>,
+    },
+    SetSpeakerAlias {
+        alias: String,
+        device: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RealtimeVoiceCommand {
+    On,
+    Off,
     List,
     Status,
     Set(RealtimeVoice),
@@ -182,21 +208,57 @@ pub(crate) struct RealtimeVoiceSession {
     input_muted: Arc<AtomicBool>,
     input_stream: cpal::Stream,
     output_stream: cpal::Stream,
+    output_queue: Arc<Mutex<VecDeque<i16>>>,
+    acknowledgement_samples: Option<Vec<i16>>,
     input_task: JoinHandle<()>,
 }
 
 impl RealtimeVoiceSession {
     /// Creates the local WebRTC peer, starts native audio streams, and returns the local SDP offer.
-    pub(crate) async fn start(audio_config: &RealtimeAudioConfig) -> Result<(Self, String)> {
+    pub(crate) async fn start(
+        audio_config: &RealtimeAudioConfig,
+        acknowledgement_sound: &RealtimeAcknowledgementSound,
+    ) -> Result<(Self, String)> {
         let host = cpal::default_host();
-        let input_device = select_input_device(&host, audio_config.microphone.as_deref())?;
-        let output_device = select_output_device(&host, audio_config.speaker.as_deref())?;
+        let input_device = match audio_config.microphone.as_deref() {
+            Some(requested) => {
+                let devices = list_input_devices()?;
+                let resolved = resolve_device_name(
+                    requested,
+                    &devices,
+                    &audio_config.microphone_aliases,
+                )
+                .with_context(|| {
+                    format!(
+                        "configured realtime microphone `{requested}` or its alias was not found"
+                    )
+                })?;
+                select_input_device(&host, Some(&resolved))?
+            }
+            None => select_input_device(&host, None)?,
+        };
+        let output_device = match audio_config.speaker.as_deref() {
+            Some(requested) => {
+                let devices = list_output_devices()?;
+                let resolved = resolve_device_name(
+                    requested,
+                    &devices,
+                    &audio_config.speaker_aliases,
+                )
+                .with_context(|| {
+                    format!("configured realtime speaker `{requested}` or its alias was not found")
+                })?;
+                select_output_device(&host, Some(&resolved))?
+            }
+            None => select_output_device(&host, None)?,
+        };
         let input_supported = select_input_config(&input_device)?;
         let output_supported = select_output_config(&output_device)?;
         let input_config = input_supported.config();
         let output_config = output_supported.config();
         let input_muted = Arc::new(AtomicBool::new(false));
         let output_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let acknowledgement_samples = load_acknowledgement_sound(acknowledgement_sound)?;
         let (input_tx, input_rx) = mpsc::channel(8);
 
         let input_stream = build_input_stream(
@@ -302,6 +364,8 @@ impl RealtimeVoiceSession {
                 input_muted,
                 input_stream,
                 output_stream,
+                output_queue,
+                acknowledgement_samples,
                 input_task,
             },
             local_description.sdp,
@@ -310,6 +374,23 @@ impl RealtimeVoiceSession {
 
     pub(crate) fn set_input_muted(&self, muted: bool) {
         self.input_muted.store(muted, Ordering::Relaxed);
+    }
+
+    pub(crate) fn play_acknowledgement_sound(&self) {
+        let Some(samples) = &self.acknowledgement_samples else {
+            return;
+        };
+        let Ok(mut output_queue) = self.output_queue.lock() else {
+            return;
+        };
+        let excess = output_queue
+            .len()
+            .saturating_add(samples.len())
+            .saturating_sub(MAX_OUTPUT_SAMPLES);
+        if excess > 0 {
+            output_queue.drain(..excess);
+        }
+        output_queue.extend(samples.iter().copied());
     }
 
     /// Applies the server answer delivered through `thread/realtime/sdp`.
@@ -336,6 +417,10 @@ impl RealtimeVoiceSession {
         let _ = (&self.input_stream, &self.output_stream);
     }
 }
+
+#[cfg(test)]
+#[path = "realtime_voice_tests.rs"]
+mod tests;
 
 impl Drop for RealtimeVoiceSession {
     fn drop(&mut self) {

@@ -1,0 +1,12 @@
+---
+source: tui/src/app/input.rs
+assertion_line: 1261
+expression: rendered
+---
+  Select realtime microphone
+  Choose the GPT-Live input device. Changes apply to the next voice session.
+
+  1. Built-in Microphone
+› 2. Clip-On Mic (current)
+
+  Press enter to confirm or esc to go back
