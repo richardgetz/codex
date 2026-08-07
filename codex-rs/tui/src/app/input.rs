@@ -293,16 +293,16 @@ impl App {
                     return true;
                 };
 
-                let (session, sdp) = match RealtimeVoiceSession::start(&self.config.realtime_audio)
-                    .await
-                {
-                    Ok(result) => result,
-                    Err(err) => {
-                        self.chat_widget
-                            .add_error_message(format!("Failed to start live voice input: {err}"));
-                        return true;
-                    }
-                };
+                let (session, sdp) =
+                    match RealtimeVoiceSession::start(&self.config.realtime_audio).await {
+                        Ok(result) => result,
+                        Err(err) => {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to start live voice input: {err:#}"
+                            ));
+                            return true;
+                        }
+                    };
                 let params = ThreadRealtimeStartParams {
                     thread_id: thread_id.to_string(),
                     client_managed_handoffs: None,
@@ -324,7 +324,7 @@ impl App {
                 if let Err(err) = app_server.thread_realtime_start_with_params(params).await {
                     session.close().await;
                     self.chat_widget
-                        .add_error_message(format!("Failed to start live voice input: {err}"));
+                        .add_error_message(format!("Failed to start live voice input: {err:#}"));
                     return true;
                 }
                 self.realtime_voice_session = Some(session);
