@@ -135,6 +135,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
+use codex_features::Feature;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
@@ -1720,6 +1721,12 @@ fn config_request_overrides_from_config(
     if config.bypass_hook_trust {
         overrides.insert("bypass_hook_trust".to_string(), true.into());
     }
+    if config.realtime.enabled {
+        overrides.insert(
+            format!("features.{}", Feature::RealtimeConversation.key()),
+            serde_json::Value::Bool(true),
+        );
+    }
     Some(overrides)
 }
 
@@ -2961,6 +2968,15 @@ mod tests {
             config_request_overrides_from_config(&config).expect("config overrides");
 
         assert!(!implicit_overrides.contains_key("personality"));
+        assert_eq!(
+            implicit_overrides.get("features.realtime_conversation"),
+            Some(&serde_json::Value::Bool(true))
+        );
+
+        config.realtime.enabled = false;
+        let disabled_overrides =
+            config_request_overrides_from_config(&config).expect("config overrides");
+        assert!(!disabled_overrides.contains_key("features.realtime_conversation"));
 
         config.personality = Some(Personality::None);
         let explicit_overrides =
