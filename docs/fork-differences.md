@@ -145,6 +145,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   enable_preambles = false
   # Optional; clearly read-only handoffs use this effort, otherwise inherit the session effort.
   non_substantive_reasoning_effort = "low"
+  # Optional; omit to use the deterministic text classifier.
+  non_substantive_classifier_model = "gpt-5.3-codex-spark"
+  # Optional; omit to use the classifier model's default reasoning effort.
+  non_substantive_classifier_reasoning_effort = "minimal"
   acknowledgement_sound = true
   acknowledgement_sound_file = "/absolute/path/to/cue.wav"
   # Optional; consumes one voice per new Codex launch, in order.
@@ -178,7 +182,19 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   only for clearly read-only/informational handoffs; ambiguous or substantive
   requests, and internal transcript-tail cleanup, inherit the normal session
   effort. Omitting it preserves the existing behavior and requires no
-  GPT-Live backend change. Device aliases are case-insensitive and persistent:
+  GPT-Live backend change. When that setting is present, the default classifier
+  is deterministic text matching. Setting `non_substantive_classifier_model`
+  opts into one bounded Codex Responses request using that model before the
+  single main-agent handoff. `non_substantive_classifier_reasoning_effort` is
+  optional and is passed only to the classifier request; if the request times
+  out, fails, or returns invalid JSON, the CLI falls back to the text classifier
+  and does not grant the override based on an ambiguous result. Oversized input
+  also falls back conservatively, and explicit mutation signals still block a
+  model-produced `read_only` result. The optional
+  model classifier does not change GPT-Live V3 WebRTC transport or its backend
+  event contract. With `/voice debug on`, the diagnostic includes the handoff
+  ID, classifier kind/model, classifier reasoning effort, fallback reason,
+  classification, and final selected effort. Device aliases are case-insensitive and persistent:
   `/mic alias airpods` names the currently selected microphone, `/mic alias
   airpods <device>` names an explicit device, and `/mic airpods` selects it.
   Speaker aliases use `/mic speaker alias desk <device>` and `/mic speaker desk`.

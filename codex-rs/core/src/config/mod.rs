@@ -4767,6 +4767,10 @@ impl Config {
                             .unwrap_or(defaults.enable_preambles),
                         non_substantive_reasoning_effort: realtime
                             .non_substantive_reasoning_effort,
+                        non_substantive_classifier_model: realtime
+                            .non_substantive_classifier_model,
+                        non_substantive_classifier_reasoning_effort: realtime
+                            .non_substantive_classifier_reasoning_effort,
                         acknowledgement_sound: realtime
                             .acknowledgement_sound
                             .unwrap_or(defaults.acknowledgement_sound),

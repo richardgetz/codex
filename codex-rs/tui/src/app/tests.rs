@@ -292,7 +292,35 @@ async fn realtime_handoff_debug_renders_selected_effort() {
         ("handoff-1", "item-1", "What time is it?"),
         ("handoff-1", "item-2", "This duplicate should be ignored."),
         ("handoff-2", "item-3", "Please update the configuration."),
+        (
+            "handoff-3",
+            "item-4",
+            "Please inspect the change and then edit it.",
+        ),
+        ("handoff-4", "item-5", ""),
+        ("handoff-4", "item-6", "What branch am I on?"),
     ] {
+        let routing = match (handoff_id, item_id) {
+            ("handoff-1", "item-1") => Some(serde_json::json!({
+                "classifier": {
+                    "kind": "model",
+                    "model": "gpt-5.3-codex-spark",
+                    "reasoning_effort": "minimal"
+                },
+                "classification": "read_only",
+                "selected_effort": "low"
+            })),
+            ("handoff-3", "item-4") => Some(serde_json::json!({
+                "classifier": {
+                    "kind": "text",
+                    "model": "gpt-5.3-codex-spark",
+                    "reasoning_effort": "minimal",
+                    "fallback": "timed_out"
+                },
+                "classification": "substantive"
+            })),
+            _ => None,
+        };
         sender
             .send(ThreadBufferedEvent::Notification(
                 ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
@@ -302,6 +330,7 @@ async fn realtime_handoff_debug_renders_selected_effort() {
                         "handoff_id": handoff_id,
                         "item_id": item_id,
                         "input_transcript": input,
+                        "routing": routing,
                     }),
                 }),
             ))

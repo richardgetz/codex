@@ -3140,6 +3140,18 @@
         "hotkey": {
           "type": "string"
         },
+        "non_substantive_classifier_model": {
+          "description": "Optional model used to classify non-substantive realtime handoffs. When omitted, text classification is used.",
+          "type": "string"
+        },
+        "non_substantive_classifier_reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Optional reasoning effort for the classifier model. When omitted, that model's default reasoning effort is used."
+        },
         "non_substantive_reasoning_effort": {
           "allOf": [
             {

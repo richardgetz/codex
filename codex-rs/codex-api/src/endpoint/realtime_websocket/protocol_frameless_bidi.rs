@@ -91,6 +91,7 @@ fn parse_delegation_created(parsed: &Value) -> Option<RealtimeEvent> {
         item_id,
         input_transcript,
         active_transcript: Vec::new(),
+        routing: None,
     }))
 }
 

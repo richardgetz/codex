@@ -10,6 +10,7 @@ fn legacy_and_frameless_delegations_decode_to_the_same_handoff() {
         item_id: "handoff-123".to_string(),
         input_transcript: "check the weather".to_string(),
         active_transcript: Vec::new(),
+        routing: None,
     }));
     let legacy = r#"{
         "type": "conversation.handoff.requested",

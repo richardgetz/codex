@@ -1118,6 +1118,7 @@ mod tests {
                 item_id: "item_123".to_string(),
                 input_transcript: "delegate this".to_string(),
                 active_transcript: Vec::new(),
+                routing: None,
             }))
         );
     }
@@ -1144,6 +1145,7 @@ mod tests {
             item_id: "item_1".to_string(),
             input_transcript: "already handed off".to_string(),
             active_transcript: vec![],
+            routing: None,
         });
         events.update_active_transcript(&mut handoff).await;
         assert_eq!(
@@ -1156,6 +1158,7 @@ mod tests {
                     role: "user".to_string(),
                     text: "already handed off".to_string(),
                 }],
+                routing: None,
             })
         );
 
@@ -1344,6 +1347,7 @@ mod tests {
                 item_id: "item_123".to_string(),
                 input_transcript: "delegate this".to_string(),
                 active_transcript: Vec::new(),
+                routing: None,
             }))
         );
     }
@@ -2101,6 +2105,7 @@ mod tests {
                         text: "working".to_string(),
                     },
                 ],
+                routing: None,
             })
         );
 

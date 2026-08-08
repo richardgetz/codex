@@ -766,6 +766,12 @@ pub struct RealtimeConfig {
     /// Optional reasoning effort for clearly read-only realtime handoffs. When omitted, the
     /// active session effort is inherited.
     pub non_substantive_reasoning_effort: Option<ReasoningEffort>,
+    /// Optional model used to classify non-substantive realtime handoffs. When omitted, text
+    /// classification is used.
+    pub non_substantive_classifier_model: Option<String>,
+    /// Optional reasoning effort for the classifier model. When omitted, that model's default
+    /// reasoning effort is used.
+    pub non_substantive_classifier_reasoning_effort: Option<ReasoningEffort>,
     /// Plays a local acknowledgement cue when push-to-talk input is released.
     #[serde(default)]
     pub acknowledgement_sound: bool,
@@ -788,6 +794,8 @@ impl Default for RealtimeConfig {
             enabled: true,
             enable_preambles: true,
             non_substantive_reasoning_effort: None,
+            non_substantive_classifier_model: None,
+            non_substantive_classifier_reasoning_effort: None,
             acknowledgement_sound: false,
             acknowledgement_sound_file: None,
             version: RealtimeWsVersion::default(),
@@ -810,6 +818,12 @@ pub struct RealtimeToml {
     /// Optional reasoning effort for clearly read-only realtime handoffs. When omitted, the
     /// active session effort is inherited.
     pub non_substantive_reasoning_effort: Option<ReasoningEffort>,
+    /// Optional model used to classify non-substantive realtime handoffs. When omitted, text
+    /// classification is used.
+    pub non_substantive_classifier_model: Option<String>,
+    /// Optional reasoning effort for the classifier model. When omitted, that model's default
+    /// reasoning effort is used.
+    pub non_substantive_classifier_reasoning_effort: Option<ReasoningEffort>,
     /// Plays a local acknowledgement cue when push-to-talk input is released.
     pub acknowledgement_sound: Option<bool>,
     /// Optional absolute path to a WAV file used instead of the built-in acknowledgement cue.

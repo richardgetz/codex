@@ -54,6 +54,7 @@ use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
+use crate::realtime_handoff::RealtimeHandoffRouting;
 use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
@@ -369,6 +370,9 @@ pub struct RealtimeHandoffRequested {
     pub item_id: String,
     pub input_transcript: String,
     pub active_transcript: Vec<RealtimeTranscriptEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub routing: Option<RealtimeHandoffRouting>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

@@ -1269,26 +1269,14 @@ impl App {
         let handoff_id = notification
             .item
             .get("handoff_id")
-            .and_then(serde_json::Value::as_str);
+            .and_then(serde_json::Value::as_str)
+            .filter(|handoff_id| !handoff_id.is_empty());
         let item_id = notification
             .item
             .get("item_id")
-            .and_then(serde_json::Value::as_str);
+            .and_then(serde_json::Value::as_str)
+            .filter(|item_id| !item_id.is_empty());
         let debug_id = handoff_id.or(item_id);
-        if debug_id.is_some_and(|debug_id| {
-            self.realtime_handoff_debug_ids
-                .iter()
-                .any(|seen_id| seen_id == debug_id)
-        }) {
-            return None;
-        }
-        if let Some(debug_id) = debug_id {
-            self.realtime_handoff_debug_ids
-                .push_back(debug_id.to_string());
-            if self.realtime_handoff_debug_ids.len() > REALTIME_HANDOFF_DEBUG_DEDUPE_CAPACITY {
-                self.realtime_handoff_debug_ids.pop_front();
-            }
-        }
         let identity = match handoff_id {
             Some(handoff_id) => format!(
                 "handoff_id `{}`",
@@ -1311,6 +1299,82 @@ impl App {
                 "GPT-Live handoff debug: {identity}; no handoff input was available; inherited the session effort."
             ));
         };
+        if debug_id.is_some_and(|debug_id| {
+            self.realtime_handoff_debug_ids
+                .iter()
+                .any(|seen_id| seen_id == debug_id)
+        }) {
+            return None;
+        }
+        if let Some(debug_id) = debug_id {
+            self.realtime_handoff_debug_ids
+                .push_back(debug_id.to_string());
+            if self.realtime_handoff_debug_ids.len() > REALTIME_HANDOFF_DEBUG_DEDUPE_CAPACITY {
+                self.realtime_handoff_debug_ids.pop_front();
+            }
+        }
+
+        if let Some(routing) = notification
+            .item
+            .get("routing")
+            .and_then(serde_json::Value::as_object)
+        {
+            let classifier = routing
+                .get("classifier")
+                .and_then(serde_json::Value::as_object);
+            let classifier_kind = classifier
+                .and_then(|classifier| classifier.get("kind"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("text");
+            let classifier_model = classifier
+                .and_then(|classifier| classifier.get("model"))
+                .and_then(serde_json::Value::as_str);
+            let classifier_reasoning_effort = classifier
+                .and_then(|classifier| classifier.get("reasoning_effort"))
+                .and_then(serde_json::Value::as_str);
+            let classifier_fallback = classifier
+                .and_then(|classifier| classifier.get("fallback"))
+                .and_then(serde_json::Value::as_str);
+            let classification = routing
+                .get("classification")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("substantive");
+            let selected_effort = routing
+                .get("selected_effort")
+                .and_then(serde_json::Value::as_str);
+            let session_effort = self.chat_widget.current_reasoning_effort();
+            let selected = selected_effort.map(str::to_string).unwrap_or_else(|| {
+                session_effort
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "session default".to_string())
+            });
+            let reason = if selected_effort.is_some() {
+                "read-only override"
+            } else {
+                "inherited session effort"
+            };
+            let classifier_name = match (classifier_kind, classifier_model) {
+                ("model", Some(model)) => format!("model `{model}`"),
+                ("model", None) => "model `<unknown>`".to_string(),
+                ("text", Some(model)) if classifier_fallback == Some("input_too_long") => {
+                    format!("text (model `{model}` not attempted)")
+                }
+                ("text", Some(model)) => format!("text (fallback from model `{model}`)"),
+                _ => "text".to_string(),
+            };
+            let classifier_reasoning = format!(
+                "; reasoning `{}`",
+                classifier_reasoning_effort.map_or_else(|| "default".to_string(), str::to_string)
+            );
+            let fallback = classifier_fallback
+                .map(|fallback| format!("; fallback `{fallback}`"))
+                .unwrap_or_default();
+            let input_preview = realtime_handoff_debug_preview(input);
+            return Some(format!(
+                "GPT-Live handoff debug: {identity}; classifier {classifier_name}{classifier_reasoning}{fallback}; classification `{classification}`; selected `{selected}` ({reason}) for input `{input_preview}`."
+            ));
+        }
 
         let configured_effort = self
             .config

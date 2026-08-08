@@ -13214,6 +13214,8 @@ async fn realtime_loads_from_config_toml() -> std::io::Result<()> {
 enabled = false
 enable_preambles = false
 non_substantive_reasoning_effort = "low"
+non_substantive_classifier_model = "gpt-5.3-codex-spark"
+non_substantive_classifier_reasoning_effort = "minimal"
 acknowledgement_sound = true
 acknowledgement_sound_file = "/tmp/codex-ding.wav"
 version = "v2"
@@ -13232,6 +13234,8 @@ hotkey = "f13"
             enabled: Some(false),
             enable_preambles: Some(false),
             non_substantive_reasoning_effort: Some(ReasoningEffort::Low),
+            non_substantive_classifier_model: Some("gpt-5.3-codex-spark".to_string()),
+            non_substantive_classifier_reasoning_effort: Some(ReasoningEffort::Minimal),
             acknowledgement_sound: Some(true),
             acknowledgement_sound_file: Some(
                 codex_utils_absolute_path::test_support::test_path_buf("/tmp/codex-ding.wav")
@@ -13261,6 +13265,8 @@ hotkey = "f13"
             enabled: false,
             enable_preambles: false,
             non_substantive_reasoning_effort: Some(ReasoningEffort::Low),
+            non_substantive_classifier_model: Some("gpt-5.3-codex-spark".to_string()),
+            non_substantive_classifier_reasoning_effort: Some(ReasoningEffort::Minimal),
             acknowledgement_sound: true,
             acknowledgement_sound_file: Some(
                 codex_utils_absolute_path::test_support::test_path_buf("/tmp/codex-ding.wav")

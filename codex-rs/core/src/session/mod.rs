@@ -51,6 +51,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::exec_policy::default_policy_path;
 use crate::image_preparation::prepare_response_items as prepare_image_response_items;
 use crate::parse_turn_item;
+use crate::realtime_classifier::RealtimeHandoffRoutingDecision;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::realtime_handoff::non_substantive_realtime_reasoning_effort;
 use crate::session::step_context::StepContext;
@@ -1477,6 +1478,7 @@ impl Session {
         text: String,
         source: RealtimeDelegationSource,
         routing_input: Option<String>,
+        routing_decision: Option<RealtimeHandoffRoutingDecision>,
     ) {
         let configured_effort = self
             .get_config()
@@ -1484,9 +1486,18 @@ impl Session {
             .realtime
             .non_substantive_reasoning_effort
             .clone();
-        let transient_effort = routing_input.as_deref().and_then(|input| {
-            non_substantive_realtime_reasoning_effort(source, input, configured_effort.as_ref())
-        });
+        let transient_effort = routing_decision.map_or_else(
+            || {
+                routing_input.as_deref().and_then(|input| {
+                    non_substantive_realtime_reasoning_effort(
+                        source,
+                        input,
+                        configured_effort.as_ref(),
+                    )
+                })
+            },
+            |decision| decision.selected_effort,
+        );
         let op = Op::UserInput {
             items: vec![UserInput::Text {
                 text,

@@ -1,5 +1,6 @@
 use super::AGENT_FINAL_MESSAGE_PREFIX;
 use super::HANDOFF_STREAM_TRUNCATION_MARKER;
+use super::REALTIME_HANDOFF_DEDUPE_CAPACITY;
 use super::RealtimeHandoffDeduper;
 use super::RealtimeHandoffState;
 use super::RealtimeSessionKind;
@@ -28,6 +29,8 @@ use tokio::sync::Mutex;
 fn deduplicates_repeated_realtime_handoff_ids() {
     let mut deduper = RealtimeHandoffDeduper::default();
 
+    assert!(!deduper.is_duplicate(""));
+    assert!(!deduper.is_duplicate(""));
     assert!(!deduper.is_duplicate("handoff-1"));
     assert!(deduper.is_duplicate("handoff-1"));
     assert!(!deduper.is_duplicate("handoff-2"));
@@ -35,6 +38,17 @@ fn deduplicates_repeated_realtime_handoff_ids() {
         assert!(!deduper.is_duplicate(&format!("handoff-extra-{index}")));
     }
     assert!(deduper.is_duplicate("handoff-1"));
+}
+
+#[test]
+fn realtime_handoff_dedupe_evicts_old_ids() {
+    let mut deduper = RealtimeHandoffDeduper::default();
+
+    assert!(!deduper.is_duplicate("handoff-1"));
+    for index in 0..REALTIME_HANDOFF_DEDUPE_CAPACITY {
+        assert!(!deduper.is_duplicate(&format!("handoff-extra-{index}")));
+    }
+    assert!(!deduper.is_duplicate("handoff-1"));
 }
 
 #[test]
@@ -53,6 +67,7 @@ fn prefers_handoff_input_transcript_over_active_transcript() {
                 text: "hi there".to_string(),
             },
         ],
+        routing: None,
     };
     assert_eq!(
         realtime_text_from_handoff_request(&handoff),
@@ -70,6 +85,7 @@ fn extracts_text_from_handoff_request_active_transcript_if_input_missing() {
             role: "user".to_string(),
             text: "hello".to_string(),
         }],
+        routing: None,
     };
     assert_eq!(
         realtime_text_from_handoff_request(&handoff),
@@ -87,6 +103,7 @@ fn does_not_use_active_transcript_as_handoff_routing_input() {
             role: "user".to_string(),
             text: "What time is it?".to_string(),
         }],
+        routing: None,
     };
     let (_, routing_input) = realtime_delegation_with_routing_input(&handoff)
         .expect("active transcript should still produce the delegated text");
@@ -109,6 +126,7 @@ fn wraps_handoff_with_transcript_delta() {
                 text: "hi there".to_string(),
             },
         ],
+        routing: None,
     };
     assert_eq!(
         realtime_delegation_from_handoff(&handoff),
@@ -126,6 +144,7 @@ fn extracts_text_from_handoff_request_input_transcript_if_messages_missing() {
         item_id: "item_1".to_string(),
         input_transcript: "ignored".to_string(),
         active_transcript: vec![],
+        routing: None,
     };
     assert_eq!(
         realtime_text_from_handoff_request(&handoff),
@@ -140,6 +159,7 @@ fn ignores_empty_handoff_request_input_transcript() {
         item_id: "item_1".to_string(),
         input_transcript: String::new(),
         active_transcript: vec![],
+        routing: None,
     };
     assert_eq!(realtime_text_from_handoff_request(&handoff), None);
 }

@@ -162,6 +162,7 @@ fn parse_handoff_requested_event(item: &JsonMap<String, Value>) -> Option<Realti
         item_id,
         input_transcript: extract_input_transcript(arguments),
         active_transcript: Vec::new(),
+        routing: None,
     }))
 }
 

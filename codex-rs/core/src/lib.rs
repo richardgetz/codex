@@ -11,6 +11,7 @@ mod arc_monitor;
 mod audio_preparation;
 mod client;
 mod client_common;
+mod realtime_classifier;
 mod realtime_context;
 mod realtime_conversation;
 mod realtime_handoff;

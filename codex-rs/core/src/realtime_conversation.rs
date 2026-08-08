@@ -2,6 +2,8 @@ use crate::client::ModelClient;
 use crate::context::ContextualUserFragment;
 use crate::context::RealtimeDelegation;
 use crate::context::RealtimeDelegationSource;
+use crate::realtime_classifier::RealtimeHandoffRoutingDecision;
+use crate::realtime_classifier::classify_realtime_handoff;
 use crate::realtime_context::build_realtime_startup_context;
 use crate::realtime_context::truncate_realtime_text_to_token_budget;
 use crate::realtime_prompt::prepare_realtime_backend_prompt;
@@ -11,6 +13,7 @@ use async_channel::Receiver;
 use async_channel::RecvError;
 use async_channel::Sender;
 use async_channel::TrySendError;
+use async_channel::bounded;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_api::ApiError;
@@ -67,6 +70,7 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -108,14 +112,201 @@ const REALTIME_V2_STEER_ACKNOWLEDGEMENT: &str =
 const REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX: &str =
     "Conversation already has an active response in progress:";
 const REALTIME_SESSION_ENDED_HANDOFF_INSTRUCTION: &str = "The user just ended their realtime session. Here is the remaining handoff/transcript tail. You probably do not have to do anything; acknowledge the handoff unless the transcript itself asks for something.";
+const REALTIME_HANDOFF_DEDUPE_CAPACITY: usize = 1_024;
 #[derive(Debug, Default)]
 struct RealtimeHandoffDeduper {
     handoff_ids: HashSet<String>,
+    handoff_order: VecDeque<String>,
 }
 
 impl RealtimeHandoffDeduper {
     fn is_duplicate(&mut self, handoff_id: &str) -> bool {
-        !self.handoff_ids.insert(handoff_id.to_string())
+        if handoff_id.is_empty() {
+            return false;
+        }
+
+        if self.handoff_ids.contains(handoff_id) {
+            return true;
+        }
+
+        let handoff_id = handoff_id.to_string();
+        self.handoff_ids.insert(handoff_id.clone());
+        self.handoff_order.push_back(handoff_id);
+        if self.handoff_order.len() > REALTIME_HANDOFF_DEDUPE_CAPACITY
+            && let Some(evicted_id) = self.handoff_order.pop_front()
+        {
+            self.handoff_ids.remove(&evicted_id);
+        }
+        false
+    }
+}
+
+struct PendingRealtimeHandoff {
+    sequence: u64,
+    event: RealtimeEvent,
+    text: String,
+    routing_input: String,
+    routing_decision: RealtimeHandoffRoutingDecision,
+}
+
+enum ReadyRealtimeEvent {
+    Forward(RealtimeEvent),
+    Handoff {
+        event: RealtimeEvent,
+        text: String,
+        routing_input: Option<String>,
+        routing_decision: Option<RealtimeHandoffRoutingDecision>,
+    },
+}
+
+enum RealtimeFanoutHandling {
+    Pending,
+    Ready {
+        sequence: u64,
+        event: Box<ReadyRealtimeEvent>,
+    },
+}
+
+fn ready_realtime_handoff_from_pending(
+    pending: PendingRealtimeHandoff,
+) -> (u64, ReadyRealtimeEvent) {
+    (
+        pending.sequence,
+        ReadyRealtimeEvent::Handoff {
+            event: pending.event,
+            text: pending.text,
+            routing_input: Some(pending.routing_input),
+            routing_decision: Some(pending.routing_decision),
+        },
+    )
+}
+
+async fn send_realtime_fanout_event(sess: &Session, sub_id: &str, event: RealtimeEvent) {
+    sess.send_event_raw(Event {
+        id: sub_id.to_string(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: event,
+        }),
+    })
+    .await;
+}
+
+async fn finish_ready_realtime_event(sess: &Arc<Session>, sub_id: &str, ready: ReadyRealtimeEvent) {
+    match ready {
+        ReadyRealtimeEvent::Forward(event) => send_realtime_fanout_event(sess, sub_id, event).await,
+        ReadyRealtimeEvent::Handoff {
+            mut event,
+            text,
+            routing_input,
+            routing_decision,
+        } => {
+            if let (RealtimeEvent::HandoffRequested(handoff), Some(decision)) =
+                (&mut event, routing_decision.as_ref())
+            {
+                handoff.routing = Some(decision.routing.clone());
+            }
+            send_realtime_fanout_event(sess, sub_id, event).await;
+            debug!(text = %text, "[realtime-text] realtime conversation text output");
+            sess.route_realtime_text_input(
+                text,
+                RealtimeDelegationSource::Handoff,
+                routing_input,
+                routing_decision,
+            )
+            .await;
+        }
+    }
+}
+
+async fn finish_ready_realtime_events(
+    sess: &Arc<Session>,
+    sub_id: &str,
+    ready_events: &mut BTreeMap<u64, ReadyRealtimeEvent>,
+    next_sequence: &mut u64,
+) {
+    while let Some(ready) = ready_events.remove(next_sequence) {
+        *next_sequence += 1;
+        finish_ready_realtime_event(sess, sub_id, ready).await;
+    }
+}
+
+async fn handle_realtime_fanout_event(
+    sess: &Arc<Session>,
+    event: RealtimeEvent,
+    route_handoff_deduper: &Arc<Mutex<RealtimeHandoffDeduper>>,
+    pending_handoff_tx: &Sender<PendingRealtimeHandoff>,
+    next_sequence: &mut u64,
+) -> RealtimeFanoutHandling {
+    let maybe_routed_text = match &event {
+        RealtimeEvent::HandoffRequested(handoff) => {
+            let maybe_routed_text = realtime_delegation_with_routing_input(handoff);
+            let is_duplicate = if maybe_routed_text.is_some() {
+                let mut deduper = route_handoff_deduper.lock().await;
+                deduper.is_duplicate(&handoff.handoff_id)
+            } else {
+                false
+            };
+            if is_duplicate {
+                debug!(
+                    handoff_id = %handoff.handoff_id,
+                    "ignoring duplicate realtime handoff"
+                );
+                let sequence = *next_sequence;
+                *next_sequence += 1;
+                return RealtimeFanoutHandling::Ready {
+                    sequence,
+                    event: Box::new(ReadyRealtimeEvent::Forward(event)),
+                };
+            }
+            maybe_routed_text
+        }
+        _ => None,
+    };
+
+    if let Some((text, routing_input)) = maybe_routed_text {
+        let sequence = *next_sequence;
+        *next_sequence += 1;
+        if let Some(routing_input) = routing_input {
+            let handoff_id = match &event {
+                RealtimeEvent::HandoffRequested(handoff) => handoff.handoff_id.clone(),
+                _ => unreachable!("routing input only comes from a handoff event"),
+            };
+            let sess_for_classifier = Arc::clone(sess);
+            let pending_handoff_tx = pending_handoff_tx.clone();
+            let classifier_input = routing_input.clone();
+            tokio::spawn(async move {
+                let routing_decision =
+                    classify_realtime_handoff(&sess_for_classifier, &classifier_input, &handoff_id)
+                        .await;
+                let _ = pending_handoff_tx
+                    .send(PendingRealtimeHandoff {
+                        sequence,
+                        event,
+                        text,
+                        routing_input,
+                        routing_decision,
+                    })
+                    .await;
+            });
+            return RealtimeFanoutHandling::Pending;
+        }
+
+        return RealtimeFanoutHandling::Ready {
+            sequence,
+            event: Box::new(ReadyRealtimeEvent::Handoff {
+                event,
+                text,
+                routing_input: None,
+                routing_decision: None,
+            }),
+        };
+    }
+
+    let sequence = *next_sequence;
+    *next_sequence += 1;
+    RealtimeFanoutHandling::Ready {
+        sequence,
+        event: Box::new(ReadyRealtimeEvent::Forward(event)),
     }
 }
 
@@ -1505,13 +1696,82 @@ async fn handle_start_inner(
     let sub_id = sub_id.to_string();
     let fanout_realtime_active = Arc::clone(&realtime_active);
     let fanout_task = tokio::spawn(async move {
-        let ev = |msg| Event {
-            id: sub_id.clone(),
-            msg,
-        };
+        let (pending_handoff_tx, pending_handoff_rx) =
+            bounded::<PendingRealtimeHandoff>(HANDOFF_OUT_QUEUE_CAPACITY);
+        let mut ready_events = BTreeMap::new();
+        let mut pending_count = 0;
+        let mut next_sequence = 0;
+        let mut next_sequence_to_finish = 0;
+        let mut events_closed = false;
         let mut end = RealtimeConversationEnd::TransportClosed;
-        // Drain already-parsed events so a queued handoff is routed before the final tail.
-        while let Ok(event) = events_rx.recv().await {
+
+        while !events_closed || pending_count > 0 {
+            let next_event = if events_closed {
+                if pending_count == 0 {
+                    None
+                } else {
+                    match pending_handoff_rx.recv().await {
+                        Ok(pending) => {
+                            pending_count -= 1;
+                            let (sequence, ready) = ready_realtime_handoff_from_pending(pending);
+                            ready_events.insert(sequence, ready);
+                            finish_ready_realtime_events(
+                                &sess_clone,
+                                &sub_id,
+                                &mut ready_events,
+                                &mut next_sequence_to_finish,
+                            )
+                            .await;
+                        }
+                        Err(_) => pending_count = 0,
+                    }
+                    continue;
+                }
+            } else if pending_count == 0 {
+                match events_rx.recv().await {
+                    Ok(event) => Some(event),
+                    Err(_) => {
+                        events_closed = true;
+                        None
+                    }
+                }
+            } else {
+                tokio::select! {
+                    result = pending_handoff_rx.recv() => {
+                        match result {
+                            Ok(pending) => {
+                                pending_count -= 1;
+                                let (sequence, ready) =
+                                    ready_realtime_handoff_from_pending(pending);
+                                ready_events.insert(sequence, ready);
+                                finish_ready_realtime_events(
+                                    &sess_clone,
+                                    &sub_id,
+                                    &mut ready_events,
+                                    &mut next_sequence_to_finish,
+                                )
+                                .await;
+                            }
+                            Err(_) => {
+                                pending_count = 0;
+                                events_closed = true;
+                            }
+                        }
+                        continue;
+                    }
+                    result = events_rx.recv() => match result {
+                        Ok(event) => Some(event),
+                        Err(_) => {
+                            events_closed = true;
+                            None
+                        }
+                    },
+                }
+            };
+
+            let Some(event) = next_event else {
+                continue;
+            };
             match &event {
                 RealtimeEvent::AudioOut(_) => {}
                 _ => {
@@ -1524,42 +1784,45 @@ async fn handle_start_inner(
             if let RealtimeEvent::Error(_) = &event {
                 end = RealtimeConversationEnd::Error;
             }
-            let maybe_routed_text = match &event {
-                RealtimeEvent::HandoffRequested(handoff) => {
-                    let is_duplicate = {
-                        let mut deduper = route_handoff_deduper.lock().await;
-                        deduper.is_duplicate(&handoff.handoff_id)
-                    };
-                    if is_duplicate {
-                        debug!(
-                            handoff_id = %handoff.handoff_id,
-                            "ignoring duplicate realtime handoff"
-                        );
-                        None
-                    } else {
-                        realtime_delegation_with_routing_input(handoff).map(
-                            |(text, routing_input)| {
-                                (text, RealtimeDelegationSource::Handoff, routing_input)
-                            },
-                        )
-                    }
-                }
-                _ => None,
-            };
-            if let Some((text, source, routing_input)) = maybe_routed_text {
-                debug!(text = %text, "[realtime-text] realtime conversation text output");
-                let sess_for_routed_text = Arc::clone(&sess_clone);
-                sess_for_routed_text
-                    .route_realtime_text_input(text, source, routing_input)
+            match handle_realtime_fanout_event(
+                &sess_clone,
+                event,
+                &route_handoff_deduper,
+                &pending_handoff_tx,
+                &mut next_sequence,
+            )
+            .await
+            {
+                RealtimeFanoutHandling::Pending => pending_count += 1,
+                RealtimeFanoutHandling::Ready { sequence, event } => {
+                    ready_events.insert(sequence, *event);
+                    finish_ready_realtime_events(
+                        &sess_clone,
+                        &sub_id,
+                        &mut ready_events,
+                        &mut next_sequence_to_finish,
+                    )
                     .await;
+                }
             }
-            sess_clone
-                .send_event_raw(ev(EventMsg::RealtimeConversationRealtime(
-                    RealtimeConversationRealtimeEvent {
-                        payload: event.clone(),
-                    },
-                )))
-                .await;
+        }
+        drop(pending_handoff_tx);
+        while pending_count > 0 {
+            match pending_handoff_rx.recv().await {
+                Ok(pending) => {
+                    pending_count -= 1;
+                    let (sequence, ready) = ready_realtime_handoff_from_pending(pending);
+                    ready_events.insert(sequence, ready);
+                    finish_ready_realtime_events(
+                        &sess_clone,
+                        &sub_id,
+                        &mut ready_events,
+                        &mut next_sequence_to_finish,
+                    )
+                    .await;
+                }
+                Err(_) => break,
+            }
         }
         if let Ok(text) = transcript_tail_rx.recv().await {
             sess_clone
@@ -1567,6 +1830,7 @@ async fn handle_start_inner(
                     text,
                     RealtimeDelegationSource::TranscriptTailFlush,
                     /*routing_input*/ None,
+                    /*routing_decision*/ None,
                 )
                 .await;
         }
@@ -2233,7 +2497,9 @@ async fn handle_realtime_server_event(
     };
 
     let is_duplicate_handoff = match &event {
-        RealtimeEvent::HandoffRequested(handoff) => {
+        RealtimeEvent::HandoffRequested(handoff)
+            if realtime_delegation_with_routing_input(handoff).is_some() =>
+        {
             let mut deduper = handoff_state.transport_handoff_deduper.lock().await;
             deduper.is_duplicate(&handoff.handoff_id)
         }
