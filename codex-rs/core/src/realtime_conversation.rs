@@ -66,6 +66,7 @@ use http::header::AUTHORIZATION;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -107,6 +108,16 @@ const REALTIME_V2_STEER_ACKNOWLEDGEMENT: &str =
 const REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX: &str =
     "Conversation already has an active response in progress:";
 const REALTIME_SESSION_ENDED_HANDOFF_INSTRUCTION: &str = "The user just ended their realtime session. Here is the remaining handoff/transcript tail. You probably do not have to do anything; acknowledge the handoff unless the transcript itself asks for something.";
+#[derive(Debug, Default)]
+struct RealtimeHandoffDeduper {
+    handoff_ids: HashSet<String>,
+}
+
+impl RealtimeHandoffDeduper {
+    fn is_duplicate(&mut self, handoff_id: &str) -> bool {
+        !self.handoff_ids.insert(handoff_id.to_string())
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RealtimeConversationEnd {
@@ -135,6 +146,7 @@ struct RealtimeHandoffState {
     output_tx: Sender<RealtimeOutbound>,
     last_output: Arc<Mutex<Option<RealtimeHandoffOutput>>>,
     stream: Arc<Mutex<RealtimeHandoffStreamState>>,
+    transport_handoff_deduper: Arc<Mutex<RealtimeHandoffDeduper>>,
     suppress_non_final_output: Arc<AtomicBool>,
     client_managed_handoffs: bool,
     codex_responses_as_items: bool,
@@ -481,6 +493,7 @@ struct RealtimeStartOutput {
     realtime_active: Arc<AtomicBool>,
     events_rx: Receiver<RealtimeEvent>,
     transcript_tail_rx: Receiver<String>,
+    route_handoff_deduper: Arc<Mutex<RealtimeHandoffDeduper>>,
     sdp: Option<String>,
 }
 
@@ -576,10 +589,12 @@ impl RealtimeConversationManager {
 
         let realtime_active = Arc::new(AtomicBool::new(true));
         let stop_token = CancellationToken::new();
+        let route_handoff_deduper = Arc::new(Mutex::new(RealtimeHandoffDeduper::default()));
         let handoff = RealtimeHandoffState {
             output_tx: handoff_output_tx,
             last_output: Arc::new(Mutex::new(None)),
             stream: Arc::new(Mutex::new(RealtimeHandoffStreamState::default())),
+            transport_handoff_deduper: Arc::new(Mutex::new(RealtimeHandoffDeduper::default())),
             suppress_non_final_output: Arc::new(AtomicBool::new(false)),
             client_managed_handoffs,
             codex_responses_as_items,
@@ -664,6 +679,7 @@ impl RealtimeConversationManager {
             realtime_active,
             events_rx,
             transcript_tail_rx,
+            route_handoff_deduper,
             sdp,
         })
     }
@@ -1474,6 +1490,7 @@ async fn handle_start_inner(
         realtime_active,
         events_rx,
         transcript_tail_rx,
+        route_handoff_deduper,
         sdp,
     } = start_output;
     if let Some(sdp) = sdp {
@@ -1509,9 +1526,23 @@ async fn handle_start_inner(
             }
             let maybe_routed_text = match &event {
                 RealtimeEvent::HandoffRequested(handoff) => {
-                    realtime_delegation_with_routing_input(handoff).map(|(text, routing_input)| {
-                        (text, RealtimeDelegationSource::Handoff, routing_input)
-                    })
+                    let is_duplicate = {
+                        let mut deduper = route_handoff_deduper.lock().await;
+                        deduper.is_duplicate(&handoff.handoff_id)
+                    };
+                    if is_duplicate {
+                        debug!(
+                            handoff_id = %handoff.handoff_id,
+                            "ignoring duplicate realtime handoff"
+                        );
+                        None
+                    } else {
+                        realtime_delegation_with_routing_input(handoff).map(
+                            |(text, routing_input)| {
+                                (text, RealtimeDelegationSource::Handoff, routing_input)
+                            },
+                        )
+                    }
                 }
                 _ => None,
             };
@@ -2201,6 +2232,14 @@ async fn handle_realtime_server_event(
         }
     };
 
+    let is_duplicate_handoff = match &event {
+        RealtimeEvent::HandoffRequested(handoff) => {
+            let mut deduper = handoff_state.transport_handoff_deduper.lock().await;
+            deduper.is_duplicate(&handoff.handoff_id)
+        }
+        _ => false,
+    };
+
     let should_stop = match &event {
         RealtimeEvent::AudioOut(frame) => {
             match session_kind {
@@ -2268,6 +2307,13 @@ async fn handle_realtime_server_event(
                         .await?;
                 }
             }
+            false
+        }
+        RealtimeEvent::HandoffRequested(handoff) if is_duplicate_handoff => {
+            debug!(
+                handoff_id = %handoff.handoff_id,
+                "ignoring duplicate realtime handoff before transport handling"
+            );
             false
         }
         RealtimeEvent::HandoffRequested(handoff) => {

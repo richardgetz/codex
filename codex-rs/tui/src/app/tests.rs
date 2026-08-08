@@ -275,31 +275,51 @@ async fn handle_mcp_inventory_result_respects_origin_thread() {
 async fn realtime_handoff_debug_renders_selected_effort() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     while app_event_rx.try_recv().is_ok() {}
+    let mut tui = crate::tui::test_support::make_test_tui().expect("test TUI should initialize");
 
     app.realtime_voice_debug = true;
     app.config.realtime.non_substantive_reasoning_effort =
         Some(codex_protocol::openai_models::ReasoningEffort::Low);
-    let thread_id = ThreadId::new().to_string();
-    for input in ["What time is it?", "Please update the configuration."] {
-        app.handle_realtime_voice_notification(&ServerNotification::ThreadRealtimeItemAdded(
-            ThreadRealtimeItemAddedNotification {
-                thread_id: thread_id.clone(),
-                item: serde_json::json!({
-                    "type": "handoff_request",
-                    "input_transcript": input,
+    let thread_id = ThreadId::new();
+    app.enqueue_primary_thread_session(
+        test_thread_session(thread_id, test_path_buf("/tmp/project")),
+        Vec::new(),
+    )
+    .await
+    .expect("primary thread should be registered");
+    let sender = app.thread_event_channels[&thread_id].sender.clone();
+    for (handoff_id, item_id, input) in [
+        ("handoff-1", "item-1", "What time is it?"),
+        ("handoff-1", "item-2", "This duplicate should be ignored."),
+        ("handoff-2", "item-3", "Please update the configuration."),
+    ] {
+        sender
+            .send(ThreadBufferedEvent::Notification(
+                ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
+                    thread_id: thread_id.to_string(),
+                    item: serde_json::json!({
+                        "type": "handoff_request",
+                        "handoff_id": handoff_id,
+                        "item_id": item_id,
+                        "input_transcript": input,
+                    }),
                 }),
-            },
-        ));
+            ))
+            .await
+            .expect("thread event channel should remain open");
     }
+    app.drain_active_thread_events(&mut tui)
+        .await
+        .expect("active thread events should drain");
 
-    let mut rendered = Vec::new();
-    while let Ok(event) = app_event_rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = event {
-            rendered.push(lines_to_single_string(&cell.display_lines(/*width*/ 120)));
-        }
-    }
-
-    assert_app_snapshot!("realtime_handoff_debug", rendered.join("\n"));
+    assert_app_snapshot!(
+        "realtime_handoff_debug",
+        app.transcript_cells
+            .iter()
+            .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 120)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
 }
 
 #[test]
@@ -4938,6 +4958,7 @@ async fn make_test_app() -> App {
         realtime_mic_mode,
         realtime_voice_session: None,
         realtime_voice_debug: false,
+        realtime_handoff_debug_ids: VecDeque::new(),
         state_db: None,
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
@@ -5010,6 +5031,7 @@ async fn make_test_app_with_channels() -> (
             realtime_mic_mode,
             realtime_voice_session: None,
             realtime_voice_debug: false,
+            realtime_handoff_debug_ids: VecDeque::new(),
             state_db: None,
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),

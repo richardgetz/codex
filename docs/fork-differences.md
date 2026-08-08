@@ -125,8 +125,11 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
     the next voice session.
   - `/voice help` prints the voice command options. `/voice debug` toggles a
     session-local, opt-in diagnostic (default off); `/voice debug on|off|status`
-    controls it explicitly. When enabled, each GPT-Live handoff displays the
-    effort selected by the shared client-side routing rule.
+    controls it explicitly. When enabled, each GPT-Live handoff immediately
+    displays its handoff ID, bounded input preview, and effort selected by the
+    shared client-side routing rule. Exact duplicate handoff IDs are routed
+    only once; repeated diagnostics are suppressed within a bounded session-
+    local display cache.
   - `/voice history` shows the most recent completed GPT-Live user and assistant
     transcript entries after they have scrolled out of view. Use
     `/voice history <count>` for 1-20 entries; this is bounded session-local

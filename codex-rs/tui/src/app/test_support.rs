@@ -28,6 +28,7 @@ pub(super) async fn make_test_app() -> App {
         realtime_mic_mode,
         realtime_voice_session: None,
         realtime_voice_debug: false,
+        realtime_handoff_debug_ids: VecDeque::new(),
         state_db: None,
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),

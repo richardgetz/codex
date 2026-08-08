@@ -3607,6 +3607,12 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
             "item_id": "item_inbound",
             "input_transcript": "text from realtime"
         }),
+        json!({
+            "type": "conversation.handoff.requested",
+            "handoff_id": "handoff_inbound",
+            "item_id": "item_inbound_duplicate",
+            "input_transcript": "duplicate realtime text"
+        }),
     ]]])
     .await;
 
@@ -3653,24 +3659,29 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
     .await;
     assert_eq!(session_updated, "sess_inbound");
 
-    let _ = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::HandoffRequested(handoff),
-        }) if handoff.handoff_id == "handoff_inbound"
-            && handoff.input_transcript == "text from realtime" =>
-        {
-            Some(())
-        }
-        _ => None,
-    })
-    .await;
-
-    let turn_id = loop {
+    let mut turn_id = None;
+    let mut first_handoff_seen = false;
+    let mut duplicate_handoff_seen = false;
+    while turn_id.is_none() || !first_handoff_seen || !duplicate_handoff_seen {
         let event = test.codex.next_event().await?;
-        if let EventMsg::TurnStarted(turn_started) = event.msg {
-            break turn_started.turn_id;
+        match event.msg {
+            EventMsg::TurnStarted(turn_started) => turn_id = Some(turn_started.turn_id),
+            EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                payload: RealtimeEvent::HandoffRequested(handoff),
+            }) => {
+                if handoff.handoff_id == "handoff_inbound"
+                    && handoff.input_transcript == "text from realtime"
+                {
+                    first_handoff_seen = true;
+                }
+                if handoff.item_id == "item_inbound_duplicate" {
+                    duplicate_handoff_seen = true;
+                }
+            }
+            _ => {}
         }
-    };
+    }
+    let turn_id = turn_id.expect("realtime-routed turn should start");
     Uuid::parse_str(&turn_id).context("realtime-routed turn ID should be a UUID")?;
 
     wait_for_event(&test.codex, |event| {
@@ -3678,6 +3689,7 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
     })
     .await;
 
+    assert_eq!(response_mock.requests().len(), 1);
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
     assert!(user_texts.iter().any(|text| text

@@ -357,6 +357,7 @@ use self::goal_status::goal_status_indicator_from_app_goal;
 mod goal_menu;
 mod ide_context;
 use self::ide_context::IdeContextState;
+mod history_insertion;
 mod input_queue;
 use self::input_queue::InputQueueState;
 mod input_flow;
@@ -1275,23 +1276,9 @@ impl ChatWidget {
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
-        // Keep the placeholder session header as the active cell until real session info arrives,
-        // so we can merge headers instead of committing a duplicate box to history.
-        let keep_placeholder_header_active = !self.is_session_configured()
-            && self
-                .transcript
-                .active_cell
-                .as_ref()
-                .is_some_and(|c| c.as_any().is::<history_cell::SessionHeaderHistoryCell>());
-
-        if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
-            // Only break exec grouping if the cell renders visible lines.
-            if !self.has_active_stream_tail() {
-                self.flush_active_cell();
-            }
-            self.transcript.needs_final_message_separator = true;
+        for cell in self.collect_history_cells_for_insertion(cell) {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         }
-        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
 
     fn enter_review_mode_with_hint(&mut self, hint: String, from_replay: bool) {

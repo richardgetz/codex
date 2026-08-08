@@ -18,6 +18,45 @@ use crate::realtime_voice_devices::resolve_device_name;
 use crate::realtime_voice_sound::RealtimeAcknowledgementSound;
 use color_eyre::eyre::eyre;
 
+const REALTIME_HANDOFF_DEBUG_DEDUPE_CAPACITY: usize = 128;
+const REALTIME_HANDOFF_DEBUG_VALUE_LIMIT: usize = 96;
+
+fn realtime_handoff_debug_preview(value: &str) -> String {
+    let mut preview = String::new();
+    let mut character_count = 0;
+    let mut needs_separator = false;
+    let mut truncated = false;
+
+    for word in value.split_whitespace() {
+        if needs_separator {
+            if character_count == REALTIME_HANDOFF_DEBUG_VALUE_LIMIT {
+                truncated = true;
+                break;
+            }
+            preview.push(' ');
+            character_count += 1;
+        }
+        needs_separator = true;
+
+        for character in word.chars() {
+            if character_count == REALTIME_HANDOFF_DEBUG_VALUE_LIMIT {
+                truncated = true;
+                break;
+            }
+            preview.push(character);
+            character_count += 1;
+        }
+        if truncated {
+            break;
+        }
+    }
+
+    if truncated {
+        preview.push('…');
+    }
+    preview
+}
+
 #[derive(Clone, Copy)]
 enum RealtimeDevicePicker {
     Microphone,
@@ -1078,6 +1117,7 @@ impl App {
                 let message = match command {
                     RealtimeVoiceDebugCommand::Toggle => {
                         self.realtime_voice_debug = !self.realtime_voice_debug;
+                        self.realtime_handoff_debug_ids.clear();
                         format!(
                             "Realtime voice handoff debug is now {} (session-local).",
                             if self.realtime_voice_debug {
@@ -1089,10 +1129,12 @@ impl App {
                     }
                     RealtimeVoiceDebugCommand::On => {
                         self.realtime_voice_debug = true;
+                        self.realtime_handoff_debug_ids.clear();
                         "Realtime voice handoff debug is on (session-local).".to_string()
                     }
                     RealtimeVoiceDebugCommand::Off => {
                         self.realtime_voice_debug = false;
+                        self.realtime_handoff_debug_ids.clear();
                         "Realtime voice handoff debug is off (session-local).".to_string()
                     }
                     RealtimeVoiceDebugCommand::Status => format!(
@@ -1193,6 +1235,9 @@ impl App {
 
     pub(super) fn handle_realtime_voice_notification(&mut self, notification: &ServerNotification) {
         match notification {
+            ServerNotification::ThreadRealtimeStarted(_) => {
+                self.realtime_handoff_debug_ids.clear();
+            }
             ServerNotification::ThreadRealtimeSdp(notification) => {
                 if let Some(session) = &self.realtime_voice_session {
                     session.apply_remote_sdp(notification.sdp.clone());
@@ -1200,44 +1245,71 @@ impl App {
             }
             ServerNotification::ThreadRealtimeError(_)
             | ServerNotification::ThreadRealtimeClosed(_) => {
+                self.realtime_handoff_debug_ids.clear();
                 self.realtime_voice_session.take();
-            }
-            ServerNotification::ThreadRealtimeItemAdded(notification)
-                if self.realtime_voice_debug =>
-            {
-                self.show_realtime_handoff_debug(notification);
             }
             _ => {}
         }
     }
 
-    fn show_realtime_handoff_debug(
+    pub(super) fn realtime_handoff_debug_message(
         &mut self,
         notification: &codex_app_server_protocol::ThreadRealtimeItemAddedNotification,
-    ) {
-        let Some(item_type) = notification
+    ) -> Option<String> {
+        if !self.realtime_voice_debug {
+            return None;
+        }
+        let item_type = notification
             .item
             .get("type")
-            .and_then(serde_json::Value::as_str)
-        else {
-            return;
-        };
+            .and_then(serde_json::Value::as_str)?;
         if item_type != "handoff_request" {
-            return;
+            return None;
         }
+        let handoff_id = notification
+            .item
+            .get("handoff_id")
+            .and_then(serde_json::Value::as_str);
+        let item_id = notification
+            .item
+            .get("item_id")
+            .and_then(serde_json::Value::as_str);
+        let debug_id = handoff_id.or(item_id);
+        if debug_id.is_some_and(|debug_id| {
+            self.realtime_handoff_debug_ids
+                .iter()
+                .any(|seen_id| seen_id == debug_id)
+        }) {
+            return None;
+        }
+        if let Some(debug_id) = debug_id {
+            self.realtime_handoff_debug_ids
+                .push_back(debug_id.to_string());
+            if self.realtime_handoff_debug_ids.len() > REALTIME_HANDOFF_DEBUG_DEDUPE_CAPACITY {
+                self.realtime_handoff_debug_ids.pop_front();
+            }
+        }
+        let identity = match handoff_id {
+            Some(handoff_id) => format!(
+                "handoff_id `{}`",
+                realtime_handoff_debug_preview(handoff_id)
+            ),
+            None => match item_id {
+                Some(item_id) => {
+                    format!("item_id `{}`", realtime_handoff_debug_preview(item_id))
+                }
+                None => "handoff_id `<missing>`".to_string(),
+            },
+        };
         let Some(input) = notification
             .item
             .get("input_transcript")
             .and_then(serde_json::Value::as_str)
-            .filter(|input| !input.is_empty())
-            .map(str::to_owned)
+            .filter(|input| !input.trim().is_empty())
         else {
-            self.chat_widget.add_info_message(
-                "GPT-Live handoff debug: no handoff input was available; inherited the session effort."
-                    .to_string(),
-                None,
-            );
-            return;
+            return Some(format!(
+                "GPT-Live handoff debug: {identity}; no handoff input was available; inherited the session effort."
+            ));
         };
 
         let configured_effort = self
@@ -1247,7 +1319,7 @@ impl App {
             .as_ref();
         let session_effort = self.chat_widget.current_reasoning_effort();
         let (selected, reason) = if let Some(effort) =
-            codex_protocol::realtime_handoff::configured_read_only_effort(&input, configured_effort)
+            codex_protocol::realtime_handoff::configured_read_only_effort(input, configured_effort)
         {
             (effort.to_string(), "read-only override")
         } else {
@@ -1259,10 +1331,10 @@ impl App {
                 "inherited session effort",
             )
         };
-        self.chat_widget.add_info_message(
-            format!("GPT-Live handoff debug: selected `{selected}` ({reason})."),
-            None,
-        );
+        let input_preview = realtime_handoff_debug_preview(input);
+        Some(format!(
+            "GPT-Live handoff debug: {identity}; selected `{selected}` ({reason}) for input `{input_preview}`."
+        ))
     }
 
     pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {

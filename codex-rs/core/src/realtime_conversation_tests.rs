@@ -1,5 +1,6 @@
 use super::AGENT_FINAL_MESSAGE_PREFIX;
 use super::HANDOFF_STREAM_TRUNCATION_MARKER;
+use super::RealtimeHandoffDeduper;
 use super::RealtimeHandoffState;
 use super::RealtimeSessionKind;
 use super::RealtimeStreamedItem;
@@ -22,6 +23,19 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
+
+#[test]
+fn deduplicates_repeated_realtime_handoff_ids() {
+    let mut deduper = RealtimeHandoffDeduper::default();
+
+    assert!(!deduper.is_duplicate("handoff-1"));
+    assert!(deduper.is_duplicate("handoff-1"));
+    assert!(!deduper.is_duplicate("handoff-2"));
+    for index in 0..256 {
+        assert!(!deduper.is_duplicate(&format!("handoff-extra-{index}")));
+    }
+    assert!(deduper.is_duplicate("handoff-1"));
+}
 
 #[test]
 fn prefers_handoff_input_transcript_over_active_transcript() {
@@ -198,6 +212,7 @@ async fn clears_active_handoff_explicitly() {
         output_tx: tx,
         last_output: Arc::new(Mutex::new(None)),
         stream: Arc::new(Mutex::new(Default::default())),
+        transport_handoff_deduper: Arc::new(Mutex::new(RealtimeHandoffDeduper::default())),
         suppress_non_final_output: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         client_managed_handoffs: false,
         codex_responses_as_items: false,
@@ -225,6 +240,7 @@ fn internal_continuation_suppression_keeps_final_realtime_output() {
         output_tx: tx,
         last_output: Arc::new(Mutex::new(None)),
         stream: Arc::new(Mutex::new(Default::default())),
+        transport_handoff_deduper: Arc::new(Mutex::new(RealtimeHandoffDeduper::default())),
         suppress_non_final_output: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         client_managed_handoffs: false,
         codex_responses_as_items: false,

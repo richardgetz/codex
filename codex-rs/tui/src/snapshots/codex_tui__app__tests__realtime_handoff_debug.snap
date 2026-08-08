@@ -3,5 +3,5 @@ source: tui/src/app/tests.rs
 assertion_line: 302
 expression: "rendered.join(\"\\n\")"
 ---
-• GPT-Live handoff debug: selected `low` (read-only override).
-• GPT-Live handoff debug: selected `session default` (inherited session effort).
+• GPT-Live handoff debug: handoff_id `handoff-1`; selected `low` (read-only override) for input `What time is it?`.
+• GPT-Live handoff debug: handoff_id `handoff-2`; selected `session default` (inherited session effort) for input `Please update the configuration.`.
