@@ -2,6 +2,7 @@
 
 use codex_config::config_toml::RealtimeConfig;
 use codex_protocol::protocol::RealtimeVoice;
+use codex_protocol::protocol::RealtimeVoicesList;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fs;
@@ -34,7 +35,12 @@ pub(crate) fn select_startup_voice(
     config: &RealtimeConfig,
     codex_home: &Path,
 ) -> Option<RealtimeVoice> {
-    let voices = config.voice_rotation.as_deref()?;
+    let configured_voices = config.voice_rotation.as_deref()?;
+    let voices = configured_voices
+        .iter()
+        .copied()
+        .filter(|voice| RealtimeVoicesList::builtin().v1.contains(voice))
+        .collect::<Vec<_>>();
     if voices.is_empty() {
         return None;
     }
@@ -54,7 +60,7 @@ pub(crate) fn select_startup_voice(
     };
     let selected = voices[next_index];
     let next_state = RotationState {
-        voices: voices.to_vec(),
+        voices: voices.clone(),
         next_index: (next_index + 1) % voices.len(),
     };
     if let Err(err) = write_state(&state_path, &next_state) {

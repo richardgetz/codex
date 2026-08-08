@@ -74,6 +74,7 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -268,6 +269,37 @@ async fn handle_mcp_inventory_result_respects_origin_thread() {
     );
 
     assert_eq!(app.transcript_cells.len(), 1);
+}
+
+#[tokio::test]
+async fn realtime_handoff_debug_renders_selected_effort() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    while app_event_rx.try_recv().is_ok() {}
+
+    app.realtime_voice_debug = true;
+    app.config.realtime.non_substantive_reasoning_effort =
+        Some(codex_protocol::openai_models::ReasoningEffort::Low);
+    let thread_id = ThreadId::new().to_string();
+    for input in ["What time is it?", "Please update the configuration."] {
+        app.handle_realtime_voice_notification(&ServerNotification::ThreadRealtimeItemAdded(
+            ThreadRealtimeItemAddedNotification {
+                thread_id: thread_id.clone(),
+                item: serde_json::json!({
+                    "type": "handoff_request",
+                    "input_transcript": input,
+                }),
+            },
+        ));
+    }
+
+    let mut rendered = Vec::new();
+    while let Ok(event) = app_event_rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            rendered.push(lines_to_single_string(&cell.display_lines(/*width*/ 120)));
+        }
+    }
+
+    assert_app_snapshot!("realtime_handoff_debug", rendered.join("\n"));
 }
 
 #[test]
@@ -4905,6 +4937,7 @@ async fn make_test_app() -> App {
         config,
         realtime_mic_mode,
         realtime_voice_session: None,
+        realtime_voice_debug: false,
         state_db: None,
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
@@ -4976,6 +5009,7 @@ async fn make_test_app_with_channels() -> (
             config,
             realtime_mic_mode,
             realtime_voice_session: None,
+            realtime_voice_debug: false,
             state_db: None,
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),

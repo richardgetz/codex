@@ -6,7 +6,7 @@ use codex_protocol::protocol::RealtimeVoice;
 fn rotation_advances_persisted_cursor_between_process_starts() {
     let codex_home = tempfile::tempdir().expect("temporary Codex home");
     let config = RealtimeConfig {
-        voice_rotation: Some(vec![RealtimeVoice::Arbor, RealtimeVoice::Marin]),
+        voice_rotation: Some(vec![RealtimeVoice::Arbor, RealtimeVoice::Cove]),
         ..RealtimeConfig::default()
     };
 
@@ -16,7 +16,7 @@ fn rotation_advances_persisted_cursor_between_process_starts() {
     );
     assert_eq!(
         select_startup_voice(&config, codex_home.path()),
-        Some(RealtimeVoice::Marin)
+        Some(RealtimeVoice::Cove)
     );
     assert_eq!(
         select_startup_voice(&config, codex_home.path()),

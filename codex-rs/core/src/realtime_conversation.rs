@@ -1178,7 +1178,12 @@ async fn prepare_realtime_start(
         ConversationStartTransport::Webrtc { .. } => RealtimeWsVersion::V1,
     });
     if matches!(transport, ConversationStartTransport::Webrtc { .. }) {
-        validate_avas_webrtc_start(version, config.realtime.session_type)?;
+        let session_type = if version == RealtimeWsVersion::V3 {
+            RealtimeWsMode::Conversational
+        } else {
+            config.realtime.session_type
+        };
+        validate_avas_webrtc_start(version, session_type)?;
     }
     let configured_voice = match (&transport, params.version) {
         (ConversationStartTransport::Webrtc { .. }, None) => ConfiguredRealtimeVoice::Ignore,
@@ -1325,9 +1330,13 @@ pub(crate) async fn build_realtime_session_config(
             "text realtime output modality requires realtime v2".to_string(),
         ));
     }
-    let session_mode = match config.realtime.session_type {
-        RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
-        RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
+    let session_mode = if version == RealtimeWsVersion::V3 {
+        RealtimeSessionMode::Conversational
+    } else {
+        match config.realtime.session_type {
+            RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
+            RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
+        }
     };
     let config_voice = match configured_voice {
         ConfiguredRealtimeVoice::Use => config.realtime.voice,
@@ -1500,8 +1509,9 @@ async fn handle_start_inner(
             }
             let maybe_routed_text = match &event {
                 RealtimeEvent::HandoffRequested(handoff) => {
-                    realtime_delegation_with_routing_input(handoff)
-                        .map(|(text, input)| (text, RealtimeDelegationSource::Handoff, Some(input)))
+                    realtime_delegation_with_routing_input(handoff).map(|(text, routing_input)| {
+                        (text, RealtimeDelegationSource::Handoff, routing_input)
+                    })
                 }
                 _ => None,
             };
@@ -1592,14 +1602,15 @@ fn realtime_delegation_from_handoff(handoff: &RealtimeHandoffRequested) -> Optio
 
 fn realtime_delegation_with_routing_input(
     handoff: &RealtimeHandoffRequested,
-) -> Option<(String, String)> {
+) -> Option<(String, Option<String>)> {
     let input = realtime_text_from_handoff_request(handoff)?;
     let text = wrap_realtime_delegation_input(
         &input,
         realtime_transcript_delta_from_handoff(handoff).as_deref(),
         RealtimeDelegationSource::Handoff,
     );
-    Some((text, input))
+    let routing_input = (!handoff.input_transcript.is_empty()).then_some(input);
+    Some((text, routing_input))
 }
 
 fn wrap_realtime_delegation_input(

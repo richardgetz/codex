@@ -6,9 +6,11 @@
 use super::*;
 use crate::app_backtrack::SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE;
 use crate::realtime_voice::DEFAULT_REALTIME_HOTKEY;
+use crate::realtime_voice::RealtimeVoiceDebugCommand;
 use crate::realtime_voice::realtime_hotkey_matches;
 use crate::realtime_voice::realtime_hotkey_spec_from_event;
 use crate::realtime_voice::realtime_start_prompt;
+use crate::realtime_voice::realtime_v3_voice;
 use crate::realtime_voice_devices::display_device_name;
 use crate::realtime_voice_devices::format_device_aliases;
 use crate::realtime_voice_devices::normalize_device_alias;
@@ -408,7 +410,7 @@ impl App {
             realtime_session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc { sdp }),
             version: Some(RealtimeConversationVersion::V3),
-            voice: Some(self.config.realtime.voice.unwrap_or(RealtimeVoice::Arbor)),
+            voice: Some(realtime_v3_voice(self.config.realtime.voice)),
         };
         if let Err(err) = app_server.thread_realtime_start_with_params(params).await {
             session.close().await;
@@ -1049,7 +1051,7 @@ impl App {
                 return;
             }
             RealtimeVoiceCommand::Status => {
-                let voice = self.config.realtime.voice.unwrap_or(RealtimeVoice::Arbor);
+                let voice = realtime_v3_voice(self.config.realtime.voice);
                 let microphone = if self.config.realtime.enabled {
                     self.realtime_mic_mode.status_label().to_string()
                 } else {
@@ -1065,15 +1067,48 @@ impl App {
                 };
                 self.chat_widget.add_info_message(
                     format!(
-                        "Realtime voice is `{}` (GPT-Live WebRTC; applies to the next voice session); microphone is {microphone}; startup rotation: {rotation}.",
+                        "Realtime voice is `{}` (GPT-Live WebRTC; applies to the next voice session); microphone is {microphone}; startup rotation: {rotation}; handoff debug: {}.",
                         voice.wire_name(),
+                        if self.realtime_voice_debug { "on" } else { "off" },
                     ),
                     None,
                 );
             }
+            RealtimeVoiceCommand::Debug(command) => {
+                let message = match command {
+                    RealtimeVoiceDebugCommand::Toggle => {
+                        self.realtime_voice_debug = !self.realtime_voice_debug;
+                        format!(
+                            "Realtime voice handoff debug is now {} (session-local).",
+                            if self.realtime_voice_debug {
+                                "on"
+                            } else {
+                                "off"
+                            }
+                        )
+                    }
+                    RealtimeVoiceDebugCommand::On => {
+                        self.realtime_voice_debug = true;
+                        "Realtime voice handoff debug is on (session-local).".to_string()
+                    }
+                    RealtimeVoiceDebugCommand::Off => {
+                        self.realtime_voice_debug = false;
+                        "Realtime voice handoff debug is off (session-local).".to_string()
+                    }
+                    RealtimeVoiceDebugCommand::Status => format!(
+                        "Realtime voice handoff debug is {} (session-local; default off).",
+                        if self.realtime_voice_debug {
+                            "on"
+                        } else {
+                            "off"
+                        }
+                    ),
+                };
+                self.chat_widget.add_info_message(message, None);
+            }
             RealtimeVoiceCommand::List => match app_server.thread_realtime_list_voices().await {
                 Ok(voices) => {
-                    let selected = self.config.realtime.voice.unwrap_or(RealtimeVoice::Arbor);
+                    let selected = realtime_v3_voice(self.config.realtime.voice);
                     let names = voices
                         .v1
                         .iter()
@@ -1167,8 +1202,67 @@ impl App {
             | ServerNotification::ThreadRealtimeClosed(_) => {
                 self.realtime_voice_session.take();
             }
+            ServerNotification::ThreadRealtimeItemAdded(notification)
+                if self.realtime_voice_debug =>
+            {
+                self.show_realtime_handoff_debug(notification);
+            }
             _ => {}
         }
+    }
+
+    fn show_realtime_handoff_debug(
+        &mut self,
+        notification: &codex_app_server_protocol::ThreadRealtimeItemAddedNotification,
+    ) {
+        let Some(item_type) = notification
+            .item
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+        else {
+            return;
+        };
+        if item_type != "handoff_request" {
+            return;
+        }
+        let Some(input) = notification
+            .item
+            .get("input_transcript")
+            .and_then(serde_json::Value::as_str)
+            .filter(|input| !input.is_empty())
+            .map(str::to_owned)
+        else {
+            self.chat_widget.add_info_message(
+                "GPT-Live handoff debug: no handoff input was available; inherited the session effort."
+                    .to_string(),
+                None,
+            );
+            return;
+        };
+
+        let configured_effort = self
+            .config
+            .realtime
+            .non_substantive_reasoning_effort
+            .as_ref();
+        let session_effort = self.chat_widget.current_reasoning_effort();
+        let (selected, reason) = if let Some(effort) =
+            codex_protocol::realtime_handoff::configured_read_only_effort(&input, configured_effort)
+        {
+            (effort.to_string(), "read-only override")
+        } else {
+            (
+                session_effort
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "session default".to_string()),
+                "inherited session effort",
+            )
+        };
+        self.chat_widget.add_info_message(
+            format!("GPT-Live handoff debug: selected `{selected}` ({reason})."),
+            None,
+        );
     }
 
     pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {

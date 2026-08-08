@@ -27,6 +27,7 @@ pub(super) async fn make_test_app() -> App {
         config,
         realtime_mic_mode,
         realtime_voice_session: None,
+        realtime_voice_debug: false,
         state_db: None,
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),

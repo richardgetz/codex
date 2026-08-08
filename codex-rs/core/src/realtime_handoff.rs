@@ -1,58 +1,6 @@
 use crate::context::RealtimeDelegationSource;
 use codex_protocol::openai_models::ReasoningEffort;
-
-const REALTIME_HANDOFF_CLASSIFICATION_MAX_BYTES: usize = 4_096;
-const MUTATING_WORDS: &[&str] = &[
-    "add",
-    "apply",
-    "build",
-    "change",
-    "commit",
-    "create",
-    "delete",
-    "deploy",
-    "dispatch",
-    "edit",
-    "fix",
-    "implement",
-    "install",
-    "merge",
-    "modify",
-    "remove",
-    "refactor",
-    "release",
-    "run",
-    "send",
-    "update",
-    "write",
-];
-const READ_ONLY_WORDS: &[&str] = &[
-    "are",
-    "can",
-    "check",
-    "describe",
-    "does",
-    "do",
-    "explain",
-    "hear",
-    "how",
-    "inspect",
-    "is",
-    "know",
-    "list",
-    "look",
-    "read",
-    "show",
-    "status",
-    "summarize",
-    "tell",
-    "what",
-    "when",
-    "where",
-    "which",
-    "who",
-    "why",
-];
+use codex_protocol::realtime_handoff::configured_read_only_effort;
 
 /// Selects a configured lower effort only for conservative, read-only realtime handoffs.
 ///
@@ -64,27 +12,11 @@ pub(crate) fn non_substantive_realtime_reasoning_effort(
     input: &str,
     configured_effort: Option<&ReasoningEffort>,
 ) -> Option<ReasoningEffort> {
-    if source != RealtimeDelegationSource::Handoff || !is_conservative_read_only_request(input) {
+    if source != RealtimeDelegationSource::Handoff {
         return None;
     }
-    configured_effort.cloned()
-}
 
-fn is_conservative_read_only_request(input: &str) -> bool {
-    if input.len() > REALTIME_HANDOFF_CLASSIFICATION_MAX_BYTES {
-        return false;
-    }
-
-    let normalized = input.to_ascii_lowercase();
-    let words = normalized
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .collect::<Vec<_>>();
-    if words.is_empty() || words.iter().any(|word| MUTATING_WORDS.contains(word)) {
-        return false;
-    }
-
-    normalized.trim_end().ends_with('?') || words.iter().any(|word| READ_ONLY_WORDS.contains(word))
+    configured_read_only_effort(input, configured_effort)
 }
 
 #[cfg(test)]

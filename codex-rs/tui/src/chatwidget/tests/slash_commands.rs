@@ -2,6 +2,7 @@ use super::*;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::realtime_voice::RealtimeMicCommand;
 use crate::realtime_voice::RealtimeVoiceCommand;
+use crate::realtime_voice::RealtimeVoiceDebugCommand;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 
@@ -277,6 +278,22 @@ async fn mic_slash_command_dispatches_mode_controls() {
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Off))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Voice, "debug".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Debug(
+            RealtimeVoiceDebugCommand::Toggle
+        )))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Voice, "debug status".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Debug(
+            RealtimeVoiceDebugCommand::Status
+        )))
     );
 
     chat.dispatch_command_with_args(SlashCommand::Voice, "arbor".to_string(), Vec::new());

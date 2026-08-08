@@ -106,6 +106,8 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   voice is Arbor. Native devices currently need a 48 kHz format.
 - The runtime controls are fork-only:
   - `/mic` toggles the microphone.
+  - `/mic help` prints the microphone, device, speaker, alias, and hotkey
+    controls; `help` and `?` are reserved and cannot be used as device aliases.
   - `/mic on`, `/mic off`, and `/mic status` explicitly enable, disable, or
     inspect the session microphone mode.
   - `/mic hot` keeps the microphone live; `/mic push` returns to push-to-talk.
@@ -121,6 +123,10 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
     current voice state, `/voice list` asks app-server for the available
     GPT-Live voices, and `/voice <name>` validates and persists a selection for
     the next voice session.
+  - `/voice help` prints the voice command options. `/voice debug` toggles a
+    session-local, opt-in diagnostic (default off); `/voice debug on|off|status`
+    controls it explicitly. When enabled, each GPT-Live handoff displays the
+    effort selected by the shared client-side routing rule.
   - `/voice history` shows the most recent completed GPT-Live user and assistant
     transcript entries after they have scrolled out of view. Use
     `/voice history <count>` for 1-20 entries; this is bounded session-local
@@ -139,7 +145,7 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   acknowledgement_sound = true
   acknowledgement_sound_file = "/absolute/path/to/cue.wav"
   # Optional; consumes one voice per new Codex launch, in order.
-  voice_rotation = ["arbor", "marin"]
+  voice_rotation = ["arbor", "cove"]
 
   [audio]
   # Optional; omit either value to use the system default.
@@ -162,7 +168,8 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   stereo PCM/float WAV up to one second. Voice and device changes apply to the
   next voice session. When `voice_rotation` is set, its cursor is stored under
   `<codex_home>/realtime_voice_rotation.json`; the configured list takes
-  precedence only at startup and does not rewrite `config.toml`. The optional
+  precedence only at startup and does not rewrite `config.toml`; rotation entries
+  are limited to the GPT-Live V3 voice list. The optional
   `non_substantive_reasoning_effort` setting is applied entirely by the CLI at
   the existing GPT-Live `delegation.created` handoff boundary. It lowers effort
   only for clearly read-only/informational handoffs; ambiguous or substantive

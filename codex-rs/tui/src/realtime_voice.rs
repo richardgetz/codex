@@ -8,6 +8,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_protocol::protocol::RealtimeVoice;
+use codex_protocol::protocol::RealtimeVoicesList;
 use cpal::traits::StreamTrait;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -121,11 +122,20 @@ pub(crate) enum RealtimeMicCommand {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RealtimeVoiceDebugCommand {
+    Toggle,
+    On,
+    Off,
+    Status,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RealtimeVoiceCommand {
     On,
     Off,
     List,
     Status,
+    Debug(RealtimeVoiceDebugCommand),
     Set(RealtimeVoice),
 }
 
@@ -151,6 +161,15 @@ pub(crate) fn realtime_voice_from_name(name: &str) -> Option<RealtimeVoice> {
         "vale" => Some(RealtimeVoice::Vale),
         "verse" => Some(RealtimeVoice::Verse),
         _ => None,
+    }
+}
+
+pub(crate) fn realtime_v3_voice(configured: Option<RealtimeVoice>) -> RealtimeVoice {
+    let voice = configured.unwrap_or(RealtimeVoice::Arbor);
+    if RealtimeVoicesList::builtin().v1.contains(&voice) {
+        voice
+    } else {
+        RealtimeVoice::Arbor
     }
 }
 

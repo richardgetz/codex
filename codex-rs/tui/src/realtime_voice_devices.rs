@@ -1,8 +1,13 @@
 use std::collections::BTreeMap;
 
+pub(crate) fn is_reserved_device_alias(alias: &str) -> bool {
+    alias.eq_ignore_ascii_case("help") || alias == "?"
+}
+
 pub(crate) fn normalize_device_alias(alias: &str) -> Option<String> {
     let alias = alias.trim();
-    if alias.is_empty() || alias.chars().any(char::is_whitespace) {
+    if alias.is_empty() || alias.chars().any(char::is_whitespace) || is_reserved_device_alias(alias)
+    {
         return None;
     }
     Some(alias.to_ascii_lowercase())
@@ -21,7 +26,9 @@ pub(crate) fn resolve_device_name(
         .or_else(|| {
             aliases
                 .iter()
-                .find(|(alias, _)| alias.eq_ignore_ascii_case(requested))
+                .find(|(alias, _)| {
+                    !is_reserved_device_alias(alias) && alias.eq_ignore_ascii_case(requested)
+                })
                 .and_then(|(_, target)| {
                     devices
                         .iter()
@@ -34,7 +41,9 @@ pub(crate) fn resolve_device_name(
 pub(crate) fn display_device_name(device: &str, aliases: &BTreeMap<String, String>) -> String {
     let aliases = aliases
         .iter()
-        .filter(|(_, target)| target.eq_ignore_ascii_case(device))
+        .filter(|(alias, target)| {
+            !is_reserved_device_alias(alias) && target.eq_ignore_ascii_case(device)
+        })
         .map(|(alias, _)| alias.as_str())
         .collect::<Vec<_>>();
     if aliases.is_empty() {
@@ -47,6 +56,7 @@ pub(crate) fn display_device_name(device: &str, aliases: &BTreeMap<String, Strin
 pub(crate) fn format_device_aliases(aliases: &BTreeMap<String, String>) -> String {
     aliases
         .iter()
+        .filter(|(alias, _)| !is_reserved_device_alias(alias))
         .map(|(alias, target)| format!("{alias} -> {target}"))
         .collect::<Vec<_>>()
         .join("\n")

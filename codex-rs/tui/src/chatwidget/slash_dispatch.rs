@@ -16,6 +16,7 @@ use crate::goal_display::GOAL_USAGE;
 use crate::goal_files::GoalDraft;
 use crate::realtime_voice::RealtimeMicCommand;
 use crate::realtime_voice::RealtimeVoiceCommand;
+use crate::realtime_voice::RealtimeVoiceDebugCommand;
 use crate::realtime_voice::realtime_voice_from_name;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,15 +43,16 @@ const CONTINUOUS_USAGE: &str = "Usage: /continuous [on|off|status]";
 const OUTCOMES_USAGE: &str = "Usage: /outcomes [on|off|status|report]";
 const SCRATCHPAD_ABSORB_USAGE: &str = "Usage: /scratchpad-absorb <scratchpad_id> [--exclude-pending] [--exclude-blocked] [--exclude-notes] [--exclude-outcomes] [--exclude-delegations] [--exclude-artifacts] [--exclude-worktrees] [--exclude-completed] [--exclude-next-steps] [--exclude-git-refs]";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
-const MIC_USAGE: &str = "Usage: /mic [on|off|status|hot|push|hotkey|change|devices|aliases|alias <name> [device]|device <name>|speakers|speaker change|speaker aliases|speaker alias <name> [device]|speaker <name>]";
-const VOICE_USAGE: &str = "Usage: /voice [on|off|status|list|history [count]|<voice>]";
+const MIC_USAGE: &str = "Usage: /mic [help|on|off|status|hot|push|hotkey|change|devices|aliases|alias <name> [device]|device <name>|speakers|speaker change|speaker aliases|speaker alias <name> [device]|speaker <name>]";
+const VOICE_USAGE: &str =
+    "Usage: /voice [help|on|off|status|debug [on|off|status]|list|history [count]|<voice>]";
 const VOICE_HISTORY_USAGE: &str = "Usage: /voice history [count] (count: 1-20)";
 const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
 
 fn realtime_alias_args(value: &str) -> Option<(String, Option<String>)> {
     let mut parts = value.trim().splitn(2, char::is_whitespace);
     let alias = parts.next()?.trim();
-    if alias.is_empty() {
+    if alias.is_empty() || alias.eq_ignore_ascii_case("help") || alias == "?" {
         return None;
     }
     let device = parts
@@ -1372,6 +1374,7 @@ impl ChatWidget {
             SlashCommand::Mic => {
                 let normalized = trimmed.to_ascii_lowercase();
                 match normalized.as_str() {
+                    "help" | "?" => self.add_info_message(MIC_USAGE.to_string(), None),
                     "on" => self
                         .app_event_tx
                         .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::On)),
@@ -1478,12 +1481,25 @@ impl ChatWidget {
                     "" | "status" => self
                         .app_event_tx
                         .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Status)),
+                    "help" | "?" => self.add_info_message(VOICE_USAGE.to_string(), None),
                     "on" => self
                         .app_event_tx
                         .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::On)),
                     "off" => self
                         .app_event_tx
                         .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Off)),
+                    "debug" => self.app_event_tx.send(AppEvent::RealtimeVoiceControl(
+                        RealtimeVoiceCommand::Debug(RealtimeVoiceDebugCommand::Toggle),
+                    )),
+                    "debug on" => self.app_event_tx.send(AppEvent::RealtimeVoiceControl(
+                        RealtimeVoiceCommand::Debug(RealtimeVoiceDebugCommand::On),
+                    )),
+                    "debug off" => self.app_event_tx.send(AppEvent::RealtimeVoiceControl(
+                        RealtimeVoiceCommand::Debug(RealtimeVoiceDebugCommand::Off),
+                    )),
+                    "debug status" => self.app_event_tx.send(AppEvent::RealtimeVoiceControl(
+                        RealtimeVoiceCommand::Debug(RealtimeVoiceDebugCommand::Status),
+                    )),
                     "list" | "voices" => self
                         .app_event_tx
                         .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::List)),

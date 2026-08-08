@@ -4,6 +4,7 @@ use super::RealtimeHandoffState;
 use super::RealtimeSessionKind;
 use super::RealtimeStreamedItem;
 use super::realtime_delegation_from_handoff;
+use super::realtime_delegation_with_routing_input;
 use super::realtime_request_headers;
 use super::realtime_text_from_handoff_request;
 use super::wrap_realtime_delegation_input;
@@ -60,6 +61,22 @@ fn extracts_text_from_handoff_request_active_transcript_if_input_missing() {
         realtime_text_from_handoff_request(&handoff),
         Some("user: hello".to_string())
     );
+}
+
+#[test]
+fn does_not_use_active_transcript_as_handoff_routing_input() {
+    let handoff = RealtimeHandoffRequested {
+        handoff_id: "handoff_1".to_string(),
+        item_id: "item_1".to_string(),
+        input_transcript: String::new(),
+        active_transcript: vec![RealtimeTranscriptEntry {
+            role: "user".to_string(),
+            text: "What time is it?".to_string(),
+        }],
+    };
+    let (_, routing_input) = realtime_delegation_with_routing_input(&handoff)
+        .expect("active transcript should still produce the delegated text");
+    assert_eq!(routing_input, None);
 }
 
 #[test]

@@ -172,7 +172,6 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
-use codex_protocol::protocol::RealtimeVoice;
 use codex_rollout::StateDbHandle;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -538,6 +537,7 @@ pub(crate) struct App {
     pub(crate) config: Config,
     realtime_mic_mode: RealtimeMicMode,
     realtime_voice_session: Option<RealtimeVoiceSession>,
+    realtime_voice_debug: bool,
     launch_cwd: PathBuf,
     pub(crate) state_db: Option<StateDbHandle>,
     cli_kv_overrides: Vec<(String, TomlValue)>,
@@ -1063,6 +1063,7 @@ See the Codex keymap documentation for supported actions and examples."
             config,
             realtime_mic_mode,
             realtime_voice_session: None,
+            realtime_voice_debug: false,
             launch_cwd,
             state_db,
             cli_kv_overrides,

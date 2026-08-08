@@ -1,5 +1,6 @@
 use super::display_device_name;
 use super::format_device_aliases;
+use super::is_reserved_device_alias;
 use super::normalize_device_alias;
 use super::resolve_device_name;
 use pretty_assertions::assert_eq;
@@ -12,6 +13,15 @@ fn normalizes_aliases_for_case_insensitive_commands() {
         Some("airpods".to_string())
     );
     assert_eq!(normalize_device_alias("desk speakers"), None);
+}
+
+#[test]
+fn reserves_help_aliases_for_command_help() {
+    assert!(is_reserved_device_alias("help"));
+    assert!(is_reserved_device_alias("HELP"));
+    assert!(is_reserved_device_alias("?"));
+    assert_eq!(normalize_device_alias("help"), None);
+    assert_eq!(normalize_device_alias("?"), None);
 }
 
 #[test]
@@ -28,6 +38,11 @@ fn resolves_aliases_and_full_device_names_case_insensitively() {
         Some("Built-in Microphone".to_string())
     );
     assert_eq!(resolve_device_name("missing", &devices, &aliases), None);
+    let reserved_aliases = BTreeMap::from([("help".to_string(), "AirPods Pro".to_string())]);
+    assert_eq!(
+        resolve_device_name("help", &devices, &reserved_aliases),
+        None
+    );
 }
 
 #[test]

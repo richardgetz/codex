@@ -146,6 +146,41 @@ async fn voice_history_command_renders_recent_transcript_entries() {
 }
 
 #[tokio::test]
+async fn realtime_help_commands_render_usage() {
+    let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "help".to_string(), Vec::new());
+    let mic_help = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => render_lines(cell.as_ref()),
+        other => panic!("expected mic help output, got {other:?}"),
+    };
+
+    chat.dispatch_command_with_args(SlashCommand::Voice, "help".to_string(), Vec::new());
+    let voice_help = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => render_lines(cell.as_ref()),
+        other => panic!("expected voice help output, got {other:?}"),
+    };
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "alias help".to_string(), Vec::new());
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            assert!(render_lines(cell.as_ref()).contains("Usage: /mic"));
+        }
+        other => panic!("expected reserved mic alias help output, got {other:?}"),
+    }
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "alias ?".to_string(), Vec::new());
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            assert!(render_lines(cell.as_ref()).contains("Usage: /mic"));
+        }
+        other => panic!("expected reserved mic alias question-mark output, got {other:?}"),
+    }
+
+    insta::assert_snapshot!("realtime_help_commands", format!("{mic_help}{voice_help}"));
+}
+
+#[tokio::test]
 async fn realtime_handoff_turn_hides_normal_codex_response_but_keeps_live_transcript() {
     let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     let thread_id = ThreadId::new();
