@@ -1638,6 +1638,10 @@ impl App {
             for cell in self.chat_widget.prepare_immediate_info_message(message) {
                 self.insert_history_cell(tui, cell);
             }
+            // This diagnostic is inserted directly by the app rather than through
+            // ChatWidget's normal AppEvent path. Wake the top-level renderer so it
+            // appears before the next user input.
+            tui.frame_requester().schedule_frame();
         }
     }
 
