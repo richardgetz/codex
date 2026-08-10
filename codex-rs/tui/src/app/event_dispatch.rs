@@ -308,6 +308,14 @@ impl App {
             AppEvent::BeginThreadSwitchHistoryReplayBuffer => {
                 self.begin_thread_switch_history_replay_buffer();
             }
+            AppEvent::RealtimeMicControl(command) => {
+                self.handle_realtime_mic_command(tui, app_server, command)
+                    .await;
+            }
+            AppEvent::RealtimeVoiceControl(command) => {
+                self.handle_realtime_voice_command(tui, app_server, command)
+                    .await;
+            }
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell);
             }
@@ -2657,6 +2665,7 @@ impl App {
         app_server: &mut AppServerSession,
         mode: ExitMode,
     ) -> AppRunControl {
+        self.stop_realtime_voice(app_server).await;
         match mode {
             ExitMode::ShutdownFirst => {
                 // Mark the thread we are explicitly shutting down for exit so

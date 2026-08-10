@@ -207,6 +207,15 @@ const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
 const PARENT_OWNED_INPUT_MESSAGE: &str =
     "This sub-agent is controlled by its parent. Direct input is disabled.";
 
+fn is_realtime_delegation_input(item: &UserInput) -> bool {
+    matches!(
+        item,
+        UserInput::Text { text, .. }
+            if text.contains("<realtime_delegation>")
+                || text.contains("&lt;realtime_delegation&gt;")
+    )
+}
+
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
 /// Apple Terminal, Warp, and VSCode integrated terminals intercept or silently
@@ -348,6 +357,7 @@ use self::goal_status::goal_status_indicator_from_app_goal;
 mod goal_menu;
 mod ide_context;
 use self::ide_context::IdeContextState;
+mod history_insertion;
 mod input_queue;
 use self::input_queue::InputQueueState;
 mod input_flow;
@@ -394,6 +404,7 @@ pub(crate) use self::rate_limits::fallback_limit_label;
 use self::rate_limits::is_app_server_cyber_policy_error;
 mod reset_credits;
 pub(crate) use self::rate_limits::limit_label_for_window;
+mod realtime_transcript;
 mod reasoning_shortcuts;
 mod rendering;
 mod replay;
@@ -1265,23 +1276,9 @@ impl ChatWidget {
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
-        // Keep the placeholder session header as the active cell until real session info arrives,
-        // so we can merge headers instead of committing a duplicate box to history.
-        let keep_placeholder_header_active = !self.is_session_configured()
-            && self
-                .transcript
-                .active_cell
-                .as_ref()
-                .is_some_and(|c| c.as_any().is::<history_cell::SessionHeaderHistoryCell>());
-
-        if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
-            // Only break exec grouping if the cell renders visible lines.
-            if !self.has_active_stream_tail() {
-                self.flush_active_cell();
-            }
-            self.transcript.needs_final_message_separator = true;
+        for cell in self.collect_history_cells_for_insertion(cell) {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         }
-        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
 
     fn enter_review_mode_with_hint(&mut self, hint: String, from_replay: bool) {
@@ -1310,6 +1307,16 @@ impl ChatWidget {
     }
 
     fn on_committed_user_message(&mut self, items: &[UserInput], from_replay: bool) {
+        if items.iter().any(is_realtime_delegation_input) {
+            // Realtime handoffs and transcript-tail flushes are internal context envelopes. The
+            // live GPT-Live transcript is already rendered through realtime notifications, so
+            // showing this model-facing wrapper would duplicate the voice conversation and expose
+            // implementation details in the TUI.
+            if !from_replay {
+                self.transcript.realtime_turn_active = true;
+            }
+            return;
+        }
         let display = Self::user_message_display_from_inputs(items);
         if from_replay {
             if self.review.is_review_mode {
@@ -1927,10 +1934,13 @@ impl ChatWidget {
     /// the main viewport updates.
     pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
         let cell = self.transcript.active_cell.as_ref();
+        let has_realtime_transcript = self.transcript.realtime_user_transcript_cell.is_some()
+            || self.transcript.realtime_assistant_transcript_cell.is_some();
         let hook_cell = self.active_hook_cell.as_ref();
         let token_activity_cell = self.pending_token_activity_output();
         let rate_limit_reset_hint = self.pending_rate_limit_reset_hint();
         if cell.is_none()
+            && !has_realtime_transcript
             && hook_cell.is_none()
             && token_activity_cell.is_none()
             && rate_limit_reset_hint.is_none()
@@ -1963,6 +1973,19 @@ impl ChatWidget {
         let mut lines = Vec::new();
         if let Some(cell) = self.transcript.active_cell.as_ref() {
             lines.extend(cell.transcript_hyperlink_lines(width));
+        }
+        let realtime_lines = self
+            .transcript
+            .realtime_user_transcript_cell
+            .iter()
+            .chain(self.transcript.realtime_assistant_transcript_cell.iter())
+            .flat_map(|cell| cell.transcript_hyperlink_lines(width))
+            .collect::<Vec<_>>();
+        if !realtime_lines.is_empty() {
+            if !lines.is_empty() {
+                lines.push(HyperlinkLine::from(""));
+            }
+            lines.extend(realtime_lines);
         }
         if let Some(hook_cell) = self.active_hook_cell.as_ref() {
             // Compute hook lines first so hidden hooks do not add a separator.

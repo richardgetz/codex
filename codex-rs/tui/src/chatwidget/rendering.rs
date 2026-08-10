@@ -13,6 +13,19 @@ impl ChatWidget {
             })),
             None => RenderableItem::Owned(Box::new(())),
         };
+        let realtime_transcript_renderable =
+            if self.transcript.realtime_user_transcript_cell.is_some()
+                || self.transcript.realtime_assistant_transcript_cell.is_some()
+            {
+                RenderableItem::Owned(Box::new(RealtimeTranscriptRenderable {
+                    user: self.transcript.realtime_user_transcript_cell.as_ref(),
+                    assistant: self.transcript.realtime_assistant_transcript_cell.as_ref(),
+                    top: 1,
+                    right: active_cell_right_reserve,
+                }))
+            } else {
+                RenderableItem::Owned(Box::new(()))
+            };
         let active_hook_cell_renderable = match &self.active_hook_cell {
             Some(cell) if cell.should_render() => {
                 RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
@@ -25,6 +38,7 @@ impl ChatWidget {
         };
         let mut flex = FlexRenderable::new();
         flex.push(/*flex*/ 1, active_cell_renderable);
+        flex.push(/*flex*/ 0, realtime_transcript_renderable);
         flex.push(/*flex*/ 0, active_hook_cell_renderable);
         if let Some(cell) = self.pending_token_activity_output() {
             flex.push(
@@ -66,6 +80,63 @@ struct TranscriptAreaRenderable<'a> {
     child: &'a dyn HistoryCell,
     top: u16,
     right: u16,
+}
+
+struct RealtimeTranscriptRenderable<'a> {
+    user: Option<&'a crate::history_cell::RealtimeTranscriptCell>,
+    assistant: Option<&'a crate::history_cell::RealtimeTranscriptCell>,
+    top: u16,
+    right: u16,
+}
+
+impl RealtimeTranscriptRenderable<'_> {
+    fn child_area(&self, area: Rect) -> Rect {
+        let y = area.y.saturating_add(self.top);
+        let height = area.height.saturating_sub(self.top);
+        Rect::new(
+            area.x,
+            y,
+            area.width.saturating_sub(self.right).max(1),
+            height,
+        )
+    }
+
+    fn lines(&self, width: u16) -> Vec<Line<'static>> {
+        let child_width = width.saturating_sub(self.right).max(1);
+        self.user
+            .into_iter()
+            .chain(self.assistant)
+            .flat_map(|cell| cell.display_lines(child_width))
+            .collect()
+    }
+}
+
+impl Renderable for RealtimeTranscriptRenderable<'_> {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let child_area = self.child_area(area);
+        let lines = self.lines(area.width);
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+        let y = if child_area.height == 0 {
+            0
+        } else {
+            let overflow = paragraph
+                .line_count(child_area.width)
+                .saturating_sub(usize::from(child_area.height));
+            u16::try_from(overflow).unwrap_or(u16::MAX)
+        };
+        Clear.render(child_area, buf);
+        paragraph.scroll((y, 0)).render(child_area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        let child_width = width.saturating_sub(self.right).max(1);
+        let lines = self.lines(width);
+        let height = Paragraph::new(Text::from(lines))
+            .wrap(Wrap { trim: false })
+            .line_count(child_width)
+            .saturating_add(usize::from(self.top));
+        u16::try_from(height).unwrap_or(u16::MAX)
+    }
 }
 
 impl Renderable for TranscriptAreaRenderable<'_> {

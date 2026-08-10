@@ -4749,6 +4749,8 @@ impl Config {
                 .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {
                     microphone: audio.microphone,
                     speaker: audio.speaker,
+                    microphone_aliases: audio.microphone_aliases.unwrap_or_default(),
+                    speaker_aliases: audio.speaker_aliases.unwrap_or_default(),
                 }),
             experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
             experimental_realtime_webrtc_call_base_url: cfg
@@ -4759,10 +4761,26 @@ impl Config {
                 .map_or_else(RealtimeConfig::default, |realtime| {
                     let defaults = RealtimeConfig::default();
                     RealtimeConfig {
+                        enabled: realtime.enabled.unwrap_or(defaults.enabled),
+                        enable_preambles: realtime
+                            .enable_preambles
+                            .unwrap_or(defaults.enable_preambles),
+                        non_substantive_reasoning_effort: realtime
+                            .non_substantive_reasoning_effort,
+                        non_substantive_classifier_model: realtime
+                            .non_substantive_classifier_model,
+                        non_substantive_classifier_reasoning_effort: realtime
+                            .non_substantive_classifier_reasoning_effort,
+                        acknowledgement_sound: realtime
+                            .acknowledgement_sound
+                            .unwrap_or(defaults.acknowledgement_sound),
+                        acknowledgement_sound_file: realtime.acknowledgement_sound_file,
                         version: realtime.version.unwrap_or(defaults.version),
                         session_type: realtime.session_type.unwrap_or(defaults.session_type),
                         transport: realtime.transport.unwrap_or(defaults.transport),
                         voice: realtime.voice,
+                        voice_rotation: realtime.voice_rotation,
+                        hotkey: realtime.hotkey,
                     }
                 }),
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,

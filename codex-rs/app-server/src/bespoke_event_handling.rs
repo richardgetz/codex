@@ -522,6 +522,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         "item_id": handoff.item_id,
                         "input_transcript": handoff.input_transcript,
                         "active_transcript": handoff.active_transcript,
+                        "routing": handoff.routing,
                     }),
                 };
                 outgoing

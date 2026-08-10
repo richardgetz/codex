@@ -5,6 +5,63 @@
 
 use super::*;
 use crate::app_backtrack::SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE;
+use crate::realtime_voice::DEFAULT_REALTIME_HOTKEY;
+use crate::realtime_voice::RealtimeVoiceDebugCommand;
+use crate::realtime_voice::realtime_hotkey_matches;
+use crate::realtime_voice::realtime_hotkey_spec_from_event;
+use crate::realtime_voice::realtime_start_prompt;
+use crate::realtime_voice::realtime_v3_voice;
+use crate::realtime_voice_devices::display_device_name;
+use crate::realtime_voice_devices::format_device_aliases;
+use crate::realtime_voice_devices::normalize_device_alias;
+use crate::realtime_voice_devices::resolve_device_name;
+use crate::realtime_voice_sound::RealtimeAcknowledgementSound;
+use color_eyre::eyre::eyre;
+
+const REALTIME_HANDOFF_DEBUG_DEDUPE_CAPACITY: usize = 128;
+const REALTIME_HANDOFF_DEBUG_VALUE_LIMIT: usize = 96;
+
+fn realtime_handoff_debug_preview(value: &str) -> String {
+    let mut preview = String::new();
+    let mut character_count = 0;
+    let mut needs_separator = false;
+    let mut truncated = false;
+
+    for word in value.split_whitespace() {
+        if needs_separator {
+            if character_count == REALTIME_HANDOFF_DEBUG_VALUE_LIMIT {
+                truncated = true;
+                break;
+            }
+            preview.push(' ');
+            character_count += 1;
+        }
+        needs_separator = true;
+
+        for character in word.chars() {
+            if character_count == REALTIME_HANDOFF_DEBUG_VALUE_LIMIT {
+                truncated = true;
+                break;
+            }
+            preview.push(character);
+            character_count += 1;
+        }
+        if truncated {
+            break;
+        }
+    }
+
+    if truncated {
+        preview.push('…');
+    }
+    preview
+}
+
+#[derive(Clone, Copy)]
+enum RealtimeDevicePicker {
+    Microphone,
+    Speaker,
+}
 
 impl App {
     pub(super) async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
@@ -93,6 +150,10 @@ impl App {
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
+        if self.handle_realtime_voice_key(app_server, key_event).await {
+            return;
+        }
+
         // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
         // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
         // agent-switch shortcuts when the composer is empty so we never steal the expected
@@ -266,6 +327,1080 @@ impl App {
         };
     }
 
+    async fn handle_realtime_voice_key(
+        &mut self,
+        app_server: &mut AppServerSession,
+        key_event: KeyEvent,
+    ) -> bool {
+        if !self.config.realtime.enabled {
+            return false;
+        }
+
+        if self.realtime_mic_mode == RealtimeMicMode::CaptureHotkey {
+            if !matches!(
+                key_event.kind,
+                crossterm::event::KeyEventKind::Press | crossterm::event::KeyEventKind::Repeat
+            ) {
+                return true;
+            }
+            let Some(hotkey) = realtime_hotkey_spec_from_event(key_event) else {
+                self.chat_widget.add_error_message(
+                    "That key cannot be used as a push-to-talk binding; try another key."
+                        .to_string(),
+                );
+                return true;
+            };
+            match crate::config_update::write_config_batch(
+                app_server.request_handle(),
+                vec![crate::config_update::build_realtime_hotkey_edit(&hotkey)],
+            )
+            .await
+            {
+                Ok(_) => {
+                    self.config.realtime.hotkey = Some(hotkey.clone());
+                    self.realtime_mic_mode = RealtimeMicMode::PushToTalk;
+                    self.chat_widget.add_info_message(
+                        format!(
+                            "Push-to-talk key set to `{hotkey}`. Hold it to speak; release it to send."
+                        ),
+                        None,
+                    );
+                }
+                Err(err) => self.chat_widget.add_error_message(format!(
+                    "Failed to save push-to-talk key `{hotkey}`: {err:#}"
+                )),
+            }
+            return true;
+        }
+
+        if !is_realtime_voice_key(self.config.realtime.hotkey.as_deref(), key_event) {
+            return false;
+        }
+
+        if self.realtime_mic_mode == RealtimeMicMode::Disabled {
+            return false;
+        }
+
+        if self.realtime_mic_mode != RealtimeMicMode::PushToTalk {
+            return true;
+        }
+
+        match key_event.kind {
+            KeyEventKind::Press | KeyEventKind::Repeat => {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_input_muted(false);
+                    return true;
+                }
+
+                if let Err(err) = self.start_realtime_voice_session(app_server).await {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to start live voice input: {err:#}"));
+                    return true;
+                }
+                true
+            }
+            KeyEventKind::Release => {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_input_muted(true);
+                    session.play_acknowledgement_sound();
+                }
+                true
+            }
+        }
+    }
+
+    async fn start_realtime_voice_session(
+        &mut self,
+        app_server: &mut AppServerSession,
+    ) -> Result<()> {
+        if self.realtime_voice_session.is_some() {
+            return Ok(());
+        }
+
+        let Some(thread_id) = self.active_thread_id.or(self.chat_widget.thread_id()) else {
+            return Err(eyre!("Voice input is unavailable until a thread starts."));
+        };
+
+        let acknowledgement_sound = if self.config.realtime.acknowledgement_sound {
+            match self.config.realtime.acknowledgement_sound_file.as_ref() {
+                Some(path) => RealtimeAcknowledgementSound::File(path.as_path().to_path_buf()),
+                None => RealtimeAcknowledgementSound::BuiltIn,
+            }
+        } else {
+            RealtimeAcknowledgementSound::Disabled
+        };
+        let (session, sdp) =
+            RealtimeVoiceSession::start(&self.config.realtime_audio, &acknowledgement_sound)
+                .await
+                .map_err(|err| eyre!("{err:#}"))?;
+        let params = ThreadRealtimeStartParams {
+            thread_id: thread_id.to_string(),
+            client_managed_handoffs: None,
+            flush_transcript_tail_on_session_end: Some(true),
+            codex_responses_as_items: Some(false),
+            codex_response_item_prefix: None,
+            codex_response_handoff_mode: None,
+            codex_response_handoff_channel_prefixes: None,
+            model: Some("gpt-live-1-codex".to_string()),
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: Some(false),
+            initial_items: None,
+            prompt: realtime_start_prompt(self.config.realtime.enable_preambles),
+            realtime_session_id: None,
+            transport: Some(ThreadRealtimeStartTransport::Webrtc { sdp }),
+            version: Some(RealtimeConversationVersion::V3),
+            voice: Some(realtime_v3_voice(self.config.realtime.voice)),
+        };
+        if let Err(err) = app_server.thread_realtime_start_with_params(params).await {
+            session.close().await;
+            return Err(err);
+        }
+        self.realtime_voice_session = Some(session);
+        Ok(())
+    }
+
+    fn show_realtime_device_picker(
+        &mut self,
+        picker: RealtimeDevicePicker,
+        devices: Vec<String>,
+        selected: Option<&str>,
+    ) {
+        let (title, subtitle) = match picker {
+            RealtimeDevicePicker::Microphone => (
+                "Select realtime microphone",
+                "Choose the GPT-Live input device. Changes apply to the next voice session.",
+            ),
+            RealtimeDevicePicker::Speaker => (
+                "Select realtime speaker",
+                "Choose the GPT-Live output device. Changes apply to the next voice session.",
+            ),
+        };
+        let aliases = match picker {
+            RealtimeDevicePicker::Microphone => {
+                self.config.realtime_audio.microphone_aliases.clone()
+            }
+            RealtimeDevicePicker::Speaker => self.config.realtime_audio.speaker_aliases.clone(),
+        };
+        let selected_device =
+            selected.and_then(|selected| resolve_device_name(selected, &devices, &aliases));
+        let initial_selected_idx = devices
+            .iter()
+            .position(|name| selected_device.as_deref() == Some(name.as_str()));
+        let items = devices
+            .into_iter()
+            .map(|name| {
+                let is_current = selected_device.as_deref() == Some(name.as_str());
+                let command_name = name.clone();
+                let display_name = display_device_name(&name, &aliases);
+                let command = match picker {
+                    RealtimeDevicePicker::Microphone => {
+                        RealtimeMicCommand::SetMicrophone(command_name)
+                    }
+                    RealtimeDevicePicker::Speaker => RealtimeMicCommand::SetSpeaker(command_name),
+                };
+                SelectionItem {
+                    name: display_name,
+                    is_current,
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::RealtimeMicControl(command.clone()));
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect();
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            title: Some(title.to_string()),
+            subtitle: Some(subtitle.to_string()),
+            items,
+            initial_selected_idx,
+            ..Default::default()
+        });
+    }
+
+    pub(super) async fn handle_realtime_mic_command(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        command: RealtimeMicCommand,
+    ) {
+        match &command {
+            RealtimeMicCommand::CaptureHotkey => {
+                if !self.config.realtime.enabled {
+                    self.chat_widget.add_error_message(
+                        "Microphone is disabled by config. Set `[realtime].enabled = true` before capturing a key."
+                            .to_string(),
+                    );
+                } else {
+                    self.realtime_mic_mode = RealtimeMicMode::CaptureHotkey;
+                    if let Some(session) = &self.realtime_voice_session {
+                        session.set_input_muted(true);
+                    }
+                    self.chat_widget.add_info_message(
+                        "Press the key you want to use for push-to-talk. Capture is armed for the next key event."
+                            .to_string(),
+                        None,
+                    );
+                }
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+            RealtimeMicCommand::ChangeMicrophone => {
+                match crate::realtime_voice_audio::list_input_devices() {
+                    Ok(devices) if devices.is_empty() => self.chat_widget.add_info_message(
+                        "No realtime microphone devices were found.".to_string(),
+                        None,
+                    ),
+                    Ok(devices) => {
+                        let selected = self.config.realtime_audio.microphone.clone();
+                        self.show_realtime_device_picker(
+                            RealtimeDevicePicker::Microphone,
+                            devices,
+                            selected.as_deref(),
+                        );
+                    }
+                    Err(err) => self
+                        .chat_widget
+                        .add_error_message(format!("Failed to list realtime microphones: {err:#}")),
+                }
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+            RealtimeMicCommand::ListDevices => {
+                match crate::realtime_voice_audio::list_input_devices() {
+                    Ok(devices) if devices.is_empty() => self.chat_widget.add_info_message(
+                        "No realtime microphone devices were found.".to_string(),
+                        None,
+                    ),
+                    Ok(devices) => {
+                        let selected = self
+                            .config
+                            .realtime_audio
+                            .microphone
+                            .as_deref()
+                            .unwrap_or("system default");
+                        let aliases = &self.config.realtime_audio.microphone_aliases;
+                        let devices = devices
+                            .iter()
+                            .map(|device| display_device_name(device, aliases))
+                            .collect::<Vec<_>>();
+                        let aliases_text = format_device_aliases(aliases);
+                        let aliases_text = if aliases_text.is_empty() {
+                            String::new()
+                        } else {
+                            format!("\nAliases:\n{aliases_text}")
+                        };
+                        self.chat_widget.add_info_message(
+                            format!(
+                                "Realtime microphones (selected: {selected}):\n{}{aliases_text}",
+                                devices.join("\n")
+                            ),
+                            None,
+                        );
+                    }
+                    Err(err) => self
+                        .chat_widget
+                        .add_error_message(format!("Failed to list realtime microphones: {err:#}")),
+                }
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+            RealtimeMicCommand::ChangeSpeaker => {
+                match crate::realtime_voice_audio::list_output_devices() {
+                    Ok(devices) if devices.is_empty() => self.chat_widget.add_info_message(
+                        "No realtime speaker devices were found.".to_string(),
+                        None,
+                    ),
+                    Ok(devices) => {
+                        let selected = self.config.realtime_audio.speaker.clone();
+                        self.show_realtime_device_picker(
+                            RealtimeDevicePicker::Speaker,
+                            devices,
+                            selected.as_deref(),
+                        );
+                    }
+                    Err(err) => self
+                        .chat_widget
+                        .add_error_message(format!("Failed to list realtime speakers: {err:#}")),
+                }
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+            RealtimeMicCommand::ListSpeakers => {
+                match crate::realtime_voice_audio::list_output_devices() {
+                    Ok(devices) if devices.is_empty() => self.chat_widget.add_info_message(
+                        "No realtime speaker devices were found.".to_string(),
+                        None,
+                    ),
+                    Ok(devices) => {
+                        let selected = self
+                            .config
+                            .realtime_audio
+                            .speaker
+                            .as_deref()
+                            .unwrap_or("system default");
+                        let aliases = &self.config.realtime_audio.speaker_aliases;
+                        let devices = devices
+                            .iter()
+                            .map(|device| display_device_name(device, aliases))
+                            .collect::<Vec<_>>();
+                        let aliases_text = format_device_aliases(aliases);
+                        let aliases_text = if aliases_text.is_empty() {
+                            String::new()
+                        } else {
+                            format!("\nAliases:\n{aliases_text}")
+                        };
+                        self.chat_widget.add_info_message(
+                            format!(
+                                "Realtime speakers (selected: {selected}):\n{}{aliases_text}",
+                                devices.join("\n")
+                            ),
+                            None,
+                        );
+                    }
+                    Err(err) => self
+                        .chat_widget
+                        .add_error_message(format!("Failed to list realtime speakers: {err:#}")),
+                }
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+            RealtimeMicCommand::ListMicrophoneAliases => {
+                let aliases = format_device_aliases(&self.config.realtime_audio.microphone_aliases);
+                let message = if aliases.is_empty() {
+                    "No realtime microphone aliases are configured.".to_string()
+                } else {
+                    format!("Realtime microphone aliases:\n{aliases}")
+                };
+                self.chat_widget.add_info_message(message, None);
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+            RealtimeMicCommand::ListSpeakerAliases => {
+                let aliases = format_device_aliases(&self.config.realtime_audio.speaker_aliases);
+                let message = if aliases.is_empty() {
+                    "No realtime speaker aliases are configured.".to_string()
+                } else {
+                    format!("Realtime speaker aliases:\n{aliases}")
+                };
+                self.chat_widget.add_info_message(message, None);
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+            RealtimeMicCommand::SetMicrophoneAlias { alias, device } => {
+                let Some(alias) = normalize_device_alias(alias) else {
+                    self.chat_widget.add_error_message(
+                        "Microphone aliases must be a single non-empty word.".to_string(),
+                    );
+                    tui.frame_requester().schedule_frame();
+                    return;
+                };
+                let requested =
+                    device
+                        .as_deref()
+                        .or(self.config.realtime_audio.microphone.as_deref());
+                let Some(requested) = requested else {
+                    self.chat_widget.add_error_message(
+                        "Choose a microphone first or provide its full device name.".to_string(),
+                    );
+                    tui.frame_requester().schedule_frame();
+                    return;
+                };
+                let devices = match crate::realtime_voice_audio::list_input_devices() {
+                    Ok(devices) => devices,
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to list realtime microphones: {err:#}"
+                        ));
+                        tui.frame_requester().schedule_frame();
+                        return;
+                    }
+                };
+                let Some(device) = resolve_device_name(
+                    requested,
+                    &devices,
+                    &self.config.realtime_audio.microphone_aliases,
+                ) else {
+                    self.chat_widget.add_error_message(format!(
+                        "Cannot create microphone alias `{alias}`: device `{requested}` was not found."
+                    ));
+                    tui.frame_requester().schedule_frame();
+                    return;
+                };
+                match crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![crate::config_update::build_realtime_microphone_alias_edit(
+                        &alias, &device,
+                    )],
+                )
+                .await
+                {
+                    Ok(_) => {
+                        self.config
+                            .realtime_audio
+                            .microphone_aliases
+                            .insert(alias.clone(), device.clone());
+                        self.chat_widget.add_info_message(
+                            format!("Realtime microphone alias `{alias}` now selects `{device}`."),
+                            None,
+                        );
+                    }
+                    Err(err) => self.chat_widget.add_error_message(format!(
+                        "Failed to save realtime microphone alias `{alias}`: {err:#}"
+                    )),
+                }
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+            RealtimeMicCommand::SetSpeakerAlias { alias, device } => {
+                let Some(alias) = normalize_device_alias(alias) else {
+                    self.chat_widget.add_error_message(
+                        "Speaker aliases must be a single non-empty word.".to_string(),
+                    );
+                    tui.frame_requester().schedule_frame();
+                    return;
+                };
+                let requested = device
+                    .as_deref()
+                    .or(self.config.realtime_audio.speaker.as_deref());
+                let Some(requested) = requested else {
+                    self.chat_widget.add_error_message(
+                        "Choose a speaker first or provide its full device name.".to_string(),
+                    );
+                    tui.frame_requester().schedule_frame();
+                    return;
+                };
+                let devices = match crate::realtime_voice_audio::list_output_devices() {
+                    Ok(devices) => devices,
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to list realtime speakers: {err:#}"
+                        ));
+                        tui.frame_requester().schedule_frame();
+                        return;
+                    }
+                };
+                let Some(device) = resolve_device_name(
+                    requested,
+                    &devices,
+                    &self.config.realtime_audio.speaker_aliases,
+                ) else {
+                    self.chat_widget.add_error_message(format!(
+                        "Cannot create speaker alias `{alias}`: device `{requested}` was not found."
+                    ));
+                    tui.frame_requester().schedule_frame();
+                    return;
+                };
+                match crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![crate::config_update::build_realtime_speaker_alias_edit(
+                        &alias, &device,
+                    )],
+                )
+                .await
+                {
+                    Ok(_) => {
+                        self.config
+                            .realtime_audio
+                            .speaker_aliases
+                            .insert(alias.clone(), device.clone());
+                        self.chat_widget.add_info_message(
+                            format!("Realtime speaker alias `{alias}` now selects `{device}`."),
+                            None,
+                        );
+                    }
+                    Err(err) => self.chat_widget.add_error_message(format!(
+                        "Failed to save realtime speaker alias `{alias}`: {err:#}"
+                    )),
+                }
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+            RealtimeMicCommand::SetMicrophone(name) => {
+                let requested = name.trim();
+                if requested.is_empty() {
+                    self.chat_widget.add_error_message(
+                        "Usage: /mic [on|off|status|hot|push|hotkey|change|devices|aliases|alias <name> [device]|device <name>|speakers|speaker change|speaker aliases|speaker alias <name> [device]|speaker <name>]"
+                            .to_string(),
+                    );
+                    tui.frame_requester().schedule_frame();
+                    return;
+                }
+                let devices = match crate::realtime_voice_audio::list_input_devices() {
+                    Ok(devices) => devices,
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to list realtime microphones: {err:#}"
+                        ));
+                        tui.frame_requester().schedule_frame();
+                        return;
+                    }
+                };
+                let Some(name) = resolve_device_name(
+                    requested,
+                    &devices,
+                    &self.config.realtime_audio.microphone_aliases,
+                ) else {
+                    self.chat_widget.add_error_message(format!(
+                        "Cannot select realtime microphone `{requested}`: device or alias was not found."
+                    ));
+                    tui.frame_requester().schedule_frame();
+                    return;
+                };
+                let host = cpal::default_host();
+                if let Err(err) =
+                    crate::realtime_voice_audio::select_input_device(&host, Some(&name))
+                {
+                    self.chat_widget.add_error_message(format!(
+                        "Cannot select realtime microphone `{requested}`: {err:#}"
+                    ));
+                    tui.frame_requester().schedule_frame();
+                    return;
+                }
+                match crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![crate::config_update::build_realtime_microphone_edit(&name)],
+                )
+                .await
+                {
+                    Ok(_) => {
+                        self.config.realtime_audio.microphone = Some(name.clone());
+                        self.chat_widget.add_info_message(
+                            format!(
+                                "Realtime microphone set to `{name}`. It will apply to the next voice session."
+                            ),
+                            None,
+                        );
+                    }
+                    Err(err) => self.chat_widget.add_error_message(format!(
+                        "Failed to save realtime microphone `{name}`: {err:#}"
+                    )),
+                }
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+            RealtimeMicCommand::SetSpeaker(name) => {
+                let requested = name.trim();
+                if requested.is_empty() {
+                    self.chat_widget.add_error_message(
+                        "Usage: /mic [on|off|status|hot|push|hotkey|change|devices|aliases|alias <name> [device]|device <name>|speakers|speaker change|speaker aliases|speaker alias <name> [device]|speaker <name>]"
+                            .to_string(),
+                    );
+                    tui.frame_requester().schedule_frame();
+                    return;
+                }
+                let devices = match crate::realtime_voice_audio::list_output_devices() {
+                    Ok(devices) => devices,
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to list realtime speakers: {err:#}"
+                        ));
+                        tui.frame_requester().schedule_frame();
+                        return;
+                    }
+                };
+                let Some(name) = resolve_device_name(
+                    requested,
+                    &devices,
+                    &self.config.realtime_audio.speaker_aliases,
+                ) else {
+                    self.chat_widget.add_error_message(format!(
+                        "Cannot select realtime speaker `{requested}`: device or alias was not found."
+                    ));
+                    tui.frame_requester().schedule_frame();
+                    return;
+                };
+                let host = cpal::default_host();
+                if let Err(err) =
+                    crate::realtime_voice_audio::select_output_device(&host, Some(&name))
+                {
+                    self.chat_widget.add_error_message(format!(
+                        "Cannot select realtime speaker `{requested}`: {err:#}"
+                    ));
+                    tui.frame_requester().schedule_frame();
+                    return;
+                }
+                match crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![crate::config_update::build_realtime_speaker_edit(&name)],
+                )
+                .await
+                {
+                    Ok(_) => {
+                        self.config.realtime_audio.speaker = Some(name.clone());
+                        self.chat_widget.add_info_message(
+                            format!(
+                                "Realtime speaker set to `{name}`. GPT-Live output will use it on the next voice session."
+                            ),
+                            None,
+                        );
+                    }
+                    Err(err) => self.chat_widget.add_error_message(format!(
+                        "Failed to save realtime speaker `{name}`: {err:#}"
+                    )),
+                }
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+            RealtimeMicCommand::Status => {}
+            RealtimeMicCommand::Toggle
+            | RealtimeMicCommand::On
+            | RealtimeMicCommand::Off
+            | RealtimeMicCommand::Hot
+            | RealtimeMicCommand::Push => {}
+        }
+
+        if matches!(&command, RealtimeMicCommand::Status) {
+            let status = if self.config.realtime.enabled {
+                self.realtime_mic_mode.status_label().to_string()
+            } else {
+                "disabled by config ([realtime].enabled = false)".to_string()
+            };
+            let microphone = self
+                .config
+                .realtime_audio
+                .microphone
+                .as_deref()
+                .unwrap_or("system default");
+            let speaker = self
+                .config
+                .realtime_audio
+                .speaker
+                .as_deref()
+                .unwrap_or("system default");
+            let hotkey = self
+                .config
+                .realtime
+                .hotkey
+                .as_deref()
+                .unwrap_or(DEFAULT_REALTIME_HOTKEY);
+            let preambles = if self.config.realtime.enable_preambles {
+                "enabled"
+            } else {
+                "suppressed"
+            };
+            let acknowledgement_sound = if !self.config.realtime.acknowledgement_sound {
+                "off"
+            } else if self.config.realtime.acknowledgement_sound_file.is_some() {
+                "custom WAV"
+            } else {
+                "built-in"
+            };
+            self.chat_widget
+                .add_info_message(
+                    format!(
+                        "Microphone is {status}; input device: {microphone}; output device: {speaker}; push-to-talk key: {hotkey}; preambles: {preambles}; acknowledgement sound: {acknowledgement_sound}."
+                    ),
+                    None,
+                );
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
+        if !self.config.realtime.enabled && !matches!(&command, RealtimeMicCommand::Off) {
+            self.chat_widget.add_error_message(
+                "Microphone is disabled by config. Set `[realtime].enabled = true` to use `/mic`."
+                    .to_string(),
+            );
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
+        let target_mode = match command {
+            RealtimeMicCommand::Toggle => match self.realtime_mic_mode {
+                RealtimeMicMode::Disabled => RealtimeMicMode::PushToTalk,
+                RealtimeMicMode::PushToTalk
+                | RealtimeMicMode::Hot
+                | RealtimeMicMode::CaptureHotkey => RealtimeMicMode::Disabled,
+            },
+            RealtimeMicCommand::On => RealtimeMicMode::PushToTalk,
+            RealtimeMicCommand::Off => RealtimeMicMode::Disabled,
+            RealtimeMicCommand::Status
+            | RealtimeMicCommand::CaptureHotkey
+            | RealtimeMicCommand::ChangeMicrophone
+            | RealtimeMicCommand::ListDevices
+            | RealtimeMicCommand::ChangeSpeaker
+            | RealtimeMicCommand::ListSpeakers
+            | RealtimeMicCommand::SetMicrophone(_)
+            | RealtimeMicCommand::SetSpeaker(_)
+            | RealtimeMicCommand::ListMicrophoneAliases
+            | RealtimeMicCommand::ListSpeakerAliases
+            | RealtimeMicCommand::SetMicrophoneAlias { .. }
+            | RealtimeMicCommand::SetSpeakerAlias { .. } => {
+                unreachable!("non-mode command handled above")
+            }
+            RealtimeMicCommand::Hot => RealtimeMicMode::Hot,
+            RealtimeMicCommand::Push => RealtimeMicMode::PushToTalk,
+        };
+        let previous_mode = self.realtime_mic_mode;
+        self.realtime_mic_mode = target_mode;
+
+        let result = match target_mode {
+            RealtimeMicMode::Disabled => {
+                self.stop_realtime_voice(app_server).await;
+                Ok(())
+            }
+            RealtimeMicMode::PushToTalk => {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_input_muted(true);
+                }
+                Ok(())
+            }
+            RealtimeMicMode::Hot => {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_input_muted(false);
+                    Ok(())
+                } else {
+                    self.start_realtime_voice_session(app_server).await
+                }
+            }
+            RealtimeMicMode::CaptureHotkey => {
+                unreachable!("hotkey capture is handled before mode changes")
+            }
+        };
+
+        if let Err(err) = result {
+            self.realtime_mic_mode = previous_mode;
+            self.chat_widget
+                .add_error_message(format!("Failed to enable hot microphone: {err:#}"));
+        } else {
+            self.chat_widget.add_info_message(
+                format!("Microphone is now {}.", target_mode.status_label()),
+                None,
+            );
+        }
+        tui.frame_requester().schedule_frame();
+    }
+
+    pub(super) async fn handle_realtime_voice_command(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        command: RealtimeVoiceCommand,
+    ) {
+        match command {
+            RealtimeVoiceCommand::On => {
+                self.handle_realtime_mic_command(tui, app_server, RealtimeMicCommand::On)
+                    .await;
+                return;
+            }
+            RealtimeVoiceCommand::Off => {
+                self.handle_realtime_mic_command(tui, app_server, RealtimeMicCommand::Off)
+                    .await;
+                return;
+            }
+            RealtimeVoiceCommand::Status => {
+                let voice = realtime_v3_voice(self.config.realtime.voice);
+                let microphone = if self.config.realtime.enabled {
+                    self.realtime_mic_mode.status_label().to_string()
+                } else {
+                    "disabled by config ([realtime].enabled = false)".to_string()
+                };
+                let rotation = match self.config.realtime.voice_rotation.as_deref() {
+                    Some(voices) if !voices.is_empty() => voices
+                        .iter()
+                        .map(|voice| voice.wire_name())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    _ => "off".to_string(),
+                };
+                self.chat_widget.add_info_message(
+                    format!(
+                        "Realtime voice is `{}` (GPT-Live WebRTC; applies to the next voice session); microphone is {microphone}; startup rotation: {rotation}; handoff debug: {}.",
+                        voice.wire_name(),
+                        if self.realtime_voice_debug { "on" } else { "off" },
+                    ),
+                    None,
+                );
+            }
+            RealtimeVoiceCommand::Debug(command) => {
+                let message = match command {
+                    RealtimeVoiceDebugCommand::Toggle => {
+                        self.realtime_voice_debug = !self.realtime_voice_debug;
+                        self.realtime_handoff_debug_ids.clear();
+                        format!(
+                            "Realtime voice handoff debug is now {} (session-local).",
+                            if self.realtime_voice_debug {
+                                "on"
+                            } else {
+                                "off"
+                            }
+                        )
+                    }
+                    RealtimeVoiceDebugCommand::On => {
+                        self.realtime_voice_debug = true;
+                        self.realtime_handoff_debug_ids.clear();
+                        "Realtime voice handoff debug is on (session-local).".to_string()
+                    }
+                    RealtimeVoiceDebugCommand::Off => {
+                        self.realtime_voice_debug = false;
+                        self.realtime_handoff_debug_ids.clear();
+                        "Realtime voice handoff debug is off (session-local).".to_string()
+                    }
+                    RealtimeVoiceDebugCommand::Status => format!(
+                        "Realtime voice handoff debug is {} (session-local; default off).",
+                        if self.realtime_voice_debug {
+                            "on"
+                        } else {
+                            "off"
+                        }
+                    ),
+                };
+                self.chat_widget.add_info_message(message, None);
+            }
+            RealtimeVoiceCommand::List => match app_server.thread_realtime_list_voices().await {
+                Ok(voices) => {
+                    let selected = realtime_v3_voice(self.config.realtime.voice);
+                    let names = voices
+                        .v1
+                        .iter()
+                        .map(|voice| {
+                            if *voice == selected {
+                                format!("{} (selected)", voice.wire_name())
+                            } else {
+                                voice.wire_name().to_string()
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    self.chat_widget.add_info_message(
+                        format!(
+                            "GPT-Live V3 voices (selected: {}):\n{}",
+                            selected.wire_name(),
+                            names.join("\n")
+                        ),
+                        None,
+                    );
+                }
+                Err(err) => self
+                    .chat_widget
+                    .add_error_message(format!("Failed to list GPT-Live voices: {err:#}")),
+            },
+            RealtimeVoiceCommand::Set(voice) => {
+                let voices = match app_server.thread_realtime_list_voices().await {
+                    Ok(voices) => voices,
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to validate GPT-Live voice `{}`: {err:#}",
+                            voice.wire_name()
+                        ));
+                        tui.frame_requester().schedule_frame();
+                        return;
+                    }
+                };
+                if !voices.v1.contains(&voice) {
+                    self.chat_widget.add_error_message(format!(
+                        "GPT-Live V3 does not support voice `{}`. Use `/voice list`.",
+                        voice.wire_name()
+                    ));
+                    tui.frame_requester().schedule_frame();
+                    return;
+                }
+                match crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![crate::config_update::build_realtime_voice_edit(
+                        voice.wire_name(),
+                    )],
+                )
+                .await
+                {
+                    Ok(_) => {
+                        self.config.realtime.voice = Some(voice);
+                        self.chat_widget.add_info_message(
+                            format!(
+                                "Realtime voice set to `{}`. It will apply to the next voice session.",
+                                voice.wire_name()
+                            ),
+                            None,
+                        );
+                    }
+                    Err(err) => self.chat_widget.add_error_message(format!(
+                        "Failed to save GPT-Live voice `{}`: {err:#}",
+                        voice.wire_name()
+                    )),
+                }
+            }
+        }
+        tui.frame_requester().schedule_frame();
+    }
+
+    pub(super) async fn stop_realtime_voice(&mut self, app_server: &mut AppServerSession) {
+        let Some(session) = self.realtime_voice_session.take() else {
+            return;
+        };
+        if let Some(thread_id) = self.active_thread_id.or(self.chat_widget.thread_id()) {
+            let _ = app_server.thread_realtime_stop(thread_id).await;
+        }
+        session.close().await;
+    }
+
+    pub(super) fn handle_realtime_voice_notification(&mut self, notification: &ServerNotification) {
+        match notification {
+            ServerNotification::ThreadRealtimeStarted(_) => {
+                self.realtime_handoff_debug_ids.clear();
+            }
+            ServerNotification::ThreadRealtimeSdp(notification) => {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.apply_remote_sdp(notification.sdp.clone());
+                }
+            }
+            ServerNotification::ThreadRealtimeError(_)
+            | ServerNotification::ThreadRealtimeClosed(_) => {
+                self.realtime_handoff_debug_ids.clear();
+                self.realtime_voice_session.take();
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn realtime_handoff_debug_message(
+        &mut self,
+        notification: &codex_app_server_protocol::ThreadRealtimeItemAddedNotification,
+    ) -> Option<String> {
+        if !self.realtime_voice_debug {
+            return None;
+        }
+        let item_type = notification
+            .item
+            .get("type")
+            .and_then(serde_json::Value::as_str)?;
+        if item_type != "handoff_request" {
+            return None;
+        }
+        let handoff_id = notification
+            .item
+            .get("handoff_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|handoff_id| !handoff_id.is_empty());
+        let item_id = notification
+            .item
+            .get("item_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|item_id| !item_id.is_empty());
+        let debug_id = handoff_id.or(item_id);
+        let identity = match handoff_id {
+            Some(handoff_id) => format!(
+                "handoff_id `{}`",
+                realtime_handoff_debug_preview(handoff_id)
+            ),
+            None => match item_id {
+                Some(item_id) => {
+                    format!("item_id `{}`", realtime_handoff_debug_preview(item_id))
+                }
+                None => "handoff_id `<missing>`".to_string(),
+            },
+        };
+        let Some(input) = notification
+            .item
+            .get("input_transcript")
+            .and_then(serde_json::Value::as_str)
+            .filter(|input| !input.trim().is_empty())
+        else {
+            return Some(format!(
+                "GPT-Live handoff debug: {identity}; no handoff input was available; inherited the session effort."
+            ));
+        };
+        if debug_id.is_some_and(|debug_id| {
+            self.realtime_handoff_debug_ids
+                .iter()
+                .any(|seen_id| seen_id == debug_id)
+        }) {
+            return None;
+        }
+        if let Some(debug_id) = debug_id {
+            self.realtime_handoff_debug_ids
+                .push_back(debug_id.to_string());
+            if self.realtime_handoff_debug_ids.len() > REALTIME_HANDOFF_DEBUG_DEDUPE_CAPACITY {
+                self.realtime_handoff_debug_ids.pop_front();
+            }
+        }
+
+        if let Some(routing) = notification
+            .item
+            .get("routing")
+            .and_then(serde_json::Value::as_object)
+        {
+            let classifier = routing
+                .get("classifier")
+                .and_then(serde_json::Value::as_object);
+            let classifier_kind = classifier
+                .and_then(|classifier| classifier.get("kind"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("text");
+            let classifier_model = classifier
+                .and_then(|classifier| classifier.get("model"))
+                .and_then(serde_json::Value::as_str);
+            let classifier_reasoning_effort = classifier
+                .and_then(|classifier| classifier.get("reasoning_effort"))
+                .and_then(serde_json::Value::as_str);
+            let classifier_fallback = classifier
+                .and_then(|classifier| classifier.get("fallback"))
+                .and_then(serde_json::Value::as_str);
+            let classification = routing
+                .get("classification")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("substantive");
+            let selected_effort = routing
+                .get("selected_effort")
+                .and_then(serde_json::Value::as_str);
+            let session_effort = self.chat_widget.current_reasoning_effort();
+            let selected = selected_effort.map(str::to_string).unwrap_or_else(|| {
+                session_effort
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "session default".to_string())
+            });
+            let reason = if selected_effort.is_some() {
+                "read-only override"
+            } else {
+                "inherited session effort"
+            };
+            let classifier_name = match (classifier_kind, classifier_model) {
+                ("model", Some(model)) => format!("model `{model}`"),
+                ("model", None) => "model `<unknown>`".to_string(),
+                ("text", Some(model)) if classifier_fallback == Some("input_too_long") => {
+                    format!("text (model `{model}` not attempted)")
+                }
+                ("text", Some(model)) => format!("text (fallback from model `{model}`)"),
+                _ => "text".to_string(),
+            };
+            let classifier_reasoning = format!(
+                "; reasoning `{}`",
+                classifier_reasoning_effort.map_or_else(|| "default".to_string(), str::to_string)
+            );
+            let fallback = classifier_fallback
+                .map(|fallback| format!("; fallback `{fallback}`"))
+                .unwrap_or_default();
+            let input_preview = realtime_handoff_debug_preview(input);
+            return Some(format!(
+                "GPT-Live handoff debug: {identity}; classifier {classifier_name}{classifier_reasoning}{fallback}; classification `{classification}`; selected `{selected}` ({reason}) for input `{input_preview}`."
+            ));
+        }
+
+        let configured_effort = self
+            .config
+            .realtime
+            .non_substantive_reasoning_effort
+            .as_ref();
+        let session_effort = self.chat_widget.current_reasoning_effort();
+        let (selected, reason) = if let Some(effort) =
+            codex_protocol::realtime_handoff::configured_read_only_effort(input, configured_effort)
+        {
+            (effort.to_string(), "read-only override")
+        } else {
+            (
+                session_effort
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "session default".to_string()),
+                "inherited session effort",
+            )
+        };
+        let input_preview = realtime_handoff_debug_preview(input);
+        Some(format!(
+            "GPT-Live handoff debug: {identity}; selected `{selected}` ({reason}) for input `{input_preview}`."
+        ))
+    }
+
     pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {
         !self.chat_widget.side_conversation_active()
             && self.chat_widget.is_normal_backtrack_mode()
@@ -295,9 +1430,21 @@ impl App {
     }
 }
 
+fn is_realtime_voice_key(spec: Option<&str>, key_event: KeyEvent) -> bool {
+    realtime_hotkey_matches(spec, key_event)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_support::make_test_app;
+    use super::RealtimeDevicePicker;
+    use super::is_realtime_voice_key;
+    use crate::chatwidget::tests::helpers::render_bottom_popup;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyEventKind;
+    use crossterm::event::KeyModifiers;
+    use crossterm::event::ModifierKeyCode;
 
     #[tokio::test]
     async fn app_keymap_shortcuts_are_disabled_while_keymap_view_is_active() {
@@ -308,5 +1455,40 @@ mod tests {
         app.chat_widget.open_keymap_debug(&keymap);
 
         assert!(!app.app_keymap_shortcuts_available());
+    }
+
+    #[test]
+    fn realtime_voice_uses_right_alt_modifier_key() {
+        let right_alt = KeyEvent {
+            code: KeyCode::Modifier(ModifierKeyCode::RightAlt),
+            kind: KeyEventKind::Press,
+            ..KeyEvent::new(KeyCode::Null, KeyModifiers::NONE)
+        };
+        let character = KeyEvent {
+            kind: KeyEventKind::Press,
+            ..KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)
+        };
+
+        assert!(is_realtime_voice_key(None, right_alt));
+        assert!(!is_realtime_voice_key(None, character));
+        assert!(is_realtime_voice_key(
+            Some("f13"),
+            KeyEvent::new(KeyCode::F(13), KeyModifiers::NONE)
+        ));
+    }
+
+    #[tokio::test]
+    async fn realtime_microphone_picker_renders_current_device() {
+        let mut app = make_test_app().await;
+        app.show_realtime_device_picker(
+            RealtimeDevicePicker::Microphone,
+            vec!["Built-in Microphone".to_string(), "Clip-On Mic".to_string()],
+            Some("Clip-On Mic"),
+        );
+
+        let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+        insta::with_settings!({snapshot_path => "../snapshots"}, {
+            insta::assert_snapshot!("realtime_microphone_picker", rendered);
+        });
     }
 }

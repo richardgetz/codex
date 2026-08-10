@@ -424,6 +424,8 @@ impl App {
             return Ok(());
         }
 
+        self.stop_realtime_voice(app_server).await;
+
         // A tracked side thread stays loaded until it is explicitly discarded and already has a
         // replay channel, so another liveness read cannot add anything before selection.
         if !(self.side_threads.contains_key(&thread_id)

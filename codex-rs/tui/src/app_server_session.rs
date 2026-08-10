@@ -98,6 +98,8 @@ use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
 use codex_app_server_protocol::ThreadRealtimeAudioChunk;
+use codex_app_server_protocol::ThreadRealtimeListVoicesParams;
+use codex_app_server_protocol::ThreadRealtimeListVoicesResponse;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadRealtimeStartResponse;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
@@ -135,6 +137,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
+use codex_features::Feature;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
@@ -149,6 +152,7 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::SubAgentSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -1455,6 +1459,19 @@ impl AppServerSession {
         Ok(())
     }
 
+    pub(crate) async fn thread_realtime_start_with_params(
+        &mut self,
+        params: ThreadRealtimeStartParams,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadRealtimeStartResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadRealtimeStart { request_id, params })
+            .await
+            .wrap_err("thread/realtime/start failed in TUI")?;
+        Ok(())
+    }
+
     pub(crate) async fn thread_realtime_audio(
         &mut self,
         thread_id: ThreadId,
@@ -1488,6 +1505,19 @@ impl AppServerSession {
             .await
             .wrap_err("thread/realtime/stop failed in TUI")?;
         Ok(())
+    }
+
+    pub(crate) async fn thread_realtime_list_voices(&mut self) -> Result<RealtimeVoicesList> {
+        let request_id = self.next_request_id();
+        let response: ThreadRealtimeListVoicesResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadRealtimeListVoices {
+                request_id,
+                params: ThreadRealtimeListVoicesParams {},
+            })
+            .await
+            .wrap_err("thread/realtime/listVoices failed in TUI")?;
+        Ok(response.voices)
     }
 
     pub(crate) async fn reject_server_request(
@@ -1706,6 +1736,12 @@ fn config_request_overrides_from_config(
     );
     if config.bypass_hook_trust {
         overrides.insert("bypass_hook_trust".to_string(), true.into());
+    }
+    if config.realtime.enabled {
+        overrides.insert(
+            format!("features.{}", Feature::RealtimeConversation.key()),
+            serde_json::Value::Bool(true),
+        );
     }
     Some(overrides)
 }
@@ -2948,6 +2984,15 @@ mod tests {
             config_request_overrides_from_config(&config).expect("config overrides");
 
         assert!(!implicit_overrides.contains_key("personality"));
+        assert_eq!(
+            implicit_overrides.get("features.realtime_conversation"),
+            Some(&serde_json::Value::Bool(true))
+        );
+
+        config.realtime.enabled = false;
+        let disabled_overrides =
+            config_request_overrides_from_config(&config).expect("config overrides");
+        assert!(!disabled_overrides.contains_key("features.realtime_conversation"));
 
         config.personality = Some(Personality::None);
         let explicit_overrides =

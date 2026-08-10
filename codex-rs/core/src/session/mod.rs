@@ -33,6 +33,7 @@ use crate::context::ForkHelpInstructions;
 use crate::context::GitIntentNotesInstructions;
 use crate::context::ModelSwitchInstructions;
 use crate::context::NetworkRuleSaved;
+use crate::context::RealtimeDelegationSource;
 use crate::context::RecommendedPluginsInstructions;
 use crate::context::ScheduleInstructions;
 use crate::context::ScratchpadInstructions;
@@ -50,7 +51,9 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::exec_policy::default_policy_path;
 use crate::image_preparation::prepare_response_items as prepare_image_response_items;
 use crate::parse_turn_item;
+use crate::realtime_classifier::RealtimeHandoffRoutingDecision;
 use crate::realtime_conversation::RealtimeConversationManager;
+use crate::realtime_handoff::non_substantive_realtime_reasoning_effort;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::session_prefix::format_inter_agent_completion_message;
@@ -1470,23 +1473,85 @@ impl Session {
         format!("auto-compact-{id}")
     }
 
-    pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
-        handlers::user_input_or_turn_inner(
-            self,
-            Uuid::now_v7().to_string(),
-            Op::UserInput {
-                items: vec![UserInput::Text {
-                    text,
-                    text_elements: Vec::new(),
-                }],
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                additional_context: Default::default(),
-                thread_settings: Default::default(),
+    pub(crate) async fn route_realtime_text_input(
+        self: &Arc<Self>,
+        text: String,
+        source: RealtimeDelegationSource,
+        routing_input: Option<String>,
+        routing_decision: Option<RealtimeHandoffRoutingDecision>,
+    ) {
+        let configured_effort = self
+            .get_config()
+            .await
+            .realtime
+            .non_substantive_reasoning_effort
+            .clone();
+        let transient_effort = routing_decision.map_or_else(
+            || {
+                routing_input.as_deref().and_then(|input| {
+                    non_substantive_realtime_reasoning_effort(
+                        source,
+                        input,
+                        configured_effort.as_ref(),
+                    )
+                })
             },
-            /*client_user_message_id*/ None,
-        )
-        .await;
+            |decision| decision.selected_effort,
+        );
+        let op = Op::UserInput {
+            items: vec![UserInput::Text {
+                text,
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        };
+        if let Some(effort) = transient_effort {
+            handlers::user_input_or_turn_inner_with_transient_reasoning_effort(
+                self,
+                Uuid::now_v7().to_string(),
+                op,
+                effort,
+                /*client_user_message_id*/ None,
+            )
+            .await;
+        } else {
+            handlers::user_input_or_turn_inner(
+                self,
+                Uuid::now_v7().to_string(),
+                op,
+                /*client_user_message_id*/ None,
+            )
+            .await;
+        }
+    }
+
+    pub(crate) async fn new_turn_with_transient_reasoning_effort(
+        &self,
+        sub_id: String,
+        final_output_json_schema: Option<Option<serde_json::Value>>,
+        effort: ReasoningEffortConfig,
+    ) -> CodexResult<Arc<TurnContext>> {
+        let session_configuration = {
+            let state = self.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let collaboration_mode = session_configuration.collaboration_mode.with_updates(
+            /*model*/ None,
+            Some(Some(effort)),
+            /*developer_instructions*/ None,
+        );
+        let session_configuration = session_configuration
+            .apply(&SessionSettingsUpdate {
+                collaboration_mode: Some(collaboration_mode),
+                ..Default::default()
+            })
+            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+        Ok(self
+            .new_turn_from_configuration(sub_id, session_configuration, final_output_json_schema)
+            .await)
     }
 
     pub(crate) async fn get_total_token_usage(&self) -> i64 {
@@ -2426,6 +2491,10 @@ impl Session {
     }
 
     async fn maybe_clear_realtime_handoff_for_event(&self, msg: &EventMsg) {
+        if matches!(msg, EventMsg::TurnAborted(_)) {
+            self.conversation.reset_handoff_output_suppression().await;
+            return;
+        }
         if !matches!(msg, EventMsg::TurnComplete(_)) {
             return;
         }
@@ -2433,6 +2502,7 @@ impl Session {
             debug!("failed to finalize realtime handoff output: {err}");
         }
         self.conversation.clear_active_handoff().await;
+        self.conversation.reset_handoff_output_suppression().await;
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {

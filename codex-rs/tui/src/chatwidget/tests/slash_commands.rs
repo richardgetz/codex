@@ -1,5 +1,8 @@
 use super::*;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
+use crate::realtime_voice::RealtimeMicCommand;
+use crate::realtime_voice::RealtimeVoiceCommand;
+use crate::realtime_voice::RealtimeVoiceDebugCommand;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 
@@ -99,6 +102,207 @@ fn expect_token_activity_refresh(rx: &mut tokio::sync::mpsc::UnboundedReceiver<A
         Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
         other => panic!("expected token activity refresh request, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn mic_slash_command_dispatches_mode_controls() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Mic);
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::Toggle))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "status".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::Status))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "hot".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::Hot))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "push".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::Push))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "on".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::On))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "off".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::Off))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "hotkey".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::CaptureHotkey
+        ))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "change".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::ChangeMicrophone
+        ))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "devices".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::ListDevices
+        ))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "speakers".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::ListSpeakers
+        ))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "speaker change".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::ChangeSpeaker
+        ))
+    );
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Mic,
+        "device Clip-On Mic".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::SetMicrophone(name)))
+            if name == "Clip-On Mic"
+    );
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Mic,
+        "speaker Clip-On Speaker".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::SetSpeaker(name)))
+            if name == "Clip-On Speaker"
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "aliases".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::ListMicrophoneAliases
+        ))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "speaker aliases".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::ListSpeakerAliases
+        ))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "alias AirPods".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::SetMicrophoneAlias { alias, device: None }
+        )) if alias == "AirPods"
+    );
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Mic,
+        "speaker alias desk Desk Speakers".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(
+            RealtimeMicCommand::SetSpeakerAlias { alias, device: Some(device) }
+        )) if alias == "desk" && device == "Desk Speakers"
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "AirPods".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::SetMicrophone(name)))
+            if name == "AirPods"
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Mic, "speaker desk".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::SetSpeaker(name)))
+            if name == "desk"
+    );
+
+    chat.dispatch_command(SlashCommand::Voice);
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Status))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Voice, "list".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::List))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Voice, "on".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::On))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Voice, "off".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Off))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Voice, "debug".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Debug(
+            RealtimeVoiceDebugCommand::Toggle
+        )))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Voice, "debug status".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Debug(
+            RealtimeVoiceDebugCommand::Status
+        )))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Voice, "arbor".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Set(
+            codex_protocol::protocol::RealtimeVoice::Arbor
+        )))
+    );
 }
 
 fn next_add_to_history_event(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> String {

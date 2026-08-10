@@ -67,6 +67,38 @@ fn streaming_agent_tail_blank_line_uses_one_viewport_row() {
     assert_eq!(cell.desired_height(/*width*/ 80), 3);
 }
 
+#[test]
+fn realtime_transcript_cell_renders_live_user_and_assistant_text() {
+    let user = RealtimeTranscriptCell::new(RealtimeTranscriptRole::User);
+    user.append("hello from the microphone");
+    let assistant = RealtimeTranscriptCell::new(RealtimeTranscriptRole::Assistant);
+    assistant.append("hello back from live voice");
+
+    let rendered = [
+        render_lines(&user.display_lines(/*width*/ 80)).join("\n"),
+        render_lines(&assistant.display_lines(/*width*/ 80)).join("\n"),
+    ]
+    .join("\n---\n");
+
+    insta::assert_snapshot!(rendered, @"› hello from the microphone
+---
+• hello back from live voice");
+}
+
+#[test]
+fn realtime_transcript_cell_replaces_cumulative_or_duplicate_deltas() {
+    let cell = RealtimeTranscriptCell::new(RealtimeTranscriptRole::User);
+    cell.append("hello ");
+    cell.append("hello ");
+    cell.append("hello from the microphone");
+    cell.append("hello from the microphone");
+
+    assert_eq!(
+        render_lines(&cell.display_lines(/*width*/ 80)),
+        vec!["› hello from the microphone"]
+    );
+}
+
 fn stdio_server_config(
     command: &str,
     args: Vec<&str>,

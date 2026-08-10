@@ -162,6 +162,11 @@ mod outcomes_report;
 mod pager_overlay;
 mod permission_compat;
 pub(crate) mod public_widgets;
+mod realtime_voice;
+mod realtime_voice_audio;
+mod realtime_voice_devices;
+mod realtime_voice_rotation;
+mod realtime_voice_sound;
 mod render;
 mod resize_reflow_cap;
 mod resume_picker;
@@ -1327,7 +1332,7 @@ async fn run_ratatui_app(
         tracing::error!("panic: {info}");
         prev_hook(info);
     }));
-    let mut initialized_terminal = tui::init()?;
+    let mut initialized_terminal = tui::init(initial_config.realtime.enabled)?;
     initialized_terminal.terminal.clear()?;
 
     let mut tui = Tui::new(

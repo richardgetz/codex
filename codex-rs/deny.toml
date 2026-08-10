@@ -84,6 +84,7 @@ ignore = [
     { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is unmaintained; pulled in via i18n-embed-fl/age used by codex-secrets local storage; remove when codex-secrets migrates off age or age drops i18n-embed-fl" },
     { id = "RUSTSEC-2026-0194", reason = "workspace quick-xml is updated to 0.41.0; remaining quick-xml 0.39.4 is pulled in via syntect and wayland-scanner; plist uses quick-xml 0.41.0; remove when syntect and wayland-scanner update to quick-xml >=0.41.0" },
     { id = "RUSTSEC-2026-0195", reason = "workspace quick-xml is updated to 0.41.0; remaining quick-xml 0.39.4 is pulled in via syntect and wayland-scanner; plist uses quick-xml 0.41.0; remove when syntect and wayland-scanner update to quick-xml >=0.41.0" },
+    { id = "RUSTSEC-2026-0150", reason = "audiopus_sys is an unmaintained transitive dependency of the native opus binding required by the desktop-parity GPT-Live WebRTC audio path; remove when the codec binding moves off audiopus_sys or a maintained drop-in replacement is available" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
@@ -232,6 +233,15 @@ deny = [
         "rmcp",
         "tonic",
         "zbus",
+        # These third-party WebRTC crates still use async-trait and are required
+        # by the native GPT-Live WebRTC transport in codex-tui.
+        "dtls",
+        "interceptor",
+        "turn",
+        "webrtc",
+        "webrtc-ice",
+        "webrtc-sctp",
+        "webrtc-util",
     ], reason = "first-party traits must use native async trait methods with explicit Send bounds" },
     # Migration ratchet: `codex-http-client` is the intended reqwest owner. Remove each temporary
     # wrapper when that crate's direct reqwest dependency is migrated to the shared abstraction.

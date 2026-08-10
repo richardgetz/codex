@@ -1,9 +1,12 @@
 use super::AGENT_FINAL_MESSAGE_PREFIX;
 use super::HANDOFF_STREAM_TRUNCATION_MARKER;
+use super::REALTIME_HANDOFF_DEDUPE_CAPACITY;
+use super::RealtimeHandoffDeduper;
 use super::RealtimeHandoffState;
 use super::RealtimeSessionKind;
 use super::RealtimeStreamedItem;
 use super::realtime_delegation_from_handoff;
+use super::realtime_delegation_with_routing_input;
 use super::realtime_request_headers;
 use super::realtime_text_from_handoff_request;
 use super::wrap_realtime_delegation_input;
@@ -23,6 +26,32 @@ use std::time::Instant;
 use tokio::sync::Mutex;
 
 #[test]
+fn deduplicates_repeated_realtime_handoff_ids() {
+    let mut deduper = RealtimeHandoffDeduper::default();
+
+    assert!(!deduper.is_duplicate(""));
+    assert!(!deduper.is_duplicate(""));
+    assert!(!deduper.is_duplicate("handoff-1"));
+    assert!(deduper.is_duplicate("handoff-1"));
+    assert!(!deduper.is_duplicate("handoff-2"));
+    for index in 0..256 {
+        assert!(!deduper.is_duplicate(&format!("handoff-extra-{index}")));
+    }
+    assert!(deduper.is_duplicate("handoff-1"));
+}
+
+#[test]
+fn realtime_handoff_dedupe_evicts_old_ids() {
+    let mut deduper = RealtimeHandoffDeduper::default();
+
+    assert!(!deduper.is_duplicate("handoff-1"));
+    for index in 0..REALTIME_HANDOFF_DEDUPE_CAPACITY {
+        assert!(!deduper.is_duplicate(&format!("handoff-extra-{index}")));
+    }
+    assert!(!deduper.is_duplicate("handoff-1"));
+}
+
+#[test]
 fn prefers_handoff_input_transcript_over_active_transcript() {
     let handoff = RealtimeHandoffRequested {
         handoff_id: "handoff_1".to_string(),
@@ -38,6 +67,7 @@ fn prefers_handoff_input_transcript_over_active_transcript() {
                 text: "hi there".to_string(),
             },
         ],
+        routing: None,
     };
     assert_eq!(
         realtime_text_from_handoff_request(&handoff),
@@ -55,11 +85,29 @@ fn extracts_text_from_handoff_request_active_transcript_if_input_missing() {
             role: "user".to_string(),
             text: "hello".to_string(),
         }],
+        routing: None,
     };
     assert_eq!(
         realtime_text_from_handoff_request(&handoff),
         Some("user: hello".to_string())
     );
+}
+
+#[test]
+fn does_not_use_active_transcript_as_handoff_routing_input() {
+    let handoff = RealtimeHandoffRequested {
+        handoff_id: "handoff_1".to_string(),
+        item_id: "item_1".to_string(),
+        input_transcript: String::new(),
+        active_transcript: vec![RealtimeTranscriptEntry {
+            role: "user".to_string(),
+            text: "What time is it?".to_string(),
+        }],
+        routing: None,
+    };
+    let (_, routing_input) = realtime_delegation_with_routing_input(&handoff)
+        .expect("active transcript should still produce the delegated text");
+    assert_eq!(routing_input, None);
 }
 
 #[test]
@@ -78,6 +126,7 @@ fn wraps_handoff_with_transcript_delta() {
                 text: "hi there".to_string(),
             },
         ],
+        routing: None,
     };
     assert_eq!(
         realtime_delegation_from_handoff(&handoff),
@@ -95,6 +144,7 @@ fn extracts_text_from_handoff_request_input_transcript_if_messages_missing() {
         item_id: "item_1".to_string(),
         input_transcript: "ignored".to_string(),
         active_transcript: vec![],
+        routing: None,
     };
     assert_eq!(
         realtime_text_from_handoff_request(&handoff),
@@ -109,6 +159,7 @@ fn ignores_empty_handoff_request_input_transcript() {
         item_id: "item_1".to_string(),
         input_transcript: String::new(),
         active_transcript: vec![],
+        routing: None,
     };
     assert_eq!(realtime_text_from_handoff_request(&handoff), None);
 }
@@ -181,6 +232,8 @@ async fn clears_active_handoff_explicitly() {
         output_tx: tx,
         last_output: Arc::new(Mutex::new(None)),
         stream: Arc::new(Mutex::new(Default::default())),
+        transport_handoff_deduper: Arc::new(Mutex::new(RealtimeHandoffDeduper::default())),
+        suppress_non_final_output: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         client_managed_handoffs: false,
         codex_responses_as_items: false,
         codex_response_item_prefix: None,
@@ -198,6 +251,29 @@ async fn clears_active_handoff_explicitly() {
 
     state.stream.lock().await.active_handoff = None;
     assert_eq!(state.stream.lock().await.active_handoff.clone(), None);
+}
+
+#[test]
+fn internal_continuation_suppression_keeps_final_realtime_output() {
+    let (tx, _rx) = bounded(1);
+    let state = RealtimeHandoffState {
+        output_tx: tx,
+        last_output: Arc::new(Mutex::new(None)),
+        stream: Arc::new(Mutex::new(Default::default())),
+        transport_handoff_deduper: Arc::new(Mutex::new(RealtimeHandoffDeduper::default())),
+        suppress_non_final_output: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        client_managed_handoffs: false,
+        codex_responses_as_items: false,
+        codex_response_item_prefix: None,
+        codex_response_handoff_mode: CodexResponseHandoffMode::Thinking,
+        codex_response_handoff_channel_prefixes: Arc::new(BTreeMap::new()),
+        session_kind: RealtimeSessionKind::V1,
+        event_parser: RealtimeEventParser::V1,
+    };
+
+    assert!(state.suppresses_output(Some(&MessagePhase::Commentary)));
+    assert!(!state.suppresses_output(Some(&MessagePhase::FinalAnswer)));
+    assert!(!state.suppresses_output(None));
 }
 
 #[test]

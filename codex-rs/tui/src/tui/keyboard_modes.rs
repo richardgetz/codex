@@ -6,6 +6,8 @@
 
 use std::fmt;
 use std::io::stdout;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
@@ -16,6 +18,11 @@ use crossterm::event::PushKeyboardEnhancementFlags;
 use ratatui::crossterm::execute;
 
 const DISABLE_KEYBOARD_ENHANCEMENT_ENV_VAR: &str = "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT";
+static REALTIME_VOICE_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub(super) fn set_realtime_voice_enabled(enabled: bool) {
+    REALTIME_VOICE_ENABLED.store(enabled, Ordering::Relaxed);
+}
 
 pub(super) fn keyboard_enhancement_disabled() -> bool {
     let disable_env = std::env::var(DISABLE_KEYBOARD_ENHANCEMENT_ENV_VAR).ok();
@@ -131,13 +138,15 @@ pub(super) fn enable_keyboard_enhancement() {
     } else {
         None
     };
+    let realtime_voice_enabled = REALTIME_VOICE_ENABLED.load(Ordering::Relaxed);
 
     let _ = execute!(
         stdout(),
         DisableModifyOtherKeys,
         PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
             terminal_info().name,
-            tmux_extended_keys_format.as_deref()
+            tmux_extended_keys_format.as_deref(),
+            realtime_voice_enabled,
         ))
     );
 
@@ -152,14 +161,21 @@ pub(super) fn enable_keyboard_enhancement() {
 fn keyboard_enhancement_flags(
     terminal_name: TerminalName,
     tmux_extended_keys_format: Option<&str>,
+    realtime_voice_enabled: bool,
 ) -> KeyboardEnhancementFlags {
-    let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+    let mut flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS;
 
     // iTerm can leak the release of an exit shortcut into the parent shell.
     // tmux's xterm key format also loses Shift-Enter when event types are
-    // reported. Preserve repeat classification on transports that support it.
-    if terminal_name == TerminalName::Iterm2 || matches!(tmux_extended_keys_format, Some("xterm")) {
+    // reported. Preserve the existing behavior unless live voice needs key
+    // release events for push-to-talk.
+    if realtime_voice_enabled {
+        flags |= KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+        flags | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+    } else if terminal_name == TerminalName::Iterm2
+        || matches!(tmux_extended_keys_format, Some("xterm"))
+    {
         flags
     } else {
         flags | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
@@ -325,7 +341,8 @@ mod tests {
         assert_eq!(
             ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
                 TerminalName::Iterm2,
-                /*tmux_extended_keys_format*/ None
+                /*tmux_extended_keys_format*/ None,
+                /*realtime_voice_enabled*/ false,
             ))),
             "\x1b[>5u"
         );
@@ -336,7 +353,8 @@ mod tests {
         assert_eq!(
             ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
                 TerminalName::Kitty,
-                /*tmux_extended_keys_format*/ None
+                /*tmux_extended_keys_format*/ None,
+                /*realtime_voice_enabled*/ false,
             ))),
             "\x1b[>7u"
         );
@@ -347,7 +365,8 @@ mod tests {
         assert_eq!(
             ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
                 TerminalName::Kitty,
-                Some("csi-u")
+                Some("csi-u"),
+                /*realtime_voice_enabled*/ false,
             ))),
             "\x1b[>7u"
         );
@@ -358,7 +377,8 @@ mod tests {
         assert_eq!(
             ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
                 TerminalName::Kitty,
-                Some("xterm")
+                Some("xterm"),
+                /*realtime_voice_enabled*/ false,
             ))),
             "\x1b[>5u"
         );
@@ -369,9 +389,22 @@ mod tests {
         assert_eq!(
             ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
                 TerminalName::Unknown,
-                /*tmux_extended_keys_format*/ None
+                /*tmux_extended_keys_format*/ None,
+                /*realtime_voice_enabled*/ false,
             ))),
             "\x1b[>7u"
+        );
+    }
+
+    #[test]
+    fn keyboard_enhancement_reports_releases_for_live_voice_on_iterm() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Iterm2,
+                /*tmux_extended_keys_format*/ None,
+                /*realtime_voice_enabled*/ true,
+            ))),
+            "\x1b[>15u"
         );
     }
 

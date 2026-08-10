@@ -1,10 +1,25 @@
 //! Transcript and active-cell bookkeeping for `ChatWidget`.
 
 use super::HistoryCell;
+use crate::history_cell::RealtimeTranscriptCell;
+use crate::history_cell::RealtimeTranscriptHistoryEntry;
+use std::collections::VecDeque;
 
 #[derive(Default)]
 pub(super) struct TranscriptState {
     pub(super) active_cell: Option<Box<dyn HistoryCell>>,
+    /// A realtime user transcript can stream alongside a normal assistant response.
+    pub(super) realtime_user_transcript_cell: Option<RealtimeTranscriptCell>,
+    /// A realtime assistant transcript can stream alongside a normal user transcript.
+    pub(super) realtime_assistant_transcript_cell: Option<RealtimeTranscriptCell>,
+    /// Whether the active agent turn originated from a hidden realtime handoff.
+    ///
+    /// The normal Codex response is sent to GPT-Live for speech, while the realtime output
+    /// transcript is delivered separately. Keep only the latter in the TUI so one voice turn does
+    /// not appear twice.
+    pub(super) realtime_turn_active: bool,
+    /// Bounded completed GPT-Live transcript entries available through `/voice history`.
+    pub(super) realtime_history: VecDeque<RealtimeTranscriptHistoryEntry>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
     pub(super) active_cell_revision: u64,
     /// Raw markdown of the most recently completed agent response.
@@ -57,6 +72,7 @@ impl TranscriptState {
 
     pub(super) fn reset_turn_flags(&mut self) {
         self.saw_copy_source_this_turn = false;
+        self.realtime_turn_active = false;
         self.last_completed_agent_message = None;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;

@@ -50,6 +50,8 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Mic,
+    Voice,
     Usage,
     DebugConfig,
     Title,
@@ -119,6 +121,8 @@ impl SlashCommand {
             SlashCommand::Import => "import setup, this project, and recent chats from Claude Code",
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Mic => "control realtime voice, microphone, and speaker devices",
+            SlashCommand::Voice => "enable realtime voice or list/select its voice",
             SlashCommand::Usage => "view account usage or use a usage limit reset",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
@@ -198,6 +202,8 @@ impl SlashCommand {
                 | SlashCommand::Ide
                 | SlashCommand::Keymap
                 | SlashCommand::Mcp
+                | SlashCommand::Mic
+                | SlashCommand::Voice
                 | SlashCommand::Continuous
                 | SlashCommand::Outcomes
                 | SlashCommand::ScratchpadAbsorb
@@ -263,6 +269,8 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Hooks
             | SlashCommand::Status
+            | SlashCommand::Mic
+            | SlashCommand::Voice
             | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
@@ -337,6 +345,18 @@ mod tests {
     fn pet_alias_parses_to_pets_command() {
         assert_eq!(SlashCommand::Pets.command(), "pets");
         assert_eq!(SlashCommand::from_str("pet"), Ok(SlashCommand::Pets));
+    }
+
+    #[test]
+    fn mic_command_supports_mode_arguments() {
+        assert_eq!(SlashCommand::from_str("mic"), Ok(SlashCommand::Mic));
+        assert!(SlashCommand::Mic.supports_inline_args());
+    }
+
+    #[test]
+    fn voice_command_supports_selection_arguments() {
+        assert_eq!(SlashCommand::from_str("voice"), Ok(SlashCommand::Voice));
+        assert!(SlashCommand::Voice.supports_inline_args());
     }
 
     #[test]

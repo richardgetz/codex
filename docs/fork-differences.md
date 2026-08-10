@@ -94,6 +94,114 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   - `codex --disable enable_mcp_approvals`
 - `codex features list` marks Rick-owned features with `(rick)`.
 
+### GPT-Live voice in the native TUI
+
+- The fork includes a native live voice mode that matches the Codex desktop
+  app's GPT-Live path: native microphone/speaker capture, Opus audio over
+  WebRTC, and app-server `thread/realtime/start` signaling. It uses
+  `gpt-live-1-codex`, realtime V3, audio output, and does not use the legacy
+  Whisper, `audio.append`, or `audio.flush` dictation path.
+- Voice is enabled by default. The default macOS push-to-talk binding is Right
+  Option (`right-option`); hold it to speak and release it to send. The default
+  voice is Arbor. Native devices currently need a 48 kHz format.
+- The runtime controls are fork-only:
+  - `/mic` toggles the microphone.
+  - `/mic help` prints the microphone, device, speaker, alias, and hotkey
+    controls; `help` and `?` are reserved and cannot be used as device aliases.
+  - `/mic on`, `/mic off`, and `/mic status` explicitly enable, disable, or
+    inspect the session microphone mode.
+  - `/mic hot` keeps the microphone live; `/mic push` returns to push-to-talk.
+  - `/mic hotkey` captures and persists the next key as the push-to-talk key.
+  - `/mic change` opens an arrow-key picker for input devices; `/mic devices`
+    lists them, and `/mic device <name>` remains available as a typed
+    compatibility form.
+  - `/mic speaker change` (or `/mic output change`) opens the matching picker
+    for GPT-Live output devices; `/mic speakers` lists them, and `/mic speaker
+    <name>` remains available as a typed compatibility form.
+  - `/voice on` and `/voice off` are aliases for enabling or disabling the
+    session microphone mode. `/voice status` shows the selected voice and
+    current voice state, `/voice list` asks app-server for the available
+    GPT-Live voices, and `/voice <name>` validates and persists a selection for
+    the next voice session.
+  - `/voice help` prints the voice command options. `/voice debug` toggles a
+    session-local, opt-in diagnostic (default off); `/voice debug on|off|status`
+    controls it explicitly. When enabled, each GPT-Live handoff immediately
+    displays its handoff ID, bounded input preview, and effort selected by the
+    shared client-side routing rule. Exact duplicate handoff IDs are routed
+    only once; repeated diagnostics are suppressed within a bounded session-
+    local display cache.
+  - `/voice history` shows the most recent completed GPT-Live user and assistant
+    transcript entries after they have scrolled out of view. Use
+    `/voice history <count>` for 1-20 entries; this is bounded session-local
+    history and does not send anything back to GPT-Live.
+- Configuration is persisted in `config.toml`:
+
+  ```toml
+  [realtime]
+  enabled = true
+  voice = "arbor"
+  hotkey = "right-option"
+  # Optional GPT-Live behavior controls.
+  enable_preambles = false
+  # Optional; clearly read-only handoffs use this effort, otherwise inherit the session effort.
+  non_substantive_reasoning_effort = "low"
+  # Optional; omit to use the deterministic text classifier.
+  non_substantive_classifier_model = "gpt-5.3-codex-spark"
+  # Optional; omit to use the classifier model's default reasoning effort.
+  non_substantive_classifier_reasoning_effort = "minimal"
+  acknowledgement_sound = true
+  acknowledgement_sound_file = "/absolute/path/to/cue.wav"
+  # Optional; consumes one voice per new Codex launch, in order.
+  voice_rotation = ["arbor", "cove"]
+
+  [audio]
+  # Optional; omit either value to use the system default.
+  microphone = "Clip-On Mic"
+  speaker = "Desk Speakers"
+
+  [audio.microphone_aliases]
+  airpods = "Clip-On Mic"
+
+  [audio.speaker_aliases]
+  desk = "Desk Speakers"
+  ```
+
+  Set `[realtime].enabled = false` to disable the voice feature and its hotkey
+  entirely. `/mic off` is a session-level mode change and does not rewrite that
+  config gate. `enable_preambles = false` sends the exact V3 session prompt that
+  suppresses filler acknowledgements and progress preambles while leaving the
+  GPT-Live transport unchanged. The acknowledgement cue is local to the TUI,
+  independent of the model prompt, and can use the built-in sound or a mono/
+  stereo PCM/float WAV up to one second. Voice and device changes apply to the
+  next voice session. When `voice_rotation` is set, its cursor is stored under
+  `<codex_home>/realtime_voice_rotation.json`; the configured list takes
+  precedence only at startup and does not rewrite `config.toml`; rotation entries
+  are limited to the GPT-Live V3 voice list. The optional
+  `non_substantive_reasoning_effort` setting is applied entirely by the CLI at
+  the existing GPT-Live `delegation.created` handoff boundary. It lowers effort
+  only for clearly read-only/informational handoffs; ambiguous or substantive
+  requests, and internal transcript-tail cleanup, inherit the normal session
+  effort. Omitting it preserves the existing behavior and requires no
+  GPT-Live backend change. When that setting is present, the default classifier
+  is deterministic text matching. Setting `non_substantive_classifier_model`
+  opts into one bounded Codex Responses request using that model before the
+  single main-agent handoff. `non_substantive_classifier_reasoning_effort` is
+  optional and is passed only to the classifier request; if the request times
+  out, fails, or returns invalid JSON, the CLI falls back to the text classifier
+  and does not grant the override based on an ambiguous result. Oversized input
+  also falls back conservatively, and explicit mutation signals still block a
+  model-produced `read_only` result. The optional
+  model classifier does not change GPT-Live V3 WebRTC transport or its backend
+  event contract. With `/voice debug on`, the diagnostic includes the handoff
+  ID, classifier kind/model, classifier reasoning effort, fallback reason,
+  classification, and final selected effort. Device aliases are case-insensitive and persistent:
+  `/mic alias airpods` names the currently selected microphone, `/mic alias
+  airpods <device>` names an explicit device, and `/mic airpods` selects it.
+  Speaker aliases use `/mic speaker alias desk <device>` and `/mic speaker desk`.
+  `/mic aliases`, `/mic speaker aliases`, `/mic devices`, and `/mic speakers`
+  show the configured aliases alongside the enumerated devices; `/mic change`
+  and `/mic speaker change` provide arrow-key selection.
+
 ### Commit and intent guidance
 
 - Conventional Commits guidance is first-class and enabled by default.

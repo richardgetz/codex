@@ -8,6 +8,7 @@ use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -26,6 +27,8 @@ use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::realtime_handoff::RealtimeHandoffClassification;
+use codex_protocol::realtime_handoff::RealtimeHandoffClassifierKind;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::WebSocketConnectionConfig;
@@ -3607,6 +3610,12 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
             "item_id": "item_inbound",
             "input_transcript": "text from realtime"
         }),
+        json!({
+            "type": "conversation.handoff.requested",
+            "handoff_id": "handoff_inbound",
+            "item_id": "item_inbound_duplicate",
+            "input_transcript": "duplicate realtime text"
+        }),
     ]]])
     .await;
 
@@ -3653,24 +3662,29 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
     .await;
     assert_eq!(session_updated, "sess_inbound");
 
-    let _ = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::HandoffRequested(handoff),
-        }) if handoff.handoff_id == "handoff_inbound"
-            && handoff.input_transcript == "text from realtime" =>
-        {
-            Some(())
-        }
-        _ => None,
-    })
-    .await;
-
-    let turn_id = loop {
+    let mut turn_id = None;
+    let mut first_handoff_seen = false;
+    let mut duplicate_handoff_seen = false;
+    while turn_id.is_none() || !first_handoff_seen || !duplicate_handoff_seen {
         let event = test.codex.next_event().await?;
-        if let EventMsg::TurnStarted(turn_started) = event.msg {
-            break turn_started.turn_id;
+        match event.msg {
+            EventMsg::TurnStarted(turn_started) => turn_id = Some(turn_started.turn_id),
+            EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                payload: RealtimeEvent::HandoffRequested(handoff),
+            }) => {
+                if handoff.handoff_id == "handoff_inbound"
+                    && handoff.input_transcript == "text from realtime"
+                {
+                    first_handoff_seen = true;
+                }
+                if handoff.item_id == "item_inbound_duplicate" {
+                    duplicate_handoff_seen = true;
+                }
+            }
+            _ => {}
         }
-    };
+    }
+    let turn_id = turn_id.expect("realtime-routed turn should start");
     Uuid::parse_str(&turn_id).context("realtime-routed turn ID should be a UUID")?;
 
     wait_for_event(&test.codex, |event| {
@@ -3678,10 +3692,127 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
     })
     .await;
 
+    assert_eq!(response_mock.requests().len(), 1);
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
     assert!(user_texts.iter().any(|text| text
         == "<realtime_delegation>\n  <input>text from realtime</input>\n  <transcript_delta>user: text from realtime</transcript_delta>\n</realtime_delegation>"));
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inbound_handoff_request_uses_configured_model_classifier_once() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &api_server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("classifier-response"),
+                responses::ev_output_text_delta(r#"{"classification":"read_only"}"#),
+                responses::ev_completed("classifier-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("agent-response"),
+                responses::ev_assistant_message("agent-message", "ok"),
+                responses::ev_completed("agent-response"),
+            ]),
+        ],
+    )
+    .await;
+
+    let realtime_server = start_websocket_server(vec![vec![vec![
+        json!({
+            "type": "session.updated",
+            "session": { "id": "sess_classifier", "instructions": "backend prompt" }
+        }),
+        json!({
+            "type": "conversation.handoff.requested",
+            "handoff_id": "handoff_classifier",
+            "item_id": "item_classifier",
+            "input_transcript": "What branch am I on?"
+        }),
+        json!({
+            "type": "conversation.handoff.requested",
+            "handoff_id": "handoff_classifier",
+            "item_id": "item_classifier_duplicate",
+            "input_transcript": "duplicate classifier input"
+        }),
+    ]]])
+    .await;
+
+    let mut builder = test_codex().with_model("gpt-5.4").with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
+            config.realtime.non_substantive_reasoning_effort = Some(ReasoningEffort::Low);
+            config.realtime.non_substantive_classifier_model = Some("gpt-5.4".to_string());
+            config.realtime.non_substantive_classifier_reasoning_effort =
+                Some(ReasoningEffort::Minimal);
+        }
+    });
+    let test = builder.build(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            client_managed_handoffs: false,
+            flush_transcript_tail_on_session_end: false,
+            codex_responses_as_items: false,
+            codex_response_item_prefix: None,
+            codex_response_handoff_mode:
+                codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            codex_response_handoff_channel_prefixes: None,
+            model: None,
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: true,
+            initial_items: Vec::new(),
+            prompt: Some(Some("backend prompt".to_string())),
+            realtime_session_id: None,
+            transport: None,
+            version: None,
+            voice: None,
+        }))
+        .await?;
+
+    let handoff = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::HandoffRequested(handoff),
+        }) if handoff.routing.is_some() => Some(handoff.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(handoff.handoff_id, "handoff_classifier");
+    let routing = handoff.routing.expect("classifier routing metadata");
+    assert_eq!(
+        routing.classification,
+        RealtimeHandoffClassification::ReadOnly
+    );
+    assert_eq!(routing.selected_effort, Some(ReasoningEffort::Low));
+    assert_eq!(
+        routing.classifier.kind,
+        RealtimeHandoffClassifierKind::Model
+    );
+    assert_eq!(routing.classifier.model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(
+        routing.classifier.reasoning_effort,
+        Some(ReasoningEffort::Minimal)
+    );
+    assert_eq!(routing.classifier.fallback, None);
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].body_json()["model"], "gpt-5.4");
+    assert_eq!(requests[0].body_json()["reasoning"]["effort"], "minimal");
+    assert_eq!(requests[1].body_json()["model"], "gpt-5.4");
 
     realtime_server.shutdown().await;
     Ok(())

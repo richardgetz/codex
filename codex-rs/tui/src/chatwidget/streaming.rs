@@ -139,6 +139,9 @@ impl ChatWidget {
     }
 
     pub(super) fn on_agent_message_delta(&mut self, delta: String) {
+        if self.transcript.realtime_turn_active {
+            return;
+        }
         self.handle_streaming_delta(delta);
     }
 
@@ -320,6 +323,9 @@ impl ChatWidget {
         from_replay: bool,
     ) {
         self.transcript.last_completed_agent_message = Some((turn_id.to_string(), item.id.clone()));
+        if self.transcript.realtime_turn_active {
+            return;
+        }
         let mut message = String::new();
         for content in &item.content {
             match content {

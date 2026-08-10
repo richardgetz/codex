@@ -1,0 +1,10 @@
+---
+source: tui/src/app/tests.rs
+assertion_line: 344
+expression: "app.transcript_cells.iter().map(|cell|\nlines_to_single_string(&cell.transcript_lines(120))).collect::<Vec<_>>().join(\"\\n\")"
+---
+• GPT-Live handoff debug: handoff_id `handoff-1`; classifier model `gpt-5.3-codex-spark`; reasoning `minimal`; classification `read_only`; selected `low` (read-only override) for input `What time is it?`.
+• GPT-Live handoff debug: handoff_id `handoff-2`; selected `session default` (inherited session effort) for input `Please update the configuration.`.
+• GPT-Live handoff debug: handoff_id `handoff-3`; classifier text (fallback from model `gpt-5.3-codex-spark`); reasoning `minimal`; fallback `timed_out`; classification `substantive`; selected `session default` (inherited session effort) for input `Please inspect the change and then edit it.`.
+• GPT-Live handoff debug: handoff_id `handoff-4`; no handoff input was available; inherited the session effort.
+• GPT-Live handoff debug: handoff_id `handoff-4`; selected `low` (read-only override) for input `What branch am I on?`.

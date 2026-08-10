@@ -65,6 +65,11 @@ use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
 use crate::multi_agents::sub_agent_activity_display;
 use crate::pager_overlay::Overlay;
+use crate::realtime_voice::RealtimeMicCommand;
+use crate::realtime_voice::RealtimeMicMode;
+use crate::realtime_voice::RealtimeVoiceCommand;
+use crate::realtime_voice::RealtimeVoiceSession;
+use crate::realtime_voice_rotation::select_startup_voice;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
@@ -127,6 +132,8 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryMode;
+use codex_app_server_protocol::ThreadRealtimeStartParams;
+use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
@@ -163,6 +170,8 @@ use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 #[cfg(target_os = "windows")]
 use codex_protocol::permissions::FileSystemSandboxKind;
+use codex_protocol::protocol::RealtimeConversationVersion;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_rollout::StateDbHandle;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -526,6 +535,10 @@ pub(crate) struct App {
     workspace_command_runner: Option<WorkspaceCommandRunner>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
+    realtime_mic_mode: RealtimeMicMode,
+    realtime_voice_session: Option<RealtimeVoiceSession>,
+    realtime_voice_debug: bool,
+    realtime_handoff_debug_ids: VecDeque<String>,
     launch_cwd: PathBuf,
     pub(crate) state_db: Option<StateDbHandle>,
     cli_kv_overrides: Vec<(String, TomlValue)>,
@@ -851,6 +864,9 @@ impl App {
         let requires_openai_auth = bootstrap.requires_openai_auth;
         let status_account_display = bootstrap.status_account_display.clone();
         let initial_plan_type = bootstrap.plan_type;
+        if let Some(voice) = select_startup_voice(&config.realtime, config.codex_home.as_path()) {
+            config.realtime.voice = Some(voice);
+        }
         let session_bootstrap_config = config.clone();
         let session_bootstrap_model = session_bootstrap_config
             .model
@@ -1038,6 +1054,7 @@ See the Codex keymap documentation for supported actions and examples."
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
+        let realtime_mic_mode = RealtimeMicMode::from_config_enabled(config.realtime.enabled);
         let mut app = Self {
             model_catalog,
             session_telemetry: session_telemetry.clone(),
@@ -1045,6 +1062,10 @@ See the Codex keymap documentation for supported actions and examples."
             chat_widget,
             workspace_command_runner: Some(workspace_command_runner),
             config,
+            realtime_mic_mode,
+            realtime_voice_session: None,
+            realtime_voice_debug: false,
+            realtime_handoff_debug_ids: VecDeque::new(),
             launch_cwd,
             state_db,
             cli_kv_overrides,

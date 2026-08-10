@@ -74,6 +74,7 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -268,6 +269,86 @@ async fn handle_mcp_inventory_result_respects_origin_thread() {
     );
 
     assert_eq!(app.transcript_cells.len(), 1);
+}
+
+#[tokio::test]
+async fn realtime_handoff_debug_renders_selected_effort() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    while app_event_rx.try_recv().is_ok() {}
+    let mut tui = crate::tui::test_support::make_test_tui().expect("test TUI should initialize");
+
+    app.realtime_voice_debug = true;
+    app.config.realtime.non_substantive_reasoning_effort =
+        Some(codex_protocol::openai_models::ReasoningEffort::Low);
+    let thread_id = ThreadId::new();
+    app.enqueue_primary_thread_session(
+        test_thread_session(thread_id, test_path_buf("/tmp/project")),
+        Vec::new(),
+    )
+    .await
+    .expect("primary thread should be registered");
+    let sender = app.thread_event_channels[&thread_id].sender.clone();
+    for (handoff_id, item_id, input) in [
+        ("handoff-1", "item-1", "What time is it?"),
+        ("handoff-1", "item-2", "This duplicate should be ignored."),
+        ("handoff-2", "item-3", "Please update the configuration."),
+        (
+            "handoff-3",
+            "item-4",
+            "Please inspect the change and then edit it.",
+        ),
+        ("handoff-4", "item-5", ""),
+        ("handoff-4", "item-6", "What branch am I on?"),
+    ] {
+        let routing = match (handoff_id, item_id) {
+            ("handoff-1", "item-1") => Some(serde_json::json!({
+                "classifier": {
+                    "kind": "model",
+                    "model": "gpt-5.3-codex-spark",
+                    "reasoning_effort": "minimal"
+                },
+                "classification": "read_only",
+                "selected_effort": "low"
+            })),
+            ("handoff-3", "item-4") => Some(serde_json::json!({
+                "classifier": {
+                    "kind": "text",
+                    "model": "gpt-5.3-codex-spark",
+                    "reasoning_effort": "minimal",
+                    "fallback": "timed_out"
+                },
+                "classification": "substantive"
+            })),
+            _ => None,
+        };
+        sender
+            .send(ThreadBufferedEvent::Notification(
+                ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
+                    thread_id: thread_id.to_string(),
+                    item: serde_json::json!({
+                        "type": "handoff_request",
+                        "handoff_id": handoff_id,
+                        "item_id": item_id,
+                        "input_transcript": input,
+                        "routing": routing,
+                    }),
+                }),
+            ))
+            .await
+            .expect("thread event channel should remain open");
+    }
+    app.drain_active_thread_events(&mut tui)
+        .await
+        .expect("active thread events should drain");
+
+    assert_app_snapshot!(
+        "realtime_handoff_debug",
+        app.transcript_cells
+            .iter()
+            .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 120)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
 }
 
 #[test]
@@ -1907,7 +1988,9 @@ fn selected_and_resumed_threads_use_server_capability_for_v1_and_v2_children() -
         assert!(backfill.completed);
         assert_eq!(
             backfill.refreshed_thread_ids,
-            [child_thread_ids[1]].into_iter().collect()
+            [child_thread_ids[1]]
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>()
         );
         assert_eq!(
             app.agent_navigation.get(&child_thread_ids[0]),
@@ -4889,6 +4972,7 @@ async fn make_test_app() -> App {
     let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
+    let realtime_mic_mode = RealtimeMicMode::from_config_enabled(config.realtime.enabled);
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
@@ -4900,6 +4984,10 @@ async fn make_test_app() -> App {
         workspace_command_runner: None,
         launch_cwd: config.cwd.to_path_buf(),
         config,
+        realtime_mic_mode,
+        realtime_voice_session: None,
+        realtime_voice_debug: false,
+        realtime_handoff_debug_ids: VecDeque::new(),
         state_db: None,
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
@@ -4956,6 +5044,7 @@ async fn make_test_app_with_channels() -> (
     let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
+    let realtime_mic_mode = RealtimeMicMode::from_config_enabled(config.realtime.enabled);
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
@@ -4968,6 +5057,10 @@ async fn make_test_app_with_channels() -> (
             workspace_command_runner: None,
             launch_cwd: config.cwd.to_path_buf(),
             config,
+            realtime_mic_mode,
+            realtime_voice_session: None,
+            realtime_voice_debug: false,
+            realtime_handoff_debug_ids: VecDeque::new(),
             state_db: None,
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),

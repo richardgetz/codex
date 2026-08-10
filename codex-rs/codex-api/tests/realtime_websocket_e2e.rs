@@ -630,6 +630,7 @@ async fn realtime_ws_e2e_realtime_v2_parser_emits_handoff_requested() {
                     text: "secret context".to_string(),
                 },
             ],
+            routing: None,
         })
     );
 

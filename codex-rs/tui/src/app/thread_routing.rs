@@ -1440,7 +1440,7 @@ impl App {
         let mut disconnected = false;
         loop {
             match rx.try_recv() {
-                Ok(event) => self.handle_thread_event_now(event),
+                Ok(event) => self.handle_thread_event_now_with_tui(tui, event),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     disconnected = true;
@@ -1587,6 +1587,9 @@ impl App {
     }
 
     pub(super) fn handle_thread_event_now(&mut self, event: ThreadBufferedEvent) {
+        if let ThreadBufferedEvent::Notification(notification) = &event {
+            self.handle_realtime_voice_notification(notification);
+        }
         let needs_refresh = matches!(
             &event,
             ThreadBufferedEvent::Notification(ServerNotification::TurnStarted(_))
@@ -1616,6 +1619,29 @@ impl App {
         }
         if needs_refresh {
             self.refresh_status_line();
+        }
+    }
+
+    pub(super) fn handle_thread_event_now_with_tui(
+        &mut self,
+        tui: &mut tui::Tui,
+        event: ThreadBufferedEvent,
+    ) {
+        let realtime_handoff_debug = match &event {
+            ThreadBufferedEvent::Notification(ServerNotification::ThreadRealtimeItemAdded(
+                notification,
+            )) => self.realtime_handoff_debug_message(notification),
+            _ => None,
+        };
+        self.handle_thread_event_now(event);
+        if let Some(message) = realtime_handoff_debug {
+            for cell in self.chat_widget.prepare_immediate_info_message(message) {
+                self.insert_history_cell(tui, cell);
+            }
+            // This diagnostic is inserted directly by the app rather than through
+            // ChatWidget's normal AppEvent path. Wake the top-level renderer so it
+            // appears before the next user input.
+            tui.frame_requester().schedule_frame();
         }
     }
 
@@ -1697,7 +1723,7 @@ impl App {
             // thread, so unrelated shutdowns cannot consume this marker.
             self.pending_shutdown_exit_thread_id = None;
         }
-        self.handle_thread_event_now(event);
+        self.handle_thread_event_now_with_tui(tui, event);
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
         }

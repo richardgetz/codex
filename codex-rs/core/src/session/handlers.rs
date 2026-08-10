@@ -30,6 +30,7 @@ use crate::tasks::execute_user_shell_command;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
@@ -190,6 +191,45 @@ pub(super) async fn user_input_or_turn_inner(
     op: Op,
     client_user_message_id: Option<String>,
 ) {
+    user_input_or_turn_inner_with_reasoning_effort(
+        sess,
+        sub_id,
+        op,
+        TurnReasoningEffort::Persistent,
+        client_user_message_id,
+    )
+    .await;
+}
+
+pub(super) async fn user_input_or_turn_inner_with_transient_reasoning_effort(
+    sess: &Arc<Session>,
+    sub_id: String,
+    op: Op,
+    effort: ReasoningEffort,
+    client_user_message_id: Option<String>,
+) {
+    user_input_or_turn_inner_with_reasoning_effort(
+        sess,
+        sub_id,
+        op,
+        TurnReasoningEffort::Transient(effort),
+        client_user_message_id,
+    )
+    .await;
+}
+
+enum TurnReasoningEffort {
+    Persistent,
+    Transient(ReasoningEffort),
+}
+
+async fn user_input_or_turn_inner_with_reasoning_effort(
+    sess: &Arc<Session>,
+    sub_id: String,
+    op: Op,
+    reasoning_effort: TurnReasoningEffort,
+    client_user_message_id: Option<String>,
+) {
     let Op::UserInput {
         items,
         final_output_json_schema,
@@ -208,7 +248,18 @@ pub(super) async fn user_input_or_turn_inner(
     };
     updates.final_output_json_schema = Some(final_output_json_schema);
 
-    let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
+    let current_context = match reasoning_effort {
+        TurnReasoningEffort::Persistent => sess.new_turn_with_sub_id(sub_id.clone(), updates).await,
+        TurnReasoningEffort::Transient(effort) => {
+            sess.new_turn_with_transient_reasoning_effort(
+                sub_id.clone(),
+                updates.final_output_json_schema,
+                effort,
+            )
+            .await
+        }
+    };
+    let Ok(current_context) = current_context else {
         // new_turn_with_sub_id already emits the error event.
         return;
     };
