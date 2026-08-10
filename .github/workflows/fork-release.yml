@@ -109,6 +109,22 @@ jobs:
             ~/.cargo/git/checkouts/
           key: fork-release-cargo-${{ runner.os }}-${{ matrix.target }}-${{ steps.cargo-cache-key.outputs.lock_hash }}
 
+      - name: "[39%] Verify vendored Opus CMake compatibility"
+        shell: bash
+        env:
+          # audiopus_sys 0.2.2 vendors Opus with cmake_minimum_required(VERSION 3.1).
+          # CMake 4 rejects policy versions older than 3.5 unless an external
+          # compatibility minimum is supplied for the third-party project.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+        run: |
+          set -euo pipefail
+          opus_source="$(find "$HOME/.cargo/registry/src" -type d -path '*/audiopus_sys-0.2.2/opus' -print -quit)"
+          test -n "${opus_source}"
+          cmake -S "${opus_source}" -B "${RUNNER_TEMP}/audiopus-opus-configure" \
+            -DOPUS_BUILD_PROGRAMS=OFF \
+            -DOPUS_BUILD_TESTING=OFF \
+            -DOPUS_BUILD_SHARED_LIBRARY=OFF
+
       - name: "[40-60%] Build release binary"
         shell: bash
         env:
@@ -118,6 +134,8 @@ jobs:
           # settings that timed out this deployment.
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
           CARGO_PROFILE_RELEASE_LTO: "false"
+          # Keep the vendored audiopus_sys Opus project compatible with CMake 4.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
           CODEX_SOURCE_BASE_VERSION: ${{ needs.compute-release.outputs.base_version }}
           CODEX_SOURCE_VERSION_SUFFIX: rick.${{ needs.compute-release.outputs.fork_counter }}
           HEARTBEAT_INTERVAL_SEC: 60
