@@ -77,6 +77,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Mutex;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -358,6 +359,7 @@ struct RealtimeHandoffOutput {
 #[derive(Debug, Default)]
 struct RealtimeHandoffStreamState {
     active_handoff: Option<String>,
+    deferred_phase_less_output: Option<(String, RealtimeHandoffOutput)>,
     items: HashMap<String, RealtimeStreamedItem>,
 }
 
@@ -514,7 +516,7 @@ fn take_last_bytes_at_char_boundary(text: &str, max_bytes: usize) -> &str {
     &text[start..]
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 enum RealtimeOutbound {
     StandaloneHandoff {
         text: String,
@@ -544,6 +546,9 @@ enum RealtimeOutbound {
     },
     HandoffCompleteAck {
         handoff_id: String,
+    },
+    Flush {
+        completion: oneshot::Sender<()>,
     },
 }
 
@@ -996,10 +1001,36 @@ impl RealtimeConversationManager {
             phase
         };
         if handoff.suppresses_output(phase.as_ref()) {
+            handoff.stream.lock().await.deferred_phase_less_output = None;
             return Ok(());
         }
         let is_commentary = matches!(phase, Some(MessagePhase::Commentary));
-        let active_handoff = handoff.stream.lock().await.active_handoff.clone();
+        let defer_phase_less_output = handoff.session_kind == RealtimeSessionKind::V1
+            && handoff.event_parser == RealtimeEventParser::FramelessBidi
+            && handoff.suppress_preambles
+            && phase.is_none()
+            && !handoff.codex_responses_as_items
+            && !output_text.trim().is_empty();
+        let (active_handoff, deferred) = {
+            let mut stream = handoff.stream.lock().await;
+            let active_handoff = stream.active_handoff.clone();
+            if defer_phase_less_output && let Some(handoff_id) = active_handoff.clone() {
+                stream.deferred_phase_less_output = Some((
+                    handoff_id,
+                    RealtimeHandoffOutput {
+                        text: realtime_backend_output(output_text.clone(), handoff.session_kind),
+                        phase: None,
+                    },
+                ));
+                (active_handoff, true)
+            } else {
+                stream.deferred_phase_less_output = None;
+                (active_handoff, false)
+            }
+        };
+        if deferred {
+            return Ok(());
+        }
         let output = match active_handoff {
             Some(handoff_id) => {
                 let output_text = realtime_backend_output(output_text, handoff.session_kind);
@@ -1073,10 +1104,11 @@ impl RealtimeConversationManager {
         let Some(handoff) = handoff else {
             return;
         };
+        handoff.stream.lock().await.deferred_phase_less_output = None;
         if !handoff.streams_handoff_append() {
             return;
         }
-        if handoff.suppresses_output(phase.as_ref()) {
+        if !handoff.routes_handoff_by_bem() && handoff.suppresses_output(phase.as_ref()) {
             return;
         }
         let flush_delay = {
@@ -1105,7 +1137,10 @@ impl RealtimeConversationManager {
                 flush_scheduled: false,
             };
             streamed_item.push_text(&initial_text);
-            let flush_delay = if streamed_item.buffered_text.is_empty() {
+            let flush_delay = if handoff.suppresses_output(streamed_item.phase.as_ref())
+                || (handoff.suppress_preambles && streamed_item.phase.is_none())
+                || streamed_item.buffered_text.is_empty()
+            {
                 None
             } else {
                 streamed_item.flush_scheduled = true;
@@ -1145,7 +1180,11 @@ impl RealtimeConversationManager {
                 return Ok(());
             };
             streamed_item.push_text(&delta);
-            if streamed_item.flush_scheduled || streamed_item.streamable_text_bytes() == 0 {
+            if handoff.suppresses_output(streamed_item.phase.as_ref())
+                || (handoff.suppress_preambles && streamed_item.phase.is_none())
+                || streamed_item.flush_scheduled
+                || streamed_item.streamable_text_bytes() == 0
+            {
                 None
             } else {
                 streamed_item.flush_scheduled = true;
@@ -1169,23 +1208,46 @@ impl RealtimeConversationManager {
         if !handoff.streams_handoff_append() {
             return false;
         }
-        let Some(mut streamed_item) = handoff.stream.lock().await.items.remove(item_id) else {
-            return false;
+        let (output, handled) = {
+            let mut stream = handoff.stream.lock().await;
+            let Some(mut streamed_item) = stream.items.remove(item_id) else {
+                return false;
+            };
+            streamed_item.finish_input();
+            let chunk = streamed_item.drain_final_chunk();
+            let sent_output = streamed_item.sent_bytes > 0;
+            if handoff.suppresses_output(streamed_item.phase.as_ref()) {
+                (None, true)
+            } else if handoff.suppress_preambles && streamed_item.phase.is_none() {
+                let handled = if let Some(text) = chunk {
+                    stream.deferred_phase_less_output = Some((
+                        streamed_item.handoff_id.clone(),
+                        RealtimeHandoffOutput { text, phase: None },
+                    ));
+                    true
+                } else {
+                    sent_output
+                };
+                (None, handled)
+            } else {
+                let handled = sent_output || chunk.is_some();
+                (
+                    chunk.map(|text| (streamed_item.handoff_id, text, streamed_item.phase)),
+                    handled,
+                )
+            }
         };
-        streamed_item.finish_input();
-        let chunk = streamed_item.drain_final_chunk();
-        let sent_output = streamed_item.sent_bytes > 0;
-        if let Some(text) = chunk {
+        if let Some((handoff_id, text, phase)) = output {
             let _ = handoff
                 .output_tx
                 .send(RealtimeOutbound::HandoffAppend {
-                    handoff_id: streamed_item.handoff_id,
+                    handoff_id,
                     text,
-                    phase: streamed_item.phase,
+                    phase,
                 })
                 .await;
         }
-        sent_output
+        handled
     }
 
     pub(crate) async fn append_speech(&self, text: String) -> CodexResult<()> {
@@ -1224,14 +1286,60 @@ impl RealtimeConversationManager {
         if handoff.client_managed_handoffs {
             return Ok(());
         }
-        match handoff.session_kind {
-            RealtimeSessionKind::V1 => return Ok(()),
-            RealtimeSessionKind::V2 => {}
+        let (handoff_id, deferred_output) = {
+            let mut stream = handoff.stream.lock().await;
+            let Some(handoff_id) = stream.active_handoff.clone() else {
+                return Ok(());
+            };
+            (
+                handoff_id.clone(),
+                stream
+                    .deferred_phase_less_output
+                    .take()
+                    .filter(|(deferred_handoff_id, _)| deferred_handoff_id == &handoff_id),
+            )
+        };
+        let deferred_output_sent =
+            if let Some((deferred_handoff_id, deferred_output)) = deferred_output {
+                let output = if handoff.codex_responses_as_items {
+                    RealtimeOutbound::ConversationItem {
+                        text: realtime_backend_item(
+                            deferred_output.text,
+                            handoff.codex_response_item_prefix.as_deref(),
+                        ),
+                        phase: deferred_output.phase,
+                    }
+                } else {
+                    RealtimeOutbound::HandoffAppend {
+                        handoff_id: deferred_handoff_id,
+                        text: deferred_output.text,
+                        phase: deferred_output.phase,
+                    }
+                };
+                handoff.output_tx.send(output).await.map_err(|_| {
+                    CodexErr::InvalidRequest("conversation is not running".to_string())
+                })?;
+                true
+            } else {
+                false
+            };
+        if deferred_output_sent {
+            let (completion_tx, completion_rx) = oneshot::channel();
+            handoff
+                .output_tx
+                .send(RealtimeOutbound::Flush {
+                    completion: completion_tx,
+                })
+                .await
+                .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
+            completion_rx
+                .await
+                .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
+        }
+        if handoff.session_kind == RealtimeSessionKind::V1 {
+            return Ok(());
         }
 
-        let Some(handoff_id) = handoff.stream.lock().await.active_handoff.clone() else {
-            return Ok(());
-        };
         let Some(last_output) = handoff.last_output.lock().await.clone() else {
             return Ok(());
         };
@@ -1262,6 +1370,7 @@ impl RealtimeConversationManager {
             {
                 let mut stream = handoff.stream.lock().await;
                 stream.active_handoff = None;
+                stream.deferred_phase_less_output = None;
                 stream.items.clear();
             }
             *handoff.last_output.lock().await = None;
@@ -2321,6 +2430,10 @@ async fn handle_handoff_output(
                     .await
             }
             RealtimeOutbound::HandoffCompleteAck { .. } => Ok(()),
+            RealtimeOutbound::Flush { completion } => {
+                let _ = completion.send(());
+                Ok(())
+            }
         },
         RealtimeEventParser::FramelessBidi => match handoff_output {
             RealtimeOutbound::StandaloneHandoff { text, phase } => {
@@ -2388,6 +2501,10 @@ async fn handle_handoff_output(
                 .await
             }
             RealtimeOutbound::HandoffCompleteAck { .. } => Ok(()),
+            RealtimeOutbound::Flush { completion } => {
+                let _ = completion.send(());
+                Ok(())
+            }
         },
         RealtimeEventParser::RealtimeV2 => match handoff_output {
             RealtimeOutbound::StandaloneHandoff { text, phase: _ } => {
@@ -2464,6 +2581,10 @@ async fn handle_handoff_output(
                 writer
                     .send_conversation_function_call_output(handoff_id, String::new())
                     .await
+            }
+            RealtimeOutbound::Flush { completion } => {
+                let _ = completion.send(());
+                Ok(())
             }
         },
     };
@@ -2597,6 +2718,7 @@ async fn handle_realtime_server_event(
                 RealtimeSessionKind::V1 => {
                     let mut stream = handoff_state.stream.lock().await;
                     stream.items.clear();
+                    stream.deferred_phase_less_output = None;
                     stream.active_handoff = Some(handoff.handoff_id.clone());
                 }
                 RealtimeSessionKind::V2 => {

@@ -1862,6 +1862,52 @@ async fn webrtc_v1_disabled_preambles_does_not_forward_commentary() -> Result<()
 }
 
 #[tokio::test]
+async fn webrtc_v1_disabled_preambles_preserves_phase_less_final_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut harness = RealtimeE2eHarness::new_without_preambles(
+        RealtimeTestVersion::V1,
+        main_loop_responses(vec![responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-final", "background complete"),
+            responses::ev_completed("resp-1"),
+        ])]),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![
+                session_updated("sess_v1_phase_less_final"),
+                json!({
+                    "type": "conversation.handoff.requested",
+                    "handoff_id": "handoff_phase_less_final",
+                    "item_id": "item_phase_less_final",
+                    "input_transcript": "run the background task"
+                }),
+            ],
+            vec![],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+    assert_eq!(started.started.version, RealtimeConversationVersion::V1);
+    let _ = harness
+        .read_notification::<TurnCompletedNotification>("turn/completed")
+        .await?;
+
+    assert_eq!(
+        harness.sideband_outbound_request(/*request_index*/ 1).await,
+        json!({
+            "type": "conversation.handoff.append",
+            "handoff_id": "handoff_phase_less_final",
+            "output_text": "\"Agent Final Message\":\n\nbackground complete",
+        })
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn websocket_v3_disabled_preambles_does_not_forward_commentary() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1919,6 +1965,205 @@ async fn websocket_v3_disabled_preambles_does_not_forward_commentary() -> Result
             "content": [{
                 "type": "input_text",
                 "text": "background complete"
+            }]
+        })
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_v3_disabled_preambles_does_not_forward_phase_less_commentary() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let commentary = responses::ev_assistant_message("msg-commentary", "background progress");
+    let mut final_answer = responses::ev_assistant_message("msg-final", "background complete");
+    final_answer["item"]["phase"] = json!("final_answer");
+    let mut harness = RealtimeE2eHarness::new_without_preambles(
+        RealtimeTestVersion::V1,
+        main_loop_responses(vec![responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            commentary,
+            final_answer,
+            responses::ev_completed("resp-1"),
+        ])]),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![
+                session_started("sess_v3_phase_less_no_preambles"),
+                json!({
+                    "type": "delegation.created",
+                    "offset_ms": 100,
+                    "item": {
+                        "id": "delegation_phase_less_no_preambles",
+                        "type": "delegation",
+                        "target": "client",
+                        "content": [{
+                            "type": "input_text",
+                            "text": "run the background task"
+                        }]
+                    }
+                }),
+            ],
+            vec![],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness
+        .start_frameless_bidi_realtime(
+            /*codex_response_handoff_mode*/ None,
+            /*codex_response_handoff_channel_prefixes*/ None, /*initial_items*/ None,
+        )
+        .await?;
+    assert_eq!(started.version, RealtimeConversationVersion::V3);
+    let _ = harness
+        .read_notification::<TurnCompletedNotification>("turn/completed")
+        .await?;
+
+    assert_eq!(
+        harness.sideband_outbound_request(/*request_index*/ 1).await,
+        json!({
+            "type": "delegation.context.append",
+            "delegation_item_id": "delegation_phase_less_no_preambles",
+            "content": [{
+                "type": "input_text",
+                "text": "background complete"
+            }]
+        })
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_v3_disabled_preambles_preserves_phase_less_final_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut harness = RealtimeE2eHarness::new_without_preambles(
+        RealtimeTestVersion::V1,
+        main_loop_responses(vec![responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-final", "background complete"),
+            responses::ev_completed("resp-1"),
+        ])]),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![
+                session_started("sess_v3_phase_less_final"),
+                json!({
+                    "type": "delegation.created",
+                    "offset_ms": 100,
+                    "item": {
+                        "id": "delegation_phase_less_final",
+                        "type": "delegation",
+                        "target": "client",
+                        "content": [{
+                            "type": "input_text",
+                            "text": "run the background task"
+                        }]
+                    }
+                }),
+            ],
+            vec![],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness
+        .start_frameless_bidi_realtime(
+            /*codex_response_handoff_mode*/ None,
+            /*codex_response_handoff_channel_prefixes*/ None, /*initial_items*/ None,
+        )
+        .await?;
+    assert_eq!(started.version, RealtimeConversationVersion::V3);
+    let _ = harness
+        .read_notification::<TurnCompletedNotification>("turn/completed")
+        .await?;
+
+    assert_eq!(
+        harness.sideband_outbound_request(/*request_index*/ 1).await,
+        json!({
+            "type": "delegation.context.append",
+            "delegation_item_id": "delegation_phase_less_final",
+            "content": [{
+                "type": "input_text",
+                "text": "background complete"
+            }]
+        })
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_v3_disabled_preambles_suppresses_bem_commentary() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let commentary =
+        responses::ev_assistant_message("msg-commentary", "[COMMENTARY]background progress");
+    let mut final_answer =
+        responses::ev_assistant_message("msg-final", "[FINAL]background complete");
+    final_answer["item"]["phase"] = json!("commentary");
+    let mut harness = RealtimeE2eHarness::new_without_preambles(
+        RealtimeTestVersion::V1,
+        main_loop_responses(vec![responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            commentary,
+            final_answer,
+            responses::ev_completed("resp-1"),
+        ])]),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![
+                session_started("sess_v3_bem_no_preambles"),
+                json!({
+                    "type": "delegation.created",
+                    "offset_ms": 100,
+                    "item": {
+                        "id": "delegation_bem_no_preambles",
+                        "type": "delegation",
+                        "target": "client",
+                        "content": [{
+                            "type": "input_text",
+                            "text": "run the background task"
+                        }]
+                    }
+                }),
+            ],
+            vec![],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness
+        .start_frameless_bidi_realtime(
+            Some(CodexResponseHandoffMode::BemTags),
+            Some(BTreeMap::from([
+                ("analysis".to_string(), vec!["[ANALYSIS]".to_string()]),
+                ("commentary".to_string(), vec!["[COMMENTARY]".to_string()]),
+                ("final".to_string(), vec!["[FINAL]".to_string()]),
+            ])),
+            /*initial_items*/ None,
+        )
+        .await?;
+    assert_eq!(started.version, RealtimeConversationVersion::V3);
+    let _ = harness
+        .read_notification::<TurnCompletedNotification>("turn/completed")
+        .await?;
+
+    assert_eq!(
+        harness.sideband_outbound_request(/*request_index*/ 1).await,
+        json!({
+            "type": "delegation.context.append",
+            "delegation_item_id": "delegation_bem_no_preambles",
+            "channel": "speakable",
+            "content": [{
+                "type": "input_text",
+                "text": "[FINAL]background complete"
             }]
         })
     );
