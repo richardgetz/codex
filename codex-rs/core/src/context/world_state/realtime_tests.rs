@@ -77,7 +77,7 @@ fn preamble_transition_emits_the_current_policy() {
 
     let reenabled_fragment = enabled
         .render_diff(PreviousSectionState::Known(&suppressed.snapshot()))
-        .expect("reenable transition should update realtime instructions");
+        .expect("re-enable transition should update realtime instructions");
     assert!(
         reenabled_fragment
             .render()
