@@ -7,6 +7,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::config_toml::RealtimeAudioConfig;
+pub(crate) use codex_protocol::protocol::REALTIME_NO_PREAMBLES_PROMPT;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use cpal::traits::StreamTrait;
@@ -61,8 +62,6 @@ pub(crate) const INPUT_BUFFER_FRAMES: usize = 30 * 1_000 / 20;
 pub(crate) const INPUT_PREROLL_FRAMES: usize = 100 / 20;
 pub(crate) const INPUT_SIGNAL_THRESHOLD: i16 = 98;
 pub(crate) const DEFAULT_REALTIME_HOTKEY: &str = "right-option";
-pub(crate) const REALTIME_NO_PREAMBLES_PROMPT: &str = "You are in a live voice conversation. Do not produce conversational backchannels, acknowledgements, filler, or progress preambles, including phrases such as 'mm-hmm', 'ah', 'okay', 'let me check', or 'I will take a look'. After the user's turn, begin directly with the substantive answer or action. Do not announce that you are checking, thinking, or about to respond. If more information is needed, ask the substantive question directly.";
-
 pub(crate) fn realtime_start_prompt(enable_preambles: bool) -> Option<Option<String>> {
     (!enable_preambles).then(|| Some(REALTIME_NO_PREAMBLES_PROMPT.to_string()))
 }

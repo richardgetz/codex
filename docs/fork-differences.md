@@ -168,14 +168,22 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
   Set `[realtime].enabled = false` to disable the voice feature and its hotkey
   entirely. `/mic off` is a session-level mode change and does not rewrite that
-  config gate. `enable_preambles = false` sends the exact V3 session prompt that
-  suppresses GPT-Live filler acknowledgements and progress preambles, and also
-  suppresses commentary-phase main-agent output from the realtime audio handoff.
-  Final answers still speak, the normal TUI output is unchanged, and the
-  GPT-Live transport remains unchanged. The acknowledgement cue is local to
-  the TUI, independent of the model prompt, and can use the built-in sound or
-  a mono/stereo PCM/float WAV up to one second. Voice and device changes apply
-  to the next voice session. When `voice_rotation` is set, its cursor is stored under
+  config gate. `enable_preambles = false` sends the no-preamble policy in the
+  realtime session prompt, appends it after any configured backend prompt
+  override, and injects it into the main-agent realtime context. It also suppresses
+  explicit commentary-phase bridge output from the realtime audio handoff.
+  Phase-less output is preserved because the protocol does not provide enough
+  metadata to distinguish a filler phrase from a final answer. Final answers
+  still speak, the normal TUI output is unchanged, and GPT-Live's wire
+  transport and protocol versions remain unchanged. Handoff forwarding keeps
+  the existing append/update ordering needed by each realtime version. GPT-Live audio has no event-level preamble marker, so its
+  filler suppression is prompt-controlled rather than a client-side audio
+  heuristic that could clip real answers. The
+  acknowledgement cue is local to the TUI, independent of the model prompt,
+  and can use the built-in sound or a mono/stereo PCM/float WAV up to one
+  second. The setting is captured when a realtime session starts, so restart
+  the voice session after changing it. Voice and device changes apply to the
+  next voice session. When `voice_rotation` is set, its cursor is stored under
   `<codex_home>/realtime_voice_rotation.json`; the configured list takes
   precedence only at startup and does not rewrite `config.toml`; rotation entries
   are limited to the GPT-Live V3 voice list. The optional

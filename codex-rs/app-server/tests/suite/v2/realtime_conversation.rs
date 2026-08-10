@@ -1844,6 +1844,15 @@ async fn webrtc_v1_disabled_preambles_does_not_forward_commentary() -> Result<()
 
     let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
     assert_eq!(started.started.version, RealtimeConversationVersion::V1);
+    let session_update = harness.sideband_outbound_request(/*request_index*/ 0).await;
+    let instructions = session_update["session"]["instructions"]
+        .as_str()
+        .context("realtime session update should include instructions")?;
+    assert!(instructions.contains("Respond normally to the user's direct conversational turns"));
+    assert!(
+        instructions
+            .ends_with("A normal direct answer is not a preamble and must still be spoken.")
+    );
     let _ = harness
         .read_notification::<TurnCompletedNotification>("turn/completed")
         .await?;
@@ -1876,6 +1885,13 @@ async fn webrtc_v1_disabled_preambles_preserves_phase_less_final_output() -> Res
             vec![
                 session_updated("sess_v1_phase_less_final"),
                 json!({
+                    "type": "conversation.output_audio.delta",
+                    "delta": "AQID",
+                    "sample_rate": 24_000,
+                    "channels": 1,
+                    "samples_per_channel": 512
+                }),
+                json!({
                     "type": "conversation.handoff.requested",
                     "handoff_id": "handoff_phase_less_final",
                     "item_id": "item_phase_less_final",
@@ -1890,6 +1906,14 @@ async fn webrtc_v1_disabled_preambles_preserves_phase_less_final_output() -> Res
 
     let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
     assert_eq!(started.started.version, RealtimeConversationVersion::V1);
+    let session_update = harness.sideband_outbound_request(/*request_index*/ 0).await;
+    assert_no_preamble_session_instructions(&session_update)?;
+    let output_audio = harness
+        .read_notification::<ThreadRealtimeOutputAudioDeltaNotification>(
+            "thread/realtime/outputAudio/delta",
+        )
+        .await?;
+    assert_eq!(output_audio.audio.data, "AQID");
     let _ = harness
         .read_notification::<TurnCompletedNotification>("turn/completed")
         .await?;
@@ -1953,6 +1977,9 @@ async fn websocket_v3_disabled_preambles_does_not_forward_commentary() -> Result
         )
         .await?;
     assert_eq!(started.version, RealtimeConversationVersion::V3);
+    assert_no_preamble_session_instructions(
+        &harness.sideband_outbound_request(/*request_index*/ 0).await,
+    )?;
     let _ = harness
         .read_notification::<TurnCompletedNotification>("turn/completed")
         .await?;
@@ -1962,71 +1989,6 @@ async fn websocket_v3_disabled_preambles_does_not_forward_commentary() -> Result
         json!({
             "type": "delegation.context.append",
             "delegation_item_id": "delegation_no_preambles",
-            "content": [{
-                "type": "input_text",
-                "text": "background complete"
-            }]
-        })
-    );
-
-    harness.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn websocket_v3_disabled_preambles_does_not_forward_phase_less_commentary() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let commentary = responses::ev_assistant_message("msg-commentary", "background progress");
-    let mut final_answer = responses::ev_assistant_message("msg-final", "background complete");
-    final_answer["item"]["phase"] = json!("final_answer");
-    let mut harness = RealtimeE2eHarness::new_without_preambles(
-        RealtimeTestVersion::V1,
-        main_loop_responses(vec![responses::sse(vec![
-            responses::ev_response_created("resp-1"),
-            commentary,
-            final_answer,
-            responses::ev_completed("resp-1"),
-        ])]),
-        realtime_sideband(vec![realtime_sideband_connection(vec![
-            vec![
-                session_started("sess_v3_phase_less_no_preambles"),
-                json!({
-                    "type": "delegation.created",
-                    "offset_ms": 100,
-                    "item": {
-                        "id": "delegation_phase_less_no_preambles",
-                        "type": "delegation",
-                        "target": "client",
-                        "content": [{
-                            "type": "input_text",
-                            "text": "run the background task"
-                        }]
-                    }
-                }),
-            ],
-            vec![],
-            vec![],
-        ])]),
-    )
-    .await?;
-
-    let started = harness
-        .start_frameless_bidi_realtime(
-            /*codex_response_handoff_mode*/ None,
-            /*codex_response_handoff_channel_prefixes*/ None, /*initial_items*/ None,
-        )
-        .await?;
-    assert_eq!(started.version, RealtimeConversationVersion::V3);
-    let _ = harness
-        .read_notification::<TurnCompletedNotification>("turn/completed")
-        .await?;
-
-    assert_eq!(
-        harness.sideband_outbound_request(/*request_index*/ 1).await,
-        json!({
-            "type": "delegation.context.append",
-            "delegation_item_id": "delegation_phase_less_no_preambles",
             "content": [{
                 "type": "input_text",
                 "text": "background complete"
@@ -2052,6 +2014,10 @@ async fn websocket_v3_disabled_preambles_preserves_phase_less_final_output() -> 
         realtime_sideband(vec![realtime_sideband_connection(vec![
             vec![
                 session_started("sess_v3_phase_less_final"),
+                json!({
+                    "type": "output_audio.delta",
+                    "audio": "AQID"
+                }),
                 json!({
                     "type": "delegation.created",
                     "offset_ms": 100,
@@ -2079,6 +2045,15 @@ async fn websocket_v3_disabled_preambles_preserves_phase_less_final_output() -> 
         )
         .await?;
     assert_eq!(started.version, RealtimeConversationVersion::V3);
+    assert_no_preamble_session_instructions(
+        &harness.sideband_outbound_request(/*request_index*/ 0).await,
+    )?;
+    let output_audio = harness
+        .read_notification::<ThreadRealtimeOutputAudioDeltaNotification>(
+            "thread/realtime/outputAudio/delta",
+        )
+        .await?;
+    assert_eq!(output_audio.audio.data, "AQID");
     let _ = harness
         .read_notification::<TurnCompletedNotification>("turn/completed")
         .await?;
@@ -2351,21 +2326,76 @@ async fn realtime_automatic_standalone_output_is_item_and_append_speaks() -> Res
 }
 
 #[tokio::test]
-async fn realtime_v2_disabled_preambles_does_not_forward_phase_less_commentary() -> Result<()> {
+async fn realtime_v2_disabled_preambles_completes_phase_less_final_without_response_items()
+-> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let mut harness = RealtimeE2eHarness::new_without_preambles(
+        RealtimeTestVersion::V2,
+        main_loop_responses(vec![create_final_assistant_message_sse_response(
+            "automatic final",
+        )?]),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![
+                session_updated("sess_v2_phase_less_final_without_items"),
+                v2_background_agent_tool_call("call_phase_less_final", "delegate quietly"),
+            ],
+            vec![],
+            vec![],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness
+        .start_websocket_realtime_with_codex_responses_as_items(None)
+        .await?;
+    assert_eq!(started.version, RealtimeConversationVersion::V2);
+
+    let _ = harness
+        .read_notification::<TurnStartedNotification>("turn/started")
+        .await?;
+    let _ = harness
+        .read_notification::<TurnCompletedNotification>("turn/completed")
+        .await?;
+
+    assert_v2_progress_update(
+        &harness.sideband_outbound_request(/*request_index*/ 1).await,
+        "automatic final",
+    );
+    assert_v2_function_call_output(
+        &harness.sideband_outbound_request(/*request_index*/ 2).await,
+        "call_phase_less_final",
+        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
+    );
+    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 3).await);
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn realtime_v2_disabled_preambles_suppresses_commentary_and_preserves_final() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut commentary = responses::ev_assistant_message("msg-commentary", "automatic progress");
+    commentary["item"]["phase"] = json!("commentary");
     let mut final_answer = responses::ev_assistant_message("msg-final", "automatic final");
     final_answer["item"]["phase"] = json!("final_answer");
     let mut harness = RealtimeE2eHarness::new_without_preambles(
         RealtimeTestVersion::V2,
         main_loop_responses(vec![responses::sse(vec![
             responses::ev_response_created("resp-1"),
-            responses::ev_assistant_message("msg-commentary", "let me check that"),
+            commentary,
             final_answer,
             responses::ev_completed("resp-1"),
         ])]),
         realtime_sideband(vec![realtime_sideband_connection(vec![
-            vec![session_updated("sess_v2_no_preambles")],
+            vec![
+                session_updated("sess_v2_commentary_suppressed"),
+                v2_background_agent_tool_call("call_commentary_suppressed", "delegate quietly"),
+            ],
+            vec![],
             vec![],
             vec![],
         ])]),
@@ -2376,38 +2406,27 @@ async fn realtime_v2_disabled_preambles_does_not_forward_phase_less_commentary()
         .start_websocket_realtime_with_codex_response_items()
         .await?;
     assert_eq!(started.version, RealtimeConversationVersion::V2);
+    let session_update = harness.sideband_outbound_request(/*request_index*/ 0).await;
+    let instructions = session_update["session"]["instructions"]
+        .as_str()
+        .context("realtime session update should include instructions")?;
+    assert!(instructions.contains("Respond normally to the user's direct conversational turns"));
 
-    let turn_request_id = harness
-        .mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: harness.thread_id.clone(),
-            input: vec![V2UserInput::Text {
-                text: "check the current state".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
+    let _ = harness
+        .read_notification::<TurnStartedNotification>("turn/started")
         .await?;
-    let _: TurnStartResponse =
-        timeout(DEFAULT_TIMEOUT, harness.mcp.read_response(turn_request_id)).await??;
     let _ = harness
         .read_notification::<TurnCompletedNotification>("turn/completed")
         .await?;
 
-    assert_v2_backend_item_update(
+    assert_v2_items_update(
         &harness.sideband_outbound_request(/*request_index*/ 1).await,
-        "automatic final",
+        "[BACKEND] automatic final",
     );
-    let preamble = timeout(
-        Duration::from_millis(200),
-        harness
-            .realtime_server
-            .wait_for_request(/*connection_index*/ 0, /*request_index*/ 2),
-    )
-    .await;
-    assert!(
-        preamble.is_err(),
-        "phase-less handoff commentary should not reach realtime"
+    assert_v2_function_call_output(
+        &harness.sideband_outbound_request(/*request_index*/ 2).await,
+        "call_commentary_suppressed",
+        "",
     );
 
     harness.shutdown().await;
@@ -2785,7 +2804,7 @@ async fn websocket_v2_forwards_audio_and_text_between_client_and_sideband() -> R
 
     // Phase 1: create a v2 websocket conversation whose sideband sends transcript + output audio
     // after the client has had a chance to append input.
-    let mut harness = RealtimeE2eHarness::new(
+    let mut harness = RealtimeE2eHarness::new_without_preambles(
         RealtimeTestVersion::V2,
         no_main_loop_responses(),
         realtime_sideband(vec![realtime_sideband_connection(vec![
@@ -2810,7 +2829,9 @@ async fn websocket_v2_forwards_audio_and_text_between_client_and_sideband() -> R
 
     let started = harness.start_websocket_realtime().await?;
     assert_eq!(started.version, RealtimeConversationVersion::V2);
-    assert_v2_session_update(&harness.sideband_outbound_request(/*request_index*/ 0).await)?;
+    let session_update = harness.sideband_outbound_request(/*request_index*/ 0).await;
+    assert_v2_session_update(&session_update)?;
+    assert_no_preamble_session_instructions(&session_update)?;
 
     // Phase 2: drive app-server as the client would: append audio, append text, then receive
     // transcript/audio notifications that came from the sideband socket.
@@ -3700,6 +3721,17 @@ fn assert_v2_response_create(request: &Value) {
             "type": "response.create"
         })
     );
+}
+
+fn assert_no_preamble_session_instructions(request: &Value) -> Result<()> {
+    let instructions = request["session"]["instructions"]
+        .as_str()
+        .context("realtime session update should include instructions")?;
+    assert!(instructions.contains("Respond normally to the user's direct conversational turns"));
+    assert!(
+        instructions.contains("A normal direct answer is not a preamble and must still be spoken")
+    );
+    Ok(())
 }
 
 fn assert_v1_session_update(request: &Value) -> Result<()> {

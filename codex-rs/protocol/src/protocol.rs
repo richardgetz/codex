@@ -235,6 +235,9 @@ pub enum ConversationStartTransport {
     Webrtc { sdp: String },
 }
 
+/// Prompt-level policy shared by the TUI and core realtime session setup.
+pub const REALTIME_NO_PREAMBLES_PROMPT: &str = "You are in a live voice conversation. Respond normally to the user's direct conversational turns, including brief answers and acknowledgements when they are the answer. When a turn requires delegated work, do not emit a standalone backchannel, acknowledgement, filler, or progress preamble while waiting for the delegated result. Avoid phrases such as 'mm-hmm', 'ah', 'okay', 'let me check', or 'I will take a look' as standalone progress messages. This instruction overrides general guidance to send preamble messages. Begin the substantive answer or action directly. Do not announce that you are checking, thinking, or about to respond. If more information is needed, ask the substantive question directly. A normal direct answer is not a preamble and must still be spoken.";
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum RealtimeOutputModality {
