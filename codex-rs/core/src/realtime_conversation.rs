@@ -359,7 +359,7 @@ struct RealtimeHandoffOutput {
 #[derive(Debug, Default)]
 struct RealtimeHandoffStreamState {
     active_handoff: Option<String>,
-    deferred_phase_less_output: Option<(String, RealtimeHandoffOutput)>,
+    deferred_phase_less_output: Option<(Option<String>, RealtimeHandoffOutput)>,
     items: HashMap<String, RealtimeStreamedItem>,
 }
 
@@ -1005,18 +1005,14 @@ impl RealtimeConversationManager {
             return Ok(());
         }
         let is_commentary = matches!(phase, Some(MessagePhase::Commentary));
-        let defer_phase_less_output = handoff.session_kind == RealtimeSessionKind::V1
-            && handoff.event_parser == RealtimeEventParser::FramelessBidi
-            && handoff.suppress_preambles
-            && phase.is_none()
-            && !handoff.codex_responses_as_items
-            && !output_text.trim().is_empty();
+        let defer_phase_less_output =
+            handoff.suppress_preambles && phase.is_none() && !output_text.trim().is_empty();
         let (active_handoff, deferred) = {
             let mut stream = handoff.stream.lock().await;
             let active_handoff = stream.active_handoff.clone();
-            if defer_phase_less_output && let Some(handoff_id) = active_handoff.clone() {
+            if defer_phase_less_output {
                 stream.deferred_phase_less_output = Some((
-                    handoff_id,
+                    active_handoff.clone(),
                     RealtimeHandoffOutput {
                         text: realtime_backend_output(output_text.clone(), handoff.session_kind),
                         phase: None,
@@ -1221,7 +1217,7 @@ impl RealtimeConversationManager {
             } else if handoff.suppress_preambles && streamed_item.phase.is_none() {
                 let handled = if let Some(text) = chunk {
                     stream.deferred_phase_less_output = Some((
-                        streamed_item.handoff_id.clone(),
+                        Some(streamed_item.handoff_id.clone()),
                         RealtimeHandoffOutput { text, phase: None },
                     ));
                     true
@@ -1288,9 +1284,7 @@ impl RealtimeConversationManager {
         }
         let (handoff_id, deferred_output) = {
             let mut stream = handoff.stream.lock().await;
-            let Some(handoff_id) = stream.active_handoff.clone() else {
-                return Ok(());
-            };
+            let handoff_id = stream.active_handoff.clone();
             (
                 handoff_id.clone(),
                 stream
@@ -1309,10 +1303,23 @@ impl RealtimeConversationManager {
                         ),
                         phase: deferred_output.phase,
                     }
-                } else {
+                } else if let Some(deferred_handoff_id) = deferred_handoff_id {
                     RealtimeOutbound::HandoffAppend {
                         handoff_id: deferred_handoff_id,
-                        text: deferred_output.text,
+                        text: if handoff.event_parser == RealtimeEventParser::V1 {
+                            format!("{AGENT_FINAL_MESSAGE_PREFIX}{}", deferred_output.text)
+                        } else {
+                            deferred_output.text
+                        },
+                        phase: deferred_output.phase,
+                    }
+                } else {
+                    RealtimeOutbound::StandaloneHandoff {
+                        text: if handoff.event_parser == RealtimeEventParser::V1 {
+                            format!("{AGENT_FINAL_MESSAGE_PREFIX}{}", deferred_output.text)
+                        } else {
+                            deferred_output.text
+                        },
                         phase: deferred_output.phase,
                     }
                 };
@@ -1336,6 +1343,9 @@ impl RealtimeConversationManager {
                 .await
                 .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
         }
+        let Some(handoff_id) = handoff_id else {
+            return Ok(());
+        };
         if handoff.session_kind == RealtimeSessionKind::V1 {
             return Ok(());
         }
@@ -1345,7 +1355,9 @@ impl RealtimeConversationManager {
         };
 
         let output = if handoff.codex_responses_as_items {
-            RealtimeOutbound::HandoffCompleteAck { handoff_id }
+            RealtimeOutbound::HandoffCompleteAck {
+                handoff_id: handoff_id.clone(),
+            }
         } else {
             RealtimeOutbound::CompletedHandoff {
                 handoff_id,

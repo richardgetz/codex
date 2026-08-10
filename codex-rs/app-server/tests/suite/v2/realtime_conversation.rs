@@ -2351,6 +2351,70 @@ async fn realtime_automatic_standalone_output_is_item_and_append_speaks() -> Res
 }
 
 #[tokio::test]
+async fn realtime_v2_disabled_preambles_does_not_forward_phase_less_commentary() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut final_answer = responses::ev_assistant_message("msg-final", "automatic final");
+    final_answer["item"]["phase"] = json!("final_answer");
+    let mut harness = RealtimeE2eHarness::new_without_preambles(
+        RealtimeTestVersion::V2,
+        main_loop_responses(vec![responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-commentary", "let me check that"),
+            final_answer,
+            responses::ev_completed("resp-1"),
+        ])]),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![session_updated("sess_v2_no_preambles")],
+            vec![],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness
+        .start_websocket_realtime_with_codex_response_items()
+        .await?;
+    assert_eq!(started.version, RealtimeConversationVersion::V2);
+
+    let turn_request_id = harness
+        .mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: harness.thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "check the current state".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse =
+        timeout(DEFAULT_TIMEOUT, harness.mcp.read_response(turn_request_id)).await??;
+    let _ = harness
+        .read_notification::<TurnCompletedNotification>("turn/completed")
+        .await?;
+
+    assert_v2_backend_item_update(
+        &harness.sideband_outbound_request(/*request_index*/ 1).await,
+        "automatic final",
+    );
+    let preamble = timeout(
+        Duration::from_millis(200),
+        harness
+            .realtime_server
+            .wait_for_request(/*connection_index*/ 0, /*request_index*/ 2),
+    )
+    .await;
+    assert!(
+        preamble.is_err(),
+        "phase-less handoff commentary should not reach realtime"
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn realtime_automatic_handoff_output_is_item_and_append_speaks() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
