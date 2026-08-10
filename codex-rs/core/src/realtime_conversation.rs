@@ -338,6 +338,7 @@ struct RealtimeHandoffState {
     last_output: Arc<Mutex<Option<RealtimeHandoffOutput>>>,
     stream: Arc<Mutex<RealtimeHandoffStreamState>>,
     transport_handoff_deduper: Arc<Mutex<RealtimeHandoffDeduper>>,
+    suppress_preambles: bool,
     suppress_non_final_output: Arc<AtomicBool>,
     client_managed_handoffs: bool,
     codex_responses_as_items: bool,
@@ -637,7 +638,7 @@ struct RealtimeInputChannels {
 
 impl RealtimeHandoffState {
     fn suppresses_output(&self, phase: Option<&MessagePhase>) -> bool {
-        self.suppress_non_final_output.load(Ordering::Relaxed)
+        (self.suppress_preambles || self.suppress_non_final_output.load(Ordering::Relaxed))
             && matches!(phase, Some(MessagePhase::Commentary))
     }
 
@@ -668,6 +669,7 @@ struct ConversationState {
 struct RealtimeStart {
     api_provider: ApiProvider,
     extra_headers: Option<HeaderMap>,
+    suppress_preambles: bool,
     client_managed_handoffs: bool,
     flush_transcript_tail_on_session_end: bool,
     codex_responses_as_items: bool,
@@ -751,6 +753,7 @@ impl RealtimeConversationManager {
         let RealtimeStart {
             api_provider,
             extra_headers,
+            suppress_preambles,
             client_managed_handoffs,
             flush_transcript_tail_on_session_end,
             codex_responses_as_items,
@@ -786,6 +789,7 @@ impl RealtimeConversationManager {
             last_output: Arc::new(Mutex::new(None)),
             stream: Arc::new(Mutex::new(RealtimeHandoffStreamState::default())),
             transport_handoff_deduper: Arc::new(Mutex::new(RealtimeHandoffDeduper::default())),
+            suppress_preambles,
             suppress_non_final_output: Arc::new(AtomicBool::new(false)),
             client_managed_handoffs,
             codex_responses_as_items,
@@ -1333,6 +1337,7 @@ pub(crate) async fn handle_start(
 struct PreparedRealtimeConversationStart {
     api_provider: ApiProvider,
     extra_headers: Option<HeaderMap>,
+    suppress_preambles: bool,
     client_managed_handoffs: bool,
     flush_transcript_tail_on_session_end: bool,
     codex_responses_as_items: bool,
@@ -1430,6 +1435,7 @@ async fn prepare_realtime_start(
     Ok(PreparedRealtimeConversationStart {
         api_provider,
         extra_headers: Some(extra_headers),
+        suppress_preambles: !config.realtime.enable_preambles,
         client_managed_handoffs: params.client_managed_handoffs,
         flush_transcript_tail_on_session_end: params.flush_transcript_tail_on_session_end,
         codex_responses_as_items: params.codex_responses_as_items,
@@ -1633,6 +1639,7 @@ async fn handle_start_inner(
     let PreparedRealtimeConversationStart {
         api_provider,
         extra_headers,
+        suppress_preambles,
         client_managed_handoffs,
         flush_transcript_tail_on_session_end,
         codex_responses_as_items,
@@ -1653,6 +1660,7 @@ async fn handle_start_inner(
     let start = RealtimeStart {
         api_provider,
         extra_headers,
+        suppress_preambles,
         client_managed_handoffs,
         flush_transcript_tail_on_session_end,
         codex_responses_as_items,

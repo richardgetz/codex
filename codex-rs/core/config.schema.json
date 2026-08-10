@@ -3130,7 +3130,7 @@
           "description": "Optional absolute path to a WAV file used instead of the built-in acknowledgement cue."
         },
         "enable_preambles": {
-          "description": "Allows GPT-Live to use brief conversational acknowledgements and progress preambles.",
+          "description": "Allows GPT-Live and the realtime handoff mirror to emit brief conversational acknowledgements and progress preambles.",
           "type": "boolean"
         },
         "enabled": {

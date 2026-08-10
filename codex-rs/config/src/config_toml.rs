@@ -760,7 +760,8 @@ pub struct RealtimeConfig {
     /// Enables the native live voice push-to-talk shortcut in the TUI.
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Allows GPT-Live to use brief conversational acknowledgements and progress preambles.
+    /// Allows GPT-Live and the realtime handoff mirror to emit brief conversational
+    /// acknowledgements and progress preambles.
     #[serde(default = "default_true")]
     pub enable_preambles: bool,
     /// Optional reasoning effort for clearly read-only realtime handoffs. When omitted, the
@@ -813,7 +814,8 @@ impl Default for RealtimeConfig {
 pub struct RealtimeToml {
     /// Enables the native live voice push-to-talk shortcut in the TUI.
     pub enabled: Option<bool>,
-    /// Allows GPT-Live to use brief conversational acknowledgements and progress preambles.
+    /// Allows GPT-Live and the realtime handoff mirror to emit brief conversational
+    /// acknowledgements and progress preambles.
     pub enable_preambles: Option<bool>,
     /// Optional reasoning effort for clearly read-only realtime handoffs. When omitted, the
     /// active session effort is inherited.

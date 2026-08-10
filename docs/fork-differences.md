@@ -169,11 +169,13 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   Set `[realtime].enabled = false` to disable the voice feature and its hotkey
   entirely. `/mic off` is a session-level mode change and does not rewrite that
   config gate. `enable_preambles = false` sends the exact V3 session prompt that
-  suppresses filler acknowledgements and progress preambles while leaving the
-  GPT-Live transport unchanged. The acknowledgement cue is local to the TUI,
-  independent of the model prompt, and can use the built-in sound or a mono/
-  stereo PCM/float WAV up to one second. Voice and device changes apply to the
-  next voice session. When `voice_rotation` is set, its cursor is stored under
+  suppresses GPT-Live filler acknowledgements and progress preambles, and also
+  suppresses commentary-phase main-agent output from the realtime audio handoff.
+  Final answers still speak, the normal TUI output is unchanged, and the
+  GPT-Live transport remains unchanged. The acknowledgement cue is local to
+  the TUI, independent of the model prompt, and can use the built-in sound or
+  a mono/stereo PCM/float WAV up to one second. Voice and device changes apply
+  to the next voice session. When `voice_rotation` is set, its cursor is stored under
   `<codex_home>/realtime_voice_rotation.json`; the configured list takes
   precedence only at startup and does not rewrite `config.toml`; rotation entries
   are limited to the GPT-Live V3 voice list. The optional

@@ -218,6 +218,23 @@ impl RealtimeE2eHarness {
         main_loop: MainLoopResponsesScript,
         realtime_sideband: RealtimeSidebandScript,
     ) -> Result<Self> {
+        Self::new_with_preambles(realtime_version, main_loop, realtime_sideband, true).await
+    }
+
+    async fn new_without_preambles(
+        realtime_version: RealtimeTestVersion,
+        main_loop: MainLoopResponsesScript,
+        realtime_sideband: RealtimeSidebandScript,
+    ) -> Result<Self> {
+        Self::new_with_preambles(realtime_version, main_loop, realtime_sideband, false).await
+    }
+
+    async fn new_with_preambles(
+        realtime_version: RealtimeTestVersion,
+        main_loop: MainLoopResponsesScript,
+        realtime_sideband: RealtimeSidebandScript,
+        enable_preambles: bool,
+    ) -> Result<Self> {
         let main_loop_responses_server =
             create_mock_responses_server_sequence_unchecked(main_loop.responses).await;
         Self::new_with_main_loop_responses_server_and_sandbox(
@@ -225,6 +242,7 @@ impl RealtimeE2eHarness {
             main_loop_responses_server,
             realtime_sideband,
             RealtimeTestSandbox::ReadOnly,
+            enable_preambles,
         )
         .await
     }
@@ -242,6 +260,7 @@ impl RealtimeE2eHarness {
             main_loop_responses_server,
             realtime_sideband,
             sandbox,
+            true,
         )
         .await
     }
@@ -256,6 +275,7 @@ impl RealtimeE2eHarness {
             main_loop_responses_server,
             realtime_sideband,
             RealtimeTestSandbox::ReadOnly,
+            true,
         )
         .await
     }
@@ -265,6 +285,7 @@ impl RealtimeE2eHarness {
         main_loop_responses_server: MockServer,
         realtime_sideband: RealtimeSidebandScript,
         sandbox: RealtimeTestSandbox,
+        enable_preambles: bool,
     ) -> Result<Self> {
         let call_capture = RealtimeCallRequestCapture::new();
         Mock::given(method("POST"))
@@ -299,6 +320,7 @@ impl RealtimeE2eHarness {
             StartupContextConfig::Override("startup context"),
             realtime_version,
             sandbox,
+            enable_preambles,
         )?;
 
         let mut mcp = TestAppServer::builder()
@@ -1781,6 +1803,123 @@ async fn webrtc_v1_ignores_codex_response_handoff_mode() -> Result<()> {
             "type": "conversation.handoff.append",
             "handoff_id": "handoff_channel",
             "output_text": "\"Agent Final Message\":\n\nbackground complete",
+        })
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn webrtc_v1_disabled_preambles_does_not_forward_commentary() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut commentary = responses::ev_assistant_message("msg-commentary", "background progress");
+    commentary["item"]["phase"] = json!("commentary");
+    let mut final_answer = responses::ev_assistant_message("msg-final", "background complete");
+    final_answer["item"]["phase"] = json!("final_answer");
+    let mut harness = RealtimeE2eHarness::new_without_preambles(
+        RealtimeTestVersion::V1,
+        main_loop_responses(vec![responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            commentary,
+            final_answer,
+            responses::ev_completed("resp-1"),
+        ])]),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![
+                session_updated("sess_v1_no_preambles"),
+                json!({
+                    "type": "conversation.handoff.requested",
+                    "handoff_id": "handoff_no_preambles",
+                    "item_id": "item_no_preambles",
+                    "input_transcript": "run the background task"
+                }),
+            ],
+            vec![],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+    assert_eq!(started.started.version, RealtimeConversationVersion::V1);
+    let _ = harness
+        .read_notification::<TurnCompletedNotification>("turn/completed")
+        .await?;
+
+    assert_eq!(
+        harness.sideband_outbound_request(/*request_index*/ 1).await,
+        json!({
+            "type": "conversation.handoff.append",
+            "handoff_id": "handoff_no_preambles",
+            "output_text": "\"Agent Final Message\":\n\nbackground complete",
+        })
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_v3_disabled_preambles_does_not_forward_commentary() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut commentary = responses::ev_assistant_message("msg-commentary", "background progress");
+    commentary["item"]["phase"] = json!("commentary");
+    let mut final_answer = responses::ev_assistant_message("msg-final", "background complete");
+    final_answer["item"]["phase"] = json!("final_answer");
+    let mut harness = RealtimeE2eHarness::new_without_preambles(
+        RealtimeTestVersion::V1,
+        main_loop_responses(vec![responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            commentary,
+            final_answer,
+            responses::ev_completed("resp-1"),
+        ])]),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![
+                session_started("sess_v3_no_preambles"),
+                json!({
+                    "type": "delegation.created",
+                    "offset_ms": 100,
+                    "item": {
+                        "id": "delegation_no_preambles",
+                        "type": "delegation",
+                        "target": "client",
+                        "content": [{
+                            "type": "input_text",
+                            "text": "run the background task"
+                        }]
+                    }
+                }),
+            ],
+            vec![],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness
+        .start_frameless_bidi_realtime(
+            /*codex_response_handoff_mode*/ None,
+            /*codex_response_handoff_channel_prefixes*/ None, /*initial_items*/ None,
+        )
+        .await?;
+    assert_eq!(started.version, RealtimeConversationVersion::V3);
+    let _ = harness
+        .read_notification::<TurnCompletedNotification>("turn/completed")
+        .await?;
+
+    assert_eq!(
+        harness.sideband_outbound_request(/*request_index*/ 1).await,
+        json!({
+            "type": "delegation.context.append",
+            "delegation_item_id": "delegation_no_preambles",
+            "content": [{
+                "type": "input_text",
+                "text": "background complete"
+            }]
         })
     );
 
@@ -3356,6 +3495,7 @@ fn create_config_toml(
         startup_context,
         RealtimeTestVersion::V2,
         RealtimeTestSandbox::ReadOnly,
+        true,
     )
 }
 
@@ -3367,6 +3507,7 @@ fn create_config_toml_with_realtime_version(
     startup_context: StartupContextConfig<'_>,
     realtime_version: RealtimeTestVersion,
     sandbox: RealtimeTestSandbox,
+    enable_preambles: bool,
 ) -> std::io::Result<()> {
     let mut config = MockResponsesConfig::new(responses_server_uri)
         .with_sandbox_mode(sandbox.config_value())
@@ -3375,8 +3516,8 @@ fn create_config_toml_with_realtime_version(
              experimental_realtime_ws_backend_prompt = \"backend prompt\""
         ))
         .with_extra_config(&format!(
-            "[realtime]\nversion = \"{}\"\ntype = \"conversational\"",
-            realtime_version.config_value()
+            "[realtime]\nversion = \"{}\"\ntype = \"conversational\"\nenable_preambles = {enable_preambles}",
+            realtime_version.config_value(),
         ));
 
     if let StartupContextConfig::Override(context) = startup_context {
