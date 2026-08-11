@@ -68,6 +68,9 @@ impl ChatWidget {
                 self.handle_turn_completed_notification(notification, replay_kind);
             }
             ServerNotification::ItemStarted(notification) => {
+                if replay_kind.is_none() {
+                    self.handle_realtime_agent_item_started(&notification.item);
+                }
                 self.handle_item_started_notification(notification, replay_kind.is_some());
             }
             ServerNotification::ItemCompleted(notification) => {
@@ -207,7 +210,13 @@ impl ChatWidget {
             }
             ServerNotification::ThreadRealtimeStarted(_) => {
                 if !from_replay {
+                    self.clear_realtime_preamble_suppression_history();
                     self.finish_realtime_transcript_stream();
+                }
+            }
+            ServerNotification::ThreadRealtimeItemAdded(notification) => {
+                if !from_replay {
+                    self.handle_realtime_handoff_item(&notification.item);
                 }
             }
             ServerNotification::ThreadRealtimeTranscriptDelta(notification) => {
@@ -252,7 +261,6 @@ impl ChatWidget {
             | ServerNotification::TurnModerationMetadata(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
-            | ServerNotification::ThreadRealtimeItemAdded(_)
             | ServerNotification::ThreadRealtimeOutputAudioDelta(_)
             | ServerNotification::ThreadRealtimeSdp(_)
             | ServerNotification::WindowsWorldWritableWarning(_)
@@ -324,6 +332,7 @@ impl ChatWidget {
                 self.on_interrupted_turn(reason);
             }
             TurnStatus::Failed => {
+                self.reset_realtime_preamble_suppression();
                 if let Some(error) = notification.turn.error {
                     if self.last_non_retry_error.as_ref()
                         == Some(&(notification.turn.id.clone(), error.message.clone()))

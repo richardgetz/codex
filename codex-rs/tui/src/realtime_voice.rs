@@ -227,6 +227,8 @@ pub(crate) struct RealtimeVoiceSession {
     input_stream: cpal::Stream,
     output_stream: cpal::Stream,
     output_queue: Arc<Mutex<VecDeque<i16>>>,
+    acknowledgement_queue: Arc<Mutex<VecDeque<i16>>>,
+    output_muted: Arc<AtomicBool>,
     acknowledgement_samples: Option<Vec<i16>>,
     input_task: JoinHandle<()>,
 }
@@ -276,6 +278,8 @@ impl RealtimeVoiceSession {
         let output_config = output_supported.config();
         let input_muted = Arc::new(AtomicBool::new(false));
         let output_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let acknowledgement_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let output_muted = Arc::new(AtomicBool::new(false));
         let acknowledgement_samples = load_acknowledgement_sound(acknowledgement_sound)?;
         let (input_tx, input_rx) = mpsc::channel(8);
 
@@ -293,6 +297,8 @@ impl RealtimeVoiceSession {
             output_supported.sample_format(),
             output_supported.channels(),
             Arc::clone(&output_queue),
+            Arc::clone(&acknowledgement_queue),
+            Arc::clone(&output_muted),
         )?;
 
         let mut media_engine = MediaEngine::default();
@@ -383,6 +389,8 @@ impl RealtimeVoiceSession {
                 input_stream,
                 output_stream,
                 output_queue,
+                acknowledgement_queue,
+                output_muted,
                 acknowledgement_samples,
                 input_task,
             },
@@ -394,21 +402,28 @@ impl RealtimeVoiceSession {
         self.input_muted.store(muted, Ordering::Relaxed);
     }
 
+    pub(crate) fn set_output_muted(&self, muted: bool) {
+        self.output_muted.store(muted, Ordering::Relaxed);
+        if muted && let Ok(mut output_queue) = self.output_queue.lock() {
+            output_queue.clear();
+        }
+    }
+
     pub(crate) fn play_acknowledgement_sound(&self) {
         let Some(samples) = &self.acknowledgement_samples else {
             return;
         };
-        let Ok(mut output_queue) = self.output_queue.lock() else {
+        let Ok(mut acknowledgement_queue) = self.acknowledgement_queue.lock() else {
             return;
         };
-        let excess = output_queue
+        let excess = acknowledgement_queue
             .len()
             .saturating_add(samples.len())
             .saturating_sub(MAX_OUTPUT_SAMPLES);
         if excess > 0 {
-            output_queue.drain(..excess);
+            acknowledgement_queue.drain(..excess);
         }
-        output_queue.extend(samples.iter().copied());
+        acknowledgement_queue.extend(samples.iter().copied());
     }
 
     /// Applies the server answer delivered through `thread/realtime/sdp`.

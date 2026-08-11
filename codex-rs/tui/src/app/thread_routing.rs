@@ -1662,6 +1662,7 @@ impl App {
             _ => Vec::new(),
         };
         self.handle_thread_event_now(event);
+        self.sync_realtime_output_preamble_gate();
         let remaining_debug_messages = REALTIME_OUTPUT_DEBUG_MESSAGE_LIMIT
             .saturating_sub(self.realtime_output_debug_message_count);
         let realtime_debug_messages = realtime_debug_messages

@@ -1237,12 +1237,26 @@ impl App {
 
     pub(super) async fn stop_realtime_voice(&mut self, app_server: &mut AppServerSession) {
         let Some(session) = self.realtime_voice_session.take() else {
+            self.realtime_output_muted_for_preamble = false;
             return;
         };
         if let Some(thread_id) = self.active_thread_id.or(self.chat_widget.thread_id()) {
             let _ = app_server.thread_realtime_stop(thread_id).await;
         }
         session.close().await;
+        self.realtime_output_muted_for_preamble = false;
+    }
+
+    pub(super) fn sync_realtime_output_preamble_gate(&mut self) {
+        let should_mute = !self.config.realtime.enable_preambles
+            && self.chat_widget.realtime_preamble_suppression_active();
+        if should_mute == self.realtime_output_muted_for_preamble {
+            return;
+        }
+        if let Some(session) = &self.realtime_voice_session {
+            session.set_output_muted(should_mute);
+        }
+        self.realtime_output_muted_for_preamble = should_mute;
     }
 
     pub(super) fn handle_realtime_voice_notification(&mut self, notification: &ServerNotification) {
@@ -1496,7 +1510,9 @@ impl App {
             self.realtime_output_debug_transcript_delta_count = 0;
         } else if item_type == "response.cancelled" {
             self.clear_realtime_output_response_state();
-            self.realtime_output_debug_handoff_id = None;
+            if !self.chat_widget.realtime_preamble_suppression_active() {
+                self.realtime_output_debug_handoff_id = None;
+            }
         } else if item_type == "response.done" {
             self.clear_realtime_output_response_state();
         } else {
@@ -1527,12 +1543,16 @@ impl App {
             .realtime_output_debug_handoff_id
             .as_deref()
             .unwrap_or("<missing>");
+        let delta_count = self.realtime_output_debug_transcript_delta_count;
         let text = realtime_handoff_debug_preview(&notification.text);
         let message = format!(
-            "GPT-Live output debug: source `assistant transcript`; item_id `{item_id}`; response_id `{response_id}`; handoff_id `{handoff_id}`; text `{text}`."
+            "GPT-Live output debug: source `assistant transcript`; item_id `{item_id}`; response_id `{response_id}`; handoff_id `{handoff_id}`; delta_count `{delta_count}`; text `{text}`."
         );
+        let preamble_suppression_active = self.chat_widget.realtime_preamble_suppression_active();
         self.clear_realtime_output_response_state();
-        self.realtime_output_debug_handoff_id = None;
+        if !preamble_suppression_active {
+            self.realtime_output_debug_handoff_id = None;
+        }
         Some(message)
     }
 
@@ -1609,16 +1629,7 @@ impl App {
             return None;
         }
         self.realtime_output_debug_transcript_delta_count += 1;
-        let item_id = "<missing>";
-        let response_id = "<missing>";
-        let handoff_id = self
-            .realtime_output_debug_handoff_id
-            .as_deref()
-            .unwrap_or("<missing>");
-        Some(format!(
-            "GPT-Live output debug: source `assistant transcript delta`; item_id `{item_id}`; response_id `{response_id}`; handoff_id `{handoff_id}`; delta `{}`.",
-            realtime_handoff_debug_preview(&notification.delta)
-        ))
+        None
     }
 
     pub(super) fn realtime_output_audio_debug_message(

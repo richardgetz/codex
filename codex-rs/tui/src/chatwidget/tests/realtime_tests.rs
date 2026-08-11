@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::history_cell::HistoryCell;
+use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 
@@ -100,6 +101,288 @@ async fn realtime_transcript_notifications_render_live_and_finalize() {
             );
         }
         other => panic!("expected finalized assistant transcript cell, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn disabled_preambles_suppress_handoff_transcript_but_preserve_final_answer() {
+    let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    chat.config.realtime.enable_preambles = false;
+    let thread_id = ThreadId::new();
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
+            thread_id: thread_id.to_string(),
+            item: serde_json::json!({
+                "type": "handoff_request",
+                "handoff_id": "handoff-1"
+            }),
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDelta(
+            ThreadRealtimeTranscriptDeltaNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                delta: "Checking that now.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            ThreadRealtimeTranscriptDoneNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                text: "Checking that now.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
+    assert!(rx.try_recv().is_err());
+
+    chat.transcript.realtime_turn_active = true;
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::AgentMessage {
+                id: "agent-item-1".to_string(),
+                text: "We're on agent/realtime-preamble-fix.".to_string(),
+                phase: Some(codex_protocol::models::MessagePhase::FinalAnswer),
+                memory_citation: None,
+            },
+            completed_at_ms: 1,
+        }),
+        /*replay_kind*/ None,
+    );
+    assert!(rx.try_recv().is_err());
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDelta(
+            ThreadRealtimeTranscriptDeltaNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                delta: "We're on agent/realtime-preamble-fix.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            ThreadRealtimeTranscriptDoneNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                text: "We're on agent/realtime-preamble-fix.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            let rendered = render_lines(cell.as_ref());
+            insta::assert_snapshot!("realtime_preamble_suppression_final", rendered);
+            assert!(rendered.contains("agent/realtime-preamble-fix"));
+        }
+        other => panic!("expected final realtime transcript cell, got {other:?}"),
+    }
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
+            thread_id: thread_id.to_string(),
+            item: serde_json::json!({
+                "type": "handoff_request",
+                "handoff_id": "handoff-1"
+            }),
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            ThreadRealtimeTranscriptDoneNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                text: "A direct follow-up.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            assert!(render_lines(cell.as_ref()).contains("A direct follow-up."));
+        }
+        other => panic!("expected follow-up transcript cell, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn disabled_preambles_survive_turn_start_and_suppress_agent_commentary() {
+    let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    chat.config.realtime.enable_preambles = false;
+    let thread_id = ThreadId::new();
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
+            thread_id: thread_id.to_string(),
+            item: serde_json::json!({
+                "type": "handoff_request",
+                "handoff_id": "handoff-1"
+            }),
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+                started_at: Some(1),
+                completed_at: None,
+                duration_ms: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::UserMessage {
+                id: "voice-user-1".to_string(),
+                client_id: None,
+                content: vec![AppServerUserInput::Text {
+                    text: "<realtime_delegation>branch?</realtime_delegation>".to_string(),
+                    text_elements: Vec::new(),
+                }],
+            },
+            completed_at_ms: 2,
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::AgentMessage {
+                id: "commentary-1".to_string(),
+                text: String::new(),
+                phase: Some(MessagePhase::Commentary),
+                memory_citation: None,
+            },
+            started_at_ms: 3,
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::AgentMessageDelta(
+            codex_app_server_protocol::AgentMessageDeltaNotification {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "commentary-1".to_string(),
+                delta: "Checking that now.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::AgentMessage {
+                id: "commentary-1".to_string(),
+                text: "Checking that now.".to_string(),
+                phase: Some(MessagePhase::Commentary),
+                memory_citation: None,
+            },
+            completed_at_ms: 4,
+        }),
+        /*replay_kind*/ None,
+    );
+    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
+    assert!(rx.try_recv().is_err());
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::AgentMessage {
+                id: "final-1".to_string(),
+                text: String::new(),
+                phase: Some(MessagePhase::FinalAnswer),
+                memory_citation: None,
+            },
+            started_at_ms: 5,
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDelta(
+            ThreadRealtimeTranscriptDeltaNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                delta: "We're on agent/realtime-preamble-fix.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            ThreadRealtimeTranscriptDoneNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                text: "We're on agent/realtime-preamble-fix.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            assert!(render_lines(cell.as_ref()).contains("agent/realtime-preamble-fix"));
+        }
+        other => panic!("expected final realtime transcript cell, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn disabled_preambles_release_after_interrupted_turn() {
+    let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    chat.config.realtime.enable_preambles = false;
+    let thread_id = ThreadId::new();
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
+            thread_id: thread_id.to_string(),
+            item: serde_json::json!({
+                "type": "handoff_request",
+                "handoff_id": "handoff-1"
+            }),
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+    while rx.try_recv().is_ok() {}
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            ThreadRealtimeTranscriptDoneNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                text: "The interrupted turn is no longer muted.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            assert!(render_lines(cell.as_ref()).contains("no longer muted"));
+        }
+        other => panic!("expected post-interruption transcript cell, got {other:?}"),
     }
 }
 

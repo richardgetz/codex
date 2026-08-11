@@ -170,15 +170,23 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   entirely. `/mic off` is a session-level mode change and does not rewrite that
   config gate. `enable_preambles = false` sends the no-preamble policy in the
   realtime session prompt, appends it after any configured backend prompt
-  override, and injects it into the main-agent realtime context. It also suppresses
-  explicit commentary-phase bridge output from the realtime audio handoff.
-  Phase-less output is preserved because the protocol does not provide enough
-  metadata to distinguish a filler phrase from a final answer. Final answers
-  still speak, the normal TUI output is unchanged, and GPT-Live's wire
-  transport and protocol versions remain unchanged. Handoff forwarding keeps
-  the existing append/update ordering needed by each realtime version. GPT-Live audio has no event-level preamble marker, so its
-  filler suppression is prompt-controlled rather than a client-side audio
-  heuristic that could clip real answers. The
+  override, and injects it into the main-agent realtime context. On a handoff,
+  the client then gates the explicitly typed assistant bridge transcript and
+  audio arriving during that deterministic handoff window until the main-agent
+  final-answer item starts. This suppresses phrases such as `Checking that now.`
+  without swallowing the final answer or the local acknowledgement cue. The
+  gate survives the hidden turn-start notification, ignores duplicate handoff
+  IDs, and resets on final, interrupted, failed, or closed turns. Phase-less
+  final output is released at the final-agent boundary; it is not broadly
+  buffered or discarded. Final answers still speak, the normal TUI output is
+  unchanged, and GPT-Live's wire transport and protocol versions remain
+  unchanged. Handoff forwarding keeps the existing append/update ordering
+  needed by each realtime version. GPT-Live can still emit an unmarked audio
+  backchannel outside that deterministic handoff window; because the protocol
+  provides no preamble event marker or audio phase, the client cannot safely
+  distinguish that audio from a real answer without risking clipped speech. The
+  no-preamble session prompt remains the deterministic control for those
+  unmarked model behaviors. The
   acknowledgement cue is local to the TUI, independent of the model prompt,
   and can use the built-in sound or a mono/stereo PCM/float WAV up to one
   second. The setting is captured when a realtime session starts, so restart
@@ -208,11 +216,13 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   response lifecycle, server-item, assistant-transcript delta/final, and audio
   events as they arrive, including the event source, item/response/handoff IDs
   when the protocol provides them, bounded assistant-text previews, and audio
-  shape metadata. Main-agent assistant item lifecycle and delta notifications
+  shape metadata. Transcript deltas are coalesced into the final transcript
+  diagnostic with a delta count instead of rendering one TUI line per word.
+  Main-agent assistant item lifecycle and delta notifications
   are tagged separately, including their item ID and message phase, so a bridge
   phrase can be distinguished from GPT-Live output. Returned-output diagnostics
-  never log audio bytes or user-role items. Handoff diagnostics also include a
-  an input character count (but not the spoken text) because they are specifically
+  never log audio bytes or user-role items. Handoff diagnostics also include an
+  input character count (but not the spoken text) because they are specifically
   used to verify classifier and handoff routing. The session-local diagnostic
   history and correlation state are bounded. Missing IDs in a diagnostic are
   evidence that the corresponding realtime event did not expose that identifier,

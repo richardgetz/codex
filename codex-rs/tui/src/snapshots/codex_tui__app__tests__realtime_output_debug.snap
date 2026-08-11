@@ -13,6 +13,5 @@ expression: "app.transcript_cells.iter().map(|cell|\nlines_to_single_string(&cel
 • GPT-Live output debug: source `server item`; type `message`; item_id `output-item-2`; response_id `<missing>`; handoff_id `handoff-1`; phase `commentary`; role `assistant`; text `hang on`.
 • GPT-Live output debug: source `audio`; chunk 1; item_id `output-item-2`; response_id `response-1`; handoff_id `handoff-1`; sample_rate 24000; channels 1; samples_per_channel `3`.
 • GPT-Live output debug: source `server response lifecycle`; type `response.done`; item_id `<missing>`; response_id `response-1`; handoff_id `handoff-1`; phase `<missing>`; role `<missing>`; text `<none>`.
-• GPT-Live output debug: source `assistant transcript delta`; item_id `<missing>`; response_id `<missing>`; handoff_id `handoff-1`; delta `The answer`.
 • The answer arrived.
-• GPT-Live output debug: source `assistant transcript`; item_id `<missing>`; response_id `<missing>`; handoff_id `handoff-1`; text `The answer arrived.`.
+• GPT-Live output debug: source `assistant transcript`; item_id `<missing>`; response_id `<missing>`; handoff_id `handoff-1`; delta_count `1`; text `The answer arrived.`.

@@ -3,6 +3,7 @@
 use super::HistoryCell;
 use crate::history_cell::RealtimeTranscriptCell;
 use crate::history_cell::RealtimeTranscriptHistoryEntry;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 
 #[derive(Default)]
@@ -18,6 +19,13 @@ pub(super) struct TranscriptState {
     /// transcript is delivered separately. Keep only the latter in the TUI so one voice turn does
     /// not appear twice.
     pub(super) realtime_turn_active: bool,
+    /// Whether assistant transcript output is temporarily suppressed while a no-preamble
+    /// realtime handoff waits for the main agent's final answer.
+    pub(super) realtime_preamble_suppression_active: bool,
+    /// Main-agent commentary items currently covered by the no-preamble gate.
+    pub(super) realtime_preamble_commentary_item_ids: HashSet<String>,
+    /// Identifier of the handoff that activated the no-preamble gate.
+    pub(super) realtime_preamble_suppression_handoff_id: Option<String>,
     /// Bounded completed GPT-Live transcript entries available through `/voice history`.
     pub(super) realtime_history: VecDeque<RealtimeTranscriptHistoryEntry>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
