@@ -46,6 +46,7 @@ fn frameless_transcript_and_audio_events_reuse_existing_internal_events() {
     let audio = r#"{
         "type": "output_audio.delta",
         "audio": "AAE=",
+        "item_id": "output-1",
         "start_ms": 0,
         "end_ms": 100
     }"#;
@@ -58,8 +59,39 @@ fn frameless_transcript_and_audio_events_reuse_existing_internal_events() {
         parse_frameless_bidi_event(done),
         Some(RealtimeEvent::InputTranscriptDone(_))
     ));
-    assert!(matches!(
-        parse_frameless_bidi_event(audio),
-        Some(RealtimeEvent::AudioOut(_))
-    ));
+    match parse_frameless_bidi_event(audio) {
+        Some(RealtimeEvent::AudioOut(frame)) => {
+            assert_eq!(frame.item_id.as_deref(), Some("output-1"));
+        }
+        other => panic!("expected audio output event, got {other:?}"),
+    }
+}
+
+#[test]
+fn frameless_response_events_preserve_response_ids_for_diagnostics() {
+    let created = r#"{
+        "type": "response.created",
+        "response": {"id": "response-1"}
+    }"#;
+    let done = r#"{
+        "type": "response.done",
+        "response_id": "response-1"
+    }"#;
+
+    assert_eq!(
+        parse_frameless_bidi_event(created),
+        Some(RealtimeEvent::ResponseCreated(
+            codex_protocol::protocol::RealtimeResponseCreated {
+                response_id: Some("response-1".to_string()),
+            }
+        ))
+    );
+    assert_eq!(
+        parse_frameless_bidi_event(done),
+        Some(RealtimeEvent::ResponseDone(
+            codex_protocol::protocol::RealtimeResponseDone {
+                response_id: Some("response-1".to_string()),
+            }
+        ))
+    );
 }

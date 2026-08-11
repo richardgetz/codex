@@ -251,6 +251,7 @@ use self::thread_events::*;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
+const REALTIME_OUTPUT_DEBUG_MESSAGE_LIMIT: usize = 256;
 
 enum ThreadInteractiveRequest {
     AppLink(AppLinkViewParams),
@@ -538,7 +539,13 @@ pub(crate) struct App {
     realtime_mic_mode: RealtimeMicMode,
     realtime_voice_session: Option<RealtimeVoiceSession>,
     realtime_voice_debug: bool,
-    realtime_handoff_debug_ids: VecDeque<String>,
+    realtime_handoff_debug_ids: VecDeque<u64>,
+    realtime_output_debug_item_id: Option<String>,
+    realtime_output_debug_response_id: Option<String>,
+    realtime_output_debug_handoff_id: Option<String>,
+    realtime_output_debug_audio_chunk_count: usize,
+    realtime_output_debug_transcript_delta_count: usize,
+    realtime_output_debug_message_count: usize,
     launch_cwd: PathBuf,
     pub(crate) state_db: Option<StateDbHandle>,
     cli_kv_overrides: Vec<(String, TomlValue)>,
@@ -1066,6 +1073,12 @@ See the Codex keymap documentation for supported actions and examples."
             realtime_voice_session: None,
             realtime_voice_debug: false,
             realtime_handoff_debug_ids: VecDeque::new(),
+            realtime_output_debug_item_id: None,
+            realtime_output_debug_response_id: None,
+            realtime_output_debug_handoff_id: None,
+            realtime_output_debug_audio_chunk_count: 0,
+            realtime_output_debug_transcript_delta_count: 0,
+            realtime_output_debug_message_count: 0,
             launch_cwd,
             state_db,
             cli_kv_overrides,

@@ -4,6 +4,9 @@ use crate::endpoint::realtime_websocket::protocol_common::parse_session_updated_
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
+use codex_protocol::protocol::RealtimeResponseCancelled;
+use codex_protocol::protocol::RealtimeResponseCreated;
+use codex_protocol::protocol::RealtimeResponseDone;
 use codex_protocol::protocol::RealtimeTranscriptDelta;
 use codex_protocol::protocol::RealtimeTranscriptDone;
 use serde_json::Value;
@@ -25,6 +28,17 @@ pub(super) fn parse_frameless_bidi_event(payload: &str) -> Option<RealtimeEvent>
         }
         "turn.done" => parse_turn_done(&parsed),
         "delegation.created" => parse_delegation_created(&parsed),
+        "response.created" => Some(RealtimeEvent::ResponseCreated(RealtimeResponseCreated {
+            response_id: parse_response_event_response_id(&parsed),
+        })),
+        "response.cancelled" => Some(RealtimeEvent::ResponseCancelled(
+            RealtimeResponseCancelled {
+                response_id: parse_response_event_response_id(&parsed),
+            },
+        )),
+        "response.done" => Some(RealtimeEvent::ResponseDone(RealtimeResponseDone {
+            response_id: parse_response_event_response_id(&parsed),
+        })),
         "error" => parse_error_event(&parsed),
         _ => {
             debug!(
@@ -35,13 +49,31 @@ pub(super) fn parse_frameless_bidi_event(payload: &str) -> Option<RealtimeEvent>
     }
 }
 
+fn parse_response_event_response_id(parsed: &Value) -> Option<String> {
+    parsed
+        .get("response")
+        .and_then(Value::as_object)
+        .and_then(|response| response.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            parsed
+                .get("response_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+}
+
 fn parse_output_audio_delta(parsed: &Value) -> Option<RealtimeEvent> {
     Some(RealtimeEvent::AudioOut(RealtimeAudioFrame {
         data: parsed.get("audio").and_then(Value::as_str)?.to_string(),
         sample_rate: DEFAULT_AUDIO_SAMPLE_RATE,
         num_channels: DEFAULT_AUDIO_CHANNELS,
         samples_per_channel: None,
-        item_id: None,
+        item_id: parsed
+            .get("item_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     }))
 }
 

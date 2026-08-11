@@ -650,6 +650,10 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         vec![],
         vec![
             json!({
+                "type": "response.created",
+                "response": { "id": "resp_stream" }
+            }),
+            json!({
                 "type": "response.output_audio.delta",
                 "delta": "AQID",
                 "sample_rate": 24_000,
@@ -684,6 +688,10 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                     "role": "assistant",
                     "content": [{ "type": "output_text", "text": "working on it" }]
                 }
+            }),
+            json!({
+                "type": "response.done",
+                "response": { "id": "resp_stream" }
             }),
             json!({
                 "type": "conversation.item.done",
@@ -819,6 +827,20 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     )
     .await??;
 
+    let response_created = read_notification::<ThreadRealtimeItemAddedNotification>(
+        &mut mcp,
+        "thread/realtime/itemAdded",
+    )
+    .await?;
+    assert_eq!(response_created.thread_id, thread_start.thread.id);
+    assert_eq!(
+        response_created.item,
+        json!({
+            "type": "response.created",
+            "response_id": "resp_stream"
+        })
+    );
+
     let output_audio = read_notification::<ThreadRealtimeOutputAudioDeltaNotification>(
         &mut mcp,
         "thread/realtime/outputAudio/delta",
@@ -863,6 +885,20 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert_eq!(final_transcript_done.thread_id, output_audio.thread_id);
     assert_eq!(final_transcript_done.role, "assistant");
     assert_eq!(final_transcript_done.text, "working on it");
+
+    let response_done = read_notification::<ThreadRealtimeItemAddedNotification>(
+        &mut mcp,
+        "thread/realtime/itemAdded",
+    )
+    .await?;
+    assert_eq!(response_done.thread_id, output_audio.thread_id);
+    assert_eq!(
+        response_done.item,
+        json!({
+            "type": "response.done",
+            "response_id": "resp_stream"
+        })
+    );
 
     let handoff_item_added = read_notification::<ThreadRealtimeItemAddedNotification>(
         &mut mcp,

@@ -79,6 +79,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -338,6 +339,7 @@ enum RealtimeSessionKind {
 #[derive(Clone, Debug)]
 struct RealtimeHandoffState {
     output_tx: Sender<RealtimeOutbound>,
+    output_send_gate: Arc<Semaphore>,
     last_output: Arc<Mutex<Option<RealtimeHandoffOutput>>>,
     stream: Arc<Mutex<RealtimeHandoffStreamState>>,
     transport_handoff_deduper: Arc<Mutex<RealtimeHandoffDeduper>>,
@@ -361,7 +363,9 @@ struct RealtimeHandoffOutput {
 #[derive(Debug, Default)]
 struct RealtimeHandoffStreamState {
     active_handoff: Option<String>,
+    completing: bool,
     items: HashMap<String, RealtimeStreamedItem>,
+    item_order: VecDeque<String>,
 }
 
 #[derive(Debug)]
@@ -507,6 +511,24 @@ impl RealtimeStreamedItem {
         self.sent_bytes += text.len();
         Some(text)
     }
+}
+
+fn finalize_streamed_handoff_item(
+    handoff: &RealtimeHandoffState,
+    mut streamed_item: RealtimeStreamedItem,
+) -> (Option<(String, String, Option<MessagePhase>)>, bool) {
+    streamed_item.finish_input();
+    let chunk = streamed_item.drain_final_chunk();
+    let sent_output = streamed_item.sent_bytes > 0;
+    if handoff.suppresses_output(streamed_item.phase.as_ref()) {
+        return (None, true);
+    }
+
+    let handled = sent_output || chunk.is_some();
+    (
+        chunk.map(|text| (streamed_item.handoff_id, text, streamed_item.phase)),
+        handled,
+    )
 }
 
 fn take_last_bytes_at_char_boundary(text: &str, max_bytes: usize) -> &str {
@@ -806,6 +828,7 @@ impl RealtimeConversationManager {
         let route_handoff_deduper = Arc::new(Mutex::new(RealtimeHandoffDeduper::default()));
         let handoff = RealtimeHandoffState {
             output_tx: handoff_output_tx,
+            output_send_gate: Arc::new(Semaphore::new(1)),
             last_output: Arc::new(Mutex::new(None)),
             stream: Arc::new(Mutex::new(RealtimeHandoffStreamState::default())),
             transport_handoff_deduper: Arc::new(Mutex::new(RealtimeHandoffDeduper::default())),
@@ -1018,8 +1041,18 @@ impl RealtimeConversationManager {
         if handoff.suppresses_output(phase.as_ref()) {
             return Ok(());
         }
+        let _output_gate = Arc::clone(&handoff.output_send_gate)
+            .acquire_owned()
+            .await
+            .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
         let is_commentary = matches!(phase, Some(MessagePhase::Commentary));
-        let active_handoff = handoff.stream.lock().await.active_handoff.clone();
+        let active_handoff = {
+            let stream = handoff.stream.lock().await;
+            if stream.completing {
+                return Ok(());
+            }
+            stream.active_handoff.clone()
+        };
         let output = match active_handoff {
             Some(handoff_id) => {
                 let output_text = realtime_backend_output(output_text, handoff.session_kind);
@@ -1105,6 +1138,9 @@ impl RealtimeConversationManager {
         }
         let flush_delay = {
             let mut stream = handoff.stream.lock().await;
+            if stream.completing {
+                return;
+            }
             let Some(handoff_id) = stream.active_handoff.clone() else {
                 return;
             };
@@ -1137,7 +1173,13 @@ impl RealtimeConversationManager {
                 streamed_item.flush_scheduled = true;
                 Some(streamed_item.next_flush_delay())
             };
-            stream.items.insert(item_id.clone(), streamed_item);
+            if stream
+                .items
+                .insert(item_id.clone(), streamed_item)
+                .is_none()
+            {
+                stream.item_order.push_back(item_id.clone());
+            }
             flush_delay
         };
         if let Some(flush_delay) = flush_delay {
@@ -1167,6 +1209,9 @@ impl RealtimeConversationManager {
         }
         let flush_delay = {
             let mut stream = handoff.stream.lock().await;
+            if stream.completing {
+                return Ok(());
+            }
             let Some(streamed_item) = stream.items.get_mut(item_id) else {
                 return Ok(());
             };
@@ -1198,24 +1243,21 @@ impl RealtimeConversationManager {
         if !handoff.streams_handoff_append() {
             return false;
         }
-        let (output, handled) = {
+        let _output_gate = match Arc::clone(&handoff.output_send_gate).acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => return false,
+        };
+        let streamed_item = {
             let mut stream = handoff.stream.lock().await;
-            let Some(mut streamed_item) = stream.items.remove(item_id) else {
+            let Some(streamed_item) = stream.items.remove(item_id) else {
                 return false;
             };
-            streamed_item.finish_input();
-            let chunk = streamed_item.drain_final_chunk();
-            let sent_output = streamed_item.sent_bytes > 0;
-            if handoff.suppresses_output(streamed_item.phase.as_ref()) {
-                (None, true)
-            } else {
-                let handled = sent_output || chunk.is_some();
-                (
-                    chunk.map(|text| (streamed_item.handoff_id, text, streamed_item.phase)),
-                    handled,
-                )
-            }
+            stream
+                .item_order
+                .retain(|queued_item_id| queued_item_id != item_id);
+            streamed_item
         };
+        let (output, handled) = finalize_streamed_handoff_item(&handoff, streamed_item);
         if let Some((handoff_id, text, phase)) = output {
             let _ = handoff
                 .output_tx
@@ -1244,6 +1286,11 @@ impl RealtimeConversationManager {
             state.handoff.clone()
         };
 
+        let _output_gate = handoff
+            .output_send_gate
+            .acquire()
+            .await
+            .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
         handoff
             .output_tx
             .send(RealtimeOutbound::StandaloneSpeech {
@@ -1265,15 +1312,45 @@ impl RealtimeConversationManager {
         if handoff.client_managed_handoffs {
             return Ok(());
         }
-        let handoff_id = {
+        let _output_gate = Arc::clone(&handoff.output_send_gate)
+            .acquire_owned()
+            .await
+            .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
+        let (handoff_id, pending_items) = {
             let mut stream = handoff.stream.lock().await;
             let handoff_id = stream.active_handoff.clone();
-            stream.items.clear();
-            handoff_id
+            stream.completing = handoff_id.is_some();
+            let mut pending_items = std::mem::take(&mut stream.items);
+            let mut item_order = std::mem::take(&mut stream.item_order);
+            let mut remaining_item_ids = pending_items.keys().cloned().collect::<Vec<_>>();
+            remaining_item_ids.sort();
+            item_order.extend(remaining_item_ids);
+            let pending_items = item_order
+                .into_iter()
+                .filter_map(|item_id| pending_items.remove(&item_id))
+                .collect::<Vec<_>>();
+            (handoff_id, pending_items)
         };
         let Some(handoff_id) = handoff_id else {
             return Ok(());
         };
+
+        for streamed_item in pending_items {
+            let (output, _) = finalize_streamed_handoff_item(&handoff, streamed_item);
+            if let Some((handoff_id, text, phase)) = output {
+                handoff
+                    .output_tx
+                    .send(RealtimeOutbound::HandoffAppend {
+                        handoff_id,
+                        text,
+                        phase,
+                    })
+                    .await
+                    .map_err(|_| {
+                        CodexErr::InvalidRequest("conversation is not running".to_string())
+                    })?;
+            }
+        }
 
         let (completion_tx, completion_rx) = oneshot::channel();
         handoff
@@ -1323,7 +1400,9 @@ impl RealtimeConversationManager {
             {
                 let mut stream = handoff.stream.lock().await;
                 stream.active_handoff = None;
+                stream.completing = false;
                 stream.items.clear();
+                stream.item_order.clear();
             }
             *handoff.last_output.lock().await = None;
         }
@@ -2282,8 +2361,14 @@ async fn handle_text_input(
 }
 
 async fn flush_streamed_handoff_item(handoff: &RealtimeHandoffState, item_id: &str) {
+    let Ok(_output_gate) = Arc::clone(&handoff.output_send_gate).acquire_owned().await else {
+        return;
+    };
     let (handoff_id, text, phase) = {
         let mut stream = handoff.stream.lock().await;
+        if stream.completing {
+            return;
+        }
         let Some(streamed_item) = stream.items.get_mut(item_id) else {
             return;
         };
@@ -2678,10 +2763,16 @@ async fn handle_realtime_server_event(
                 RealtimeSessionKind::V1 => {
                     let mut stream = handoff_state.stream.lock().await;
                     stream.items.clear();
+                    stream.item_order.clear();
+                    stream.completing = false;
                     stream.active_handoff = Some(handoff.handoff_id.clone());
                 }
                 RealtimeSessionKind::V2 => {
-                    let active_handoff = handoff_state.stream.lock().await.active_handoff.clone();
+                    let active_handoff = {
+                        let mut stream = handoff_state.stream.lock().await;
+                        stream.completing = false;
+                        stream.active_handoff.clone()
+                    };
                     match active_handoff {
                         Some(_) => {
                             if let Err(err) = writer

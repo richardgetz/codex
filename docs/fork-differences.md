@@ -204,7 +204,20 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   model classifier does not change GPT-Live V3 WebRTC transport or its backend
   event contract. With `/voice debug on`, the diagnostic includes the handoff
   ID, classifier kind/model, classifier reasoning effort, fallback reason,
-  classification, and final selected effort. Device aliases are case-insensitive and persistent:
+  classification, and final selected effort. It also reports returned GPT-Live
+  response lifecycle, server-item, assistant-transcript delta/final, and audio
+  events as they arrive, including the event source, item/response/handoff IDs
+  when the protocol provides them, bounded assistant-text previews, and audio
+  shape metadata. Main-agent assistant item lifecycle and delta notifications
+  are tagged separately, including their item ID and message phase, so a bridge
+  phrase can be distinguished from GPT-Live output. Returned-output diagnostics
+  never log audio bytes or user-role items. Handoff diagnostics also include a
+  an input character count (but not the spoken text) because they are specifically
+  used to verify classifier and handoff routing. The session-local diagnostic
+  history and correlation state are bounded. Missing IDs in a diagnostic are
+  evidence that the corresponding realtime event did not expose that identifier,
+  rather than a generated ID.
+  Device aliases are case-insensitive and persistent:
   `/mic alias airpods` names the currently selected microphone, `/mic alias
   airpods <device>` names an explicit device, and `/mic airpods` selects it.
   Speaker aliases use `/mic speaker alias desk <device>` and `/mic speaker desk`.
