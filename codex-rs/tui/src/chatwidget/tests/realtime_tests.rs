@@ -350,6 +350,82 @@ async fn disabled_preambles_survive_turn_start_and_suppress_agent_commentary() {
 }
 
 #[tokio::test]
+async fn disabled_preambles_suppress_unphased_bridge_before_final_answer() {
+    let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    chat.config.realtime.enable_preambles = false;
+    chat.transcript.realtime_turn_active = true;
+    let thread_id = ThreadId::new();
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
+            thread_id: thread_id.to_string(),
+            item: serde_json::json!({
+                "type": "handoff_request",
+                "handoff_id": "handoff-unphased-bridge"
+            }),
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::AgentMessage {
+                id: "bridge-1".to_string(),
+                text: String::new(),
+                phase: None,
+                memory_citation: None,
+            },
+            started_at_ms: 1,
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            ThreadRealtimeTranscriptDoneNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                text: "Just a sec, checking that.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
+    assert!(rx.try_recv().is_err());
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::AgentMessage {
+                id: "bridge-1".to_string(),
+                text: "Just a sec, checking that.".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+            completed_at_ms: 2,
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            ThreadRealtimeTranscriptDoneNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                text: "We're on agent/realtime-preamble-fix.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            assert!(render_lines(cell.as_ref()).contains("agent/realtime-preamble-fix"));
+        }
+        other => panic!("expected final realtime transcript cell, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn disabled_preambles_release_after_interrupted_turn() {
     let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     chat.config.realtime.enable_preambles = false;

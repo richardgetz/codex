@@ -77,9 +77,13 @@ impl ChatWidget {
                     .realtime_preamble_commentary_item_ids
                     .insert(id.clone());
             }
-            Some(codex_protocol::models::MessagePhase::FinalAnswer) | None => {
+            Some(codex_protocol::models::MessagePhase::FinalAnswer) => {
                 self.reset_realtime_preamble_suppression();
             }
+            // A phase-less item can be either a legacy final answer or a bridge item. Its start
+            // event is not enough to distinguish those cases, so keep suppression active until
+            // the completion event releases it.
+            None => {}
         }
     }
 
