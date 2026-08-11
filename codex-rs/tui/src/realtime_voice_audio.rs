@@ -215,7 +215,6 @@ pub(crate) fn build_output_stream(
     channels: u16,
     output_queue: Arc<Mutex<VecDeque<i16>>>,
     acknowledgement_queue: Arc<Mutex<VecDeque<i16>>>,
-    output_muted: Arc<AtomicBool>,
 ) -> Result<cpal::Stream> {
     match format {
         SampleFormat::F32 => build_output_stream_for(
@@ -224,7 +223,6 @@ pub(crate) fn build_output_stream(
             channels,
             output_queue,
             acknowledgement_queue,
-            output_muted,
             |sample, value| *sample = value as f32 / 32_768.0,
         ),
         SampleFormat::F64 => build_output_stream_for(
@@ -233,7 +231,6 @@ pub(crate) fn build_output_stream(
             channels,
             output_queue,
             acknowledgement_queue,
-            output_muted,
             |sample, value| *sample = value as f64 / 32_768.0,
         ),
         SampleFormat::I8 => build_output_stream_for(
@@ -242,7 +239,6 @@ pub(crate) fn build_output_stream(
             channels,
             output_queue,
             acknowledgement_queue,
-            output_muted,
             |sample, value| *sample = (value / 256) as i8,
         ),
         SampleFormat::I16 => build_output_stream_for(
@@ -251,7 +247,6 @@ pub(crate) fn build_output_stream(
             channels,
             output_queue,
             acknowledgement_queue,
-            output_muted,
             |sample, value| *sample = value,
         ),
         SampleFormat::I32 => build_output_stream_for(
@@ -260,7 +255,6 @@ pub(crate) fn build_output_stream(
             channels,
             output_queue,
             acknowledgement_queue,
-            output_muted,
             |sample, value| *sample = i32::from(value) << 16,
         ),
         SampleFormat::I64 => build_output_stream_for(
@@ -269,7 +263,6 @@ pub(crate) fn build_output_stream(
             channels,
             output_queue,
             acknowledgement_queue,
-            output_muted,
             |sample, value| *sample = i64::from(value) << 48,
         ),
         SampleFormat::U8 => build_output_stream_for(
@@ -278,7 +271,6 @@ pub(crate) fn build_output_stream(
             channels,
             output_queue,
             acknowledgement_queue,
-            output_muted,
             |sample, value| *sample = (i32::from(value) / 256 + 128) as u8,
         ),
         SampleFormat::U16 => build_output_stream_for(
@@ -287,7 +279,6 @@ pub(crate) fn build_output_stream(
             channels,
             output_queue,
             acknowledgement_queue,
-            output_muted,
             |sample, value| *sample = (i32::from(value) + 32_768) as u16,
         ),
         SampleFormat::U32 => build_output_stream_for(
@@ -296,7 +287,6 @@ pub(crate) fn build_output_stream(
             channels,
             output_queue,
             acknowledgement_queue,
-            output_muted,
             |sample, value| *sample = ((i64::from(value) << 16) + 2_147_483_648) as u32,
         ),
         SampleFormat::U64 => build_output_stream_for(
@@ -305,7 +295,6 @@ pub(crate) fn build_output_stream(
             channels,
             output_queue,
             acknowledgement_queue,
-            output_muted,
             |sample, value| {
                 *sample = ((i128::from(value) << 48) + 9_223_372_036_854_775_808) as u64
             },
@@ -320,7 +309,6 @@ fn build_output_stream_for<T>(
     channels: u16,
     output_queue: Arc<Mutex<VecDeque<i16>>>,
     acknowledgement_queue: Arc<Mutex<VecDeque<i16>>>,
-    output_muted: Arc<AtomicBool>,
     converter: impl Fn(&mut T, i16) + Send + 'static,
 ) -> Result<cpal::Stream>
 where
@@ -338,11 +326,7 @@ where
                     return;
                 };
                 for frame in data.chunks_mut(channels) {
-                    let (left, right) = pop_output_sample(
-                        &mut queue,
-                        &mut acknowledgement_queue,
-                        output_muted.load(Ordering::Relaxed),
-                    );
+                    let (left, right) = pop_output_sample(&mut queue, &mut acknowledgement_queue);
                     let mono = ((i32::from(left) + i32::from(right)) / 2) as i16;
                     for (channel, sample) in frame.iter_mut().enumerate() {
                         converter(
@@ -367,16 +351,8 @@ where
 fn pop_output_sample(
     output_queue: &mut VecDeque<i16>,
     acknowledgement_queue: &mut VecDeque<i16>,
-    output_muted: bool,
 ) -> (i16, i16) {
-    if output_muted {
-        output_queue.clear();
-        if !acknowledgement_queue.is_empty() {
-            pop_stereo_sample(acknowledgement_queue)
-        } else {
-            (0, 0)
-        }
-    } else if !acknowledgement_queue.is_empty() {
+    if !acknowledgement_queue.is_empty() {
         pop_stereo_sample(acknowledgement_queue)
     } else {
         pop_stereo_sample(output_queue)

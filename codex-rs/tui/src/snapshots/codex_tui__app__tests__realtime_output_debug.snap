@@ -3,15 +3,15 @@ source: tui/src/app/tests.rs
 expression: "app.transcript_cells.iter().map(|cell|\nlines_to_single_string(&cell.transcript_lines(120))).collect::<Vec<_>>().join(\"\\n\")"
 ---
 • GPT-Live handoff debug: handoff_id `handoff-1`; selected `session default` (inherited session effort); input_chars `20`.
-• GPT-Live output debug: source `main agent item started`; item_id `agent-item-1`; response_id `<missing>`; handoff_id `handoff-1`; phase `commentary`; text `<none>`.
-• GPT-Live output debug: source `main agent item delta`; item_id `agent-item-1`; response_id `<missing>`; handoff_id `handoff-1`; phase `<missing>`; text `let me take a look`.
+• GPT-Live output debug: source `main agent item started`; item_id `agent-item-1`; response_id `<missing>`; handoff_context_id `handoff-1`; phase `commentary`; text `<none>`.
+• GPT-Live output debug: source `main agent item delta`; item_id `agent-item-1`; response_id `<missing>`; handoff_context_id `handoff-1`; phase `<missing>`; text `let me take a look`.
 • let me take a look
-• GPT-Live output debug: source `main agent item completed`; item_id `agent-item-1`; response_id `<missing>`; handoff_id `handoff-1`; phase `commentary`; text `let me take a look`.
-• GPT-Live output debug: source `server response lifecycle`; type `response.created`; item_id `<missing>`; response_id `response-1`; handoff_id `handoff-1`; phase `<missing>`; role `<missing>`; text `<none>`.
-• GPT-Live output debug: source `server item`; type `message`; item_id `output-item-1`; response_id `response-1`; handoff_id `handoff-1`; phase `commentary`; role `assistant`; text `one sec`.
-• GPT-Live output debug: source `audio`; chunk 1; item_id `output-item-1`; response_id `response-1`; handoff_id `handoff-1`; sample_rate 24000; channels 1; samples_per_channel `3`.
-• GPT-Live output debug: source `server item`; type `message`; item_id `output-item-2`; response_id `<missing>`; handoff_id `handoff-1`; phase `commentary`; role `assistant`; text `hang on`.
-• GPT-Live output debug: source `audio`; chunk 1; item_id `output-item-2`; response_id `response-1`; handoff_id `handoff-1`; sample_rate 24000; channels 1; samples_per_channel `3`.
-• GPT-Live output debug: source `server response lifecycle`; type `response.done`; item_id `<missing>`; response_id `response-1`; handoff_id `handoff-1`; phase `<missing>`; role `<missing>`; text `<none>`.
+• GPT-Live output debug: source `main agent item completed`; item_id `agent-item-1`; response_id `<missing>`; handoff_context_id `handoff-1`; phase `commentary`; text `let me take a look`.
+• GPT-Live output debug: source `server response lifecycle`; type `response.created`; item_id `<missing>`; response_id `response-1`; handoff_context_id `handoff-1`; phase `<missing>`; role `<missing>`; text `<none>`.
+• GPT-Live output debug: source `server item`; type `message`; item_id `output-item-1`; response_id `response-1`; handoff_context_id `handoff-1`; phase `commentary`; role `assistant`; text `one sec`.
+• GPT-Live output debug: source `audio`; chunk 1; item_id `output-item-1`; response_id `response-1`; handoff_context_id `handoff-1`; sample_rate 24000; channels 1; samples_per_channel `3`.
+• GPT-Live output debug: source `server item`; type `message`; item_id `output-item-2`; response_id `<missing>`; handoff_context_id `handoff-1`; phase `commentary`; role `assistant`; text `hang on`.
+• GPT-Live output debug: source `audio`; chunk 1; item_id `output-item-2`; response_id `response-1`; handoff_context_id `handoff-1`; sample_rate 24000; channels 1; samples_per_channel `3`.
+• GPT-Live output debug: source `server response lifecycle`; type `response.done`; item_id `<missing>`; response_id `response-1`; handoff_context_id `handoff-1`; phase `<missing>`; role `<missing>`; text `<none>`.
 • The answer arrived.
-• GPT-Live output debug: source `assistant transcript`; item_id `<missing>`; response_id `<missing>`; handoff_id `handoff-1`; delta_count `1`; text `The answer arrived.`.
+• GPT-Live output debug: source `assistant transcript`; item_id `<missing>`; response_id `<missing>`; handoff_context_id `handoff-1`; delta_count `1`; text `The answer arrived.`.

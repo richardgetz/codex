@@ -139,9 +139,7 @@ impl ChatWidget {
     }
 
     pub(super) fn on_agent_message_delta(&mut self, delta: String) {
-        if self.transcript.realtime_turn_active
-            || self.transcript.realtime_preamble_suppression_active
-        {
+        if self.transcript.realtime_turn_active {
             return;
         }
         self.handle_streaming_delta(delta);
@@ -314,10 +312,6 @@ impl ChatWidget {
     }
 
     /// Handle completion of an `AgentMessage` turn item.
-    ///
-    /// Commentary completion sets a deferred restore flag so the status row
-    /// returns once stream queues are idle. Final-answer completion (or absent
-    /// phase for legacy models) clears the flag to preserve historical behavior.
     pub(super) fn on_agent_message_item_completed(
         &mut self,
         item: AgentMessageItem,
@@ -325,9 +319,6 @@ impl ChatWidget {
         from_replay: bool,
     ) {
         self.transcript.last_completed_agent_message = Some((turn_id.to_string(), item.id.clone()));
-        if self.handle_realtime_agent_item_completed(&item.id, item.phase.as_ref()) {
-            return;
-        }
         if self.transcript.realtime_turn_active {
             return;
         }

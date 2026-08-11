@@ -226,9 +226,7 @@ pub(crate) struct RealtimeVoiceSession {
     input_muted: Arc<AtomicBool>,
     input_stream: cpal::Stream,
     output_stream: cpal::Stream,
-    output_queue: Arc<Mutex<VecDeque<i16>>>,
     acknowledgement_queue: Arc<Mutex<VecDeque<i16>>>,
-    output_muted: Arc<AtomicBool>,
     acknowledgement_samples: Option<Vec<i16>>,
     input_task: JoinHandle<()>,
 }
@@ -279,7 +277,6 @@ impl RealtimeVoiceSession {
         let input_muted = Arc::new(AtomicBool::new(false));
         let output_queue = Arc::new(Mutex::new(VecDeque::new()));
         let acknowledgement_queue = Arc::new(Mutex::new(VecDeque::new()));
-        let output_muted = Arc::new(AtomicBool::new(false));
         let acknowledgement_samples = load_acknowledgement_sound(acknowledgement_sound)?;
         let (input_tx, input_rx) = mpsc::channel(8);
 
@@ -298,7 +295,6 @@ impl RealtimeVoiceSession {
             output_supported.channels(),
             Arc::clone(&output_queue),
             Arc::clone(&acknowledgement_queue),
-            Arc::clone(&output_muted),
         )?;
 
         let mut media_engine = MediaEngine::default();
@@ -388,9 +384,7 @@ impl RealtimeVoiceSession {
                 input_muted,
                 input_stream,
                 output_stream,
-                output_queue,
                 acknowledgement_queue,
-                output_muted,
                 acknowledgement_samples,
                 input_task,
             },
@@ -400,13 +394,6 @@ impl RealtimeVoiceSession {
 
     pub(crate) fn set_input_muted(&self, muted: bool) {
         self.input_muted.store(muted, Ordering::Relaxed);
-    }
-
-    pub(crate) fn set_output_muted(&self, muted: bool) {
-        self.output_muted.store(muted, Ordering::Relaxed);
-        if muted && let Ok(mut output_queue) = self.output_queue.lock() {
-            output_queue.clear();
-        }
     }
 
     pub(crate) fn play_acknowledgement_sound(&self) {

@@ -105,7 +105,7 @@ async fn realtime_transcript_notifications_render_live_and_finalize() {
 }
 
 #[tokio::test]
-async fn disabled_preambles_suppress_handoff_transcript_but_preserve_final_answer() {
+async fn disabled_preambles_allow_realtime_answer_after_handoff_turn_completion() {
     let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     chat.config.realtime.enable_preambles = false;
     let thread_id = ThreadId::new();
@@ -115,110 +115,60 @@ async fn disabled_preambles_suppress_handoff_transcript_but_preserve_final_answe
             thread_id: thread_id.to_string(),
             item: serde_json::json!({
                 "type": "handoff_request",
-                "handoff_id": "handoff-1"
+                "handoff_id": "handoff-unmarked-answer"
             }),
         }),
         /*replay_kind*/ None,
     );
-    chat.handle_server_notification(
-        ServerNotification::ThreadRealtimeTranscriptDelta(
-            ThreadRealtimeTranscriptDeltaNotification {
-                thread_id: thread_id.to_string(),
-                role: "assistant".to_string(),
-                delta: "Checking that now.".to_string(),
-            },
-        ),
-        /*replay_kind*/ None,
-    );
+    handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
     chat.handle_server_notification(
         ServerNotification::ThreadRealtimeTranscriptDone(
             ThreadRealtimeTranscriptDoneNotification {
                 thread_id: thread_id.to_string(),
                 role: "assistant".to_string(),
-                text: "Checking that now.".to_string(),
+                text: "The direct GPT-Live answer remains visible.".to_string(),
             },
         ),
         /*replay_kind*/ None,
     );
-    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
-    assert!(rx.try_recv().is_err());
 
-    chat.transcript.realtime_turn_active = true;
-    chat.handle_server_notification(
-        ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: thread_id.to_string(),
-            turn_id: "turn-1".to_string(),
-            item: AppServerThreadItem::AgentMessage {
-                id: "agent-item-1".to_string(),
-                text: "We're on agent/realtime-preamble-fix.".to_string(),
-                phase: Some(codex_protocol::models::MessagePhase::FinalAnswer),
-                memory_citation: None,
-            },
-            completed_at_ms: 1,
-        }),
-        /*replay_kind*/ None,
-    );
-    assert!(rx.try_recv().is_err());
-
-    chat.handle_server_notification(
-        ServerNotification::ThreadRealtimeTranscriptDelta(
-            ThreadRealtimeTranscriptDeltaNotification {
-                thread_id: thread_id.to_string(),
-                role: "assistant".to_string(),
-                delta: "We're on agent/realtime-preamble-fix.".to_string(),
-            },
-        ),
-        /*replay_kind*/ None,
-    );
-    chat.handle_server_notification(
-        ServerNotification::ThreadRealtimeTranscriptDone(
-            ThreadRealtimeTranscriptDoneNotification {
-                thread_id: thread_id.to_string(),
-                role: "assistant".to_string(),
-                text: "We're on agent/realtime-preamble-fix.".to_string(),
-            },
-        ),
-        /*replay_kind*/ None,
-    );
     match rx.try_recv() {
         Ok(AppEvent::InsertHistoryCell(cell)) => {
             let rendered = render_lines(cell.as_ref());
-            insta::assert_snapshot!("realtime_preamble_suppression_final", rendered);
-            assert!(rendered.contains("agent/realtime-preamble-fix"));
+            insta::assert_snapshot!("realtime_unmarked_answer_after_handoff", rendered);
+            assert!(rendered.contains("direct GPT-Live answer remains visible"));
         }
-        other => panic!("expected final realtime transcript cell, got {other:?}"),
-    }
-
-    chat.handle_server_notification(
-        ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
-            thread_id: thread_id.to_string(),
-            item: serde_json::json!({
-                "type": "handoff_request",
-                "handoff_id": "handoff-1"
-            }),
-        }),
-        /*replay_kind*/ None,
-    );
-    chat.handle_server_notification(
-        ServerNotification::ThreadRealtimeTranscriptDone(
-            ThreadRealtimeTranscriptDoneNotification {
-                thread_id: thread_id.to_string(),
-                role: "assistant".to_string(),
-                text: "A direct follow-up.".to_string(),
-            },
-        ),
-        /*replay_kind*/ None,
-    );
-    match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => {
-            assert!(render_lines(cell.as_ref()).contains("A direct follow-up."));
-        }
-        other => panic!("expected follow-up transcript cell, got {other:?}"),
+        other => panic!("expected unmarked realtime answer cell, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn disabled_preambles_survive_turn_start_and_suppress_agent_commentary() {
+async fn disabled_preambles_do_not_mute_direct_realtime_conversation() {
+    let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    chat.config.realtime.enable_preambles = false;
+    let thread_id = ThreadId::new();
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            ThreadRealtimeTranscriptDoneNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                text: "This direct GPT-Live answer remains visible.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            assert!(render_lines(cell.as_ref()).contains("direct GPT-Live answer remains visible"));
+        }
+        other => panic!("expected direct realtime answer cell, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn disabled_preambles_keep_direct_realtime_output_after_handoff() {
     let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     chat.config.realtime.enable_preambles = false;
     let thread_id = ThreadId::new();
@@ -307,6 +257,7 @@ async fn disabled_preambles_survive_turn_start_and_suppress_agent_commentary() {
     assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
     assert!(rx.try_recv().is_err());
 
+    handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
     chat.handle_server_notification(
         ServerNotification::ItemStarted(ItemStartedNotification {
             thread_id: thread_id.to_string(),
@@ -350,83 +301,7 @@ async fn disabled_preambles_survive_turn_start_and_suppress_agent_commentary() {
 }
 
 #[tokio::test]
-async fn disabled_preambles_suppress_unphased_bridge_before_final_answer() {
-    let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
-    chat.config.realtime.enable_preambles = false;
-    chat.transcript.realtime_turn_active = true;
-    let thread_id = ThreadId::new();
-
-    chat.handle_server_notification(
-        ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
-            thread_id: thread_id.to_string(),
-            item: serde_json::json!({
-                "type": "handoff_request",
-                "handoff_id": "handoff-unphased-bridge"
-            }),
-        }),
-        /*replay_kind*/ None,
-    );
-    chat.handle_server_notification(
-        ServerNotification::ItemStarted(ItemStartedNotification {
-            thread_id: thread_id.to_string(),
-            turn_id: "turn-1".to_string(),
-            item: AppServerThreadItem::AgentMessage {
-                id: "bridge-1".to_string(),
-                text: String::new(),
-                phase: None,
-                memory_citation: None,
-            },
-            started_at_ms: 1,
-        }),
-        /*replay_kind*/ None,
-    );
-    chat.handle_server_notification(
-        ServerNotification::ThreadRealtimeTranscriptDone(
-            ThreadRealtimeTranscriptDoneNotification {
-                thread_id: thread_id.to_string(),
-                role: "assistant".to_string(),
-                text: "Just a sec, checking that.".to_string(),
-            },
-        ),
-        /*replay_kind*/ None,
-    );
-    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
-    assert!(rx.try_recv().is_err());
-
-    chat.handle_server_notification(
-        ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: thread_id.to_string(),
-            turn_id: "turn-1".to_string(),
-            item: AppServerThreadItem::AgentMessage {
-                id: "bridge-1".to_string(),
-                text: "Just a sec, checking that.".to_string(),
-                phase: None,
-                memory_citation: None,
-            },
-            completed_at_ms: 2,
-        }),
-        /*replay_kind*/ None,
-    );
-    chat.handle_server_notification(
-        ServerNotification::ThreadRealtimeTranscriptDone(
-            ThreadRealtimeTranscriptDoneNotification {
-                thread_id: thread_id.to_string(),
-                role: "assistant".to_string(),
-                text: "We're on agent/realtime-preamble-fix.".to_string(),
-            },
-        ),
-        /*replay_kind*/ None,
-    );
-    match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => {
-            assert!(render_lines(cell.as_ref()).contains("agent/realtime-preamble-fix"));
-        }
-        other => panic!("expected final realtime transcript cell, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn disabled_preambles_release_after_interrupted_turn() {
+async fn realtime_output_remains_visible_after_interrupted_handoff() {
     let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     chat.config.realtime.enable_preambles = false;
     let thread_id = ThreadId::new();

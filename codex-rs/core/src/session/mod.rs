@@ -2467,6 +2467,13 @@ impl Session {
                             agent_message_text(item),
                         )
                         .await;
+                } else {
+                    // A non-agent item is the source/lifecycle boundary that identifies a
+                    // preceding phase-less agent item as bridge progress. Do not inspect its
+                    // wording: GPT-Live direct transcript and audio stay outside this path.
+                    self.conversation
+                        .discard_pending_unphased_handoff_output()
+                        .await;
                 }
                 return;
             }

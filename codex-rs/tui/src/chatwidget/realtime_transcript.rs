@@ -10,109 +10,7 @@ const MAX_REALTIME_HISTORY_LIMIT: usize = 20;
 const MAX_REALTIME_HISTORY_ENTRIES: usize = 40;
 
 impl ChatWidget {
-    pub(super) fn handle_realtime_handoff_item(&mut self, item: &serde_json::Value) {
-        if self.config.realtime.enable_preambles
-            || item.get("type").and_then(serde_json::Value::as_str) != Some("handoff_request")
-        {
-            return;
-        }
-
-        let handoff_id = item
-            .get("handoff_id")
-            .or_else(|| item.get("item_id"))
-            .and_then(serde_json::Value::as_str)
-            .filter(|id| !id.is_empty())
-            .map(str::to_owned);
-        let duplicate = match (
-            self.transcript
-                .realtime_preamble_suppression_handoff_id
-                .as_deref(),
-            handoff_id.as_deref(),
-        ) {
-            (Some(previous), Some(current)) => previous == current,
-            (None, None) => self.transcript.realtime_preamble_suppression_active,
-            _ => false,
-        };
-        if duplicate {
-            return;
-        }
-
-        self.transcript.realtime_preamble_suppression_active = true;
-        self.transcript
-            .realtime_preamble_commentary_item_ids
-            .clear();
-        self.transcript.realtime_preamble_suppression_handoff_id = handoff_id;
-        self.bump_active_cell_revision();
-    }
-
-    pub(crate) fn realtime_preamble_suppression_active(&self) -> bool {
-        self.transcript.realtime_preamble_suppression_active
-    }
-
-    pub(super) fn reset_realtime_preamble_suppression(&mut self) {
-        self.transcript.realtime_preamble_suppression_active = false;
-        self.transcript
-            .realtime_preamble_commentary_item_ids
-            .clear();
-    }
-
-    pub(super) fn clear_realtime_preamble_suppression_history(&mut self) {
-        self.reset_realtime_preamble_suppression();
-        self.transcript.realtime_preamble_suppression_handoff_id = None;
-    }
-
-    pub(super) fn handle_realtime_agent_item_started(
-        &mut self,
-        item: &codex_app_server_protocol::ThreadItem,
-    ) {
-        if !self.transcript.realtime_preamble_suppression_active {
-            return;
-        }
-        let codex_app_server_protocol::ThreadItem::AgentMessage { id, phase, .. } = item else {
-            return;
-        };
-        match phase {
-            Some(codex_protocol::models::MessagePhase::Commentary) => {
-                self.transcript
-                    .realtime_preamble_commentary_item_ids
-                    .insert(id.clone());
-            }
-            Some(codex_protocol::models::MessagePhase::FinalAnswer) => {
-                self.reset_realtime_preamble_suppression();
-            }
-            // A phase-less item can be either a legacy final answer or a bridge item. Its start
-            // event is not enough to distinguish those cases, so keep suppression active until
-            // the completion event releases it.
-            None => {}
-        }
-    }
-
-    pub(super) fn handle_realtime_agent_item_completed(
-        &mut self,
-        item_id: &str,
-        phase: Option<&codex_protocol::models::MessagePhase>,
-    ) -> bool {
-        match phase {
-            Some(codex_protocol::models::MessagePhase::Commentary)
-                if self.transcript.realtime_preamble_suppression_active =>
-            {
-                self.transcript
-                    .realtime_preamble_commentary_item_ids
-                    .remove(item_id);
-                true
-            }
-            Some(codex_protocol::models::MessagePhase::FinalAnswer) | None => {
-                self.reset_realtime_preamble_suppression();
-                false
-            }
-            _ => false,
-        }
-    }
-
     pub(super) fn handle_realtime_transcript_delta(&mut self, role: &str, delta: &str) {
-        if role == "assistant" && self.realtime_preamble_suppression_active() {
-            return;
-        }
         let Some(role) = RealtimeTranscriptRole::from_wire(role) else {
             return;
         };
@@ -130,9 +28,6 @@ impl ChatWidget {
     }
 
     pub(super) fn handle_realtime_transcript_done(&mut self, role: &str, text: &str) {
-        if role == "assistant" && self.realtime_preamble_suppression_active() {
-            return;
-        }
         let Some(role) = RealtimeTranscriptRole::from_wire(role) else {
             return;
         };
@@ -234,7 +129,6 @@ impl ChatWidget {
             self.flush_realtime_transcript_cell(RealtimeTranscriptRole::Assistant);
             self.request_redraw();
         }
-        self.reset_realtime_preamble_suppression();
     }
 
     fn ensure_realtime_transcript_cell(&mut self, role: RealtimeTranscriptRole) {

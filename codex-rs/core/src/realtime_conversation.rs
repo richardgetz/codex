@@ -364,6 +364,7 @@ struct RealtimeHandoffOutput {
 struct RealtimeHandoffStreamState {
     active_handoff: Option<String>,
     completing: bool,
+    pending_unphased_output: Option<RealtimeHandoffOutput>,
     items: HashMap<String, RealtimeStreamedItem>,
     item_order: VecDeque<String>,
 }
@@ -674,6 +675,10 @@ impl RealtimeHandoffState {
         self.event_parser == RealtimeEventParser::FramelessBidi
             && !self.client_managed_handoffs
             && !self.codex_responses_as_items
+    }
+
+    fn defers_unphased_output(&self, phase: Option<&MessagePhase>) -> bool {
+        self.suppress_preambles && self.streams_handoff_append() && phase.is_none()
     }
 
     fn routes_handoff_by_bem(&self) -> bool {
@@ -1039,6 +1044,9 @@ impl RealtimeConversationManager {
             phase
         };
         if handoff.suppresses_output(phase.as_ref()) {
+            if phase.is_some() {
+                handoff.stream.lock().await.pending_unphased_output = None;
+            }
             return Ok(());
         }
         let _output_gate = Arc::clone(&handoff.output_send_gate)
@@ -1047,12 +1055,27 @@ impl RealtimeConversationManager {
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
         let is_commentary = matches!(phase, Some(MessagePhase::Commentary));
         let active_handoff = {
-            let stream = handoff.stream.lock().await;
+            let mut stream = handoff.stream.lock().await;
             if stream.completing {
                 return Ok(());
             }
+            if phase.is_some() {
+                stream.pending_unphased_output = None;
+            }
             stream.active_handoff.clone()
         };
+        if active_handoff.is_some() && handoff.defers_unphased_output(phase.as_ref()) {
+            let output_text = realtime_backend_output(output_text, handoff.session_kind);
+            let mut stream = handoff.stream.lock().await;
+            if stream.completing {
+                return Ok(());
+            }
+            stream.pending_unphased_output = Some(RealtimeHandoffOutput {
+                text: output_text,
+                phase,
+            });
+            return Ok(());
+        }
         let output = match active_handoff {
             Some(handoff_id) => {
                 let output_text = realtime_backend_output(output_text, handoff.session_kind);
@@ -1068,11 +1091,7 @@ impl RealtimeConversationManager {
                         ),
                         phase,
                     }
-                } else if (handoff.event_parser == RealtimeEventParser::V1 && is_commentary)
-                    || (handoff.suppress_preambles
-                        && handoff.streams_handoff_append()
-                        && phase.is_none())
-                {
+                } else if handoff.event_parser == RealtimeEventParser::V1 && is_commentary {
                     RealtimeOutbound::HandoffAppend {
                         handoff_id,
                         text: output_text,
@@ -1134,12 +1153,18 @@ impl RealtimeConversationManager {
             return;
         }
         if !handoff.routes_handoff_by_bem() && handoff.suppresses_output(phase.as_ref()) {
+            if phase.is_some() {
+                handoff.stream.lock().await.pending_unphased_output = None;
+            }
             return;
         }
         let flush_delay = {
             let mut stream = handoff.stream.lock().await;
             if stream.completing {
                 return;
+            }
+            if phase.is_some() {
+                stream.pending_unphased_output = None;
             }
             let Some(handoff_id) = stream.active_handoff.clone() else {
                 return;
@@ -1166,6 +1191,7 @@ impl RealtimeConversationManager {
             };
             streamed_item.push_text(&initial_text);
             let flush_delay = if handoff.suppresses_output(streamed_item.phase.as_ref())
+                || handoff.defers_unphased_output(streamed_item.phase.as_ref())
                 || streamed_item.buffered_text.is_empty()
             {
                 None
@@ -1217,6 +1243,7 @@ impl RealtimeConversationManager {
             };
             streamed_item.push_text(&delta);
             if handoff.suppresses_output(streamed_item.phase.as_ref())
+                || handoff.defers_unphased_output(streamed_item.phase.as_ref())
                 || streamed_item.flush_scheduled
                 || streamed_item.streamable_text_bytes() == 0
             {
@@ -1257,7 +1284,15 @@ impl RealtimeConversationManager {
                 .retain(|queued_item_id| queued_item_id != item_id);
             streamed_item
         };
+        let defers_output = handoff.defers_unphased_output(streamed_item.phase.as_ref());
         let (output, handled) = finalize_streamed_handoff_item(&handoff, streamed_item);
+        if defers_output {
+            if let Some((_, text, phase)) = output {
+                handoff.stream.lock().await.pending_unphased_output =
+                    Some(RealtimeHandoffOutput { text, phase });
+            }
+            return handled;
+        }
         if let Some((handoff_id, text, phase)) = output {
             let _ = handoff
                 .output_tx
@@ -1316,10 +1351,11 @@ impl RealtimeConversationManager {
             .acquire_owned()
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
-        let (handoff_id, pending_items) = {
+        let (handoff_id, pending_items, pending_unphased_output) = {
             let mut stream = handoff.stream.lock().await;
             let handoff_id = stream.active_handoff.clone();
             stream.completing = handoff_id.is_some();
+            let pending_unphased_output = stream.pending_unphased_output.take();
             let mut pending_items = std::mem::take(&mut stream.items);
             let mut item_order = std::mem::take(&mut stream.item_order);
             let mut remaining_item_ids = pending_items.keys().cloned().collect::<Vec<_>>();
@@ -1329,7 +1365,7 @@ impl RealtimeConversationManager {
                 .into_iter()
                 .filter_map(|item_id| pending_items.remove(&item_id))
                 .collect::<Vec<_>>();
-            (handoff_id, pending_items)
+            (handoff_id, pending_items, pending_unphased_output)
         };
         let Some(handoff_id) = handoff_id else {
             return Ok(());
@@ -1350,6 +1386,19 @@ impl RealtimeConversationManager {
                         CodexErr::InvalidRequest("conversation is not running".to_string())
                     })?;
             }
+        }
+
+        if let Some(pending_output) = pending_unphased_output {
+            *handoff.last_output.lock().await = Some(pending_output.clone());
+            handoff
+                .output_tx
+                .send(RealtimeOutbound::HandoffAppend {
+                    handoff_id: handoff_id.clone(),
+                    text: pending_output.text,
+                    phase: pending_output.phase,
+                })
+                .await
+                .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
         }
 
         let (completion_tx, completion_rx) = oneshot::channel();
@@ -1401,10 +1450,38 @@ impl RealtimeConversationManager {
                 let mut stream = handoff.stream.lock().await;
                 stream.active_handoff = None;
                 stream.completing = false;
+                stream.pending_unphased_output = None;
                 stream.items.clear();
                 stream.item_order.clear();
             }
             *handoff.last_output.lock().await = None;
+        }
+    }
+
+    pub(crate) async fn discard_pending_unphased_handoff_output(&self) {
+        let handoff = {
+            let guard = self.state.lock().await;
+            guard.as_ref().map(|state| state.handoff.clone())
+        };
+        let Some(handoff) = handoff else {
+            return;
+        };
+        if !handoff.streams_handoff_append() {
+            return;
+        }
+        let mut stream = handoff.stream.lock().await;
+        stream.pending_unphased_output = None;
+        let phase_less_item_ids = stream
+            .items
+            .iter()
+            .filter(|(_, item)| item.phase.is_none())
+            .map(|(item_id, _)| item_id.clone())
+            .collect::<Vec<_>>();
+        for item_id in phase_less_item_ids {
+            stream.items.remove(&item_id);
+            stream
+                .item_order
+                .retain(|queued_item_id| queued_item_id != &item_id);
         }
     }
 

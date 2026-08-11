@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/realtime_tests.rs
+assertion_line: 137
 expression: rendered
 ---
-• We're on agent/realtime-preamble-fix.
+• The direct GPT-Live answer remains visible.

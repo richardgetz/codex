@@ -354,7 +354,7 @@ async fn handoff_complete_preserves_pending_streamed_final_output() {
 }
 
 #[tokio::test]
-async fn disabled_preambles_suppress_commentary_and_preserve_phase_less_final_output() {
+async fn disabled_preambles_suppress_commentary_and_defer_unphased_output_until_completion() {
     let (output_tx, output_rx) = bounded(8);
     let handoff = RealtimeHandoffState {
         output_tx,
@@ -407,11 +407,7 @@ async fn disabled_preambles_suppress_commentary_and_preserve_phase_less_final_ou
         .handoff_out("direct answer".to_string(), None)
         .await
         .expect("phase-less final handoff output should be accepted");
-    assert!(matches!(
-        output_rx.recv().await.expect("direct answer should be forwarded"),
-        RealtimeOutbound::HandoffAppend { text, phase: None, .. }
-            if text == "direct answer"
-    ));
+    assert!(output_rx.try_recv().is_err());
 
     manager
         .register_handoff_stream_item(
@@ -430,12 +426,123 @@ async fn disabled_preambles_suppress_commentary_and_preserve_phase_less_final_ou
         )
         .await;
     assert!(manager.finish_handoff_stream_item("final-item").await);
-    assert!(matches!(
-        output_rx.recv().await.expect("streamed answer should be forwarded"),
-        RealtimeOutbound::HandoffAppend { text, phase: None, .. }
-            if text == "streamed answer"
-    ));
     assert!(output_rx.try_recv().is_err());
+
+    let output_task = tokio::spawn(async move {
+        let mut append_texts = Vec::new();
+        while let Ok(output) = output_rx.recv().await {
+            match output {
+                RealtimeOutbound::HandoffAppend { text, .. } => append_texts.push(text),
+                RealtimeOutbound::Flush { completion } => {
+                    let _ = completion.send(());
+                    break;
+                }
+                output => panic!("unexpected realtime output: {output:?}"),
+            }
+        }
+        append_texts
+    });
+
+    manager
+        .handoff_complete()
+        .await
+        .expect("handoff completion should succeed");
+
+    assert_eq!(
+        output_task.await.expect("output task should finish"),
+        ["streamed answer".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn disabled_preambles_drop_phase_less_bridge_before_preserving_final_output() {
+    let (output_tx, output_rx) = bounded(8);
+    let handoff = RealtimeHandoffState {
+        output_tx,
+        output_send_gate: Arc::new(Semaphore::new(1)),
+        last_output: Arc::new(Mutex::new(None)),
+        stream: Arc::new(Mutex::new(Default::default())),
+        transport_handoff_deduper: Arc::new(Mutex::new(RealtimeHandoffDeduper::default())),
+        suppress_preambles: true,
+        suppress_non_final_output: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        client_managed_handoffs: false,
+        codex_responses_as_items: false,
+        codex_response_item_prefix: None,
+        codex_response_handoff_mode: CodexResponseHandoffMode::Thinking,
+        codex_response_handoff_channel_prefixes: Arc::new(BTreeMap::new()),
+        session_kind: RealtimeSessionKind::V1,
+        event_parser: RealtimeEventParser::FramelessBidi,
+    };
+    let manager = RealtimeConversationManager {
+        state: Mutex::new(Some(ConversationState {
+            audio_tx: bounded(1).0,
+            text_tx: bounded(1).0,
+            session_kind: RealtimeSessionKind::V1,
+            handoff,
+            input_task: tokio::spawn(async {}),
+            fanout_task: None,
+            realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            stop_token: CancellationToken::new(),
+        })),
+    };
+    let handoff = manager
+        .state
+        .lock()
+        .await
+        .as_ref()
+        .expect("realtime state should be present")
+        .handoff
+        .clone();
+    handoff.stream.lock().await.active_handoff = Some("handoff_1".to_string());
+
+    manager
+        .register_handoff_stream_item(
+            "bridge-1".to_string(),
+            None,
+            "Just a sec, checking that.".to_string(),
+        )
+        .await;
+    assert!(manager.finish_handoff_stream_item("bridge-1").await);
+    assert!(
+        output_rx.try_recv().is_err(),
+        "phase-less bridge output must stay local until the turn boundary identifies it"
+    );
+    // A non-agent item is the lifecycle evidence that the phase-less item was bridge commentary,
+    // not the final answer. This is source/event correlation, never text matching.
+    manager.discard_pending_unphased_handoff_output().await;
+
+    let output_task = tokio::spawn(async move {
+        let mut append_texts = Vec::new();
+        while let Ok(output) = output_rx.recv().await {
+            match output {
+                RealtimeOutbound::HandoffAppend { text, .. } => append_texts.push(text),
+                RealtimeOutbound::Flush { completion } => {
+                    let _ = completion.send(());
+                    break;
+                }
+                output => panic!("unexpected realtime output: {output:?}"),
+            }
+        }
+        append_texts
+    });
+
+    manager
+        .register_handoff_stream_item(
+            "final-1".to_string(),
+            None,
+            "We're on agent/realtime-preamble-fix.".to_string(),
+        )
+        .await;
+    assert!(manager.finish_handoff_stream_item("final-1").await);
+    manager
+        .handoff_complete()
+        .await
+        .expect("handoff completion should succeed");
+
+    assert_eq!(
+        output_task.await.expect("output task should finish"),
+        ["We're on agent/realtime-preamble-fix.".to_string()]
+    );
 }
 
 #[test]
