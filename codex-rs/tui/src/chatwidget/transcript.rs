@@ -18,6 +18,11 @@ pub(super) struct TranscriptState {
     /// transcript is delivered separately. Keep only the latter in the TUI so one voice turn does
     /// not appear twice.
     pub(super) realtime_turn_active: bool,
+    /// Holds GPT-Live assistant output after a handoff request until the delegated turn completes.
+    ///
+    /// This is lifecycle-based suppression, not phrase matching: direct GPT-Live turns never arm
+    /// it, and output is released when the app-server reports the handoff turn's terminal state.
+    pub(super) realtime_handoff_output_suppressed: bool,
     /// Bounded completed GPT-Live transcript entries available through `/voice history`.
     pub(super) realtime_history: VecDeque<RealtimeTranscriptHistoryEntry>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.

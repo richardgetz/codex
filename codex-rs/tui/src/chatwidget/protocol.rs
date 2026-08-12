@@ -65,6 +65,7 @@ impl ChatWidget {
                 }
             }
             ServerNotification::TurnCompleted(notification) => {
+                self.release_realtime_handoff_output();
                 self.handle_turn_completed_notification(notification, replay_kind);
             }
             ServerNotification::ItemStarted(notification) => {
@@ -207,10 +208,15 @@ impl ChatWidget {
             }
             ServerNotification::ThreadRealtimeStarted(_) => {
                 if !from_replay {
+                    self.release_realtime_handoff_output();
                     self.finish_realtime_transcript_stream();
                 }
             }
-            ServerNotification::ThreadRealtimeItemAdded(_) => {}
+            ServerNotification::ThreadRealtimeItemAdded(notification) => {
+                if !from_replay {
+                    self.handle_realtime_item_added(&notification.item);
+                }
+            }
             ServerNotification::ThreadRealtimeTranscriptDelta(notification) => {
                 if !from_replay {
                     self.handle_realtime_transcript_delta(&notification.role, &notification.delta);
@@ -224,6 +230,7 @@ impl ChatWidget {
             ServerNotification::ThreadRealtimeError(_)
             | ServerNotification::ThreadRealtimeClosed(_) => {
                 if !from_replay {
+                    self.release_realtime_handoff_output();
                     self.finish_realtime_transcript_stream();
                 }
             }

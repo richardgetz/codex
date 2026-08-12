@@ -224,8 +224,10 @@ pub(crate) fn realtime_hotkey_spec_from_event(event: KeyEvent) -> Option<String>
 pub(crate) struct RealtimeVoiceSession {
     peer_connection: Arc<RTCPeerConnection>,
     input_muted: Arc<AtomicBool>,
+    output_muted: Arc<AtomicBool>,
     input_stream: cpal::Stream,
     output_stream: cpal::Stream,
+    output_queue: Arc<Mutex<VecDeque<i16>>>,
     acknowledgement_queue: Arc<Mutex<VecDeque<i16>>>,
     acknowledgement_samples: Option<Vec<i16>>,
     input_task: JoinHandle<()>,
@@ -275,6 +277,7 @@ impl RealtimeVoiceSession {
         let input_config = input_supported.config();
         let output_config = output_supported.config();
         let input_muted = Arc::new(AtomicBool::new(false));
+        let output_muted = Arc::new(AtomicBool::new(false));
         let output_queue = Arc::new(Mutex::new(VecDeque::new()));
         let acknowledgement_queue = Arc::new(Mutex::new(VecDeque::new()));
         let acknowledgement_samples = load_acknowledgement_sound(acknowledgement_sound)?;
@@ -347,7 +350,11 @@ impl RealtimeVoiceSession {
             .await
             .context("adding realtime microphone track")?;
 
-        install_remote_audio_handler(&peer_connection, Arc::clone(&output_queue));
+        install_remote_audio_handler(
+            &peer_connection,
+            Arc::clone(&output_queue),
+            Arc::clone(&output_muted),
+        );
 
         let mut gather_complete = peer_connection.gathering_complete_promise().await;
         let offer = peer_connection
@@ -382,8 +389,10 @@ impl RealtimeVoiceSession {
             Self {
                 peer_connection,
                 input_muted,
+                output_muted,
                 input_stream,
                 output_stream,
+                output_queue,
                 acknowledgement_queue,
                 acknowledgement_samples,
                 input_task,
@@ -394,6 +403,13 @@ impl RealtimeVoiceSession {
 
     pub(crate) fn set_input_muted(&self, muted: bool) {
         self.input_muted.store(muted, Ordering::Relaxed);
+    }
+
+    pub(crate) fn set_output_muted(&self, muted: bool) {
+        self.output_muted.store(muted, Ordering::Relaxed);
+        if muted && let Ok(mut output_queue) = self.output_queue.lock() {
+            output_queue.clear();
+        }
     }
 
     pub(crate) fn play_acknowledgement_sound(&self) {

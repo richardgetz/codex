@@ -1248,7 +1248,27 @@ impl App {
     pub(super) fn handle_realtime_voice_notification(&mut self, notification: &ServerNotification) {
         match notification {
             ServerNotification::ThreadRealtimeStarted(_) => {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_output_muted(false);
+                }
                 self.clear_realtime_debug_state();
+            }
+            ServerNotification::ThreadRealtimeItemAdded(notification)
+                if !self.config.realtime.enable_preambles
+                    && notification
+                        .item
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("handoff_request") =>
+            {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_output_muted(true);
+                }
+            }
+            ServerNotification::TurnCompleted(_) => {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_output_muted(false);
+                }
             }
             ServerNotification::ThreadRealtimeSdp(notification) => {
                 if let Some(session) = &self.realtime_voice_session {
@@ -1257,6 +1277,9 @@ impl App {
             }
             ServerNotification::ThreadRealtimeError(_)
             | ServerNotification::ThreadRealtimeClosed(_) => {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_output_muted(false);
+                }
                 self.clear_realtime_debug_state();
                 self.realtime_voice_session.take();
             }

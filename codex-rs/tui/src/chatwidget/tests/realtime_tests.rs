@@ -168,6 +168,112 @@ async fn disabled_preambles_do_not_mute_direct_realtime_conversation() {
 }
 
 #[tokio::test]
+async fn disabled_preambles_suppress_gpt_live_progress_before_handoff_completion() {
+    let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    chat.config.realtime.enable_preambles = false;
+    let thread_id = ThreadId::new();
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
+            thread_id: thread_id.to_string(),
+            item: serde_json::json!({
+                "type": "handoff_request",
+                "handoff_id": "handoff-progress"
+            }),
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDelta(
+            ThreadRealtimeTranscriptDeltaNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                delta: "Just a sec, checking that.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            ThreadRealtimeTranscriptDoneNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                text: "Just a sec, checking that.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
+    assert!(rx.try_recv().is_err());
+
+    handle_turn_completed(&mut chat, "turn-progress", /*duration_ms*/ None);
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            ThreadRealtimeTranscriptDoneNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                text: "The branch is agent/realtime-preamble-fix.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            assert!(render_lines(cell.as_ref()).contains("agent/realtime-preamble-fix"));
+        }
+        other => panic!("expected final realtime transcript cell, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn disabled_preambles_keep_gpt_live_progress_suppressed_through_turn_start() {
+    let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    chat.config.realtime.enable_preambles = false;
+    let thread_id = ThreadId::new();
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
+            thread_id: thread_id.to_string(),
+            item: serde_json::json!({
+                "type": "handoff_request",
+                "handoff_id": "handoff-through-turn-start"
+            }),
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn: AppServerTurn {
+                id: "turn-through-handoff".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+                started_at: Some(1),
+                completed_at: None,
+                duration_ms: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDelta(
+            ThreadRealtimeTranscriptDeltaNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".to_string(),
+                delta: "Just a sec, checking that.".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
+    assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn disabled_preambles_keep_direct_realtime_output_after_handoff() {
     let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     chat.config.realtime.enable_preambles = false;

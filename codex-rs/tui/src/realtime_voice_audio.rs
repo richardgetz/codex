@@ -408,9 +408,11 @@ impl InputFrameAccumulator {
 pub(crate) fn install_remote_audio_handler(
     peer_connection: &Arc<RTCPeerConnection>,
     output_queue: Arc<Mutex<VecDeque<i16>>>,
+    output_muted: Arc<AtomicBool>,
 ) {
     peer_connection.on_track(Box::new(move |track, _receiver, _transceiver| {
         let output_queue = Arc::clone(&output_queue);
+        let output_muted = Arc::clone(&output_muted);
         Box::pin(async move {
             let Ok(mut decoder) = Decoder::new(SAMPLE_RATE, Channels::Stereo) else {
                 return;
@@ -425,20 +427,34 @@ pub(crate) fn install_remote_audio_handler(
                     continue;
                 };
                 let decoded = &decoded[..samples_per_channel * 2];
-                let Ok(mut queue) = output_queue.lock() else {
-                    return;
-                };
-                let excess = queue
-                    .len()
-                    .saturating_add(decoded.len())
-                    .saturating_sub(MAX_OUTPUT_SAMPLES);
-                if excess > 0 {
-                    queue.drain(..excess);
-                }
-                queue.extend(decoded);
+                append_remote_audio(&output_queue, &output_muted, decoded);
             }
         })
     }));
+}
+
+fn append_remote_audio(
+    output_queue: &Arc<Mutex<VecDeque<i16>>>,
+    output_muted: &Arc<AtomicBool>,
+    decoded: &[i16],
+) {
+    if output_muted.load(Ordering::Relaxed) {
+        return;
+    }
+    let Ok(mut queue) = output_queue.lock() else {
+        return;
+    };
+    if output_muted.load(Ordering::Relaxed) {
+        return;
+    }
+    let excess = queue
+        .len()
+        .saturating_add(decoded.len())
+        .saturating_sub(MAX_OUTPUT_SAMPLES);
+    if excess > 0 {
+        queue.drain(..excess);
+    }
+    queue.extend(decoded);
 }
 
 pub(crate) async fn encode_input_frames(
