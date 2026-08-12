@@ -16,6 +16,29 @@ fn output_queue_fills_missing_right_channel_with_left() {
 }
 
 #[test]
+fn muted_remote_audio_is_discarded_until_handoff_completion() {
+    let output_queue = Arc::new(Mutex::new(VecDeque::from([1, 2])));
+    let output_muted = Arc::new(AtomicBool::new(true));
+
+    append_remote_audio(&output_queue, &output_muted, &[3, 4]);
+
+    assert_eq!(
+        *output_queue
+            .lock()
+            .expect("output queue should be available"),
+        [1, 2]
+    );
+    output_muted.store(false, Ordering::Relaxed);
+    append_remote_audio(&output_queue, &output_muted, &[3, 4]);
+    assert_eq!(
+        *output_queue
+            .lock()
+            .expect("output queue should be available"),
+        [1, 2, 3, 4]
+    );
+}
+
+#[test]
 fn input_buffer_keeps_preroll_before_first_signal() {
     let mut frames = VecDeque::from_iter((0..10).map(|_| vec![0i16]));
     frames[7][0] = INPUT_SIGNAL_THRESHOLD;

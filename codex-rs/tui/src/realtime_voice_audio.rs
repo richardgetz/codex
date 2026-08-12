@@ -214,58 +214,91 @@ pub(crate) fn build_output_stream(
     format: SampleFormat,
     channels: u16,
     output_queue: Arc<Mutex<VecDeque<i16>>>,
+    acknowledgement_queue: Arc<Mutex<VecDeque<i16>>>,
 ) -> Result<cpal::Stream> {
     match format {
-        SampleFormat::F32 => {
-            build_output_stream_for(device, config, channels, output_queue, |sample, value| {
-                *sample = value as f32 / 32_768.0
-            })
-        }
-        SampleFormat::F64 => {
-            build_output_stream_for(device, config, channels, output_queue, |sample, value| {
-                *sample = value as f64 / 32_768.0
-            })
-        }
-        SampleFormat::I8 => {
-            build_output_stream_for(device, config, channels, output_queue, |sample, value| {
-                *sample = (value / 256) as i8
-            })
-        }
-        SampleFormat::I16 => {
-            build_output_stream_for(device, config, channels, output_queue, |sample, value| {
-                *sample = value
-            })
-        }
-        SampleFormat::I32 => {
-            build_output_stream_for(device, config, channels, output_queue, |sample, value| {
-                *sample = i32::from(value) << 16
-            })
-        }
-        SampleFormat::I64 => {
-            build_output_stream_for(device, config, channels, output_queue, |sample, value| {
-                *sample = i64::from(value) << 48
-            })
-        }
-        SampleFormat::U8 => {
-            build_output_stream_for(device, config, channels, output_queue, |sample, value| {
-                *sample = (i32::from(value) / 256 + 128) as u8
-            })
-        }
-        SampleFormat::U16 => {
-            build_output_stream_for(device, config, channels, output_queue, |sample, value| {
-                *sample = (i32::from(value) + 32_768) as u16
-            })
-        }
-        SampleFormat::U32 => {
-            build_output_stream_for(device, config, channels, output_queue, |sample, value| {
-                *sample = ((i64::from(value) << 16) + 2_147_483_648) as u32
-            })
-        }
-        SampleFormat::U64 => {
-            build_output_stream_for(device, config, channels, output_queue, |sample, value| {
+        SampleFormat::F32 => build_output_stream_for(
+            device,
+            config,
+            channels,
+            output_queue,
+            acknowledgement_queue,
+            |sample, value| *sample = value as f32 / 32_768.0,
+        ),
+        SampleFormat::F64 => build_output_stream_for(
+            device,
+            config,
+            channels,
+            output_queue,
+            acknowledgement_queue,
+            |sample, value| *sample = value as f64 / 32_768.0,
+        ),
+        SampleFormat::I8 => build_output_stream_for(
+            device,
+            config,
+            channels,
+            output_queue,
+            acknowledgement_queue,
+            |sample, value| *sample = (value / 256) as i8,
+        ),
+        SampleFormat::I16 => build_output_stream_for(
+            device,
+            config,
+            channels,
+            output_queue,
+            acknowledgement_queue,
+            |sample, value| *sample = value,
+        ),
+        SampleFormat::I32 => build_output_stream_for(
+            device,
+            config,
+            channels,
+            output_queue,
+            acknowledgement_queue,
+            |sample, value| *sample = i32::from(value) << 16,
+        ),
+        SampleFormat::I64 => build_output_stream_for(
+            device,
+            config,
+            channels,
+            output_queue,
+            acknowledgement_queue,
+            |sample, value| *sample = i64::from(value) << 48,
+        ),
+        SampleFormat::U8 => build_output_stream_for(
+            device,
+            config,
+            channels,
+            output_queue,
+            acknowledgement_queue,
+            |sample, value| *sample = (i32::from(value) / 256 + 128) as u8,
+        ),
+        SampleFormat::U16 => build_output_stream_for(
+            device,
+            config,
+            channels,
+            output_queue,
+            acknowledgement_queue,
+            |sample, value| *sample = (i32::from(value) + 32_768) as u16,
+        ),
+        SampleFormat::U32 => build_output_stream_for(
+            device,
+            config,
+            channels,
+            output_queue,
+            acknowledgement_queue,
+            |sample, value| *sample = ((i64::from(value) << 16) + 2_147_483_648) as u32,
+        ),
+        SampleFormat::U64 => build_output_stream_for(
+            device,
+            config,
+            channels,
+            output_queue,
+            acknowledgement_queue,
+            |sample, value| {
                 *sample = ((i128::from(value) << 48) + 9_223_372_036_854_775_808) as u64
-            })
-        }
+            },
+        ),
         _ => bail!("unsupported realtime speaker sample format `{format}`"),
     }
 }
@@ -275,6 +308,7 @@ fn build_output_stream_for<T>(
     config: StreamConfig,
     channels: u16,
     output_queue: Arc<Mutex<VecDeque<i16>>>,
+    acknowledgement_queue: Arc<Mutex<VecDeque<i16>>>,
     converter: impl Fn(&mut T, i16) + Send + 'static,
 ) -> Result<cpal::Stream>
 where
@@ -288,8 +322,11 @@ where
                 let Ok(mut queue) = output_queue.lock() else {
                     return;
                 };
+                let Ok(mut acknowledgement_queue) = acknowledgement_queue.lock() else {
+                    return;
+                };
                 for frame in data.chunks_mut(channels) {
-                    let (left, right) = pop_stereo_sample(&mut queue);
+                    let (left, right) = pop_output_sample(&mut queue, &mut acknowledgement_queue);
                     let mono = ((i32::from(left) + i32::from(right)) / 2) as i16;
                     for (channel, sample) in frame.iter_mut().enumerate() {
                         converter(
@@ -309,6 +346,17 @@ where
             None,
         )
         .context("creating realtime speaker stream")
+}
+
+fn pop_output_sample(
+    output_queue: &mut VecDeque<i16>,
+    acknowledgement_queue: &mut VecDeque<i16>,
+) -> (i16, i16) {
+    if !acknowledgement_queue.is_empty() {
+        pop_stereo_sample(acknowledgement_queue)
+    } else {
+        pop_stereo_sample(output_queue)
+    }
 }
 
 struct InputFrameAccumulator {
@@ -360,9 +408,11 @@ impl InputFrameAccumulator {
 pub(crate) fn install_remote_audio_handler(
     peer_connection: &Arc<RTCPeerConnection>,
     output_queue: Arc<Mutex<VecDeque<i16>>>,
+    output_muted: Arc<AtomicBool>,
 ) {
     peer_connection.on_track(Box::new(move |track, _receiver, _transceiver| {
         let output_queue = Arc::clone(&output_queue);
+        let output_muted = Arc::clone(&output_muted);
         Box::pin(async move {
             let Ok(mut decoder) = Decoder::new(SAMPLE_RATE, Channels::Stereo) else {
                 return;
@@ -377,20 +427,34 @@ pub(crate) fn install_remote_audio_handler(
                     continue;
                 };
                 let decoded = &decoded[..samples_per_channel * 2];
-                let Ok(mut queue) = output_queue.lock() else {
-                    return;
-                };
-                let excess = queue
-                    .len()
-                    .saturating_add(decoded.len())
-                    .saturating_sub(MAX_OUTPUT_SAMPLES);
-                if excess > 0 {
-                    queue.drain(..excess);
-                }
-                queue.extend(decoded);
+                append_remote_audio(&output_queue, &output_muted, decoded);
             }
         })
     }));
+}
+
+fn append_remote_audio(
+    output_queue: &Arc<Mutex<VecDeque<i16>>>,
+    output_muted: &Arc<AtomicBool>,
+    decoded: &[i16],
+) {
+    if output_muted.load(Ordering::Relaxed) {
+        return;
+    }
+    let Ok(mut queue) = output_queue.lock() else {
+        return;
+    };
+    if output_muted.load(Ordering::Relaxed) {
+        return;
+    }
+    let excess = queue
+        .len()
+        .saturating_add(decoded.len())
+        .saturating_sub(MAX_OUTPUT_SAMPLES);
+    if excess > 0 {
+        queue.drain(..excess);
+    }
+    queue.extend(decoded);
 }
 
 pub(crate) async fn encode_input_frames(

@@ -55,6 +55,7 @@ use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileUpdateChange;
+use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationRequest;
@@ -74,7 +75,11 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadRealtimeAudioChunk;
 use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
+use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
+use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
+use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -287,6 +292,7 @@ async fn realtime_handoff_debug_renders_selected_effort() {
     )
     .await
     .expect("primary thread should be registered");
+    while app_event_rx.try_recv().is_ok() {}
     let sender = app.thread_event_channels[&thread_id].sender.clone();
     for (handoff_id, item_id, input) in [
         ("handoff-1", "item-1", "What time is it?"),
@@ -340,9 +346,227 @@ async fn realtime_handoff_debug_renders_selected_effort() {
     app.drain_active_thread_events(&mut tui)
         .await
         .expect("active thread events should drain");
+    while let Ok(event) = app_event_rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            app.insert_history_cell(&mut tui, cell);
+        }
+    }
 
     assert_app_snapshot!(
         "realtime_handoff_debug",
+        app.transcript_cells
+            .iter()
+            .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 120)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+#[tokio::test]
+async fn realtime_output_debug_renders_returned_ids_and_metadata() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    while app_event_rx.try_recv().is_ok() {}
+    let mut tui = crate::tui::test_support::make_test_tui().expect("test TUI should initialize");
+
+    app.realtime_voice_debug = true;
+    let thread_id = ThreadId::new();
+    app.enqueue_primary_thread_session(
+        test_thread_session(thread_id, test_path_buf("/tmp/project")),
+        Vec::new(),
+    )
+    .await
+    .expect("primary thread should be registered");
+    while app_event_rx.try_recv().is_ok() {}
+    let sender = app.thread_event_channels[&thread_id].sender.clone();
+
+    sender
+        .send(ThreadBufferedEvent::Notification(
+            ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
+                thread_id: thread_id.to_string(),
+                item: serde_json::json!({
+                    "type": "handoff_request",
+                    "handoff_id": "handoff-1",
+                    "item_id": "handoff-item-1",
+                    "input_transcript": "What branch am I on?"
+                }),
+            }),
+        ))
+        .await
+        .expect("thread event channel should remain open");
+    sender
+        .send(ThreadBufferedEvent::Notification(
+            ServerNotification::ItemStarted(ItemStartedNotification {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn-1".to_string(),
+                item: ThreadItem::AgentMessage {
+                    id: "agent-item-1".to_string(),
+                    text: String::new(),
+                    phase: Some(codex_protocol::models::MessagePhase::Commentary),
+                    memory_citation: None,
+                },
+                started_at_ms: 1,
+            }),
+        ))
+        .await
+        .expect("thread event channel should remain open");
+    sender
+        .send(ThreadBufferedEvent::Notification(
+            ServerNotification::AgentMessageDelta(AgentMessageDeltaNotification {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "agent-item-1".to_string(),
+                delta: "let me take a look".to_string(),
+            }),
+        ))
+        .await
+        .expect("thread event channel should remain open");
+    sender
+        .send(ThreadBufferedEvent::Notification(
+            ServerNotification::ItemCompleted(ItemCompletedNotification {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn-1".to_string(),
+                item: ThreadItem::AgentMessage {
+                    id: "agent-item-1".to_string(),
+                    text: "let me take a look".to_string(),
+                    phase: Some(codex_protocol::models::MessagePhase::Commentary),
+                    memory_citation: None,
+                },
+                completed_at_ms: 2,
+            }),
+        ))
+        .await
+        .expect("thread event channel should remain open");
+    sender
+        .send(ThreadBufferedEvent::Notification(
+            ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
+                thread_id: thread_id.to_string(),
+                item: serde_json::json!({
+                    "type": "response.created",
+                    "response_id": "response-1"
+                }),
+            }),
+        ))
+        .await
+        .expect("thread event channel should remain open");
+    sender
+        .send(ThreadBufferedEvent::Notification(
+            ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
+                thread_id: thread_id.to_string(),
+                item: serde_json::json!({
+                    "type": "message",
+                    "id": "output-item-1",
+                    "response_id": "response-1",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "one sec"
+                    }]
+                }),
+            }),
+        ))
+        .await
+        .expect("thread event channel should remain open");
+    sender
+        .send(ThreadBufferedEvent::Notification(
+            ServerNotification::ThreadRealtimeOutputAudioDelta(
+                ThreadRealtimeOutputAudioDeltaNotification {
+                    thread_id: thread_id.to_string(),
+                    audio: ThreadRealtimeAudioChunk {
+                        data: "AQID".to_string(),
+                        sample_rate: 24_000,
+                        num_channels: 1,
+                        samples_per_channel: Some(3),
+                        item_id: Some("output-item-1".to_string()),
+                    },
+                },
+            ),
+        ))
+        .await
+        .expect("thread event channel should remain open");
+    sender
+        .send(ThreadBufferedEvent::Notification(
+            ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
+                thread_id: thread_id.to_string(),
+                item: serde_json::json!({
+                    "type": "message",
+                    "id": "output-item-2",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "hang on"
+                    }]
+                }),
+            }),
+        ))
+        .await
+        .expect("thread event channel should remain open");
+    sender
+        .send(ThreadBufferedEvent::Notification(
+            ServerNotification::ThreadRealtimeOutputAudioDelta(
+                ThreadRealtimeOutputAudioDeltaNotification {
+                    thread_id: thread_id.to_string(),
+                    audio: ThreadRealtimeAudioChunk {
+                        data: "BAUG".to_string(),
+                        sample_rate: 24_000,
+                        num_channels: 1,
+                        samples_per_channel: Some(3),
+                        item_id: Some("output-item-2".to_string()),
+                    },
+                },
+            ),
+        ))
+        .await
+        .expect("thread event channel should remain open");
+    sender
+        .send(ThreadBufferedEvent::Notification(
+            ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
+                thread_id: thread_id.to_string(),
+                item: serde_json::json!({
+                    "type": "response.done",
+                    "response_id": "response-1"
+                }),
+            }),
+        ))
+        .await
+        .expect("thread event channel should remain open");
+    sender
+        .send(ThreadBufferedEvent::Notification(
+            ServerNotification::ThreadRealtimeTranscriptDelta(
+                ThreadRealtimeTranscriptDeltaNotification {
+                    thread_id: thread_id.to_string(),
+                    role: "assistant".to_string(),
+                    delta: "The answer ".to_string(),
+                },
+            ),
+        ))
+        .await
+        .expect("thread event channel should remain open");
+    sender
+        .send(ThreadBufferedEvent::Notification(
+            ServerNotification::ThreadRealtimeTranscriptDone(
+                ThreadRealtimeTranscriptDoneNotification {
+                    thread_id: thread_id.to_string(),
+                    role: "assistant".to_string(),
+                    text: "The answer arrived.".to_string(),
+                },
+            ),
+        ))
+        .await
+        .expect("thread event channel should remain open");
+
+    app.drain_active_thread_events(&mut tui)
+        .await
+        .expect("active thread events should drain");
+    while let Ok(event) = app_event_rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            app.insert_history_cell(&mut tui, cell);
+        }
+    }
+
+    assert_app_snapshot!(
+        "realtime_output_debug",
         app.transcript_cells
             .iter()
             .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 120)))
@@ -4988,6 +5212,12 @@ async fn make_test_app() -> App {
         realtime_voice_session: None,
         realtime_voice_debug: false,
         realtime_handoff_debug_ids: VecDeque::new(),
+        realtime_output_debug_item_id: None,
+        realtime_output_debug_response_id: None,
+        realtime_output_debug_handoff_id: None,
+        realtime_output_debug_audio_chunk_count: 0,
+        realtime_output_debug_transcript_delta_count: 0,
+        realtime_output_debug_message_count: 0,
         state_db: None,
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
@@ -5061,6 +5291,12 @@ async fn make_test_app_with_channels() -> (
             realtime_voice_session: None,
             realtime_voice_debug: false,
             realtime_handoff_debug_ids: VecDeque::new(),
+            realtime_output_debug_item_id: None,
+            realtime_output_debug_response_id: None,
+            realtime_output_debug_handoff_id: None,
+            realtime_output_debug_audio_chunk_count: 0,
+            realtime_output_debug_transcript_delta_count: 0,
+            realtime_output_debug_message_count: 0,
             state_db: None,
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),

@@ -7,6 +7,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::config_toml::RealtimeAudioConfig;
+pub(crate) use codex_protocol::protocol::REALTIME_NO_PREAMBLES_PROMPT;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use cpal::traits::StreamTrait;
@@ -61,8 +62,6 @@ pub(crate) const INPUT_BUFFER_FRAMES: usize = 30 * 1_000 / 20;
 pub(crate) const INPUT_PREROLL_FRAMES: usize = 100 / 20;
 pub(crate) const INPUT_SIGNAL_THRESHOLD: i16 = 98;
 pub(crate) const DEFAULT_REALTIME_HOTKEY: &str = "right-option";
-pub(crate) const REALTIME_NO_PREAMBLES_PROMPT: &str = "You are in a live voice conversation. Do not produce conversational backchannels, acknowledgements, filler, or progress preambles, including phrases such as 'mm-hmm', 'ah', 'okay', 'let me check', or 'I will take a look'. After the user's turn, begin directly with the substantive answer or action. Do not announce that you are checking, thinking, or about to respond. If more information is needed, ask the substantive question directly.";
-
 pub(crate) fn realtime_start_prompt(enable_preambles: bool) -> Option<Option<String>> {
     (!enable_preambles).then(|| Some(REALTIME_NO_PREAMBLES_PROMPT.to_string()))
 }
@@ -225,9 +224,11 @@ pub(crate) fn realtime_hotkey_spec_from_event(event: KeyEvent) -> Option<String>
 pub(crate) struct RealtimeVoiceSession {
     peer_connection: Arc<RTCPeerConnection>,
     input_muted: Arc<AtomicBool>,
+    output_muted: Arc<AtomicBool>,
     input_stream: cpal::Stream,
     output_stream: cpal::Stream,
     output_queue: Arc<Mutex<VecDeque<i16>>>,
+    acknowledgement_queue: Arc<Mutex<VecDeque<i16>>>,
     acknowledgement_samples: Option<Vec<i16>>,
     input_task: JoinHandle<()>,
 }
@@ -276,7 +277,9 @@ impl RealtimeVoiceSession {
         let input_config = input_supported.config();
         let output_config = output_supported.config();
         let input_muted = Arc::new(AtomicBool::new(false));
+        let output_muted = Arc::new(AtomicBool::new(false));
         let output_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let acknowledgement_queue = Arc::new(Mutex::new(VecDeque::new()));
         let acknowledgement_samples = load_acknowledgement_sound(acknowledgement_sound)?;
         let (input_tx, input_rx) = mpsc::channel(8);
 
@@ -294,6 +297,7 @@ impl RealtimeVoiceSession {
             output_supported.sample_format(),
             output_supported.channels(),
             Arc::clone(&output_queue),
+            Arc::clone(&acknowledgement_queue),
         )?;
 
         let mut media_engine = MediaEngine::default();
@@ -346,7 +350,11 @@ impl RealtimeVoiceSession {
             .await
             .context("adding realtime microphone track")?;
 
-        install_remote_audio_handler(&peer_connection, Arc::clone(&output_queue));
+        install_remote_audio_handler(
+            &peer_connection,
+            Arc::clone(&output_queue),
+            Arc::clone(&output_muted),
+        );
 
         let mut gather_complete = peer_connection.gathering_complete_promise().await;
         let offer = peer_connection
@@ -381,9 +389,11 @@ impl RealtimeVoiceSession {
             Self {
                 peer_connection,
                 input_muted,
+                output_muted,
                 input_stream,
                 output_stream,
                 output_queue,
+                acknowledgement_queue,
                 acknowledgement_samples,
                 input_task,
             },
@@ -395,21 +405,28 @@ impl RealtimeVoiceSession {
         self.input_muted.store(muted, Ordering::Relaxed);
     }
 
+    pub(crate) fn set_output_muted(&self, muted: bool) {
+        self.output_muted.store(muted, Ordering::Relaxed);
+        if muted && let Ok(mut output_queue) = self.output_queue.lock() {
+            output_queue.clear();
+        }
+    }
+
     pub(crate) fn play_acknowledgement_sound(&self) {
         let Some(samples) = &self.acknowledgement_samples else {
             return;
         };
-        let Ok(mut output_queue) = self.output_queue.lock() else {
+        let Ok(mut acknowledgement_queue) = self.acknowledgement_queue.lock() else {
             return;
         };
-        let excess = output_queue
+        let excess = acknowledgement_queue
             .len()
             .saturating_add(samples.len())
             .saturating_sub(MAX_OUTPUT_SAMPLES);
         if excess > 0 {
-            output_queue.drain(..excess);
+            acknowledgement_queue.drain(..excess);
         }
-        output_queue.extend(samples.iter().copied());
+        acknowledgement_queue.extend(samples.iter().copied());
     }
 
     /// Applies the server answer delivered through `thread/realtime/sdp`.

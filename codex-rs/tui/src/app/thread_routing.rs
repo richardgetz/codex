@@ -1627,20 +1627,52 @@ impl App {
         tui: &mut tui::Tui,
         event: ThreadBufferedEvent,
     ) {
-        let realtime_handoff_debug = match &event {
+        let realtime_debug_messages = match &event {
             ThreadBufferedEvent::Notification(ServerNotification::ThreadRealtimeItemAdded(
                 notification,
-            )) => self.realtime_handoff_debug_message(notification),
-            _ => None,
+            )) => [
+                self.realtime_handoff_debug_message(notification),
+                self.realtime_output_item_debug_message(notification),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            ThreadBufferedEvent::Notification(
+                ServerNotification::ThreadRealtimeTranscriptDone(notification),
+            ) => self
+                .realtime_output_transcript_debug_message(notification)
+                .into_iter()
+                .collect(),
+            ThreadBufferedEvent::Notification(
+                ServerNotification::ThreadRealtimeTranscriptDelta(notification),
+            ) => self
+                .realtime_output_transcript_delta_debug_message(notification)
+                .into_iter()
+                .collect(),
+            ThreadBufferedEvent::Notification(
+                ServerNotification::ThreadRealtimeOutputAudioDelta(notification),
+            ) => self
+                .realtime_output_audio_debug_message(notification)
+                .into_iter()
+                .collect(),
+            ThreadBufferedEvent::Notification(notification) => self
+                .realtime_main_agent_output_debug_message(notification)
+                .into_iter()
+                .collect(),
+            _ => Vec::new(),
         };
         self.handle_thread_event_now(event);
-        if let Some(message) = realtime_handoff_debug {
+        let remaining_debug_messages = REALTIME_OUTPUT_DEBUG_MESSAGE_LIMIT
+            .saturating_sub(self.realtime_output_debug_message_count);
+        let realtime_debug_messages = realtime_debug_messages
+            .into_iter()
+            .take(remaining_debug_messages)
+            .collect::<Vec<_>>();
+        self.realtime_output_debug_message_count += realtime_debug_messages.len();
+        for message in realtime_debug_messages {
             for cell in self.chat_widget.prepare_immediate_info_message(message) {
-                self.insert_history_cell(tui, cell);
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
             }
-            // This diagnostic is inserted directly by the app rather than through
-            // ChatWidget's normal AppEvent path. Wake the top-level renderer so it
-            // appears before the next user input.
             tui.frame_requester().schedule_frame();
         }
     }

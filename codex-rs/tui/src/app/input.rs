@@ -16,10 +16,13 @@ use crate::realtime_voice_devices::format_device_aliases;
 use crate::realtime_voice_devices::normalize_device_alias;
 use crate::realtime_voice_devices::resolve_device_name;
 use crate::realtime_voice_sound::RealtimeAcknowledgementSound;
+use codex_protocol::models::MessagePhase;
 use color_eyre::eyre::eyre;
 
 const REALTIME_HANDOFF_DEBUG_DEDUPE_CAPACITY: usize = 128;
 const REALTIME_HANDOFF_DEBUG_VALUE_LIMIT: usize = 96;
+const REALTIME_OUTPUT_DEBUG_AUDIO_CHUNK_LIMIT: usize = 32;
+const REALTIME_OUTPUT_DEBUG_TRANSCRIPT_DELTA_LIMIT: usize = 32;
 
 fn realtime_handoff_debug_preview(value: &str) -> String {
     let mut preview = String::new();
@@ -55,6 +58,15 @@ fn realtime_handoff_debug_preview(value: &str) -> String {
         preview.push('…');
     }
     preview
+}
+
+fn realtime_handoff_debug_id_key(value: &str) -> u64 {
+    use std::hash::Hash;
+    use std::hash::Hasher;
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[derive(Clone, Copy)]
@@ -1117,7 +1129,7 @@ impl App {
                 let message = match command {
                     RealtimeVoiceDebugCommand::Toggle => {
                         self.realtime_voice_debug = !self.realtime_voice_debug;
-                        self.realtime_handoff_debug_ids.clear();
+                        self.clear_realtime_debug_state();
                         format!(
                             "Realtime voice handoff debug is now {} (session-local).",
                             if self.realtime_voice_debug {
@@ -1129,12 +1141,12 @@ impl App {
                     }
                     RealtimeVoiceDebugCommand::On => {
                         self.realtime_voice_debug = true;
-                        self.realtime_handoff_debug_ids.clear();
+                        self.clear_realtime_debug_state();
                         "Realtime voice handoff debug is on (session-local).".to_string()
                     }
                     RealtimeVoiceDebugCommand::Off => {
                         self.realtime_voice_debug = false;
-                        self.realtime_handoff_debug_ids.clear();
+                        self.clear_realtime_debug_state();
                         "Realtime voice handoff debug is off (session-local).".to_string()
                     }
                     RealtimeVoiceDebugCommand::Status => format!(
@@ -1236,7 +1248,27 @@ impl App {
     pub(super) fn handle_realtime_voice_notification(&mut self, notification: &ServerNotification) {
         match notification {
             ServerNotification::ThreadRealtimeStarted(_) => {
-                self.realtime_handoff_debug_ids.clear();
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_output_muted(false);
+                }
+                self.clear_realtime_debug_state();
+            }
+            ServerNotification::ThreadRealtimeItemAdded(notification)
+                if !self.config.realtime.enable_preambles
+                    && notification
+                        .item
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("handoff_request") =>
+            {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_output_muted(true);
+                }
+            }
+            ServerNotification::TurnCompleted(_) => {
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_output_muted(false);
+                }
             }
             ServerNotification::ThreadRealtimeSdp(notification) => {
                 if let Some(session) = &self.realtime_voice_session {
@@ -1245,11 +1277,24 @@ impl App {
             }
             ServerNotification::ThreadRealtimeError(_)
             | ServerNotification::ThreadRealtimeClosed(_) => {
-                self.realtime_handoff_debug_ids.clear();
+                if let Some(session) = &self.realtime_voice_session {
+                    session.set_output_muted(false);
+                }
+                self.clear_realtime_debug_state();
                 self.realtime_voice_session.take();
             }
             _ => {}
         }
+    }
+
+    fn clear_realtime_debug_state(&mut self) {
+        self.realtime_handoff_debug_ids.clear();
+        self.realtime_output_debug_item_id = None;
+        self.realtime_output_debug_response_id = None;
+        self.realtime_output_debug_handoff_id = None;
+        self.realtime_output_debug_audio_chunk_count = 0;
+        self.realtime_output_debug_transcript_delta_count = 0;
+        self.realtime_output_debug_message_count = 0;
     }
 
     pub(super) fn realtime_handoff_debug_message(
@@ -1289,31 +1334,34 @@ impl App {
                 None => "handoff_id `<missing>`".to_string(),
             },
         };
-        let Some(input) = notification
+        let input = notification
             .item
             .get("input_transcript")
             .and_then(serde_json::Value::as_str)
-            .filter(|input| !input.trim().is_empty())
-        else {
+            .filter(|input| !input.trim().is_empty());
+        if input.is_some() {
+            let debug_key = debug_id.map(realtime_handoff_debug_id_key);
+            if debug_key.is_some_and(|debug_key| {
+                self.realtime_handoff_debug_ids
+                    .iter()
+                    .any(|seen_id| *seen_id == debug_key)
+            }) {
+                return None;
+            }
+            if let Some(debug_key) = debug_key {
+                self.realtime_handoff_debug_ids.push_back(debug_key);
+                if self.realtime_handoff_debug_ids.len() > REALTIME_HANDOFF_DEBUG_DEDUPE_CAPACITY {
+                    self.realtime_handoff_debug_ids.pop_front();
+                }
+            }
+        }
+        self.clear_realtime_output_response_state();
+        self.realtime_output_debug_handoff_id = handoff_id.map(realtime_handoff_debug_preview);
+        let Some(input) = input else {
             return Some(format!(
                 "GPT-Live handoff debug: {identity}; no handoff input was available; inherited the session effort."
             ));
         };
-        if debug_id.is_some_and(|debug_id| {
-            self.realtime_handoff_debug_ids
-                .iter()
-                .any(|seen_id| seen_id == debug_id)
-        }) {
-            return None;
-        }
-        if let Some(debug_id) = debug_id {
-            self.realtime_handoff_debug_ids
-                .push_back(debug_id.to_string());
-            if self.realtime_handoff_debug_ids.len() > REALTIME_HANDOFF_DEBUG_DEDUPE_CAPACITY {
-                self.realtime_handoff_debug_ids.pop_front();
-            }
-        }
-
         if let Some(routing) = notification
             .item
             .get("routing")
@@ -1370,9 +1418,9 @@ impl App {
             let fallback = classifier_fallback
                 .map(|fallback| format!("; fallback `{fallback}`"))
                 .unwrap_or_default();
-            let input_preview = realtime_handoff_debug_preview(input);
+            let input_chars = input.chars().count();
             return Some(format!(
-                "GPT-Live handoff debug: {identity}; classifier {classifier_name}{classifier_reasoning}{fallback}; classification `{classification}`; selected `{selected}` ({reason}) for input `{input_preview}`."
+                "GPT-Live handoff debug: {identity}; classifier {classifier_name}{classifier_reasoning}{fallback}; classification `{classification}`; selected `{selected}` ({reason}); input_chars `{input_chars}`."
             ));
         }
 
@@ -1395,10 +1443,251 @@ impl App {
                 "inherited session effort",
             )
         };
-        let input_preview = realtime_handoff_debug_preview(input);
+        let input_chars = input.chars().count();
         Some(format!(
-            "GPT-Live handoff debug: {identity}; selected `{selected}` ({reason}) for input `{input_preview}`."
+            "GPT-Live handoff debug: {identity}; selected `{selected}` ({reason}); input_chars `{input_chars}`."
         ))
+    }
+
+    pub(super) fn realtime_output_item_debug_message(
+        &mut self,
+        notification: &codex_app_server_protocol::ThreadRealtimeItemAddedNotification,
+    ) -> Option<String> {
+        if !self.realtime_voice_debug {
+            return None;
+        }
+        let item = &notification.item;
+        let item_type = item.get("type").and_then(serde_json::Value::as_str)?;
+        if item_type == "handoff_request" || item_type.starts_with("input_") {
+            return None;
+        }
+        let is_response_lifecycle = matches!(
+            item_type,
+            "response.created" | "response.cancelled" | "response.done"
+        );
+        let role = item.get("role").and_then(serde_json::Value::as_str);
+        if !is_response_lifecycle && role != Some("assistant") {
+            return None;
+        }
+
+        let source = if is_response_lifecycle {
+            "server response lifecycle"
+        } else {
+            "server item"
+        };
+        let item_id = item
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(realtime_handoff_debug_preview);
+        let response_id = item
+            .get("response_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(realtime_handoff_debug_preview)
+            .or_else(|| {
+                item.get("response")
+                    .and_then(|response| response.get("id"))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(realtime_handoff_debug_preview)
+            });
+        let item_type_preview = realtime_handoff_debug_preview(item_type);
+        let role = role.map_or_else(|| "<missing>".to_string(), realtime_handoff_debug_preview);
+        let phase = item
+            .get("phase")
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(|| "<missing>".to_string(), realtime_handoff_debug_preview);
+        let text = if is_response_lifecycle {
+            "<none>".to_string()
+        } else {
+            realtime_item_text_preview(item).unwrap_or_else(|| "<none>".to_string())
+        };
+        // Transcript/audio notifications do not carry a handoff ID. This is only the current
+        // handoff context, so label it as such rather than implying event-level provenance.
+        let handoff_context_id = self
+            .realtime_output_debug_handoff_id
+            .as_deref()
+            .unwrap_or("<missing>");
+        let message = format!(
+            "GPT-Live output debug: source `{source}`; type `{item_type_preview}`; item_id `{}`; response_id `{}`; handoff_context_id `{handoff_context_id}`; phase `{phase}`; role `{role}`; text `{text}`.",
+            item_id.as_deref().unwrap_or("<missing>"),
+            response_id.as_deref().unwrap_or("<missing>"),
+        );
+        if item_type == "response.created" {
+            self.realtime_output_debug_response_id = response_id;
+            self.realtime_output_debug_item_id = None;
+            self.realtime_output_debug_audio_chunk_count = 0;
+            self.realtime_output_debug_transcript_delta_count = 0;
+        } else if item_type == "response.cancelled" {
+            self.clear_realtime_output_response_state();
+            self.realtime_output_debug_handoff_id = None;
+        } else if item_type == "response.done" {
+            self.clear_realtime_output_response_state();
+        } else {
+            let is_new_item = item_id.as_deref() != self.realtime_output_debug_item_id.as_deref();
+            self.realtime_output_debug_item_id = item_id;
+            if response_id.is_some() {
+                self.realtime_output_debug_response_id = response_id;
+            }
+            if is_new_item {
+                self.realtime_output_debug_audio_chunk_count = 0;
+                self.realtime_output_debug_transcript_delta_count = 0;
+            }
+        }
+
+        Some(message)
+    }
+
+    pub(super) fn realtime_output_transcript_debug_message(
+        &mut self,
+        notification: &codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification,
+    ) -> Option<String> {
+        if !self.realtime_voice_debug || notification.role != "assistant" {
+            return None;
+        }
+        let item_id = "<missing>";
+        let response_id = "<missing>";
+        let handoff_context_id = self
+            .realtime_output_debug_handoff_id
+            .as_deref()
+            .unwrap_or("<missing>");
+        let delta_count = self.realtime_output_debug_transcript_delta_count;
+        let text = realtime_handoff_debug_preview(&notification.text);
+        let message = format!(
+            "GPT-Live output debug: source `assistant transcript`; item_id `{item_id}`; response_id `{response_id}`; handoff_context_id `{handoff_context_id}`; delta_count `{delta_count}`; text `{text}`."
+        );
+        self.clear_realtime_output_response_state();
+        Some(message)
+    }
+
+    pub(super) fn realtime_main_agent_output_debug_message(
+        &self,
+        notification: &ServerNotification,
+    ) -> Option<String> {
+        if !self.realtime_voice_debug {
+            return None;
+        }
+        // Main-agent notifications do not carry the originating realtime handoff ID either; this
+        // value is the current context used to correlate the notification in the TUI.
+        let handoff_context_id = self.realtime_output_debug_handoff_id.as_deref()?;
+        let (source, item_id, phase, text) = match notification {
+            ServerNotification::ItemStarted(notification) => match &notification.item {
+                ThreadItem::AgentMessage {
+                    id, phase, text, ..
+                } => (
+                    "main agent item started",
+                    id.as_str(),
+                    phase.as_ref(),
+                    text.as_str(),
+                ),
+                _ => return None,
+            },
+            ServerNotification::ItemCompleted(notification) => match &notification.item {
+                ThreadItem::AgentMessage {
+                    id, phase, text, ..
+                } => (
+                    "main agent item completed",
+                    id.as_str(),
+                    phase.as_ref(),
+                    text.as_str(),
+                ),
+                _ => return None,
+            },
+            ServerNotification::AgentMessageDelta(notification) => (
+                "main agent item delta",
+                notification.item_id.as_str(),
+                None,
+                notification.delta.as_str(),
+            ),
+            _ => return None,
+        };
+        let phase = match phase {
+            Some(MessagePhase::Commentary) => "commentary",
+            Some(MessagePhase::FinalAnswer) => "final_answer",
+            None => "<missing>",
+        };
+        let text = if text.trim().is_empty() {
+            "<none>".to_string()
+        } else {
+            realtime_handoff_debug_preview(text)
+        };
+        Some(format!(
+            "GPT-Live output debug: source `{source}`; item_id `{}`; response_id `{}`; handoff_context_id `{}`; phase `{phase}`; text `{}`.",
+            realtime_handoff_debug_preview(item_id),
+            self.realtime_output_debug_response_id
+                .as_deref()
+                .unwrap_or("<missing>"),
+            realtime_handoff_debug_preview(handoff_context_id),
+            text,
+        ))
+    }
+
+    pub(super) fn realtime_output_transcript_delta_debug_message(
+        &mut self,
+        notification: &codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification,
+    ) -> Option<String> {
+        if !self.realtime_voice_debug
+            || notification.role != "assistant"
+            || notification.delta.trim().is_empty()
+            || self.realtime_output_debug_transcript_delta_count
+                >= REALTIME_OUTPUT_DEBUG_TRANSCRIPT_DELTA_LIMIT
+        {
+            return None;
+        }
+        self.realtime_output_debug_transcript_delta_count += 1;
+        None
+    }
+
+    pub(super) fn realtime_output_audio_debug_message(
+        &mut self,
+        notification: &codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification,
+    ) -> Option<String> {
+        if !self.realtime_voice_debug {
+            return None;
+        }
+        let item_id = notification
+            .audio
+            .item_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .map_or_else(|| "<missing>".to_string(), realtime_handoff_debug_preview);
+        let is_new_item = item_id != "<missing>"
+            && Some(item_id.as_str()) != self.realtime_output_debug_item_id.as_deref();
+        if item_id != "<missing>" {
+            self.realtime_output_debug_item_id = Some(item_id.clone());
+        }
+        if is_new_item {
+            self.realtime_output_debug_audio_chunk_count = 0;
+            self.realtime_output_debug_transcript_delta_count = 0;
+        }
+        if self.realtime_output_debug_audio_chunk_count >= REALTIME_OUTPUT_DEBUG_AUDIO_CHUNK_LIMIT {
+            return None;
+        }
+        self.realtime_output_debug_audio_chunk_count += 1;
+        Some(format!(
+            "GPT-Live output debug: source `audio`; chunk {}; item_id `{item_id}`; response_id `{}`; handoff_context_id `{}`; sample_rate {}; channels {}; samples_per_channel `{}`.",
+            self.realtime_output_debug_audio_chunk_count,
+            self.realtime_output_debug_response_id
+                .as_deref()
+                .unwrap_or("<missing>"),
+            self.realtime_output_debug_handoff_id
+                .as_deref()
+                .unwrap_or("<missing>"),
+            notification.audio.sample_rate,
+            notification.audio.num_channels,
+            notification
+                .audio
+                .samples_per_channel
+                .map_or_else(|| "<missing>".to_string(), |value| value.to_string()),
+        ))
+    }
+
+    fn clear_realtime_output_response_state(&mut self) {
+        self.realtime_output_debug_item_id = None;
+        self.realtime_output_debug_response_id = None;
+        self.realtime_output_debug_audio_chunk_count = 0;
+        self.realtime_output_debug_transcript_delta_count = 0;
     }
 
     pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {
@@ -1427,6 +1716,56 @@ impl App {
 
     pub(super) fn refresh_status_line(&mut self) {
         self.chat_widget.refresh_status_line();
+    }
+}
+
+fn realtime_item_text_preview(item: &serde_json::Value) -> Option<String> {
+    let direct_text = item
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| item.get("transcript").and_then(serde_json::Value::as_str));
+    if let Some(direct_text) = direct_text {
+        return Some(realtime_handoff_debug_preview(direct_text));
+    }
+
+    let content = item.get("content").and_then(serde_json::Value::as_array)?;
+    let mut text = String::new();
+    let mut character_count = 0;
+    let mut truncated = false;
+    for part in content {
+        let Some(part_text) = part
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| part.get("transcript").and_then(serde_json::Value::as_str))
+        else {
+            continue;
+        };
+        if !text.is_empty() {
+            if character_count == REALTIME_HANDOFF_DEBUG_VALUE_LIMIT {
+                truncated = true;
+                break;
+            }
+            text.push(' ');
+            character_count += 1;
+        }
+        for character in part_text.chars() {
+            if character_count == REALTIME_HANDOFF_DEBUG_VALUE_LIMIT {
+                truncated = true;
+                break;
+            }
+            text.push(character);
+            character_count += 1;
+        }
+        if truncated {
+            break;
+        }
+    }
+    if text.is_empty() {
+        None
+    } else if truncated {
+        Some(format!("{text}…"))
+    } else {
+        Some(realtime_handoff_debug_preview(&text))
     }
 }
 

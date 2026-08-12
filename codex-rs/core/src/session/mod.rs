@@ -2265,13 +2265,20 @@ impl Session {
             id: turn_context.sub_id.clone(),
             msg,
         };
+        let clear_realtime_before_delivery = matches!(&legacy_source, EventMsg::TurnComplete(_));
+        if clear_realtime_before_delivery {
+            self.maybe_clear_realtime_handoff_for_event(&legacy_source)
+                .await;
+        }
         self.send_event_raw(event).await;
         self.maybe_notify_parent_of_terminal_turn(turn_context, &legacy_source)
             .await;
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;
-        self.maybe_clear_realtime_handoff_for_event(&legacy_source)
-            .await;
+        if !clear_realtime_before_delivery {
+            self.maybe_clear_realtime_handoff_for_event(&legacy_source)
+                .await;
+        }
 
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
@@ -2459,6 +2466,13 @@ impl Session {
                             item.phase.clone(),
                             agent_message_text(item),
                         )
+                        .await;
+                } else {
+                    // A non-agent item is the source/lifecycle boundary that identifies a
+                    // preceding phase-less agent item as bridge progress. Do not inspect its
+                    // wording: GPT-Live direct transcript and audio stay outside this path.
+                    self.conversation
+                        .discard_pending_unphased_handoff_output()
                         .await;
                 }
                 return;

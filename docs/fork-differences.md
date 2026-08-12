@@ -168,11 +168,30 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
   Set `[realtime].enabled = false` to disable the voice feature and its hotkey
   entirely. `/mic off` is a session-level mode change and does not rewrite that
-  config gate. `enable_preambles = false` sends the exact V3 session prompt that
-  suppresses filler acknowledgements and progress preambles while leaving the
-  GPT-Live transport unchanged. The acknowledgement cue is local to the TUI,
-  independent of the model prompt, and can use the built-in sound or a mono/
-  stereo PCM/float WAV up to one second. Voice and device changes apply to the
+  config gate. `enable_preambles = false` adds the no-preamble policy to the
+  realtime session prompt, appends it after any configured backend prompt
+  override, and injects it into the main-agent realtime context. It can
+  deterministically suppress source-owned, explicitly typed main-agent
+  commentary such as `Checking that now.` while preserving the final answer
+  and local acknowledgement cue. The setting is not, however, a guarantee
+  that every GPT-Live spoken preamble disappears in the current V3/WebRTC
+  path. GPT-Live transcript and audio chunks can arrive without an item,
+  response, or turn ID and without a provisional/final phase; they can also
+  arrive before or around the handoff event. The client therefore cannot prove
+  that an unmarked phrase such as `Let me check.` is disposable preamble rather
+  than valid direct conversation. It intentionally does not use phrase matching
+  or blind audio buffering, because either can discard a legitimate answer.
+  For that unmarked GPT-Live output, `enable_preambles = false` is a prompt-level
+  best-effort instruction, not a client-side guarantee. The flag remains in
+  place so a future GPT-Live/app-server provenance contract can provide exact
+  suppression without changing the user-facing configuration. Final answers
+  still speak, the normal TUI output is unchanged, and GPT-Live's wire
+  transport and protocol versions remain unchanged. Handoff forwarding keeps
+  the existing append/update ordering needed by each realtime version. The
+  acknowledgement cue is local to the TUI, independent of the model prompt,
+  and can use the built-in sound or a mono/stereo PCM/float WAV up to one
+  second. The setting is captured when a realtime session starts, so restart
+  the voice session after changing it. Voice and device changes apply to the
   next voice session. When `voice_rotation` is set, its cursor is stored under
   `<codex_home>/realtime_voice_rotation.json`; the configured list takes
   precedence only at startup and does not rewrite `config.toml`; rotation entries
@@ -194,7 +213,22 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   model classifier does not change GPT-Live V3 WebRTC transport or its backend
   event contract. With `/voice debug on`, the diagnostic includes the handoff
   ID, classifier kind/model, classifier reasoning effort, fallback reason,
-  classification, and final selected effort. Device aliases are case-insensitive and persistent:
+  classification, and final selected effort. It also reports returned GPT-Live
+  response lifecycle, server-item, assistant-transcript delta/final, and audio
+  events as they arrive, including the event source, item/response/handoff IDs
+  when the protocol provides them, bounded assistant-text previews, and audio
+  shape metadata. Transcript deltas are coalesced into the final transcript
+  diagnostic with a delta count instead of rendering one TUI line per word.
+  Main-agent assistant item lifecycle and delta notifications
+  are tagged separately, including their item ID and message phase, so a bridge
+  phrase can be distinguished from GPT-Live output. Returned-output diagnostics
+  never log audio bytes or user-role items. Handoff diagnostics also include an
+  input character count (but not the spoken text) because they are specifically
+  used to verify classifier and handoff routing. The session-local diagnostic
+  history and correlation state are bounded. Missing IDs in a diagnostic are
+  evidence that the corresponding realtime event did not expose that identifier,
+  rather than a generated ID.
+  Device aliases are case-insensitive and persistent:
   `/mic alias airpods` names the currently selected microphone, `/mic alias
   airpods <device>` names an explicit device, and `/mic airpods` selects it.
   Speaker aliases use `/mic speaker alias desk <device>` and `/mic speaker desk`.

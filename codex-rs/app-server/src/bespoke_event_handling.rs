@@ -485,7 +485,20 @@ pub(crate) async fn apply_bespoke_event_handling(
                     ))
                     .await;
             }
-            RealtimeEvent::ResponseCreated(_) => {}
+            RealtimeEvent::ResponseCreated(event) => {
+                let notification = ThreadRealtimeItemAddedNotification {
+                    thread_id: conversation_id.to_string(),
+                    item: serde_json::json!({
+                        "type": "response.created",
+                        "response_id": event.response_id,
+                    }),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(
+                        notification,
+                    ))
+                    .await;
+            }
             RealtimeEvent::ResponseCancelled(event) => {
                 let notification = ThreadRealtimeItemAddedNotification {
                     thread_id: conversation_id.to_string(),
@@ -500,7 +513,20 @@ pub(crate) async fn apply_bespoke_event_handling(
                     ))
                     .await;
             }
-            RealtimeEvent::ResponseDone(_) => {}
+            RealtimeEvent::ResponseDone(event) => {
+                let notification = ThreadRealtimeItemAddedNotification {
+                    thread_id: conversation_id.to_string(),
+                    item: serde_json::json!({
+                        "type": "response.done",
+                        "response_id": event.response_id,
+                    }),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(
+                        notification,
+                    ))
+                    .await;
+            }
             RealtimeEvent::ConversationItemAdded(item) => {
                 let notification = ThreadRealtimeItemAddedNotification {
                     thread_id: conversation_id.to_string(),

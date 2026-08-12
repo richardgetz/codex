@@ -65,6 +65,7 @@ impl ChatWidget {
                 }
             }
             ServerNotification::TurnCompleted(notification) => {
+                self.release_realtime_handoff_output();
                 self.handle_turn_completed_notification(notification, replay_kind);
             }
             ServerNotification::ItemStarted(notification) => {
@@ -207,7 +208,13 @@ impl ChatWidget {
             }
             ServerNotification::ThreadRealtimeStarted(_) => {
                 if !from_replay {
+                    self.release_realtime_handoff_output();
                     self.finish_realtime_transcript_stream();
+                }
+            }
+            ServerNotification::ThreadRealtimeItemAdded(notification) => {
+                if !from_replay {
+                    self.handle_realtime_item_added(&notification.item);
                 }
             }
             ServerNotification::ThreadRealtimeTranscriptDelta(notification) => {
@@ -223,6 +230,7 @@ impl ChatWidget {
             ServerNotification::ThreadRealtimeError(_)
             | ServerNotification::ThreadRealtimeClosed(_) => {
                 if !from_replay {
+                    self.release_realtime_handoff_output();
                     self.finish_realtime_transcript_stream();
                 }
             }
@@ -252,7 +260,6 @@ impl ChatWidget {
             | ServerNotification::TurnModerationMetadata(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
-            | ServerNotification::ThreadRealtimeItemAdded(_)
             | ServerNotification::ThreadRealtimeOutputAudioDelta(_)
             | ServerNotification::ThreadRealtimeSdp(_)
             | ServerNotification::WindowsWorldWritableWarning(_)

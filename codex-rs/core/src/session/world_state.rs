@@ -16,6 +16,7 @@ use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::RealtimeState;
 use crate::context::world_state::ToolsState;
 use crate::context::world_state::WorldState;
+use crate::realtime_prompt::RealtimePreamblePolicy;
 use codex_core_skills::HostSkillsSnapshot;
 use codex_extension_api::WorldStateContributionInput;
 use codex_features::Feature;
@@ -113,13 +114,30 @@ impl Session {
                 personality_is_baked,
             ));
         }
-        world_state.add_section(RealtimeState::new(
+        let realtime_state = RealtimeState::new(
             turn_context.realtime_active,
             turn_context
                 .config
                 .experimental_realtime_start_instructions
                 .as_deref(),
-        ));
+        );
+        let preamble_policy = self
+            .conversation
+            .preamble_policy()
+            .await
+            .unwrap_or_else(|| {
+                if turn_context.config.realtime.enable_preambles {
+                    RealtimePreamblePolicy::Enabled
+                } else {
+                    RealtimePreamblePolicy::Suppressed
+                }
+            });
+        let realtime_state = if preamble_policy.suppresses() {
+            realtime_state.suppress_preambles()
+        } else {
+            realtime_state
+        };
+        world_state.add_section(realtime_state);
         world_state.add_section(AgentsMdState::new(step_context.loaded_agents_md.as_deref()));
         if turn_context.config.include_permissions_instructions {
             let permission_profile = turn_context.permission_profile();

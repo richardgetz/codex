@@ -10,10 +10,31 @@ const MAX_REALTIME_HISTORY_LIMIT: usize = 20;
 const MAX_REALTIME_HISTORY_ENTRIES: usize = 40;
 
 impl ChatWidget {
+    pub(super) fn handle_realtime_item_added(&mut self, item: &serde_json::Value) {
+        if self.config.realtime.enable_preambles
+            || item.get("type").and_then(serde_json::Value::as_str) != Some("handoff_request")
+        {
+            return;
+        }
+
+        self.transcript.realtime_handoff_output_suppressed = true;
+        self.transcript.realtime_assistant_transcript_cell = None;
+        self.transcript.bump_active_cell_revision();
+    }
+
+    pub(super) fn release_realtime_handoff_output(&mut self) {
+        self.transcript.realtime_handoff_output_suppressed = false;
+    }
+
     pub(super) fn handle_realtime_transcript_delta(&mut self, role: &str, delta: &str) {
         let Some(role) = RealtimeTranscriptRole::from_wire(role) else {
             return;
         };
+        if matches!(role, RealtimeTranscriptRole::Assistant)
+            && self.transcript.realtime_handoff_output_suppressed
+        {
+            return;
+        }
         if delta.is_empty() {
             return;
         }
@@ -31,6 +52,11 @@ impl ChatWidget {
         let Some(role) = RealtimeTranscriptRole::from_wire(role) else {
             return;
         };
+        if matches!(role, RealtimeTranscriptRole::Assistant)
+            && self.transcript.realtime_handoff_output_suppressed
+        {
+            return;
+        }
         let active_text = self
             .realtime_transcript_cell(role)
             .map(crate::history_cell::RealtimeTranscriptCell::text);
@@ -122,6 +148,11 @@ impl ChatWidget {
     }
 
     pub(super) fn finish_realtime_transcript_stream(&mut self) {
+        if self.transcript.realtime_handoff_output_suppressed {
+            self.transcript.realtime_user_transcript_cell = None;
+            self.transcript.realtime_assistant_transcript_cell = None;
+            return;
+        }
         if self.transcript.realtime_user_transcript_cell.is_some()
             || self.transcript.realtime_assistant_transcript_cell.is_some()
         {
