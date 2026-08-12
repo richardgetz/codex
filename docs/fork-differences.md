@@ -168,25 +168,26 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
 
   Set `[realtime].enabled = false` to disable the voice feature and its hotkey
   entirely. `/mic off` is a session-level mode change and does not rewrite that
-  config gate. `enable_preambles = false` sends the no-preamble policy in the
+  config gate. `enable_preambles = false` adds the no-preamble policy to the
   realtime session prompt, appends it after any configured backend prompt
-  override, and injects it into the main-agent realtime context. On a handoff,
-  the client then gates the explicitly typed assistant bridge transcript and
-  audio arriving during that deterministic handoff window until the main-agent
-  final-answer item starts. This suppresses phrases such as `Checking that now.`
-  without swallowing the final answer or the local acknowledgement cue. The
-  gate survives the hidden turn-start notification, ignores duplicate handoff
-  IDs, and resets on final, interrupted, failed, or closed turns. Phase-less
-  final output is released at the final-agent boundary; it is not broadly
-  buffered or discarded. Final answers still speak, the normal TUI output is
-  unchanged, and GPT-Live's wire transport and protocol versions remain
-  unchanged. Handoff forwarding keeps the existing append/update ordering
-  needed by each realtime version. GPT-Live can still emit an unmarked audio
-  backchannel outside that deterministic handoff window; because the protocol
-  provides no preamble event marker or audio phase, the client cannot safely
-  distinguish that audio from a real answer without risking clipped speech. The
-  no-preamble session prompt remains the deterministic control for those
-  unmarked model behaviors. The
+  override, and injects it into the main-agent realtime context. It can
+  deterministically suppress source-owned, explicitly typed main-agent
+  commentary such as `Checking that now.` while preserving the final answer
+  and local acknowledgement cue. The setting is not, however, a guarantee
+  that every GPT-Live spoken preamble disappears in the current V3/WebRTC
+  path. GPT-Live transcript and audio chunks can arrive without an item,
+  response, or turn ID and without a provisional/final phase; they can also
+  arrive before or around the handoff event. The client therefore cannot prove
+  that an unmarked phrase such as `Let me check.` is disposable preamble rather
+  than valid direct conversation. It intentionally does not use phrase matching
+  or blind audio buffering, because either can discard a legitimate answer.
+  For that unmarked GPT-Live output, `enable_preambles = false` is a prompt-level
+  best-effort instruction, not a client-side guarantee. The flag remains in
+  place so a future GPT-Live/app-server provenance contract can provide exact
+  suppression without changing the user-facing configuration. Final answers
+  still speak, the normal TUI output is unchanged, and GPT-Live's wire
+  transport and protocol versions remain unchanged. Handoff forwarding keeps
+  the existing append/update ordering needed by each realtime version. The
   acknowledgement cue is local to the TUI, independent of the model prompt,
   and can use the built-in sound or a mono/stereo PCM/float WAV up to one
   second. The setting is captured when a realtime session starts, so restart
