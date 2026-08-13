@@ -61,7 +61,6 @@ fn ensure_no_inline_bearer_tokens(value: &TomlValue) -> std::io::Result<()> {
 
     Ok(())
 }
-
 pub struct ConfigEditsBuilder {
     codex_home: PathBuf,
     mcp_servers: Option<BTreeMap<String, McpServerConfig>>,
@@ -203,6 +202,13 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
             McpServerSharingMode::Standalone => "standalone",
             McpServerSharingMode::Shared => "shared",
         });
+    }
+    if let Some(omit_tools_from) = &config.omit_tools_from {
+        let surfaces = omit_tools_from
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        entry["omit_tools_from"] = array_from_strings(&surfaces);
     }
     if let Some(timeout) = config.startup_timeout_sec {
         entry["startup_timeout_sec"] = value(timeout.as_secs_f64());

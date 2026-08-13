@@ -64,18 +64,19 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigTomlLoadResult;
+use codex_core::config::bootstrap_auth_config;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_toml_with_layer_stack;
-use codex_core::config::resolve_bootstrap_auth_keyring_backend_kind;
-use codex_core::config::resolve_bootstrap_auth_route_config;
 use codex_core::config::resolve_oss_provider;
 use codex_core::config::resolve_profile_v2_config_path;
 use codex_core::find_thread_meta_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
+use codex_core::read_session_meta_line;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::get_git_repo_root;
 use codex_login::AuthConfig;
+use codex_login::AuthManagerConfig;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
 use codex_login::enforce_login_restrictions;
@@ -239,16 +240,12 @@ fn exec_stderr_env_filter() -> EnvFilter {
 }
 
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
-    #[allow(clippy::print_stderr)]
-    if let Some(message) = cli.removed_full_auto_warning() {
-        eprintln!("{message}");
-    }
-
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }
 
     let Cli {
+        psp,
         command,
         strict_config,
         shared,
@@ -256,15 +253,15 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         ephemeral,
         ignore_user_config,
         ignore_rules,
-        removed_full_auto,
         color,
         last_message_file,
         json: json_mode,
         prompt,
         output_schema: output_schema_path,
-        config_overrides,
+        mut config_overrides,
     } = cli;
-    let shared = shared.into_inner();
+    let mut shared = shared.into_inner();
+    shared.take_auto_review_config_overrides(&mut config_overrides);
     let SharedCliOptions {
         images,
         model: model_cli_arg,
@@ -272,6 +269,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         oss_provider,
         config_profile_v2,
         sandbox_mode: sandbox_mode_cli_arg,
+        auto_review: _,
         dangerously_bypass_approvals_and_sandbox,
         bypass_hook_trust,
         cwd,
@@ -291,9 +289,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .with_writer(std::io::stderr)
         .with_filter(exec_stderr_env_filter());
 
-    let sandbox_mode = if removed_full_auto {
-        Some(SandboxMode::WorkspaceWrite)
-    } else if dangerously_bypass_approvals_and_sandbox {
+    let sandbox_mode = if dangerously_bypass_approvals_and_sandbox {
         Some(SandboxMode::DangerFullAccess)
     } else {
         sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
@@ -347,28 +343,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     )
     .await;
     let bootstrap_config_toml = &bootstrap_config.config_toml;
-
-    let chatgpt_base_url = bootstrap_config_toml
-        .chatgpt_base_url
-        .clone()
-        .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let auth_route_config = resolve_bootstrap_auth_route_config(
-        bootstrap_config_toml,
-        bootstrap_config
-            .config_layer_stack
-            .requirements()
-            .feature_requirements
-            .as_ref(),
-    )?;
     let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
-        codex_home.to_path_buf(),
+        bootstrap_auth_config(&codex_home, &bootstrap_config)?,
         /*enable_codex_api_key_env*/ false,
-        bootstrap_config_toml
-            .cli_auth_credentials_store
-            .unwrap_or_default(),
-        resolve_bootstrap_auth_keyring_backend_kind(&bootstrap_config)?,
-        chatgpt_base_url,
-        auth_route_config,
     )
     .await;
     let run_cli_overrides = cli_kv_overrides.clone();
@@ -446,6 +423,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         tools_web_search_request: None,
         ephemeral: ephemeral.then_some(true),
         bypass_hook_trust: bypass_hook_trust.then_some(true),
+        psp: Some(psp),
         additional_writable_roots: add_dir,
         memory_policy: None,
         user_preferences_memory_policy: None,
@@ -464,7 +442,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     };
     let config = build_exec_config(
         overrides,
-        dangerously_bypass_approvals_and_sandbox || removed_full_auto,
+        dangerously_bypass_approvals_and_sandbox,
         build_config,
     )
     .await?;
@@ -496,6 +474,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         forced_login_method: config.forced_login_method,
         forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
         chatgpt_base_url: Some(config.chatgpt_base_url.clone()),
+        managed_auth_policy: config.managed_auth_policy(),
         auth_route_config,
     })
     .await
@@ -1002,9 +981,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
 
         match server_event {
             InProcessServerEvent::ServerRequest(request) => {
-                handle_server_request(&client, request, &mut error_seen).await;
+                handle_server_request(&client, *request, &mut error_seen).await;
             }
-            InProcessServerEvent::ServerNotification(mut notification) => {
+            InProcessServerEvent::ServerNotification(notification) => {
+                let mut notification = *notification;
                 if let ServerNotification::Error(payload) = &notification {
                     if payload.thread_id == primary_thread_id_for_requests
                         && payload.turn_id == task_id
@@ -1120,6 +1100,7 @@ fn thread_resume_params_from_config(
         sandbox: sandbox.flatten(),
         permissions,
         config: thread_config_overrides_from_config(config),
+        exclude_turns: true,
         ..ThreadResumeParams::default()
     }
 }
@@ -1477,6 +1458,7 @@ async fn resolve_resume_thread_id(
     let model_providers = resume_lookup_model_providers(config, args);
 
     if args.last {
+        let mut use_state_db_only = state_db.is_some();
         let mut cursor = None;
         loop {
             let response: ThreadListResponse = send_request_with_response(
@@ -1491,11 +1473,11 @@ async fn resolve_resume_thread_id(
                         model_providers: model_providers.clone(),
                         source_kinds: Some(all_thread_source_kinds()),
                         archived: Some(false),
-                        is_pinned: None,
+                        section_id: None,
                         parent_thread_id: None,
                         ancestor_thread_id: None,
                         cwd: None,
-                        use_state_db_only: false,
+                        use_state_db_only,
                         search_term: None,
                     },
                 },
@@ -1504,12 +1486,28 @@ async fn resolve_resume_thread_id(
             .await
             .map_err(anyhow::Error::msg)?;
             for thread in response.data {
+                if use_state_db_only && let Some(path) = thread.path.as_deref() {
+                    let Ok(session_meta) = read_session_meta_line(path).await else {
+                        continue;
+                    };
+                    if session_meta.meta.id.to_string() != thread.id {
+                        continue;
+                    }
+                }
                 let latest_cwd = latest_thread_cwd(&thread).await;
                 if args.all || cwds_match(config.cwd.as_path(), latest_cwd.as_path()) {
+                    // A usable SQLite candidate is authoritative. Scanning is reserved for a
+                    // complete miss so successful `--last` lookups avoid auditing every rollout.
                     return Ok(Some(thread.id));
                 }
             }
             let Some(next_cursor) = response.next_cursor else {
+                if use_state_db_only {
+                    // Repair from rollouts before giving up on a missing SQLite match.
+                    use_state_db_only = false;
+                    cursor = None;
+                    continue;
+                }
                 return Ok(None);
             };
             cursor = Some(next_cursor);
@@ -1559,7 +1557,7 @@ async fn resolve_resume_thread_id(
                     model_providers: model_providers.clone(),
                     source_kinds: Some(all_thread_source_kinds()),
                     archived: Some(false),
-                    is_pinned: None,
+                    section_id: None,
                     parent_thread_id: None,
                     ancestor_thread_id: None,
                     cwd: None,

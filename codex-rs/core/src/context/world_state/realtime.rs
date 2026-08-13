@@ -18,6 +18,7 @@ const REALTIME_START_INSTRUCTIONS_TOKEN_BUDGET: usize = 8_000;
 pub(crate) struct RealtimeState {
     snapshot: RealtimeSnapshot,
     start_instructions: Option<String>,
+    end_instructions: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -28,13 +29,18 @@ pub(crate) struct RealtimeSnapshot {
 }
 
 impl RealtimeState {
-    pub(crate) fn new(active: bool, start_instructions: Option<&str>) -> Self {
+    pub(crate) fn new(
+        active: bool,
+        start_instructions: Option<&str>,
+        end_instructions: Option<&str>,
+    ) -> Self {
         Self {
             snapshot: RealtimeSnapshot {
                 active,
                 suppress_preambles: false,
             },
             start_instructions: start_instructions.map(str::to_string),
+            end_instructions: end_instructions.map(str::to_string),
         }
     }
 
@@ -75,7 +81,12 @@ impl RealtimeState {
     ) -> Option<Box<dyn ContextualUserFragment>> {
         match (previous.active, self.snapshot.active) {
             (false, true) => Some(self.render_start()),
-            (true, false) => Some(Box::new(RealtimeEndInstructions::new("inactive"))),
+            (true, false) => Some(match self.end_instructions.as_deref() {
+                Some(instructions) => {
+                    Box::new(RealtimeEndInstructions::with_instructions(instructions))
+                }
+                None => Box::new(RealtimeEndInstructions::with_reason("inactive")),
+            }),
             (true, true) if previous.suppress_preambles != self.snapshot.suppress_preambles => {
                 if self.snapshot.suppress_preambles {
                     Some(self.render_start())
@@ -100,9 +111,7 @@ impl WorldStateSection for RealtimeState {
     }
 
     fn matches_legacy_fragment(role: &str, text: &str) -> bool {
-        role == "developer"
-            && RealtimeStartInstructions::matches_text(text)
-            && !RealtimeEndInstructions::matches_text(text)
+        role == "developer" && RealtimeStartInstructions::matches_text(text)
     }
 
     fn has_retained_fragment_matcher() -> bool {

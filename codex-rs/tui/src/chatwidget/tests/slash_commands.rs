@@ -527,6 +527,7 @@ async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
     assert_eq!(next_add_to_history_event(&mut rx), "!echo hi");
     assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
 
+    handle_turn_started(&mut chat, "turn-2");
     let begin = begin_exec_with_source(
         &mut chat,
         "user-shell-echo",
@@ -534,6 +535,7 @@ async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
         ExecCommandSource::UserShell,
     );
     end_exec(&mut chat, begin, "hi\n", "", /*exit_code*/ 0);
+    handle_turn_completed(&mut chat, "turn-2", /*duration_ms*/ None);
 
     match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => assert_eq!(
@@ -2017,6 +2019,7 @@ async fn keymap_capture_can_capture_current_copy_shortcut() {
         "composer".to_string(),
         "submit".to_string(),
         crate::app_event::KeymapEditIntent::ReplaceAll,
+        crate::app_event::KeymapCaptureMode::SingleKey,
         &runtime_keymap,
     );
 
@@ -2051,6 +2054,7 @@ async fn slash_keymap_capture_can_capture_app_shortcuts() {
             "global".to_string(),
             "open_transcript".to_string(),
             crate::app_event::KeymapEditIntent::ReplaceAll,
+            crate::app_event::KeymapCaptureMode::SingleKey,
             &runtime_keymap,
         );
 
@@ -3683,7 +3687,26 @@ async fn slash_fork_requests_current_fork() {
 
     chat.dispatch_command(SlashCommand::Fork);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ForkCurrentSession));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ForkCurrentSession { name: None })
+    );
+}
+
+#[tokio::test]
+async fn slash_fork_with_name_requests_named_fork() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane
+        .set_composer_text("/fork   Add User  ".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ForkCurrentSession {
+            name: Some(name)
+        }) if name == "Add User"
+    );
 }
 
 #[tokio::test]

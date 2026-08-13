@@ -49,7 +49,9 @@ fn uses_reserved_image_gen_namespace() {
         panic!("imagegen should advertise a namespace tool");
     };
     assert_eq!(spec.name, IMAGE_GEN_NAMESPACE);
-    let ResponsesApiNamespaceTool::Function(function) = &spec.tools[0];
+    let ResponsesApiNamespaceTool::Function(function) = &spec.tools[0] else {
+        panic!("imagegen should advertise a function tool");
+    };
     assert_eq!(function.name, IMAGEGEN_TOOL_NAME);
 }
 
@@ -100,6 +102,7 @@ async fn recent_image_fallback_preserves_latest_user_anchor_and_generated_contex
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "mcp-call".to_string(),
+            encrypted_function_args: None,
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {

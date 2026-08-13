@@ -31,3 +31,11 @@ incoming upstream migrations are appended as:
 0045_upstream_threads_is_pinned.sql
 0046_upstream_external_agent_config_imports_provider_id.sql
 ```
+
+The `rust-v0.147.0` refresh keeps those already-shipped migrations unchanged.
+Its incoming thread-section migrations are appended as:
+
+```text
+0047_upstream_threads_section.sql
+0048_upstream_threads_section_order.sql
+```

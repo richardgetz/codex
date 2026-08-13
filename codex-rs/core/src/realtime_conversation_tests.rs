@@ -326,6 +326,7 @@ async fn handoff_complete_preserves_pending_streamed_final_output() {
             realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             stop_token: CancellationToken::new(),
         })),
+        mode_instructions: Mutex::new(None),
     };
     let output_task = tokio::spawn(async move {
         let mut append_texts = Vec::new();
@@ -383,6 +384,7 @@ async fn disabled_preambles_suppress_commentary_and_defer_unphased_output_until_
             realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             stop_token: CancellationToken::new(),
         })),
+        mode_instructions: Mutex::new(None),
     };
     let handoff = manager
         .state
@@ -484,6 +486,7 @@ async fn disabled_preambles_drop_phase_less_bridge_before_preserving_final_outpu
             realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             stop_token: CancellationToken::new(),
         })),
+        mode_instructions: Mutex::new(None),
     };
     let handoff = manager
         .state

@@ -127,6 +127,9 @@ fn serialize_mcp_server_table(config: &McpServerConfig) -> TomlTable {
             McpServerSharingMode::Shared => "shared",
         });
     }
+    if let Some(omit_tools_from) = &config.omit_tools_from {
+        entry["omit_tools_from"] = array_from_iter(omit_tools_from.iter().map(ToString::to_string));
+    }
     if let Some(timeout) = config.startup_timeout_sec {
         entry["startup_timeout_sec"] = value(timeout.as_secs_f64());
     }

@@ -1,9 +1,13 @@
 //! MCP server configuration types.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use codex_protocol::config_types::ToolExposureSurface;
 use codex_utils_path_uri::LegacyAppPathString;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -209,6 +213,11 @@ pub struct McpServerConfig {
     #[serde(default, skip_serializing_if = "is_default_sharing_mode")]
     pub sharing: McpServerSharingMode,
 
+    /// Model-facing surfaces from which this server's tools must be omitted.
+    /// `None` leaves lower-priority configuration unchanged; an empty list clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omit_tools_from: Option<Vec<ToolExposureSurface>>,
+
     /// Reason this server was disabled after applying requirements.
     #[serde(skip)]
     pub disabled_reason: Option<McpServerDisabledReason>,
@@ -257,6 +266,21 @@ pub struct McpServerConfig {
 impl McpServerConfig {
     pub fn is_local_environment(&self) -> bool {
         self.environment_id == DEFAULT_MCP_SERVER_ENVIRONMENT_ID
+    }
+
+    /// Keeps local OAuth credentials compatible while isolating executor-owned servers.
+    pub fn oauth_credential_name<'a>(&self, server_name: &'a str) -> Cow<'a, str> {
+        if self.is_local_environment() {
+            if server_name.starts_with("executor:") || server_name.starts_with("local:") {
+                Cow::Owned(format!("local:{server_name}"))
+            } else {
+                Cow::Borrowed(server_name)
+            }
+        } else {
+            let environment = URL_SAFE_NO_PAD.encode(self.environment_id.as_bytes());
+            let server = URL_SAFE_NO_PAD.encode(server_name.as_bytes());
+            Cow::Owned(format!("executor:{environment}:{server}"))
+        }
     }
 
     pub fn oauth_client_id(&self) -> Option<&str> {
@@ -321,6 +345,8 @@ pub struct RawMcpServerConfig {
     #[serde(default)]
     pub sharing: Option<McpServerSharingMode>,
     #[serde(default)]
+    pub omit_tools_from: Option<Vec<ToolExposureSurface>>,
+    #[serde(default)]
     pub default_tools_approval_mode: Option<AppToolApproval>,
     #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
@@ -364,6 +390,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             supports_parallel_tool_calls,
             startup,
             sharing,
+            omit_tools_from,
             default_tools_approval_mode,
             enabled_tools,
             disabled_tools,
@@ -443,6 +470,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             supports_parallel_tool_calls: supports_parallel_tool_calls.unwrap_or_default(),
             startup: startup.unwrap_or_default(),
             sharing: sharing.unwrap_or_default(),
+            omit_tools_from,
             disabled_reason: None,
             default_tools_approval_mode,
             enabled_tools,
