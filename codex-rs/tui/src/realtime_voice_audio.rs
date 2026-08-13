@@ -4,9 +4,12 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use bytes::Bytes;
+use cpal::I24;
 use cpal::SampleFormat;
 use cpal::StreamConfig;
 use cpal::SupportedStreamConfig;
+use cpal::SupportedStreamConfigRange;
+use cpal::U24;
 use cpal::traits::DeviceTrait;
 use cpal::traits::HostTrait;
 use opus::Channels;
@@ -87,10 +90,29 @@ where
         .with_context(|| format!("configured realtime {kind} `{requested}` was not found"))
 }
 
+#[derive(Clone, Copy)]
 enum AudioDirection {
     Input,
     Output,
 }
+
+#[derive(Clone, Copy)]
+enum SampleRatePolicy {
+    Exact,
+    AllowFallback,
+}
+
+const INPUT_SAMPLE_RATES: &[u32] = &[
+    SAMPLE_RATE,
+    44_100,
+    32_000,
+    24_000,
+    22_050,
+    16_000,
+    12_000,
+    11_025,
+    8_000,
+];
 
 fn select_audio_config(
     device: &cpal::Device,
@@ -106,15 +128,54 @@ fn select_audio_config(
             .context("listing speaker formats")?
             .collect::<Vec<_>>(),
     };
-    supported
-        .into_iter()
-        .filter_map(|range| range.try_with_sample_rate(SAMPLE_RATE))
-        .find(|config| supported_sample_format(config.sample_format()))
-        .with_context(|| {
-            format!(
-                "realtime audio device `{device}` does not support a supported 48 kHz PCM format"
-            )
+    let config = match direction {
+        AudioDirection::Input => select_supported_audio_config(
+            &supported,
+            INPUT_SAMPLE_RATES,
+            SampleRatePolicy::AllowFallback,
+        ),
+        AudioDirection::Output => {
+            select_supported_audio_config(&supported, &[SAMPLE_RATE], SampleRatePolicy::Exact)
+        }
+    };
+    config.with_context(|| {
+        let kind = match direction {
+            AudioDirection::Input => "microphone",
+            AudioDirection::Output => "speaker",
+        };
+        format!("realtime {kind} `{device}` does not support a compatible PCM format")
+    })
+}
+
+fn select_supported_audio_config(
+    ranges: &[SupportedStreamConfigRange],
+    preferred_sample_rates: &[u32],
+    sample_rate_policy: SampleRatePolicy,
+) -> Option<SupportedStreamConfig> {
+    for &sample_rate in preferred_sample_rates {
+        if let Some(config) = ranges
+            .iter()
+            .copied()
+            .filter(|range| supported_sample_format(range.sample_format()))
+            .find_map(|range| range.try_with_sample_rate(sample_rate))
+        {
+            return Some(config);
+        }
+    }
+
+    if matches!(sample_rate_policy, SampleRatePolicy::Exact) {
+        return None;
+    }
+
+    ranges
+        .iter()
+        .copied()
+        .filter(|range| supported_sample_format(range.sample_format()))
+        .map(|range| {
+            let sample_rate = SAMPLE_RATE.clamp(range.min_sample_rate(), range.max_sample_rate());
+            range.with_sample_rate(sample_rate)
         })
+        .min_by_key(|config| config.sample_rate().abs_diff(SAMPLE_RATE))
 }
 
 fn supported_sample_format(format: SampleFormat) -> bool {
@@ -124,10 +185,12 @@ fn supported_sample_format(format: SampleFormat) -> bool {
             | SampleFormat::F64
             | SampleFormat::I8
             | SampleFormat::I16
+            | SampleFormat::I24
             | SampleFormat::I32
             | SampleFormat::I64
             | SampleFormat::U8
             | SampleFormat::U16
+            | SampleFormat::U24
             | SampleFormat::U32
             | SampleFormat::U64
     )
@@ -146,42 +209,24 @@ pub(crate) fn build_input_stream(
     config: StreamConfig,
     format: SampleFormat,
     channels: u16,
-    input_tx: tokio::sync::mpsc::Sender<Vec<i16>>,
+    input_tx: tokio::sync::mpsc::Sender<InputFrame>,
     input_muted: Arc<AtomicBool>,
 ) -> Result<cpal::Stream> {
+    let accumulator =
+        InputFrameAccumulator::new(channels, config.sample_rate, input_tx, input_muted);
     match format {
-        SampleFormat::F32 => {
-            build_input_stream_for(device, config, channels, input_tx, input_muted, f32_to_i16)
-        }
-        SampleFormat::F64 => {
-            build_input_stream_for(device, config, channels, input_tx, input_muted, f64_to_i16)
-        }
-        SampleFormat::I8 => {
-            build_input_stream_for(device, config, channels, input_tx, input_muted, i8_to_i16)
-        }
-        SampleFormat::I16 => {
-            build_input_stream_for(device, config, channels, input_tx, input_muted, |sample| {
-                sample
-            })
-        }
-        SampleFormat::I32 => {
-            build_input_stream_for(device, config, channels, input_tx, input_muted, i32_to_i16)
-        }
-        SampleFormat::I64 => {
-            build_input_stream_for(device, config, channels, input_tx, input_muted, i64_to_i16)
-        }
-        SampleFormat::U8 => {
-            build_input_stream_for(device, config, channels, input_tx, input_muted, u8_to_i16)
-        }
-        SampleFormat::U16 => {
-            build_input_stream_for(device, config, channels, input_tx, input_muted, u16_to_i16)
-        }
-        SampleFormat::U32 => {
-            build_input_stream_for(device, config, channels, input_tx, input_muted, u32_to_i16)
-        }
-        SampleFormat::U64 => {
-            build_input_stream_for(device, config, channels, input_tx, input_muted, u64_to_i16)
-        }
+        SampleFormat::F32 => build_input_stream_for(device, config, accumulator, f32_to_i16),
+        SampleFormat::F64 => build_input_stream_for(device, config, accumulator, f64_to_i16),
+        SampleFormat::I8 => build_input_stream_for(device, config, accumulator, i8_to_i16),
+        SampleFormat::I16 => build_input_stream_for(device, config, accumulator, |sample| sample),
+        SampleFormat::I24 => build_input_stream_for(device, config, accumulator, i24_to_i16),
+        SampleFormat::I32 => build_input_stream_for(device, config, accumulator, i32_to_i16),
+        SampleFormat::I64 => build_input_stream_for(device, config, accumulator, i64_to_i16),
+        SampleFormat::U8 => build_input_stream_for(device, config, accumulator, u8_to_i16),
+        SampleFormat::U16 => build_input_stream_for(device, config, accumulator, u16_to_i16),
+        SampleFormat::U24 => build_input_stream_for(device, config, accumulator, u24_to_i16),
+        SampleFormat::U32 => build_input_stream_for(device, config, accumulator, u32_to_i16),
+        SampleFormat::U64 => build_input_stream_for(device, config, accumulator, u64_to_i16),
         _ => bail!("unsupported realtime microphone sample format `{format}`"),
     }
 }
@@ -189,15 +234,12 @@ pub(crate) fn build_input_stream(
 fn build_input_stream_for<T>(
     device: &cpal::Device,
     config: StreamConfig,
-    channels: u16,
-    input_tx: tokio::sync::mpsc::Sender<Vec<i16>>,
-    input_muted: Arc<AtomicBool>,
+    mut accumulator: InputFrameAccumulator,
     converter: impl Fn(T) -> i16 + Send + 'static,
 ) -> Result<cpal::Stream>
 where
     T: cpal::SizedSample,
 {
-    let mut accumulator = InputFrameAccumulator::new(channels, input_tx, input_muted);
     device
         .build_input_stream(
             config,
@@ -249,6 +291,14 @@ pub(crate) fn build_output_stream(
             acknowledgement_queue,
             |sample, value| *sample = value,
         ),
+        SampleFormat::I24 => build_output_stream_for(
+            device,
+            config,
+            channels,
+            output_queue,
+            acknowledgement_queue,
+            |sample, value| *sample = i16_to_i24(value),
+        ),
         SampleFormat::I32 => build_output_stream_for(
             device,
             config,
@@ -280,6 +330,14 @@ pub(crate) fn build_output_stream(
             output_queue,
             acknowledgement_queue,
             |sample, value| *sample = (i32::from(value) + 32_768) as u16,
+        ),
+        SampleFormat::U24 => build_output_stream_for(
+            device,
+            config,
+            channels,
+            output_queue,
+            acknowledgement_queue,
+            |sample, value| *sample = i16_to_u24(value),
         ),
         SampleFormat::U32 => build_output_stream_for(
             device,
@@ -359,22 +417,161 @@ fn pop_output_sample(
     }
 }
 
+type InputFrame = [i16; FRAME_SAMPLES];
+
+const MAX_RESAMPLER_BUFFER_SAMPLES: usize = 4_096;
+const MAX_LOW_PASS_TAPS: usize = 128;
+
+struct InputLowPass {
+    window: VecDeque<i16>,
+    coefficients: Vec<f64>,
+}
+
+impl InputLowPass {
+    fn new(source_rate: u32, target_rate: u32, rate_ratio: usize) -> Self {
+        let taps = rate_ratio.saturating_mul(32).clamp(16, MAX_LOW_PASS_TAPS);
+        let cutoff = 0.4 * f64::from(target_rate) / f64::from(source_rate);
+        let center = (taps - 1) as f64 / 2.0;
+        let denominator = (taps - 1) as f64;
+        let mut coefficients = (0..taps)
+            .map(|index| {
+                let distance = index as f64 - center;
+                let sinc = if distance == 0.0 {
+                    2.0 * cutoff
+                } else {
+                    (2.0 * std::f64::consts::PI * cutoff * distance).sin()
+                        / (std::f64::consts::PI * distance)
+                };
+                let window = 0.42
+                    - 0.5 * (2.0 * std::f64::consts::PI * index as f64 / denominator).cos()
+                    + 0.08 * (4.0 * std::f64::consts::PI * index as f64 / denominator).cos();
+                sinc * window
+            })
+            .collect::<Vec<_>>();
+        let coefficient_sum = coefficients.iter().sum::<f64>();
+        for coefficient in &mut coefficients {
+            *coefficient /= coefficient_sum;
+        }
+        Self {
+            window: VecDeque::with_capacity(taps),
+            coefficients,
+        }
+    }
+
+    fn push(&mut self, sample: i16) -> i16 {
+        if self.window.is_empty() {
+            self.window.resize(self.coefficients.len(), sample);
+        } else {
+            if self.window.len() == self.coefficients.len() {
+                let _ = self.window.pop_front();
+            }
+            self.window.push_back(sample);
+        }
+        self.window
+            .iter()
+            .zip(&self.coefficients)
+            .map(|(sample, coefficient)| f64::from(*sample) * coefficient)
+            .sum::<f64>()
+            .round()
+            .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16
+    }
+}
+
+struct InputResampler {
+    source_rate: u32,
+    target_rate: u32,
+    input: VecDeque<i16>,
+    output: VecDeque<i16>,
+    low_pass: Option<InputLowPass>,
+    position: f64,
+}
+
+impl InputResampler {
+    fn new(source_rate: u32, target_rate: u32) -> Self {
+        let source_rate = source_rate.max(1);
+        let target_rate = target_rate.max(1);
+        let rate_ratio = source_rate
+            .max(target_rate)
+            .div_ceil(source_rate.min(target_rate));
+        let rate_ratio = usize::try_from(rate_ratio)
+            .unwrap_or(MAX_RESAMPLER_BUFFER_SAMPLES)
+            .min(MAX_RESAMPLER_BUFFER_SAMPLES);
+        let buffer_capacity = rate_ratio
+            .saturating_add(4)
+            .clamp(8, MAX_RESAMPLER_BUFFER_SAMPLES);
+        Self {
+            source_rate,
+            target_rate,
+            input: VecDeque::with_capacity(buffer_capacity),
+            output: VecDeque::with_capacity(buffer_capacity),
+            low_pass: if source_rate > target_rate {
+                Some(InputLowPass::new(source_rate, target_rate, rate_ratio))
+            } else {
+                None
+            },
+            position: 0.0,
+        }
+    }
+
+    fn push(&mut self, sample: i16) {
+        let sample = self
+            .low_pass
+            .as_mut()
+            .map_or(sample, |low_pass| low_pass.push(sample));
+        if self.source_rate == self.target_rate {
+            self.output.push_back(sample);
+            return;
+        }
+
+        self.input.push_back(sample);
+        let step = f64::from(self.source_rate) / f64::from(self.target_rate);
+        while self.position + 1.0 < self.input.len() as f64 {
+            let index = self.position.floor() as usize;
+            let fraction = self.position - index as f64;
+            let left = f64::from(self.input[index]);
+            let right = f64::from(self.input[index + 1]);
+            let sample = left + (right - left) * fraction;
+            self.output.push_back(
+                sample
+                    .round()
+                    .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16,
+            );
+            self.position += step;
+        }
+
+        let consumed = (self.position.floor() as usize).min(self.input.len());
+        for _ in 0..consumed {
+            let _ = self.input.pop_front();
+        }
+        self.position -= consumed as f64;
+    }
+
+    fn pop_output(&mut self) -> Option<i16> {
+        self.output.pop_front()
+    }
+}
+
 struct InputFrameAccumulator {
     channels: usize,
-    pending: Vec<i16>,
-    input_tx: tokio::sync::mpsc::Sender<Vec<i16>>,
+    pending: InputFrame,
+    pending_len: usize,
+    resampler: InputResampler,
+    input_tx: tokio::sync::mpsc::Sender<InputFrame>,
     input_muted: Arc<AtomicBool>,
 }
 
 impl InputFrameAccumulator {
     fn new(
         channels: u16,
-        input_tx: tokio::sync::mpsc::Sender<Vec<i16>>,
+        sample_rate: u32,
+        input_tx: tokio::sync::mpsc::Sender<InputFrame>,
         input_muted: Arc<AtomicBool>,
     ) -> Self {
         Self {
             channels: channels as usize,
-            pending: Vec::with_capacity(FRAME_SAMPLES),
+            pending: [0; FRAME_SAMPLES],
+            pending_len: 0,
+            resampler: InputResampler::new(sample_rate, SAMPLE_RATE),
             input_tx,
             input_muted,
         }
@@ -396,10 +593,15 @@ impl InputFrameAccumulator {
                     .sum::<i32>();
                 (sum / frame.len() as i32) as i16
             };
-            self.pending.push(sample);
-            if self.pending.len() == FRAME_SAMPLES {
-                let frame = std::mem::replace(&mut self.pending, Vec::with_capacity(FRAME_SAMPLES));
-                let _ = self.input_tx.try_send(frame);
+            self.resampler.push(sample);
+            while let Some(sample) = self.resampler.pop_output() {
+                self.pending[self.pending_len] = sample;
+                self.pending_len += 1;
+                if self.pending_len == FRAME_SAMPLES {
+                    let frame = std::mem::replace(&mut self.pending, [0; FRAME_SAMPLES]);
+                    self.pending_len = 0;
+                    let _ = self.input_tx.try_send(frame);
+                }
             }
         }
     }
@@ -458,7 +660,7 @@ fn append_remote_audio(
 }
 
 pub(crate) async fn encode_input_frames(
-    mut input_rx: tokio::sync::mpsc::Receiver<Vec<i16>>,
+    mut input_rx: tokio::sync::mpsc::Receiver<InputFrame>,
     input_track: Arc<TrackLocalStaticSample>,
     mut encoder: Encoder,
     input_released: Arc<AtomicBool>,
@@ -490,7 +692,7 @@ pub(crate) async fn encode_input_frames(
     }
 }
 
-fn release_input_buffer(buffered_frames: &mut VecDeque<Vec<i16>>) {
+fn release_input_buffer(buffered_frames: &mut VecDeque<InputFrame>) {
     let Some(first_signal_frame) = buffered_frames.iter().position(|frame| {
         frame
             .iter()
@@ -506,7 +708,7 @@ fn release_input_buffer(buffered_frames: &mut VecDeque<Vec<i16>>) {
 async fn encode_and_write_frame(
     encoder: &mut Encoder,
     input_track: &Arc<TrackLocalStaticSample>,
-    frame: Vec<i16>,
+    frame: InputFrame,
 ) -> bool {
     let Ok(encoded) = encoder.encode_vec(&frame, MAX_OPUS_PACKET_SIZE) else {
         return true;
@@ -533,6 +735,14 @@ fn f64_to_i16(value: f64) -> i16 {
     (value.clamp(-1.0, 1.0) * 32_767.0).round() as i16
 }
 
+fn i16_to_i24(value: i16) -> I24 {
+    I24::from(i32::from(value) << 8)
+}
+
+fn i24_to_i16(value: I24) -> i16 {
+    (value.inner() >> 8) as i16
+}
+
 fn i8_to_i16(value: i8) -> i16 {
     i16::from(value) << 8
 }
@@ -551,6 +761,14 @@ fn u8_to_i16(value: u8) -> i16 {
 
 fn u16_to_i16(value: u16) -> i16 {
     (i32::from(value) - 32_768) as i16
+}
+
+fn i16_to_u24(value: i16) -> U24 {
+    U24::from((i32::from(value) << 8) + 8_388_608)
+}
+
+fn u24_to_i16(value: U24) -> i16 {
+    ((value.inner() - 8_388_608) >> 8) as i16
 }
 
 fn u32_to_i16(value: u32) -> i16 {
