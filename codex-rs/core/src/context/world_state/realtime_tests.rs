@@ -2,7 +2,7 @@ use super::super::test_support::render_section_cases;
 use super::*;
 
 fn state(active: bool, start_instructions: Option<&str>) -> RealtimeState {
-    RealtimeState::new(active, start_instructions)
+    RealtimeState::new(active, start_instructions, /*end_instructions*/ None)
 }
 
 #[test]
@@ -34,17 +34,17 @@ fn snapshots() {
 }
 
 #[test]
-fn retained_fragment_matcher_only_matches_starts() {
+fn retained_fragment_matcher_matches_realtime_fragments() {
     let start = RealtimeStartWithInstructions::new("custom instructions").render();
-    let end = RealtimeEndInstructions::new("inactive").render();
+    let end = RealtimeEndInstructions::new().render();
 
     assert!(RealtimeState::matches_legacy_fragment("developer", &start));
-    assert!(!RealtimeState::matches_legacy_fragment("developer", &end));
+    assert!(RealtimeState::matches_legacy_fragment("developer", &end));
 }
 
 #[test]
 fn disabled_preambles_add_a_directive_to_main_agent_context() {
-    let state = RealtimeState::new(true, None).suppress_preambles();
+    let state = RealtimeState::new(true, None, /*end_instructions*/ None).suppress_preambles();
     let rendered = state.render_start().render();
 
     assert!(rendered.contains("Respond normally to the user's direct conversational turns"));
@@ -54,7 +54,12 @@ fn disabled_preambles_add_a_directive_to_main_agent_context() {
 #[test]
 fn realtime_start_instructions_are_bounded_before_policy_is_appended() {
     let custom_instructions = "x".repeat(50_000);
-    let state = RealtimeState::new(true, Some(&custom_instructions)).suppress_preambles();
+    let state = RealtimeState::new(
+        true,
+        Some(&custom_instructions),
+        /*end_instructions*/ None,
+    )
+    .suppress_preambles();
     let rendered = state.render_start().render();
 
     assert!(rendered.len() < custom_instructions.len());
@@ -63,7 +68,7 @@ fn realtime_start_instructions_are_bounded_before_policy_is_appended() {
 
 #[test]
 fn preamble_transition_emits_the_current_policy() {
-    let enabled = RealtimeState::new(true, None);
+    let enabled = RealtimeState::new(true, None, /*end_instructions*/ None);
     let suppressed = enabled.clone().suppress_preambles();
 
     let suppressed_fragment = suppressed

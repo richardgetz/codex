@@ -1,4 +1,5 @@
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::PermissionProfile;
@@ -19,6 +20,7 @@ use super::requirements_exec_policy::RequirementsExecPolicy;
 use super::requirements_exec_policy::RequirementsExecPolicyToml;
 use crate::Constrained;
 use crate::ConstraintError;
+use crate::ManagedAuthPolicy;
 use crate::ManagedHooksRequirementsToml;
 use crate::config_toml::ConfigToml;
 use crate::mcp_requirements::McpServerRequirement;
@@ -147,6 +149,8 @@ impl<T> std::ops::DerefMut for ConstrainedWithSource<T> {
 /// normalization.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigRequirements {
+    pub allowed_login_methods: Option<Sourced<Vec<ForcedLoginMethod>>>,
+    pub allowed_chatgpt_workspaces: Option<Sourced<Vec<String>>>,
     pub sqlite_home: Option<Sourced<AbsolutePathBuf>>,
     pub log_dir: Option<Sourced<AbsolutePathBuf>>,
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
@@ -182,6 +186,8 @@ pub struct ConfigRequirements {
 impl Default for ConfigRequirements {
     fn default() -> Self {
         Self {
+            allowed_login_methods: None,
+            allowed_chatgpt_workspaces: None,
             sqlite_home: None,
             log_dir: None,
             model_catalog_json: None,
@@ -232,6 +238,24 @@ impl Default for ConfigRequirements {
 }
 
 impl ConfigRequirements {
+    pub fn managed_auth_policy(&self) -> ManagedAuthPolicy {
+        ManagedAuthPolicy {
+            allowed_login_methods: self
+                .allowed_login_methods
+                .as_ref()
+                .map(|allowed| allowed.value.clone()),
+            allowed_chatgpt_workspaces: self.allowed_chatgpt_workspaces.as_ref().map(|allowed| {
+                allowed
+                    .value
+                    .iter()
+                    .map(|workspace| workspace.trim())
+                    .filter(|workspace| !workspace.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            }),
+        }
+    }
+
     pub fn exec_policy_source(&self) -> Option<&RequirementSource> {
         self.exec_policy.as_ref().map(|policy| &policy.source)
     }
@@ -875,6 +899,8 @@ pub(crate) fn merge_app_requirements_descending(
 /// Base config deserialized from system `requirements.toml` or MDM.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
+    pub allowed_login_methods: Option<Vec<ForcedLoginMethod>>,
+    pub allowed_chatgpt_workspaces: Option<Vec<String>>,
     pub sqlite_home: Option<AbsolutePathBuf>,
     pub log_dir: Option<AbsolutePathBuf>,
     pub model_catalog_json: Option<AbsolutePathBuf>,
@@ -967,6 +993,8 @@ impl<T> std::ops::Deref for Sourced<T> {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsWithSources {
+    pub allowed_login_methods: Option<Sourced<Vec<ForcedLoginMethod>>>,
+    pub allowed_chatgpt_workspaces: Option<Sourced<Vec<String>>>,
     pub sqlite_home: Option<Sourced<AbsolutePathBuf>>,
     pub log_dir: Option<Sourced<AbsolutePathBuf>>,
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
@@ -1019,6 +1047,8 @@ impl ConfigRequirementsWithSources {
         // Destructure without `..` so adding fields to `ConfigRequirementsToml`
         // forces this merge logic to be updated.
         let ConfigRequirementsToml {
+            allowed_login_methods: _,
+            allowed_chatgpt_workspaces: _,
             sqlite_home: _,
             log_dir: _,
             model_catalog_json: _,
@@ -1066,6 +1096,8 @@ impl ConfigRequirementsWithSources {
             other,
             source,
             {
+                allowed_login_methods,
+                allowed_chatgpt_workspaces,
                 sqlite_home,
                 log_dir,
                 model_catalog_json,
@@ -1110,6 +1142,8 @@ impl ConfigRequirementsWithSources {
 
     pub fn into_toml(self) -> ConfigRequirementsToml {
         let ConfigRequirementsWithSources {
+            allowed_login_methods,
+            allowed_chatgpt_workspaces,
             sqlite_home,
             log_dir,
             model_catalog_json,
@@ -1143,6 +1177,8 @@ impl ConfigRequirementsWithSources {
             guardian_policy_config,
         } = self;
         ConfigRequirementsToml {
+            allowed_login_methods: allowed_login_methods.map(|sourced| sourced.value),
+            allowed_chatgpt_workspaces: allowed_chatgpt_workspaces.map(|sourced| sourced.value),
             sqlite_home: sqlite_home.map(|sourced| sourced.value),
             log_dir: log_dir.map(|sourced| sourced.value),
             model_catalog_json: model_catalog_json.map(|sourced| sourced.value),
@@ -1243,7 +1279,9 @@ impl ConfigRequirementsToml {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.sqlite_home.is_none()
+        self.allowed_login_methods.is_none()
+            && self.allowed_chatgpt_workspaces.is_none()
+            && self.sqlite_home.is_none()
             && self.log_dir.is_none()
             && self.model_catalog_json.is_none()
             && self.check_for_update_on_startup.is_none()
@@ -1431,6 +1469,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         // defaults also remain there because they are initialization values,
         // not runtime constraints.
         let ConfigRequirementsWithSources {
+            allowed_login_methods,
+            allowed_chatgpt_workspaces,
             sqlite_home,
             log_dir,
             model_catalog_json,
@@ -1760,6 +1800,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         });
         let guardian_policy_config_source = guardian_policy_config.map(|sourced| sourced.source);
         Ok(ConfigRequirements {
+            allowed_login_methods,
+            allowed_chatgpt_workspaces,
             sqlite_home,
             log_dir,
             model_catalog_json,
@@ -1917,6 +1959,8 @@ mod tests {
 
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
         let ConfigRequirementsToml {
+            allowed_login_methods,
+            allowed_chatgpt_workspaces,
             sqlite_home,
             log_dir,
             model_catalog_json,
@@ -1951,6 +1995,10 @@ mod tests {
             guardian_policy_config,
         } = toml;
         ConfigRequirementsWithSources {
+            allowed_login_methods: allowed_login_methods
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allowed_chatgpt_workspaces: allowed_chatgpt_workspaces
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             sqlite_home: sqlite_home.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             log_dir: log_dir.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             model_catalog_json: model_catalog_json
@@ -2223,6 +2271,8 @@ mod tests {
         // Intentionally constructed without `..Default::default()` so adding a new field to
         // `ConfigRequirementsToml` forces this test to be updated.
         let other = ConfigRequirementsToml {
+            allowed_login_methods: Some(vec![ForcedLoginMethod::Chatgpt]),
+            allowed_chatgpt_workspaces: Some(vec!["managed-workspace".to_string()]),
             sqlite_home: Some(sqlite_home.clone()),
             log_dir: Some(log_dir.clone()),
             model_catalog_json: Some(model_catalog_json.clone()),
@@ -2262,6 +2312,14 @@ mod tests {
         assert_eq!(
             target,
             ConfigRequirementsWithSources {
+                allowed_login_methods: Some(Sourced::new(
+                    vec![ForcedLoginMethod::Chatgpt],
+                    source.clone(),
+                )),
+                allowed_chatgpt_workspaces: Some(Sourced::new(
+                    vec!["managed-workspace".to_string()],
+                    source.clone(),
+                )),
                 sqlite_home: Some(Sourced::new(sqlite_home, source.clone())),
                 log_dir: Some(Sourced::new(log_dir, source.clone())),
                 model_catalog_json: Some(Sourced::new(model_catalog_json, source.clone())),

@@ -209,6 +209,7 @@ pub(crate) fn filter_discoverable_tools_for_mode(
                 let summary = PluginCapabilitySummary {
                     config_name: plugin.id.clone(),
                     display_name: plugin.name.clone(),
+                    plugin_namespace: None,
                     description: plugin.description.clone(),
                     has_skills: plugin.has_skills,
                     mcp_server_names: plugin.mcp_server_names.clone(),
@@ -450,6 +451,7 @@ mod tests {
             PluginCapabilitySummary {
                 config_name: "gmail@openai-curated".to_string(),
                 display_name: "Gmail".to_string(),
+                plugin_namespace: None,
                 description: None,
                 has_skills: true,
                 mcp_server_names: Vec::new(),
@@ -458,6 +460,7 @@ mod tests {
             PluginCapabilitySummary {
                 config_name: "slack@openai-curated".to_string(),
                 display_name: "Slack".to_string(),
+                plugin_namespace: None,
                 description: None,
                 has_skills: true,
                 mcp_server_names: Vec::new(),
@@ -487,6 +490,7 @@ mod tests {
             PluginCapabilitySummary {
                 config_name: "gmail@openai-curated".to_string(),
                 display_name: "Gmail".to_string(),
+                plugin_namespace: None,
                 description: None,
                 has_skills: true,
                 mcp_server_names: Vec::new(),
@@ -495,6 +499,7 @@ mod tests {
             PluginCapabilitySummary {
                 config_name: "slack@openai-curated".to_string(),
                 display_name: "Slack".to_string(),
+                plugin_namespace: None,
                 description: None,
                 has_skills: true,
                 mcp_server_names: Vec::new(),

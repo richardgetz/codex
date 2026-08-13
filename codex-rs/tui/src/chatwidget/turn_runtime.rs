@@ -34,6 +34,7 @@ impl ChatWidget {
         let waiting_on_agents = !self.active_collab_wait_calls.is_empty();
         self.bottom_pane.set_task_running(
             self.turn_lifecycle.agent_turn_running
+                || self.review.is_review_mode
                 || self.mcp_startup_status.is_some()
                 || waiting_on_agents,
         );

@@ -54,6 +54,7 @@ pub(super) fn start_thread_inbound_message_poller(
                         responsesapi_client_metadata: None,
                         thread_settings: Default::default(),
                     },
+                    parent_turn_id: None,
                     trace: None,
                 };
                 if tx_sub.send(submission).await.is_err() {
@@ -111,7 +112,9 @@ mod tests {
                 name: None,
                 title: "target".to_string(),
                 preview: None,
-                is_pinned: false,
+                section: None,
+                section_position: None,
+                section_entered_at: None,
                 sandbox_policy: "read-only".to_string(),
                 approval_mode: "on-request".to_string(),
                 tokens_used: 0,

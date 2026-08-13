@@ -30,11 +30,7 @@ pub(super) async fn create_thread(
     let _live_writer_guard = store.live_writer_locks.lock(thread_id).await;
     let history_mode = params.history_mode;
     store.ensure_live_recorder_absent(thread_id).await?;
-    let writer_lock = if matches!(history_mode, ThreadHistoryMode::Paginated) {
-        Some(store.writer_lock_coordinator.acquire(thread_id)?)
-    } else {
-        None
-    };
+    let writer_lock = store.writer_lock_coordinator.acquire(thread_id)?;
     let recorder = create_thread::create_thread(store, params).await?;
     store
         .insert_live_recorder(thread_id, recorder, history_mode, writer_lock)
@@ -47,6 +43,7 @@ pub(super) async fn resume_thread(
 ) -> ThreadStoreResult<()> {
     let _live_writer_guard = store.live_writer_locks.lock(params.thread_id).await;
     store.ensure_live_recorder_absent(params.thread_id).await?;
+    let writer_lock = store.writer_lock_coordinator.acquire(params.thread_id)?;
     let history_mode = if let Some(history) = params.history.as_deref() {
         canonical_history_mode_from_rollout_items(history)
     } else if let Some(rollout_path) = params.rollout_path.as_ref() {
@@ -103,11 +100,6 @@ pub(super) async fn resume_thread(
         model_provider_id: params.metadata.model_provider.clone(),
         generate_memories: matches!(params.metadata.memory_mode, ThreadMemoryMode::Enabled),
         initial_memory_mode: Some(memory_mode_as_str(params.metadata.memory_mode).to_string()),
-    };
-    let writer_lock = if matches!(history_mode, ThreadHistoryMode::Paginated) {
-        Some(store.writer_lock_coordinator.acquire(params.thread_id)?)
-    } else {
-        None
     };
     let recorder = RolloutRecorder::new(&config, RolloutRecorderParams::resume(rollout_path))
         .await
