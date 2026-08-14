@@ -600,22 +600,19 @@ impl ScratchpadStore {
             FunctionCallError::RespondToModel(format!("failed to serialize scratchpad: {err}"))
         })?;
         atomic_write_json(&path, &format!("{text}\n"))?;
-        self.write_index()
+        self.refresh_index_best_effort();
+        Ok(())
     }
 
     fn remove_if_exists(&self, scratchpad_id: &str) -> Result<bool, FunctionCallError> {
         let path = self.path(scratchpad_id)?;
-        match fs::remove_file(path) {
-            Ok(()) => {
-                self.write_index()?;
-                Ok(true)
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                self.write_index()?;
-                Ok(false)
-            }
-            Err(err) => Err(io_error(err)),
-        }
+        let removed = match fs::remove_file(path) {
+            Ok(()) => true,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+            Err(err) => return Err(io_error(err)),
+        };
+        self.refresh_index_best_effort();
+        Ok(removed)
     }
 
     fn remove_history_if_exists(&self, scratchpad_id: &str) -> Result<(), FunctionCallError> {
@@ -669,8 +666,12 @@ impl ScratchpadStore {
 
     fn read(&self, scratchpad_id: &str) -> Result<Scratchpad, FunctionCallError> {
         let path = self.path(scratchpad_id)?;
-        let text = fs::read_to_string(&path).map_err(|_| {
-            FunctionCallError::RespondToModel("scratchpad not found or unreadable".to_string())
+        let text = fs::read_to_string(&path).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                FunctionCallError::RespondToModel("scratchpad not found".to_string())
+            } else {
+                io_error(err)
+            }
         })?;
         let scratchpad = serde_json::from_str::<Scratchpad>(&text).map_err(|_| {
             FunctionCallError::RespondToModel("scratchpad file is invalid".to_string())
@@ -690,7 +691,8 @@ impl ScratchpadStore {
             FunctionCallError::RespondToModel(format!("failed to serialize scratchpad: {err}"))
         })?;
         atomic_write_json(&path, &format!("{text}\n"))?;
-        self.write_index()
+        self.refresh_index_best_effort();
+        Ok(())
     }
 
     fn list(&self) -> Result<Vec<Scratchpad>, FunctionCallError> {
@@ -736,7 +738,18 @@ impl ScratchpadStore {
         let path = self.path(scratchpad_id)?;
         fs::remove_file(path).map_err(io_error)?;
         self.remove_history_if_exists(scratchpad_id)?;
-        self.write_index()
+        self.refresh_index_best_effort();
+        Ok(())
+    }
+
+    fn refresh_index_best_effort(&self) {
+        if let Err(err) = self.write_index() {
+            tracing::warn!(
+                root = %self.root.display(),
+                error = %err,
+                "failed to refresh derived scratchpad index"
+            );
+        }
     }
 
     fn write_index(&self) -> Result<(), FunctionCallError> {
@@ -881,7 +894,8 @@ pub(crate) fn run_lifecycle_cleanup(
             store.write(&scratchpad)?;
         }
     }
-    store.write_index()
+    store.refresh_index_best_effort();
+    Ok(())
 }
 
 pub(crate) fn record_thread_scratchpad_checkpoint(
@@ -1152,13 +1166,31 @@ fn open_scratchpad_with_default_continuous(
     let _guard = scratchpad_write_guard()?;
     let objective = string_arg(args, "objective")?;
     let session_key = optional_string_arg(args, "session_key");
+    let refresh_session_key = bool_arg(args, "refresh_session_key");
+    if refresh_session_key && session_key.is_none() {
+        return Err(FunctionCallError::RespondToModel(
+            "refresh_session_key requires a non-empty session_key".to_string(),
+        ));
+    }
     let requested_scratchpad_id = optional_string_arg(args, "scratchpad_id");
     let scratchpad_id =
         requested_scratchpad_id.unwrap_or_else(|| default_scratchpad_id.to_string());
     ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
-    if let Some(existing) = read_existing_scratchpad(store, &scratchpad_id)? {
+    if let Some(mut existing) = read_existing_scratchpad(store, &scratchpad_id)? {
         ensure_thread_owner(&existing, default_scratchpad_id)?;
-        ensure_open_compatible(&existing, &objective, session_key.as_deref())?;
+        if refresh_session_key {
+            if existing.objective != objective {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "scratchpad `{}` is already bound to objective `{}` and cannot be refreshed for `{objective}`",
+                    existing.scratchpad_id, existing.objective
+                )));
+            }
+            existing.session_key = session_key;
+            touch(&mut existing);
+            store.write(&existing)?;
+        } else {
+            ensure_open_compatible(&existing, &objective, session_key.as_deref())?;
+        }
         return Ok(serde_json::json!({ "scratchpad": existing }));
     }
 
@@ -1858,6 +1890,7 @@ fn schema_payload() -> Value {
         "required": ["scratchpad_id", "objective", "status", "created_at", "updated_at"],
         "optional": [
             "session_key",
+            "refresh_session_key",
             "origin_thread_id",
             "worktrees",
             "active_channels",
@@ -1883,6 +1916,7 @@ fn schema_payload() -> Value {
         ],
         "storage": "Built-in scratchpads are JSON files under <codex_home>/scratchpad/entries unless state_home is provided.",
         "thread_id_default": "Built-in scratchpad tools are bound to the current Codex thread/session id. open_scratchpad defaults scratchpad_id to that id when omitted, and model-visible tools reject custom or other-thread scratchpad ids. Archived pads remain readable/editable by the owning thread until lifecycle deletion.",
+        "session_refresh": "If a restart leaves an existing thread scratchpad bound to an old session_key, call open_scratchpad with the same objective and refresh_session_key=true to atomically rebind it. The thread id and objective must still match; ordinary reads and writes remain strict.",
         "objective_updates": "Use update_scratchpad with objective to rename the current working objective. open_scratchpad still rejects rebinding an existing thread scratchpad to a different objective.",
         "continuous_work_policy": "Keep next_steps limited to actionable work. Move external waits to pending_waits and true blockers to blocked. A wait can use wait_type='user_confirmation' when the user must confirm or grant access. Continuous mode only loops for actionable next_steps; pending_waits and blocked alone are recovery context, not active work.",
         "action_policy_usage": "When the user gives session-scoped rules for PRs, merges, deployments, benchmark launches, or AWS writes, persist them immediately with set_action_policy. Before taking those actions, call check_action_allowed with action plus repo, target_branch, env, or bypass_pr_requirements as applicable. If denied, stop before acting and record the denial in blocked or pending_waits.",
@@ -2687,6 +2721,95 @@ mod tests {
         assert_eq!(
             second["scratchpad"]["scratchpad_id"],
             first["scratchpad"]["scratchpad_id"]
+        );
+    }
+
+    #[test]
+    fn open_can_refresh_a_stale_session_key_for_the_same_thread_and_objective() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        let original = serde_json::json!({
+            "objective": "refreshable objective",
+            "session_key": "old-session"
+        });
+        open_scratchpad(&store, &original, "thread-123").unwrap();
+
+        let refreshed = open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "refreshable objective",
+                "session_key": "new-session",
+                "refresh_session_key": true
+            }),
+            "thread-123",
+        )
+        .unwrap();
+
+        assert_eq!(
+            refreshed["scratchpad"]["session_key"],
+            serde_json::json!("new-session")
+        );
+    }
+
+    #[test]
+    fn open_refresh_rejects_a_different_objective() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "original objective",
+                "session_key": "old-session"
+            }),
+            "thread-123",
+        )
+        .unwrap();
+
+        let error = open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "different objective",
+                "session_key": "new-session",
+                "refresh_session_key": true
+            }),
+            "thread-123",
+        )
+        .expect_err("refresh must preserve the objective binding");
+
+        assert!(error.to_string().contains("cannot be refreshed"));
+    }
+
+    #[test]
+    fn open_refresh_requires_a_new_session_key() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(
+            /*state_home*/ Some(tmp.path().to_str().unwrap()),
+            tmp.path(),
+        )
+        .unwrap();
+
+        let error = open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "refresh objective",
+                "refresh_session_key": true
+            }),
+            "thread-123",
+        )
+        .expect_err("refresh must require a replacement session key");
+
+        assert!(
+            error
+                .to_string()
+                .contains("requires a non-empty session_key")
         );
     }
 
@@ -3938,6 +4061,40 @@ mod tests {
             serde_json::json!(false)
         );
         assert!(tmp.path().join("scratchpad/index.json").exists());
+    }
+
+    #[test]
+    fn scratchpad_entry_write_survives_derived_index_failure() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(/*state_home*/ None, tmp.path()).unwrap();
+        fs::create_dir_all(store.root.join("index.json")).unwrap();
+        let scratchpad = test_scratchpad("index-failure", None);
+
+        store.write(&scratchpad).unwrap();
+
+        assert_eq!(store.read("index-failure").unwrap(), scratchpad);
+        assert!(store.root.join("index.json").is_dir());
+    }
+
+    #[test]
+    fn lifecycle_cleanup_survives_derived_index_failure() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ScratchpadStore::new(/*state_home*/ None, tmp.path()).unwrap();
+        fs::create_dir_all(store.root.join("index.json")).unwrap();
+        let mut scratchpad = test_scratchpad("cleanup-index-failure", None);
+        scratchpad.updated_at = (Utc::now() - Duration::days(31)).to_rfc3339();
+        store.write(&scratchpad).unwrap();
+
+        run_lifecycle_cleanup(
+            tmp.path(),
+            /*auto_archive_after_days*/ 30,
+            /*delete_archived_after_days*/ 0,
+        )
+        .unwrap();
+
+        let archived = store.read("cleanup-index-failure").unwrap();
+        assert_eq!(archived.status, "archived");
+        assert!(store.root.join("index.json").is_dir());
     }
 
     #[test]

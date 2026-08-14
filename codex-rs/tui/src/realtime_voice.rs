@@ -50,6 +50,8 @@ use crate::realtime_voice_audio::select_input_device;
 use crate::realtime_voice_audio::select_output_config;
 use crate::realtime_voice_audio::select_output_device;
 use crate::realtime_voice_devices::resolve_device_name;
+use crate::realtime_voice_dsp::VoiceEffectProcessor;
+use crate::realtime_voice_effects::VoiceEffectPreset;
 use crate::realtime_voice_sound::RealtimeAcknowledgementSound;
 use crate::realtime_voice_sound::load_acknowledgement_sound;
 
@@ -128,13 +130,31 @@ pub(crate) enum RealtimeVoiceDebugCommand {
     Status,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RealtimeVoiceEffectCommand {
+    List,
+    Status,
+    Off,
+    Use(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RealtimeVoiceProfileCommand {
+    List,
+    Status,
+    Off,
+    Use(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RealtimeVoiceCommand {
     On,
     Off,
     List,
     Status,
     Debug(RealtimeVoiceDebugCommand),
+    Effect(RealtimeVoiceEffectCommand),
+    Profile(RealtimeVoiceProfileCommand),
     Set(RealtimeVoice),
 }
 
@@ -229,6 +249,7 @@ pub(crate) struct RealtimeVoiceSession {
     output_stream: cpal::Stream,
     output_queue: Arc<Mutex<VecDeque<i16>>>,
     acknowledgement_queue: Arc<Mutex<VecDeque<i16>>>,
+    effect_processor: Arc<Mutex<Option<VoiceEffectProcessor>>>,
     acknowledgement_samples: Option<Vec<i16>>,
     input_task: JoinHandle<()>,
 }
@@ -238,7 +259,14 @@ impl RealtimeVoiceSession {
     pub(crate) async fn start(
         audio_config: &RealtimeAudioConfig,
         acknowledgement_sound: &RealtimeAcknowledgementSound,
+        voice_effect: Option<VoiceEffectPreset>,
     ) -> Result<(Self, String)> {
+        let effect_processor = voice_effect
+            .as_ref()
+            .map(VoiceEffectProcessor::new)
+            .transpose()
+            .context("creating the GPT-Live voice effect processor")?;
+        let effect_processor = Arc::new(Mutex::new(effect_processor));
         let host = cpal::default_host();
         let input_device = match audio_config.microphone.as_deref() {
             Some(requested) => {
@@ -354,6 +382,7 @@ impl RealtimeVoiceSession {
             &peer_connection,
             Arc::clone(&output_queue),
             Arc::clone(&output_muted),
+            Arc::clone(&effect_processor),
         );
 
         let mut gather_complete = peer_connection.gathering_complete_promise().await;
@@ -394,11 +423,23 @@ impl RealtimeVoiceSession {
                 output_stream,
                 output_queue,
                 acknowledgement_queue,
+                effect_processor,
                 acknowledgement_samples,
                 input_task,
             },
             local_description.sdp,
         ))
+    }
+
+    /// Replaces the client-side output processor while the GPT-Live session remains connected.
+    pub(crate) fn set_voice_effect(&self, preset: Option<&VoiceEffectPreset>) -> Result<()> {
+        let replacement = preset.map(VoiceEffectProcessor::new).transpose()?;
+        let mut effect_processor = self
+            .effect_processor
+            .lock()
+            .map_err(|_| anyhow::anyhow!("GPT-Live voice effect processor lock was poisoned"))?;
+        *effect_processor = replacement;
+        Ok(())
     }
 
     pub(crate) fn set_input_muted(&self, muted: bool) {

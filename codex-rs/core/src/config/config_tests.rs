@@ -13392,6 +13392,7 @@ type = "transcription"
 transport = "webrtc"
 voice = "cedar"
 voice_rotation = ["arbor", "marin"]
+voice_profile_rotation = ["jarvis", "robot-cove"]
 hotkey = "f13"
 "#,
     )
@@ -13416,6 +13417,7 @@ hotkey = "f13"
             transport: Some(RealtimeTransport::WebRtc),
             voice: Some(RealtimeVoice::Cedar),
             voice_rotation: Some(vec![RealtimeVoice::Arbor, RealtimeVoice::Marin]),
+            voice_profile_rotation: Some(vec!["jarvis".to_string(), "robot-cove".to_string()]),
             hotkey: Some("f13".to_string()),
         })
     );
@@ -13447,6 +13449,7 @@ hotkey = "f13"
             transport: RealtimeTransport::WebRtc,
             voice: Some(RealtimeVoice::Cedar),
             voice_rotation: Some(vec![RealtimeVoice::Arbor, RealtimeVoice::Marin]),
+            voice_profile_rotation: Some(vec!["jarvis".to_string(), "robot-cove".to_string()]),
             hotkey: Some("f13".to_string()),
         }
     );

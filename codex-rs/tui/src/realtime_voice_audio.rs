@@ -32,6 +32,7 @@ use crate::realtime_voice::INPUT_SIGNAL_THRESHOLD;
 use crate::realtime_voice::MAX_OPUS_PACKET_SIZE;
 use crate::realtime_voice::MAX_OUTPUT_SAMPLES;
 use crate::realtime_voice::SAMPLE_RATE;
+use crate::realtime_voice_dsp::VoiceEffectProcessor;
 
 pub(crate) fn select_input_device(
     host: &cpal::Host,
@@ -611,10 +612,12 @@ pub(crate) fn install_remote_audio_handler(
     peer_connection: &Arc<RTCPeerConnection>,
     output_queue: Arc<Mutex<VecDeque<i16>>>,
     output_muted: Arc<AtomicBool>,
+    effect_processor: Arc<Mutex<Option<VoiceEffectProcessor>>>,
 ) {
     peer_connection.on_track(Box::new(move |track, _receiver, _transceiver| {
         let output_queue = Arc::clone(&output_queue);
         let output_muted = Arc::clone(&output_muted);
+        let effect_processor = Arc::clone(&effect_processor);
         Box::pin(async move {
             let Ok(mut decoder) = Decoder::new(SAMPLE_RATE, Channels::Stereo) else {
                 return;
@@ -628,11 +631,23 @@ pub(crate) fn install_remote_audio_handler(
                 else {
                     continue;
                 };
-                let decoded = &decoded[..samples_per_channel * 2];
+                let decoded = &mut decoded[..samples_per_channel * 2];
+                process_remote_audio_effects(decoded, &effect_processor);
                 append_remote_audio(&output_queue, &output_muted, decoded);
             }
         })
     }));
+}
+
+fn process_remote_audio_effects(
+    decoded: &mut [i16],
+    effect_processor: &Arc<Mutex<Option<VoiceEffectProcessor>>>,
+) {
+    if let Ok(mut effect_processor) = effect_processor.lock()
+        && let Some(effect_processor) = effect_processor.as_mut()
+    {
+        effect_processor.process(decoded);
+    }
 }
 
 fn append_remote_audio(

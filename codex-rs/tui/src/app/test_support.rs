@@ -27,6 +27,8 @@ pub(super) async fn make_test_app() -> App {
         config,
         realtime_mic_mode,
         realtime_voice_session: None,
+        realtime_voice_profile: None,
+        realtime_voice_rotation_selected: false,
         realtime_voice_debug: false,
         realtime_handoff_debug_ids: VecDeque::new(),
         realtime_output_debug_item_id: None,

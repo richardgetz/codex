@@ -33,7 +33,7 @@ expression: commands
 /mention - mention a file
 /status - show current session configuration and token usage
 /mic - control realtime voice, microphone, and speaker devices
-/voice - enable realtime voice or list/select its voice
+/voice - enable realtime voice, select voices, or tune client-side effects/profiles
 /title - configure which items appear in the terminal title
 /statusline - configure which items appear in the status line
 /theme - choose a syntax highlighting theme

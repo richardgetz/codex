@@ -4881,6 +4881,7 @@ impl Config {
                         transport: realtime.transport.unwrap_or(defaults.transport),
                         voice: realtime.voice,
                         voice_rotation: realtime.voice_rotation,
+                        voice_profile_rotation: realtime.voice_profile_rotation,
                         hotkey: realtime.hotkey,
                     }
                 }),

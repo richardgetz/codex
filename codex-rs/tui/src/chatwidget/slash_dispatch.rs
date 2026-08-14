@@ -17,7 +17,10 @@ use crate::goal_files::GoalDraft;
 use crate::realtime_voice::RealtimeMicCommand;
 use crate::realtime_voice::RealtimeVoiceCommand;
 use crate::realtime_voice::RealtimeVoiceDebugCommand;
+use crate::realtime_voice::RealtimeVoiceEffectCommand;
+use crate::realtime_voice::RealtimeVoiceProfileCommand;
 use crate::realtime_voice::realtime_voice_from_name;
+use crate::realtime_voice_effects::load_active_preset;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -44,9 +47,10 @@ const OUTCOMES_USAGE: &str = "Usage: /outcomes [on|off|status|report]";
 const SCRATCHPAD_ABSORB_USAGE: &str = "Usage: /scratchpad-absorb <scratchpad_id> [--exclude-pending] [--exclude-blocked] [--exclude-notes] [--exclude-outcomes] [--exclude-delegations] [--exclude-artifacts] [--exclude-worktrees] [--exclude-completed] [--exclude-next-steps] [--exclude-git-refs]";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
 const MIC_USAGE: &str = "Usage: /mic [help|on|off|status|hot|push|hotkey|change|devices|aliases|alias <name> [device]|device <name>|speakers|speaker change|speaker aliases|speaker alias <name> [device]|speaker <name>]";
-const VOICE_USAGE: &str =
-    "Usage: /voice [help|on|off|status|debug [on|off|status]|list|history [count]|<voice>]";
+const VOICE_USAGE: &str = "Usage: /voice [help|on|off|status|debug [on|off|status]|list|history [count]|effect [list|status|off|use <name>]|profile [list|status|off|use <name>]|tune|<voice>]";
 const VOICE_HISTORY_USAGE: &str = "Usage: /voice history [count] (count: 1-20)";
+const VOICE_EFFECT_USAGE: &str = "Usage: /voice effect [list|status|off|use <name>]";
+const VOICE_PROFILE_USAGE: &str = "Usage: /voice profile [list|status|off|use <name>]";
 const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
 
 fn realtime_alias_args(value: &str) -> Option<(String, Option<String>)> {
@@ -1513,6 +1517,96 @@ impl ChatWidget {
                     "list" | "voices" => self
                         .app_event_tx
                         .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::List)),
+                    "tune" => match load_active_preset(self.config.codex_home.as_path()) {
+                        Ok(Some(preset)) => {
+                            self.bottom_pane.show_view(Box::new(
+                                crate::bottom_pane::RealtimeVoiceTuner::new(
+                                    preset,
+                                    self.app_event_tx.clone(),
+                                ),
+                            ));
+                            self.request_redraw();
+                        }
+                        Ok(None) => {
+                            self.add_error_message(
+                                "No active GPT-Live effect; use /voice effect use jarvis first."
+                                    .to_string(),
+                            );
+                        }
+                        Err(err) => {
+                            self.add_error_message(format!(
+                                "Failed to load the active GPT-Live effect: {err:#}"
+                            ));
+                        }
+                    },
+                    "effect" | "effects" | "effect status" | "effects status" => {
+                        self.app_event_tx.send(AppEvent::RealtimeVoiceControl(
+                            RealtimeVoiceCommand::Effect(RealtimeVoiceEffectCommand::Status),
+                        ))
+                    }
+                    "effect list" | "effects list" => {
+                        self.app_event_tx.send(AppEvent::RealtimeVoiceControl(
+                            RealtimeVoiceCommand::Effect(RealtimeVoiceEffectCommand::List),
+                        ))
+                    }
+                    "effect off" | "effects off" => {
+                        self.app_event_tx.send(AppEvent::RealtimeVoiceControl(
+                            RealtimeVoiceCommand::Effect(RealtimeVoiceEffectCommand::Off),
+                        ))
+                    }
+                    _ if normalized.starts_with("effect use ")
+                        || normalized.starts_with("effects use ") =>
+                    {
+                        let mut parts = trimmed.split_whitespace();
+                        let _command = parts.next();
+                        let _subcommand = parts.next();
+                        match (parts.next(), parts.next()) {
+                            (Some(name), None) if !name.is_empty() => self.app_event_tx.send(
+                                AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Effect(
+                                    RealtimeVoiceEffectCommand::Use(name.to_string()),
+                                )),
+                            ),
+                            _ => self.add_error_message(VOICE_EFFECT_USAGE.to_string()),
+                        }
+                    }
+                    _ if normalized.starts_with("effect") || normalized.starts_with("effects") => {
+                        self.add_error_message(VOICE_EFFECT_USAGE.to_string())
+                    }
+                    "profile" | "profiles" | "profile status" | "profiles status" => {
+                        self.app_event_tx.send(AppEvent::RealtimeVoiceControl(
+                            RealtimeVoiceCommand::Profile(RealtimeVoiceProfileCommand::Status),
+                        ))
+                    }
+                    "profile list" | "profiles list" => {
+                        self.app_event_tx.send(AppEvent::RealtimeVoiceControl(
+                            RealtimeVoiceCommand::Profile(RealtimeVoiceProfileCommand::List),
+                        ))
+                    }
+                    "profile off" | "profiles off" => {
+                        self.app_event_tx.send(AppEvent::RealtimeVoiceControl(
+                            RealtimeVoiceCommand::Profile(RealtimeVoiceProfileCommand::Off),
+                        ))
+                    }
+                    _ if normalized.starts_with("profile use ")
+                        || normalized.starts_with("profiles use ") =>
+                    {
+                        let mut parts = trimmed.split_whitespace();
+                        let _command = parts.next();
+                        let _subcommand = parts.next();
+                        match (parts.next(), parts.next()) {
+                            (Some(name), None) if !name.is_empty() => self.app_event_tx.send(
+                                AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Profile(
+                                    RealtimeVoiceProfileCommand::Use(name.to_string()),
+                                )),
+                            ),
+                            _ => self.add_error_message(VOICE_PROFILE_USAGE.to_string()),
+                        }
+                    }
+                    _ if normalized.starts_with("profile")
+                        || normalized.starts_with("profiles") =>
+                    {
+                        self.add_error_message(VOICE_PROFILE_USAGE.to_string())
+                    }
                     "history" | "recent" => self.add_realtime_history_output(None),
                     _ if normalized.starts_with("history ")
                         || normalized.starts_with("recent ") =>

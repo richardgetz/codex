@@ -380,6 +380,13 @@ impl App {
                 self.handle_realtime_voice_command(tui, app_server, command)
                     .await;
             }
+            AppEvent::RealtimeVoiceEffectUpdate {
+                preset,
+                persist,
+                bypass,
+            } => {
+                self.handle_realtime_voice_effect_update(preset, persist, bypass);
+            }
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell);
             }
@@ -631,6 +638,8 @@ impl App {
             }
             AppEvent::CodexOp(op) => {
                 let is_user_turn = matches!(&op, AppCommand::UserTurn { .. });
+                let is_continuous_policy_update =
+                    matches!(&op, AppCommand::SetScratchpadContinuousPolicy { .. });
                 if is_user_turn {
                     let screen_size = tui.terminal.last_known_screen_size;
                     self.handle_draw_pre_render(tui, screen_size)?;
@@ -643,19 +652,29 @@ impl App {
                 }
                 self.chat_widget.prepare_local_op_submission(&op);
                 if let Err(err) = self.submit_active_thread_op(app_server, op).await {
-                    let handled = is_user_turn
-                        && matches!(
-                            err.downcast_ref::<TypedRequestError>(),
-                            Some(TypedRequestError::Server { method, .. })
-                                if method == "turn/start"
-                        )
-                        && self
-                            .chat_widget
-                            .handle_turn_start_rejection(format!("Failed to start turn: {err:#}"));
-                    if !handled {
-                        return Err(err);
+                    if is_continuous_policy_update {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to update continuous run policy: {err:#}"
+                        ));
+                        tracing::warn!(
+                            error = ?err,
+                            "failed to update continuous run policy through app server"
+                        );
+                    } else {
+                        let handled = is_user_turn
+                            && matches!(
+                                err.downcast_ref::<TypedRequestError>(),
+                                Some(TypedRequestError::Server { method, .. })
+                                    if method == "turn/start"
+                            )
+                            && self.chat_widget.handle_turn_start_rejection(format!(
+                                "Failed to start turn: {err:#}"
+                            ));
+                        if !handled {
+                            return Err(err);
+                        }
+                        tracing::error!(error = ?err, "failed to start turn through app server");
                     }
-                    tracing::error!(error = ?err, "failed to start turn through app server");
                 }
             }
             AppEvent::RetrySafetyBufferedTurn {

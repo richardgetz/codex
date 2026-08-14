@@ -62,6 +62,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use crate::history_cell::HistoryCell;
 use crate::realtime_voice::RealtimeMicCommand;
 use crate::realtime_voice::RealtimeVoiceCommand;
+use crate::realtime_voice_effects::VoiceEffectPreset;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RestorablePermissionSelection {
@@ -208,6 +209,13 @@ pub(crate) enum AppEvent {
 
     /// List, report, or persist the realtime voice used by new sessions.
     RealtimeVoiceControl(RealtimeVoiceCommand),
+
+    /// Apply a live GPT-Live effect update from the voice tuner.
+    RealtimeVoiceEffectUpdate {
+        preset: VoiceEffectPreset,
+        persist: bool,
+        bypass: bool,
+    },
 
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,

@@ -7,6 +7,8 @@ use super::*;
 use crate::app_backtrack::SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE;
 use crate::realtime_voice::DEFAULT_REALTIME_HOTKEY;
 use crate::realtime_voice::RealtimeVoiceDebugCommand;
+use crate::realtime_voice::RealtimeVoiceEffectCommand;
+use crate::realtime_voice::RealtimeVoiceProfileCommand;
 use crate::realtime_voice::realtime_hotkey_matches;
 use crate::realtime_voice::realtime_hotkey_spec_from_event;
 use crate::realtime_voice::realtime_start_prompt;
@@ -15,6 +17,20 @@ use crate::realtime_voice_devices::display_device_name;
 use crate::realtime_voice_devices::format_device_aliases;
 use crate::realtime_voice_devices::normalize_device_alias;
 use crate::realtime_voice_devices::resolve_device_name;
+use crate::realtime_voice_effects::VoiceEffectPreset;
+use crate::realtime_voice_effects::active_preset_name;
+use crate::realtime_voice_effects::list_preset_names;
+use crate::realtime_voice_effects::load_active_preset;
+use crate::realtime_voice_effects::load_named_preset;
+use crate::realtime_voice_effects::preset_file_path;
+use crate::realtime_voice_effects::save_preset;
+use crate::realtime_voice_profiles::activate_preset_and_deactivate_profile;
+use crate::realtime_voice_profiles::activate_profile;
+use crate::realtime_voice_profiles::deactivate_profile;
+use crate::realtime_voice_profiles::deactivate_profile_and_preset;
+use crate::realtime_voice_profiles::list_profile_names;
+use crate::realtime_voice_profiles::load_named_profile;
+use crate::realtime_voice_profiles::profile_file_path;
 use crate::realtime_voice_sound::RealtimeAcknowledgementSound;
 use codex_protocol::models::MessagePhase;
 use color_eyre::eyre::eyre;
@@ -76,6 +92,33 @@ enum RealtimeDevicePicker {
 }
 
 impl App {
+    pub(super) fn handle_realtime_voice_effect_update(
+        &mut self,
+        preset: VoiceEffectPreset,
+        persist: bool,
+        bypass: bool,
+    ) {
+        let result = if bypass {
+            self.realtime_voice_session
+                .as_ref()
+                .map_or(Ok(()), |session| session.set_voice_effect(None))
+        } else {
+            self.realtime_voice_session
+                .as_ref()
+                .map_or(Ok(()), |session| session.set_voice_effect(Some(&preset)))
+        };
+        if let Err(err) = result {
+            self.chat_widget.add_error_message(format!(
+                "Failed to update the live GPT-Live effect: {err:#}"
+            ));
+            return;
+        }
+        if persist && let Err(err) = save_preset(self.config.codex_home.as_path(), &preset) {
+            self.chat_widget
+                .add_error_message(format!("Failed to save the GPT-Live tuner preset: {err:#}"));
+        }
+    }
+
     pub(super) fn route_key_chord_event(
         &mut self,
         tui: &mut tui::Tui,
@@ -517,10 +560,41 @@ impl App {
         } else {
             RealtimeAcknowledgementSound::Disabled
         };
-        let (session, sdp) =
-            RealtimeVoiceSession::start(&self.config.realtime_audio, &acknowledgement_sound)
-                .await
-                .map_err(|err| eyre!("{err:#}"))?;
+        let voice_effect = if let Some(profile_name) = self
+            .realtime_voice_profile
+            .as_ref()
+            .map(|profile| profile.name.clone())
+        {
+            let profile = load_named_profile(self.config.codex_home.as_path(), &profile_name)
+                .map_err(|err| {
+                    eyre!(
+                        "Failed to reload GPT-Live voice profile '{}': {err:#}",
+                        profile_name
+                    )
+                })?;
+            self.config.realtime.voice = Some(profile.voice);
+            self.realtime_voice_profile = Some(profile.clone());
+            load_named_preset(self.config.codex_home.as_path(), &profile.effect)
+                .map(Some)
+                .map_err(|err| {
+                    eyre!(
+                        "Failed to load the effect for GPT-Live voice profile '{}': {err:#}",
+                        profile.name
+                    )
+                })?
+        } else if self.realtime_voice_rotation_selected {
+            None
+        } else {
+            load_active_preset(self.config.codex_home.as_path())
+                .map_err(|err| eyre!("Failed to load the active GPT-Live voice effect: {err:#}"))?
+        };
+        let (session, sdp) = RealtimeVoiceSession::start(
+            &self.config.realtime_audio,
+            &acknowledgement_sound,
+            voice_effect,
+        )
+        .await
+        .map_err(|err| eyre!("{err:#}"))?;
         let params = ThreadRealtimeStartParams {
             thread_id: thread_id.to_string(),
             client_managed_handoffs: None,
@@ -1195,9 +1269,20 @@ impl App {
                         .join(", "),
                     _ => "off".to_string(),
                 };
+                let profile_rotation = self
+                    .config
+                    .realtime
+                    .voice_profile_rotation
+                    .as_deref()
+                    .filter(|profiles| !profiles.is_empty())
+                    .map_or_else(|| "off".to_string(), |profiles| profiles.join(", "));
+                let profile = self
+                    .realtime_voice_profile
+                    .as_ref()
+                    .map_or_else(|| "off".to_string(), |profile| profile.name.clone());
                 self.chat_widget.add_info_message(
                     format!(
-                        "Realtime voice is `{}` (GPT-Live WebRTC; applies to the next voice session); microphone is {microphone}; startup rotation: {rotation}; handoff debug: {}.",
+                        "Realtime voice is `{}` (GPT-Live WebRTC; applies to the next voice session); profile: {profile}; microphone is {microphone}; startup rotation: {rotation}; profile rotation: {profile_rotation}; handoff debug: {}.",
                         voice.wire_name(),
                         if self.realtime_voice_debug { "on" } else { "off" },
                     ),
@@ -1238,6 +1323,235 @@ impl App {
                     ),
                 };
                 self.chat_widget.add_info_message(message, None);
+            }
+            RealtimeVoiceCommand::Profile(command) => {
+                let codex_home = self.config.codex_home.as_path();
+                match command {
+                    RealtimeVoiceProfileCommand::List => match list_profile_names(codex_home) {
+                        Ok(names) => {
+                            let active = self
+                                .realtime_voice_profile
+                                .as_ref()
+                                .map(|profile| profile.name.as_str())
+                                .unwrap_or("off");
+                            let names = names
+                                .iter()
+                                .map(|name| {
+                                    if name == active {
+                                        format!("{name} (selected)")
+                                    } else {
+                                        name.to_string()
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            self.chat_widget.add_info_message(
+                                format!("GPT-Live voice profiles (selected: {active}): {names}"),
+                                None,
+                            );
+                        }
+                        Err(err) => self.chat_widget.add_error_message(format!(
+                            "Failed to list GPT-Live voice profiles: {err:#}"
+                        )),
+                    },
+                    RealtimeVoiceProfileCommand::Status => {
+                        if let Some(profile) = &self.realtime_voice_profile {
+                            let location = profile_file_path(codex_home, &profile.name)
+                                .map(|path| path.display().to_string())
+                                .unwrap_or_else(|_| "the Codex home".to_string());
+                            self.chat_widget.add_info_message(
+                                format!(
+                                    "GPT-Live voice profile is '{}' on base voice `{}` (client-side; applies to the next voice session). Edit '{}' and its referenced effect preset to tune or share it.",
+                                    profile.name,
+                                    profile.voice.wire_name(),
+                                    location,
+                                ),
+                                None,
+                            );
+                        } else {
+                            self.chat_widget.add_info_message(
+                            "GPT-Live voice profile is off. Use '/voice profile use jarvis' to try the built-in Arbor/Jarvis profile.".to_string(),
+                            None,
+                            );
+                        }
+                    }
+                    RealtimeVoiceProfileCommand::Off => {
+                        match deactivate_profile_and_preset(codex_home) {
+                            Ok(()) => {
+                                if let Some(session) = self.realtime_voice_session.as_ref()
+                                    && let Err(err) = session.set_voice_effect(None)
+                                {
+                                    self.chat_widget.add_error_message(format!(
+                                        "GPT-Live effects were persisted off, but the live session could not bypass them: {err:#}"
+                                    ));
+                                }
+                                self.realtime_voice_profile = None;
+                                self.realtime_voice_rotation_selected = false;
+                                self.chat_widget.add_info_message(
+                                "GPT-Live voice profile and its output effect are off. The current base voice remains selected.".to_string(),
+                                None,
+                            );
+                            }
+                            Err(err) => self.chat_widget.add_error_message(format!(
+                                "Failed to disable GPT-Live voice profile: {err:#}"
+                            )),
+                        }
+                    }
+                    RealtimeVoiceProfileCommand::Use(name) => {
+                        match activate_profile(codex_home, &name) {
+                            Ok(profile) => {
+                                let location = profile_file_path(codex_home, &name)
+                                    .map(|path| path.display().to_string())
+                                    .unwrap_or_else(|_| "the Codex home".to_string());
+                                self.config.realtime.voice = Some(profile.voice);
+                                self.realtime_voice_profile = Some(profile.clone());
+                                self.realtime_voice_rotation_selected = false;
+                                self.chat_widget.add_info_message(
+                                    format!(
+                                        "GPT-Live voice profile '{}' is active (base voice `{}`). It applies to the next voice session; edit '{location}' to tune or share it.",
+                                        profile.name,
+                                        profile.voice.wire_name()
+                                    ),
+                                    None,
+                                );
+                            }
+                            Err(err) => self.chat_widget.add_error_message(format!(
+                                "Failed to select GPT-Live voice profile '{name}': {err:#}"
+                            )),
+                        }
+                    }
+                }
+            }
+            RealtimeVoiceCommand::Effect(command) => {
+                let codex_home = self.config.codex_home.as_path();
+                match command {
+                    RealtimeVoiceEffectCommand::List => {
+                        let active = if let Some(profile) = &self.realtime_voice_profile {
+                            Ok(Some(profile.effect.clone()))
+                        } else if self.realtime_voice_rotation_selected {
+                            Ok(None)
+                        } else {
+                            active_preset_name(codex_home)
+                        };
+                        match (list_preset_names(codex_home), active) {
+                            (Ok(names), Ok(active)) => {
+                                let active = active.as_deref().unwrap_or("off");
+                                let names = names
+                                    .iter()
+                                    .map(|name| {
+                                        if name == active {
+                                            format!("{name} (selected)")
+                                        } else {
+                                            name.to_string()
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                self.chat_widget.add_info_message(
+                                    format!(
+                                        "GPT-Live output effects (selected: {active}): {names}"
+                                    ),
+                                    None,
+                                );
+                            }
+                            (Err(err), _) | (_, Err(err)) => self.chat_widget.add_error_message(
+                                format!("Failed to list GPT-Live voice effects: {err:#}"),
+                            ),
+                        }
+                    }
+                    RealtimeVoiceEffectCommand::Status => {
+                        if let Some(profile) = &self.realtime_voice_profile {
+                            let location = preset_file_path(codex_home, &profile.effect)
+                                .map(|path| path.display().to_string())
+                                .unwrap_or_else(|_| "the Codex home".to_string());
+                            self.chat_widget.add_info_message(
+                                format!(
+                                    "GPT-Live output effect is '{}' through voice profile '{}' (client-side; applies to the next voice session). Edit '{location}' to tune it.",
+                                    profile.effect,
+                                    profile.name,
+                                ),
+                                None,
+                            );
+                        } else if self.realtime_voice_rotation_selected {
+                            self.chat_widget.add_info_message(
+                                "GPT-Live output effect is off for the rotation-selected base voice (client-side; applies to the next voice session). Use '/voice effect use jarvis' to override the rotation.".to_string(),
+                                None,
+                            );
+                        } else {
+                            match (active_preset_name(codex_home), load_active_preset(codex_home)) {
+                                (Ok(active), Ok(Some(preset))) => {
+                                    let name = active.unwrap_or(preset.name);
+                                    let location = preset_file_path(codex_home, &name)
+                                        .map(|path| path.display().to_string())
+                                        .unwrap_or_else(|_| "the Codex home".to_string());
+                                    self.chat_widget.add_info_message(
+                                        format!(
+                                            "GPT-Live output effect is '{name}' (client-side; applies to the next voice session). Edit '{location}' to tune it."
+                                        ),
+                                        None,
+                                    );
+                                }
+                                (Ok(Some(_)), Ok(None)) | (Ok(None), Ok(None)) => self.chat_widget.add_info_message(
+                                    "GPT-Live output effect is off (client-side; applies to the next voice session). Use '/voice effect use jarvis' to try the built-in profile.".to_string(),
+                                    None,
+                                ),
+                                (Err(err), _) | (_, Err(err)) => self.chat_widget.add_error_message(format!(
+                                    "Failed to read the active GPT-Live voice effect: {err:#}"
+                                )),
+                            }
+                        }
+                    }
+                    RealtimeVoiceEffectCommand::Off => {
+                        match deactivate_profile_and_preset(codex_home) {
+                            Ok(()) => {
+                                if let Some(session) = self.realtime_voice_session.as_ref()
+                                    && let Err(err) = session.set_voice_effect(None)
+                                {
+                                    self.chat_widget.add_error_message(format!(
+                                        "GPT-Live effects were persisted off, but the live session could not bypass them: {err:#}"
+                                    ));
+                                }
+                                self.realtime_voice_profile = None;
+                                self.realtime_voice_rotation_selected = false;
+                                self.chat_widget.add_info_message(
+                                "GPT-Live output effects are off for the current and next voice session."
+                                    .to_string(),
+                                None,
+                            );
+                            }
+                            Err(err) => self.chat_widget.add_error_message(format!(
+                                "Failed to disable GPT-Live voice effects: {err:#}"
+                            )),
+                        }
+                    }
+                    RealtimeVoiceEffectCommand::Use(name) => {
+                        match activate_preset_and_deactivate_profile(codex_home, &name) {
+                            Ok(preset) => {
+                                if let Some(session) = self.realtime_voice_session.as_ref()
+                                    && let Err(err) = session.set_voice_effect(Some(&preset))
+                                {
+                                    self.chat_widget.add_error_message(format!(
+                                        "GPT-Live effect was persisted, but the live session could not update: {err:#}"
+                                    ));
+                                }
+                                self.realtime_voice_profile = None;
+                                self.realtime_voice_rotation_selected = false;
+                                let location = preset_file_path(codex_home, &name)
+                                    .map(|path| path.display().to_string())
+                                    .unwrap_or_else(|_| "the Codex home".to_string());
+                                self.chat_widget.add_info_message(
+                                    format!(
+                                        "GPT-Live output effect set to '{name}' for the current and next voice session; edit '{location}' to tune or share the preset."
+                                    ),
+                                    None,
+                                );
+                            }
+                            Err(err) => self.chat_widget.add_error_message(format!(
+                                "Failed to select GPT-Live voice effect '{name}': {err:#}"
+                            )),
+                        }
+                    }
+                }
             }
             RealtimeVoiceCommand::List => match app_server.thread_realtime_list_voices().await {
                 Ok(voices) => {
@@ -1295,14 +1609,22 @@ impl App {
                 .await
                 {
                     Ok(_) => {
-                        self.config.realtime.voice = Some(voice);
-                        self.chat_widget.add_info_message(
-                            format!(
-                                "Realtime voice set to `{}`. It will apply to the next voice session.",
-                                voice.wire_name()
-                            ),
-                            None,
-                        );
+                        if let Err(err) = deactivate_profile(self.config.codex_home.as_path()) {
+                            self.chat_widget.add_error_message(format!(
+                                "Realtime voice config was saved, but the active GPT-Live profile remains in control of the next session: {err:#}"
+                            ));
+                        } else {
+                            self.config.realtime.voice = Some(voice);
+                            self.realtime_voice_profile = None;
+                            self.realtime_voice_rotation_selected = false;
+                            self.chat_widget.add_info_message(
+                                format!(
+                                    "Realtime voice set to `{}`. It will apply to the next voice session.",
+                                    voice.wire_name()
+                                ),
+                                None,
+                            );
+                        }
                     }
                     Err(err) => self.chat_widget.add_error_message(format!(
                         "Failed to save GPT-Live voice `{}`: {err:#}",

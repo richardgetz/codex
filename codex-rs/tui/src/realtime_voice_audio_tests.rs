@@ -177,6 +177,36 @@ fn muted_remote_audio_is_discarded_until_handoff_completion() {
 }
 
 #[test]
+fn decoded_remote_audio_runs_through_the_voice_effect_processor() {
+    let preset = crate::realtime_voice_effects::VoiceEffectPreset {
+        version: 1,
+        name: "audio-hookup".to_string(),
+        bands: vec![],
+        compressor: None,
+        output_gain_db: -6.0,
+        pitch_shift_semitones: 0.0,
+        formant_shift_semitones: 0.0,
+        saturation: 0.0,
+        ring_mod_frequency_hz: 0.0,
+        ring_mod_mix: 0.0,
+        bitcrush_bits: 16,
+        reverb_mix: 0.0,
+    };
+    preset.validate().expect("test preset should be valid");
+    let processor = VoiceEffectProcessor::new(&preset).expect("build effect processor");
+    let processor = std::sync::Arc::new(std::sync::Mutex::new(Some(processor)));
+    let mut decoded = vec![12_000_i16; FRAME_SAMPLES * 2];
+
+    process_remote_audio_effects(&mut decoded, &processor);
+
+    let expected = (f32::from(12_000_i16) / f32::from(i16::MAX)
+        * 10.0_f32.powf(-6.0 / 20.0)
+        * f32::from(i16::MAX))
+    .round() as i16;
+    assert_eq!(decoded, vec![expected; FRAME_SAMPLES * 2]);
+}
+
+#[test]
 fn input_buffer_keeps_preroll_before_first_signal() {
     let mut frames = VecDeque::from_iter((0..10).map(|_| [0i16; FRAME_SAMPLES]));
     frames[7][0] = INPUT_SIGNAL_THRESHOLD;

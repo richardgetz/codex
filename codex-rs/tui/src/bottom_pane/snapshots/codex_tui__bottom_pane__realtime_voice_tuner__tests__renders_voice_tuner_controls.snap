@@ -1,0 +1,13 @@
+---
+source: tui/src/bottom_pane/realtime_voice_tuner_tests.rs
+assertion_line: 41
+expression: "render_lines(&view, 80)"
+---
+  GPT-Live voice tuner
+ › Output gain: 1.0 dB
+   Pitch shift: -2.0 semitones
+   Formant shift: -1.0 semitones
+   Saturation: 0.20
+   Ring-mod mix: 0.10
+   Reverb mix: 0.15
+  LIVE  arrows: select/adjust  b: A/B  s: save  enter: keep  esc: cancel
