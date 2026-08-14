@@ -3,4 +3,4 @@ source: tui/src/chatwidget/tests/realtime_tests.rs
 expression: "format!(\"{mic_help}{voice_help}\")"
 ---
 • Usage: /mic [help|on|off|status|hot|push|hotkey|change|devices|aliases|alias <name> [device]|device <name>|speakers|speaker change|speaker aliases|speaker alias <name> [device]|speaker <name>]
-• Usage: /voice [help|on|off|status|debug [on|off|status]|list|history [count]|<voice>]
+• Usage: /voice [help|on|off|status|debug [on|off|status]|list|history [count]|effect [list|status|off|use <name>]|profile [list|status|off|use <name>]|tune|<voice>]

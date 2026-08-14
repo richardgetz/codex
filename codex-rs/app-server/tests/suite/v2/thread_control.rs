@@ -161,6 +161,28 @@ async fn thread_scratchpad_continuous_policy_set_round_trip() -> Result<()> {
         serde_json::json!(true)
     );
     assert_eq!(value["origin_thread_id"], serde_json::json!(thread.id));
+
+    let clear_id = mcp
+        .send_thread_scratchpad_continuous_policy_set_request(
+            ThreadScratchpadContinuousPolicySetParams {
+                thread_id: thread.id.clone(),
+                enabled: false,
+            },
+        )
+        .await?;
+    let clear_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(clear_id)),
+    )
+    .await??;
+    let ThreadScratchpadContinuousPolicySetResponse {} =
+        to_response::<ThreadScratchpadContinuousPolicySetResponse>(clear_resp)?;
+
+    let value = wait_for_scratchpad_json(&scratchpad_path).await?;
+    assert_eq!(
+        value["run_policy"]["continuous"]["enabled"],
+        serde_json::json!(false)
+    );
     Ok(())
 }
 

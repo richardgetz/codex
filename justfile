@@ -14,11 +14,13 @@ help:
 # `codex`
 alias c := codex
 codex *args:
-    cargo run --bin codex -- {args}
+    {{ python }} ../scripts/run_local_cargo.py build --bin codex --bin codex-code-mode-host
+    {{ python }} ../scripts/run_local_cargo.py run --bin codex -- {args}
 
 # `codex exec`
 exec *args:
-    cargo run --bin codex -- exec {args}
+    {{ python }} ../scripts/run_local_cargo.py build --bin codex --bin codex-code-mode-host
+    {{ python }} ../scripts/run_local_cargo.py run --bin codex -- exec {args}
 
 # Start `codex exec-server` and run codex-tui.
 [no-cd]
@@ -33,7 +35,7 @@ file-search *args:
 
 # Run the standalone code-mode host from source.
 code-mode-host *args:
-    cargo run --bin codex-code-mode-host -- {args}
+    {{ python }} ../scripts/run_local_cargo.py run --bin codex-code-mode-host -- {args}
 
 # Build the CLI and run the app-server test client
 app-server-test-client *args:

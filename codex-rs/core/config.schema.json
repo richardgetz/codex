@@ -3198,6 +3198,13 @@
         "voice": {
           "$ref": "#/definitions/RealtimeVoice"
         },
+        "voice_profile_rotation": {
+          "description": "Optional client-side voice profiles selected after built-in voices in the startup round-robin.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "voice_rotation": {
           "description": "Optional voices selected in round-robin order for new Codex processes.",
           "items": {

@@ -70,7 +70,10 @@ use crate::realtime_voice::RealtimeMicCommand;
 use crate::realtime_voice::RealtimeMicMode;
 use crate::realtime_voice::RealtimeVoiceCommand;
 use crate::realtime_voice::RealtimeVoiceSession;
-use crate::realtime_voice_rotation::select_startup_voice;
+use crate::realtime_voice_profiles::VoiceProfile;
+use crate::realtime_voice_profiles::load_active_profile;
+use crate::realtime_voice_profiles::load_named_profile;
+use crate::realtime_voice_rotation::select_startup_selection;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
@@ -543,6 +546,8 @@ pub(crate) struct App {
     pub(crate) config: Config,
     realtime_mic_mode: RealtimeMicMode,
     realtime_voice_session: Option<RealtimeVoiceSession>,
+    realtime_voice_profile: Option<VoiceProfile>,
+    realtime_voice_rotation_selected: bool,
     realtime_voice_debug: bool,
     realtime_handoff_debug_ids: VecDeque<u64>,
     realtime_output_debug_item_id: Option<String>,
@@ -879,8 +884,24 @@ impl App {
         let requires_openai_auth = bootstrap.requires_openai_auth;
         let status_account_display = bootstrap.status_account_display.clone();
         let initial_plan_type = bootstrap.plan_type;
-        if let Some(voice) = select_startup_voice(&config.realtime, config.codex_home.as_path()) {
-            config.realtime.voice = Some(voice);
+        let mut startup_profile = load_active_profile(config.codex_home.as_path())
+            .inspect_err(|err| {
+                tracing::debug!(error = %err, "failed to load the active realtime voice profile")
+            })
+            .ok()
+            .flatten();
+        let mut startup_rotation_selected = false;
+        if let Some(profile) = &startup_profile {
+            config.realtime.voice = Some(profile.voice);
+        }
+        if let Some(selection) =
+            select_startup_selection(&config.realtime, config.codex_home.as_path())
+        {
+            startup_rotation_selected = true;
+            config.realtime.voice = Some(selection.voice);
+            startup_profile = selection
+                .profile
+                .and_then(|name| load_named_profile(config.codex_home.as_path(), &name).ok());
         }
         let session_bootstrap_config = config.clone();
         let session_bootstrap_model = session_bootstrap_config
@@ -1079,6 +1100,8 @@ See the Codex keymap documentation for supported actions and examples."
             config,
             realtime_mic_mode,
             realtime_voice_session: None,
+            realtime_voice_profile: startup_profile,
+            realtime_voice_rotation_selected: startup_rotation_selected,
             realtime_voice_debug: false,
             realtime_handoff_debug_ids: VecDeque::new(),
             realtime_output_debug_item_id: None,

@@ -785,6 +785,8 @@ pub struct RealtimeConfig {
     pub voice: Option<RealtimeVoice>,
     /// Optional voices selected in round-robin order for new Codex processes.
     pub voice_rotation: Option<Vec<RealtimeVoice>>,
+    /// Optional client-side voice profiles selected after built-in voices in the startup round-robin.
+    pub voice_profile_rotation: Option<Vec<String>>,
     /// Push-to-talk key specification, such as `right-option` or `f13`.
     pub hotkey: Option<String>,
 }
@@ -804,6 +806,7 @@ impl Default for RealtimeConfig {
             transport: RealtimeTransport::default(),
             voice: None,
             voice_rotation: None,
+            voice_profile_rotation: None,
             hotkey: None,
         }
     }
@@ -837,6 +840,8 @@ pub struct RealtimeToml {
     pub voice: Option<RealtimeVoice>,
     /// Optional voices selected in round-robin order for new Codex processes.
     pub voice_rotation: Option<Vec<RealtimeVoice>>,
+    /// Optional client-side voice profiles selected after built-in voices in the startup round-robin.
+    pub voice_profile_rotation: Option<Vec<String>>,
     pub hotkey: Option<String>,
 }
 

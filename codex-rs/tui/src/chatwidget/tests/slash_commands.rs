@@ -3,6 +3,8 @@ use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::realtime_voice::RealtimeMicCommand;
 use crate::realtime_voice::RealtimeVoiceCommand;
 use crate::realtime_voice::RealtimeVoiceDebugCommand;
+use crate::realtime_voice::RealtimeVoiceEffectCommand;
+use crate::realtime_voice::RealtimeVoiceProfileCommand;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 
@@ -113,6 +115,23 @@ async fn mic_slash_command_dispatches_mode_controls() {
         rx.try_recv(),
         Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::Toggle))
     );
+
+    for (args, expected) in [
+        (
+            "profile use jarvis",
+            RealtimeVoiceProfileCommand::Use("jarvis".to_string()),
+        ),
+        ("profile list", RealtimeVoiceProfileCommand::List),
+        ("profile status", RealtimeVoiceProfileCommand::Status),
+        ("profile off", RealtimeVoiceProfileCommand::Off),
+    ] {
+        chat.dispatch_command_with_args(SlashCommand::Voice, args.to_string(), Vec::new());
+        assert_matches!(
+            rx.try_recv(),
+            Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Profile(command)))
+                if command == expected
+        );
+    }
 
     chat.dispatch_command_with_args(SlashCommand::Mic, "status".to_string(), Vec::new());
     assert_matches!(
@@ -266,6 +285,30 @@ async fn mic_slash_command_dispatches_mode_controls() {
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::List))
+    );
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Voice,
+        "effect use jarvis".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Effect(
+            RealtimeVoiceEffectCommand::Use(name)
+        ))) if name == "jarvis"
+    );
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Voice,
+        "profile use jarvis".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Profile(
+            RealtimeVoiceProfileCommand::Use(name)
+        ))) if name == "jarvis"
     );
 
     chat.dispatch_command_with_args(SlashCommand::Voice, "on".to_string(), Vec::new());
