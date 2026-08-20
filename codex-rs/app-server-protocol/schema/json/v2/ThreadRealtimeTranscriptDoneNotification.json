@@ -5,6 +5,10 @@
     "role": {
       "type": "string"
     },
+    "submissionId": {
+      "description": "Stable submission identifier shared by all notifications from this realtime session.",
+      "type": "string"
+    },
     "text": {
       "description": "Final complete text for the transcript part.",
       "type": "string"

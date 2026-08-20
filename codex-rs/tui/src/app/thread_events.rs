@@ -620,6 +620,7 @@ mod tests {
             store.push_notification_ref(&ServerNotification::ThreadRealtimeOutputAudioDelta(
                 ThreadRealtimeOutputAudioDeltaNotification {
                     thread_id: thread_id.to_string(),
+                    submission_id: String::new(),
                     audio: ThreadRealtimeAudioChunk {
                         data: large_payload.clone(),
                         sample_rate: 24_000,

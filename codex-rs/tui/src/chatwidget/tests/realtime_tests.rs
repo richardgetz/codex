@@ -21,6 +21,7 @@ async fn realtime_transcript_notifications_render_live_and_finalize() {
         ServerNotification::ThreadRealtimeTranscriptDelta(
             ThreadRealtimeTranscriptDeltaNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "user".to_string(),
                 delta: "hello from the microphone".to_string(),
             },
@@ -40,6 +41,7 @@ async fn realtime_transcript_notifications_render_live_and_finalize() {
         ServerNotification::ThreadRealtimeTranscriptDone(
             ThreadRealtimeTranscriptDoneNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "user".to_string(),
                 text: "hello from the microphone".to_string(),
             },
@@ -56,6 +58,7 @@ async fn realtime_transcript_notifications_render_live_and_finalize() {
         ServerNotification::ThreadRealtimeTranscriptDone(
             ThreadRealtimeTranscriptDoneNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "user".to_string(),
                 text: "hello from the microphone".to_string(),
             },
@@ -69,6 +72,7 @@ async fn realtime_transcript_notifications_render_live_and_finalize() {
         ServerNotification::ThreadRealtimeTranscriptDelta(
             ThreadRealtimeTranscriptDeltaNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "assistant".to_string(),
                 delta: "hello back from live voice".to_string(),
             },
@@ -87,6 +91,7 @@ async fn realtime_transcript_notifications_render_live_and_finalize() {
         ServerNotification::ThreadRealtimeTranscriptDone(
             ThreadRealtimeTranscriptDoneNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "assistant".to_string(),
                 text: "hello back from live voice".to_string(),
             },
@@ -113,6 +118,7 @@ async fn disabled_preambles_allow_realtime_answer_after_handoff_turn_completion(
     chat.handle_server_notification(
         ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
             thread_id: thread_id.to_string(),
+            submission_id: String::new(),
             item: serde_json::json!({
                 "type": "handoff_request",
                 "handoff_id": "handoff-unmarked-answer"
@@ -125,6 +131,7 @@ async fn disabled_preambles_allow_realtime_answer_after_handoff_turn_completion(
         ServerNotification::ThreadRealtimeTranscriptDone(
             ThreadRealtimeTranscriptDoneNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "assistant".to_string(),
                 text: "The direct GPT-Live answer remains visible.".to_string(),
             },
@@ -152,6 +159,7 @@ async fn disabled_preambles_do_not_mute_direct_realtime_conversation() {
         ServerNotification::ThreadRealtimeTranscriptDone(
             ThreadRealtimeTranscriptDoneNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "assistant".to_string(),
                 text: "This direct GPT-Live answer remains visible.".to_string(),
             },
@@ -176,6 +184,7 @@ async fn disabled_preambles_suppress_gpt_live_progress_before_handoff_completion
     chat.handle_server_notification(
         ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
             thread_id: thread_id.to_string(),
+            submission_id: String::new(),
             item: serde_json::json!({
                 "type": "handoff_request",
                 "handoff_id": "handoff-progress"
@@ -187,6 +196,7 @@ async fn disabled_preambles_suppress_gpt_live_progress_before_handoff_completion
         ServerNotification::ThreadRealtimeTranscriptDelta(
             ThreadRealtimeTranscriptDeltaNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "assistant".to_string(),
                 delta: "Just a sec, checking that.".to_string(),
             },
@@ -197,6 +207,7 @@ async fn disabled_preambles_suppress_gpt_live_progress_before_handoff_completion
         ServerNotification::ThreadRealtimeTranscriptDone(
             ThreadRealtimeTranscriptDoneNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "assistant".to_string(),
                 text: "Just a sec, checking that.".to_string(),
             },
@@ -211,6 +222,7 @@ async fn disabled_preambles_suppress_gpt_live_progress_before_handoff_completion
         ServerNotification::ThreadRealtimeTranscriptDone(
             ThreadRealtimeTranscriptDoneNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "assistant".to_string(),
                 text: "The branch is agent/realtime-preamble-fix.".to_string(),
             },
@@ -235,6 +247,7 @@ async fn disabled_preambles_keep_gpt_live_progress_suppressed_through_turn_start
     chat.handle_server_notification(
         ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
             thread_id: thread_id.to_string(),
+            submission_id: String::new(),
             item: serde_json::json!({
                 "type": "handoff_request",
                 "handoff_id": "handoff-through-turn-start"
@@ -262,6 +275,7 @@ async fn disabled_preambles_keep_gpt_live_progress_suppressed_through_turn_start
         ServerNotification::ThreadRealtimeTranscriptDelta(
             ThreadRealtimeTranscriptDeltaNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "assistant".to_string(),
                 delta: "Just a sec, checking that.".to_string(),
             },
@@ -282,6 +296,7 @@ async fn disabled_preambles_keep_direct_realtime_output_after_handoff() {
     chat.handle_server_notification(
         ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
             thread_id: thread_id.to_string(),
+            submission_id: String::new(),
             item: serde_json::json!({
                 "type": "handoff_request",
                 "handoff_id": "handoff-1"
@@ -382,6 +397,7 @@ async fn disabled_preambles_keep_direct_realtime_output_after_handoff() {
         ServerNotification::ThreadRealtimeTranscriptDelta(
             ThreadRealtimeTranscriptDeltaNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "assistant".to_string(),
                 delta: "We're on agent/realtime-preamble-fix.".to_string(),
             },
@@ -392,6 +408,7 @@ async fn disabled_preambles_keep_direct_realtime_output_after_handoff() {
         ServerNotification::ThreadRealtimeTranscriptDone(
             ThreadRealtimeTranscriptDoneNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "assistant".to_string(),
                 text: "We're on agent/realtime-preamble-fix.".to_string(),
             },
@@ -415,6 +432,7 @@ async fn realtime_output_remains_visible_after_interrupted_handoff() {
     chat.handle_server_notification(
         ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
             thread_id: thread_id.to_string(),
+            submission_id: String::new(),
             item: serde_json::json!({
                 "type": "handoff_request",
                 "handoff_id": "handoff-1"
@@ -429,6 +447,7 @@ async fn realtime_output_remains_visible_after_interrupted_handoff() {
         ServerNotification::ThreadRealtimeTranscriptDone(
             ThreadRealtimeTranscriptDoneNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "assistant".to_string(),
                 text: "The interrupted turn is no longer muted.".to_string(),
             },
@@ -453,6 +472,7 @@ async fn voice_history_command_renders_recent_transcript_entries() {
         ServerNotification::ThreadRealtimeTranscriptDone(
             ThreadRealtimeTranscriptDoneNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "user".to_string(),
                 text: "what did you change?".to_string(),
             },
@@ -463,6 +483,7 @@ async fn voice_history_command_renders_recent_transcript_entries() {
         ServerNotification::ThreadRealtimeTranscriptDone(
             ThreadRealtimeTranscriptDoneNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "assistant".to_string(),
                 text: "I added a voice history command.".to_string(),
             },
@@ -578,6 +599,7 @@ async fn realtime_handoff_turn_hides_normal_codex_response_but_keeps_live_transc
         ServerNotification::ThreadRealtimeTranscriptDelta(
             ThreadRealtimeTranscriptDeltaNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "assistant".to_string(),
                 delta: "spoken response".to_string(),
             },

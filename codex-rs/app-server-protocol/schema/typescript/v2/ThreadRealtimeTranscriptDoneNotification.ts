@@ -6,7 +6,11 @@
  * EXPERIMENTAL - final transcript text emitted when realtime completes
  * a transcript part.
  */
-export type ThreadRealtimeTranscriptDoneNotification = { threadId: string, role: string,
+export type ThreadRealtimeTranscriptDoneNotification = { threadId: string,
+/**
+ * Stable submission identifier shared by all notifications from this realtime session.
+ */
+submissionId?: string, role: string,
 /**
  * Final complete text for the transcript part.
  */

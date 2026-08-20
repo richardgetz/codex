@@ -395,6 +395,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::RealtimeConversationStarted(event) => {
             let notification = ThreadRealtimeStartedNotification {
                 thread_id: conversation_id.to_string(),
+                submission_id: event_turn_id.clone(),
                 realtime_session_id: event.realtime_session_id,
                 version: event.version,
             };
@@ -405,6 +406,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::RealtimeConversationSdp(event) => {
             let notification = ThreadRealtimeSdpNotification {
                 thread_id: conversation_id.to_string(),
+                submission_id: event_turn_id.clone(),
                 sdp: event.sdp,
             };
             outgoing
@@ -416,6 +418,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             RealtimeEvent::InputAudioSpeechStarted(event) => {
                 let notification = ThreadRealtimeItemAddedNotification {
                     thread_id: conversation_id.to_string(),
+                    submission_id: event_turn_id.clone(),
                     item: serde_json::json!({
                         "type": "input_audio_buffer.speech_started",
                         "item_id": event.item_id,
@@ -430,6 +433,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             RealtimeEvent::InputTranscriptDelta(event) => {
                 let notification = ThreadRealtimeTranscriptDeltaNotification {
                     thread_id: conversation_id.to_string(),
+                    submission_id: event_turn_id.clone(),
                     role: "user".to_string(),
                     delta: event.delta,
                 };
@@ -442,6 +446,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             RealtimeEvent::InputTranscriptDone(event) => {
                 let notification = ThreadRealtimeTranscriptDoneNotification {
                     thread_id: conversation_id.to_string(),
+                    submission_id: event_turn_id.clone(),
                     role: "user".to_string(),
                     text: event.text,
                 };
@@ -454,6 +459,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             RealtimeEvent::OutputTranscriptDelta(event) => {
                 let notification = ThreadRealtimeTranscriptDeltaNotification {
                     thread_id: conversation_id.to_string(),
+                    submission_id: event_turn_id.clone(),
                     role: "assistant".to_string(),
                     delta: event.delta,
                 };
@@ -466,6 +472,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             RealtimeEvent::OutputTranscriptDone(event) => {
                 let notification = ThreadRealtimeTranscriptDoneNotification {
                     thread_id: conversation_id.to_string(),
+                    submission_id: event_turn_id.clone(),
                     role: "assistant".to_string(),
                     text: event.text,
                 };
@@ -478,6 +485,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             RealtimeEvent::AudioOut(audio) => {
                 let notification = ThreadRealtimeOutputAudioDeltaNotification {
                     thread_id: conversation_id.to_string(),
+                    submission_id: event_turn_id.clone(),
                     audio: audio.into(),
                 };
                 outgoing
@@ -489,6 +497,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             RealtimeEvent::ResponseCreated(event) => {
                 let notification = ThreadRealtimeItemAddedNotification {
                     thread_id: conversation_id.to_string(),
+                    submission_id: event_turn_id.clone(),
                     item: serde_json::json!({
                         "type": "response.created",
                         "response_id": event.response_id,
@@ -503,6 +512,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             RealtimeEvent::ResponseCancelled(event) => {
                 let notification = ThreadRealtimeItemAddedNotification {
                     thread_id: conversation_id.to_string(),
+                    submission_id: event_turn_id.clone(),
                     item: serde_json::json!({
                         "type": "response.cancelled",
                         "response_id": event.response_id,
@@ -517,6 +527,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             RealtimeEvent::ResponseDone(event) => {
                 let notification = ThreadRealtimeItemAddedNotification {
                     thread_id: conversation_id.to_string(),
+                    submission_id: event_turn_id.clone(),
                     item: serde_json::json!({
                         "type": "response.done",
                         "response_id": event.response_id,
@@ -531,6 +542,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             RealtimeEvent::ConversationItemAdded(item) => {
                 let notification = ThreadRealtimeItemAddedNotification {
                     thread_id: conversation_id.to_string(),
+                    submission_id: event_turn_id.clone(),
                     item,
                 };
                 outgoing
@@ -543,6 +555,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             RealtimeEvent::HandoffRequested(handoff) => {
                 let notification = ThreadRealtimeItemAddedNotification {
                     thread_id: conversation_id.to_string(),
+                    submission_id: event_turn_id.clone(),
                     item: serde_json::json!({
                         "type": "handoff_request",
                         "handoff_id": handoff.handoff_id,
@@ -561,6 +574,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             RealtimeEvent::Error(message) => {
                 let notification = ThreadRealtimeErrorNotification {
                     thread_id: conversation_id.to_string(),
+                    submission_id: event_turn_id.clone(),
                     message,
                 };
                 outgoing
@@ -571,6 +585,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::RealtimeConversationClosed(event) => {
             let notification = ThreadRealtimeClosedNotification {
                 thread_id: conversation_id.to_string(),
+                submission_id: event_turn_id,
                 reason: event.reason,
             };
             outgoing

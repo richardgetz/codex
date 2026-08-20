@@ -13,11 +13,13 @@ use crate::realtime_voice::realtime_hotkey_matches;
 use crate::realtime_voice::realtime_hotkey_spec_from_event;
 use crate::realtime_voice::realtime_start_prompt;
 use crate::realtime_voice::realtime_v3_voice;
+use crate::realtime_voice_calibration::CALIBRATION_STOP_TIMEOUT;
 use crate::realtime_voice_devices::display_device_name;
 use crate::realtime_voice_devices::format_device_aliases;
 use crate::realtime_voice_devices::normalize_device_alias;
 use crate::realtime_voice_devices::resolve_device_name;
 use crate::realtime_voice_effects::VoiceEffectPreset;
+use crate::realtime_voice_effects::activate_preset;
 use crate::realtime_voice_effects::active_preset_name;
 use crate::realtime_voice_effects::list_preset_names;
 use crate::realtime_voice_effects::load_active_preset;
@@ -39,6 +41,10 @@ const REALTIME_HANDOFF_DEBUG_DEDUPE_CAPACITY: usize = 128;
 const REALTIME_HANDOFF_DEBUG_VALUE_LIMIT: usize = 96;
 const REALTIME_OUTPUT_DEBUG_AUDIO_CHUNK_LIMIT: usize = 32;
 const REALTIME_OUTPUT_DEBUG_TRANSCRIPT_DELTA_LIMIT: usize = 32;
+
+fn realtime_session_id_matches(expected: Option<&str>, actual: Option<&str>) -> bool {
+    expected == actual
+}
 
 fn realtime_handoff_debug_preview(value: &str) -> String {
     let mut preview = String::new();
@@ -113,9 +119,21 @@ impl App {
             ));
             return;
         }
-        if persist && let Err(err) = save_preset(self.config.codex_home.as_path(), &preset) {
-            self.chat_widget
-                .add_error_message(format!("Failed to save the GPT-Live tuner preset: {err:#}"));
+        if persist {
+            match save_preset(self.config.codex_home.as_path(), &preset) {
+                Ok(()) => {
+                    if let Err(err) =
+                        activate_preset(self.config.codex_home.as_path(), &preset.name)
+                    {
+                        self.chat_widget.add_error_message(format!(
+                            "GPT-Live tuner preset was saved but could not be selected: {err:#}"
+                        ));
+                    }
+                }
+                Err(err) => self.chat_widget.add_error_message(format!(
+                    "Failed to save the GPT-Live tuner preset: {err:#}"
+                )),
+            }
         }
     }
 
@@ -283,7 +301,10 @@ impl App {
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
-        if self.handle_realtime_voice_key(app_server, key_event).await {
+        if self
+            .handle_realtime_voice_key(tui, app_server, key_event)
+            .await
+        {
             return;
         }
 
@@ -460,6 +481,7 @@ impl App {
 
     async fn handle_realtime_voice_key(
         &mut self,
+        tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) -> bool {
@@ -489,6 +511,7 @@ impl App {
             {
                 Ok(_) => {
                     self.config.realtime.hotkey = Some(hotkey.clone());
+                    tui.reconfigure_realtime_hotkey();
                     self.realtime_mic_mode = RealtimeMicMode::PushToTalk;
                     self.chat_widget.add_info_message(
                         format!(
@@ -513,6 +536,12 @@ impl App {
         }
 
         if self.realtime_mic_mode != RealtimeMicMode::PushToTalk {
+            return true;
+        }
+
+        if self.realtime_voice_calibration.is_some()
+            || self.realtime_voice_calibration_preparing.is_some()
+        {
             return true;
         }
 
@@ -546,6 +575,13 @@ impl App {
     ) -> Result<()> {
         if self.realtime_voice_session.is_some() {
             return Ok(());
+        }
+        if self.realtime_voice_calibration.is_some()
+            || self.realtime_voice_calibration_preparing.is_some()
+        {
+            return Err(eyre!(
+                "GPT-Live voice calibration is running; use `/voice off` to cancel it first."
+            ));
         }
 
         let Some(thread_id) = self.active_thread_id.or(self.chat_widget.thread_id()) else {
@@ -595,6 +631,8 @@ impl App {
         )
         .await
         .map_err(|err| eyre!("{err:#}"))?;
+        let requested_realtime_session_id = format!("codex-gpt-live-{}", uuid::Uuid::new_v4());
+        self.realtime_voice_ignore_legacy_notifications = false;
         let params = ThreadRealtimeStartParams {
             thread_id: thread_id.to_string(),
             client_managed_handoffs: None,
@@ -611,15 +649,18 @@ impl App {
             realtime_start_instructions: None,
             realtime_end_instructions: None,
             prompt: realtime_start_prompt(self.config.realtime.enable_preambles),
-            realtime_session_id: None,
+            realtime_session_id: Some(requested_realtime_session_id.clone()),
             transport: Some(ThreadRealtimeStartTransport::Webrtc { sdp }),
             version: Some(RealtimeConversationVersion::V3),
             voice: Some(realtime_v3_voice(self.config.realtime.voice)),
         };
+        self.realtime_voice_requested_session_id = Some(requested_realtime_session_id);
         if let Err(err) = app_server.thread_realtime_start_with_params(params).await {
+            self.realtime_voice_requested_session_id = None;
             session.close().await;
             return Err(err);
         }
+        self.realtime_voice_legacy_notifications = false;
         self.realtime_voice_session = Some(session);
         Ok(())
     }
@@ -1212,7 +1253,11 @@ impl App {
                 Ok(())
             }
             RealtimeMicMode::Hot => {
-                if let Some(session) = &self.realtime_voice_session {
+                if self.realtime_voice_calibration.is_some() {
+                    Err(eyre!(
+                        "the microphone stays muted while GPT-Live voice calibration is running"
+                    ))
+                } else if let Some(session) = &self.realtime_voice_session {
                     session.set_input_muted(false);
                     Ok(())
                 } else {
@@ -1250,8 +1295,16 @@ impl App {
                 return;
             }
             RealtimeVoiceCommand::Off => {
+                let was_calibrating = self.realtime_voice_calibration.is_some()
+                    || self.realtime_voice_calibration_preparing.is_some();
                 self.handle_realtime_mic_command(tui, app_server, RealtimeMicCommand::Off)
                     .await;
+                if was_calibrating {
+                    self.chat_widget.add_info_message(
+                        "GPT-Live voice calibration cancelled.".to_string(),
+                        None,
+                    );
+                }
                 return;
             }
             RealtimeVoiceCommand::Status => {
@@ -1323,6 +1376,11 @@ impl App {
                     ),
                 };
                 self.chat_widget.add_info_message(message, None);
+            }
+            RealtimeVoiceCommand::Calibrate(path) => {
+                self.start_realtime_voice_calibration(tui, app_server, path)
+                    .await;
+                return;
             }
             RealtimeVoiceCommand::Profile(command) => {
                 let codex_home = self.config.codex_home.as_path();
@@ -1637,20 +1695,89 @@ impl App {
     }
 
     pub(super) async fn stop_realtime_voice(&mut self, app_server: &mut AppServerSession) {
+        if let Some(cancellation) = self.realtime_voice_calibration_preparation_cancel.take() {
+            cancellation.store(true, Ordering::Release);
+        }
+        if let Some(abort_handle) = self.realtime_voice_calibration_preparation_abort.take() {
+            abort_handle.abort();
+        }
+        self.realtime_voice_calibration_preparing = None;
+        let calibration_thread_id = self
+            .realtime_voice_calibration
+            .take()
+            .map(|run| run.thread_id);
+        self.realtime_voice_ignore_legacy_notifications = calibration_thread_id.is_some();
+        self.realtime_voice_requested_session_id = None;
+        self.realtime_voice_submission_id = None;
+        self.realtime_voice_legacy_notifications = false;
         let Some(session) = self.realtime_voice_session.take() else {
             return;
         };
-        if let Some(thread_id) = self.active_thread_id.or(self.chat_widget.thread_id()) {
-            let _ = app_server.thread_realtime_stop(thread_id).await;
+        if let Some(thread_id) =
+            calibration_thread_id.or(self.active_thread_id.or(self.chat_widget.thread_id()))
+        {
+            match tokio::time::timeout(
+                CALIBRATION_STOP_TIMEOUT,
+                app_server.thread_realtime_stop(thread_id),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => self.chat_widget.add_error_message(format!(
+                    "The local GPT-Live session closed, but the server session may still be active: {err:#}"
+                )),
+                Err(_) => self.chat_widget.add_error_message(
+                    "The local GPT-Live session closed, but stopping the server session timed out; it may still be active."
+                        .to_string(),
+                ),
+            }
         }
         session.close().await;
     }
 
     pub(super) fn handle_realtime_voice_notification(&mut self, notification: &ServerNotification) {
+        if !self.realtime_notification_matches_current_thread(notification) {
+            return;
+        }
+        if let ServerNotification::ThreadRealtimeStarted(notification) = notification
+            && let Some(run) = self.realtime_voice_calibration.as_mut()
+            && !run.mark_started(
+                notification.realtime_session_id.as_deref(),
+                notification.submission_id.clone(),
+            )
+        {
+            return;
+        }
+        if let ServerNotification::ThreadRealtimeStarted(notification) = notification
+            && self.realtime_voice_calibration.is_none()
+        {
+            if self.realtime_voice_session.is_none()
+                || !realtime_session_id_matches(
+                    self.realtime_voice_requested_session_id.as_deref(),
+                    notification.realtime_session_id.as_deref(),
+                )
+                || self
+                    .realtime_voice_submission_id
+                    .as_deref()
+                    .is_some_and(|current_id| {
+                        notification.submission_id.is_empty()
+                            || current_id != notification.submission_id
+                    })
+                || self.realtime_voice_legacy_notifications
+            {
+                return;
+            }
+            self.realtime_voice_legacy_notifications = notification.submission_id.is_empty();
+            self.realtime_voice_submission_id = (!notification.submission_id.is_empty())
+                .then(|| notification.submission_id.clone());
+        }
+        if !self.realtime_notification_matches_current_session(notification) {
+            return;
+        }
         match notification {
             ServerNotification::ThreadRealtimeStarted(_) => {
                 if let Some(session) = &self.realtime_voice_session {
-                    session.set_output_muted(false);
+                    session.set_output_muted(self.realtime_voice_calibration.is_some());
                 }
                 self.clear_realtime_debug_state();
             }
@@ -1668,7 +1795,7 @@ impl App {
             }
             ServerNotification::TurnCompleted(_) => {
                 if let Some(session) = &self.realtime_voice_session {
-                    session.set_output_muted(false);
+                    session.set_output_muted(self.realtime_voice_calibration.is_some());
                 }
             }
             ServerNotification::ThreadRealtimeSdp(notification) => {
@@ -1676,16 +1803,154 @@ impl App {
                     session.apply_remote_sdp(notification.sdp.clone());
                 }
             }
-            ServerNotification::ThreadRealtimeError(_)
-            | ServerNotification::ThreadRealtimeClosed(_) => {
-                if let Some(session) = &self.realtime_voice_session {
-                    session.set_output_muted(false);
+            ServerNotification::ThreadRealtimeError(notification) => {
+                if let Some(run) = self.realtime_voice_calibration.as_mut() {
+                    if !run.waiting_for_close {
+                        run.error = Some(notification.message.clone());
+                    }
+                    if let Some(session) = &self.realtime_voice_session {
+                        session.set_output_muted(true);
+                    }
+                } else {
+                    if let Some(session) = &self.realtime_voice_session {
+                        session.set_output_muted(false);
+                    }
+                    self.realtime_voice_requested_session_id = None;
+                    self.realtime_voice_submission_id = None;
+                    self.realtime_voice_legacy_notifications = false;
+                    self.realtime_voice_ignore_legacy_notifications = false;
+                    self.clear_realtime_debug_state();
+                    self.realtime_voice_session.take();
                 }
-                self.clear_realtime_debug_state();
-                self.realtime_voice_session.take();
+            }
+            ServerNotification::ThreadRealtimeClosed(_) => {
+                if let Some(run) = self.realtime_voice_calibration.as_mut() {
+                    run.mark_closed();
+                } else {
+                    if let Some(session) = &self.realtime_voice_session {
+                        session.set_output_muted(false);
+                    }
+                    self.realtime_voice_requested_session_id = None;
+                    self.realtime_voice_submission_id = None;
+                    self.realtime_voice_legacy_notifications = false;
+                    self.realtime_voice_ignore_legacy_notifications = false;
+                    self.clear_realtime_debug_state();
+                    self.realtime_voice_session.take();
+                }
             }
             _ => {}
         }
+    }
+
+    pub(super) fn realtime_notification_matches_current_session(
+        &self,
+        notification: &ServerNotification,
+    ) -> bool {
+        if let ServerNotification::ThreadRealtimeStarted(notification) = notification {
+            let expected_session_id = self
+                .realtime_voice_calibration
+                .as_ref()
+                .and_then(|run| run.requested_realtime_session_id.as_deref())
+                .or(self.realtime_voice_requested_session_id.as_deref());
+            if self.realtime_voice_ignore_legacy_notifications
+                && expected_session_id.is_none()
+                && notification.realtime_session_id.is_none()
+            {
+                return false;
+            }
+            return realtime_session_id_matches(
+                expected_session_id,
+                notification.realtime_session_id.as_deref(),
+            );
+        }
+        let Some(submission_id) = (match notification {
+            ServerNotification::ThreadRealtimeItemAdded(notification) => {
+                Some(notification.submission_id.as_str())
+            }
+            ServerNotification::ThreadRealtimeTranscriptDelta(notification) => {
+                Some(notification.submission_id.as_str())
+            }
+            ServerNotification::ThreadRealtimeTranscriptDone(notification) => {
+                Some(notification.submission_id.as_str())
+            }
+            ServerNotification::ThreadRealtimeOutputAudioDelta(notification) => {
+                Some(notification.submission_id.as_str())
+            }
+            ServerNotification::ThreadRealtimeSdp(notification) => {
+                Some(notification.submission_id.as_str())
+            }
+            ServerNotification::ThreadRealtimeError(notification) => {
+                Some(notification.submission_id.as_str())
+            }
+            ServerNotification::ThreadRealtimeClosed(notification) => {
+                Some(notification.submission_id.as_str())
+            }
+            _ => None,
+        }) else {
+            return true;
+        };
+        if submission_id.is_empty() {
+            if self.realtime_voice_ignore_legacy_notifications {
+                return false;
+            }
+            return self
+                .realtime_voice_calibration
+                .as_ref()
+                .is_some_and(|run| run.legacy_submission_id)
+                || self.realtime_voice_legacy_notifications;
+        }
+        if self.realtime_voice_calibration.is_some() {
+            return self
+                .realtime_voice_calibration
+                .as_ref()
+                .and_then(|run| run.realtime_submission_id.as_deref())
+                .is_some_and(|current_id| current_id == submission_id);
+        }
+        self.realtime_voice_submission_id
+            .as_deref()
+            .is_some_and(|current_id| current_id == submission_id)
+    }
+
+    fn realtime_notification_matches_current_thread(
+        &self,
+        notification: &ServerNotification,
+    ) -> bool {
+        let Some(notification_thread_id) = (match notification {
+            ServerNotification::ThreadRealtimeStarted(notification) => {
+                Some(notification.thread_id.as_str())
+            }
+            ServerNotification::ThreadRealtimeItemAdded(notification) => {
+                Some(notification.thread_id.as_str())
+            }
+            ServerNotification::ThreadRealtimeTranscriptDelta(notification) => {
+                Some(notification.thread_id.as_str())
+            }
+            ServerNotification::ThreadRealtimeTranscriptDone(notification) => {
+                Some(notification.thread_id.as_str())
+            }
+            ServerNotification::ThreadRealtimeOutputAudioDelta(notification) => {
+                Some(notification.thread_id.as_str())
+            }
+            ServerNotification::ThreadRealtimeSdp(notification) => {
+                Some(notification.thread_id.as_str())
+            }
+            ServerNotification::ThreadRealtimeError(notification) => {
+                Some(notification.thread_id.as_str())
+            }
+            ServerNotification::ThreadRealtimeClosed(notification) => {
+                Some(notification.thread_id.as_str())
+            }
+            _ => None,
+        }) else {
+            return true;
+        };
+        let expected_thread_id = self
+            .realtime_voice_calibration
+            .as_ref()
+            .map(|run| run.thread_id)
+            .or(self.active_thread_id)
+            .or(self.chat_widget.thread_id());
+        expected_thread_id.is_some_and(|thread_id| notification_thread_id == thread_id.to_string())
     }
 
     fn clear_realtime_debug_state(&mut self) {
@@ -2179,12 +2444,18 @@ mod tests {
     use super::super::test_support::make_test_app;
     use super::RealtimeDevicePicker;
     use super::is_realtime_voice_key;
+    use super::realtime_session_id_matches;
     use crate::chatwidget::tests::helpers::render_bottom_popup;
+    use crate::realtime_voice_calibration::VoiceAudioFeatures;
+    use crate::realtime_voice_calibration::VoiceCalibrationRun;
+    use codex_protocol::ThreadId;
+    use codex_protocol::protocol::RealtimeVoice;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyEventKind;
     use crossterm::event::KeyModifiers;
     use crossterm::event::ModifierKeyCode;
+    use std::path::PathBuf;
 
     #[tokio::test]
     async fn app_keymap_shortcuts_are_disabled_while_keymap_view_is_active() {
@@ -2204,17 +2475,31 @@ mod tests {
             kind: KeyEventKind::Press,
             ..KeyEvent::new(KeyCode::Null, KeyModifiers::NONE)
         };
+        let right_alt_release = KeyEvent {
+            code: KeyCode::Modifier(ModifierKeyCode::RightAlt),
+            kind: KeyEventKind::Release,
+            ..KeyEvent::new(KeyCode::Null, KeyModifiers::NONE)
+        };
         let character = KeyEvent {
             kind: KeyEventKind::Press,
             ..KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)
         };
 
         assert!(is_realtime_voice_key(None, right_alt));
+        assert!(is_realtime_voice_key(None, right_alt_release));
         assert!(!is_realtime_voice_key(None, character));
         assert!(is_realtime_voice_key(
             Some("f13"),
             KeyEvent::new(KeyCode::F(13), KeyModifiers::NONE)
         ));
+    }
+
+    #[test]
+    fn realtime_voice_start_requires_the_expected_session_identity() {
+        assert!(realtime_session_id_matches(Some("thread"), Some("thread")));
+        assert!(!realtime_session_id_matches(Some("thread"), Some("stale")));
+        assert!(!realtime_session_id_matches(Some("thread"), None));
+        assert!(realtime_session_id_matches(None, None));
     }
 
     #[tokio::test]
@@ -2230,5 +2515,97 @@ mod tests {
         insta::with_settings!({snapshot_path => "../snapshots"}, {
             insta::assert_snapshot!("realtime_microphone_picker", rendered);
         });
+    }
+
+    #[tokio::test]
+    async fn late_calibration_lifecycle_notifications_stay_fenced_after_cancel() {
+        let mut app = make_test_app().await;
+        app.realtime_voice_submission_id = Some("normal-submission".to_string());
+
+        let late_calibration_close =
+            codex_app_server_protocol::ServerNotification::ThreadRealtimeClosed(
+                codex_app_server_protocol::ThreadRealtimeClosedNotification {
+                    thread_id: "thread".to_string(),
+                    submission_id: "calibration-submission".to_string(),
+                    reason: None,
+                },
+            );
+        assert!(!app.realtime_notification_matches_current_session(&late_calibration_close));
+
+        let normal_voice_close =
+            codex_app_server_protocol::ServerNotification::ThreadRealtimeClosed(
+                codex_app_server_protocol::ThreadRealtimeClosedNotification {
+                    thread_id: "thread".to_string(),
+                    submission_id: "normal-submission".to_string(),
+                    reason: None,
+                },
+            );
+        assert!(app.realtime_notification_matches_current_session(&normal_voice_close));
+
+        let unknown_voice_close =
+            codex_app_server_protocol::ServerNotification::ThreadRealtimeClosed(
+                codex_app_server_protocol::ThreadRealtimeClosedNotification {
+                    thread_id: "thread".to_string(),
+                    submission_id: "unknown-submission".to_string(),
+                    reason: None,
+                },
+            );
+        assert!(!app.realtime_notification_matches_current_session(&unknown_voice_close));
+    }
+
+    #[tokio::test]
+    async fn legacy_lifecycle_notifications_require_an_active_legacy_session() {
+        let mut app = make_test_app().await;
+        let legacy_close = codex_app_server_protocol::ServerNotification::ThreadRealtimeClosed(
+            codex_app_server_protocol::ThreadRealtimeClosedNotification {
+                thread_id: "thread".to_string(),
+                submission_id: String::new(),
+                reason: None,
+            },
+        );
+
+        assert!(!app.realtime_notification_matches_current_session(&legacy_close));
+        app.realtime_voice_legacy_notifications = true;
+        assert!(app.realtime_notification_matches_current_session(&legacy_close));
+        app.realtime_voice_legacy_notifications = false;
+        app.realtime_voice_ignore_legacy_notifications = true;
+        assert!(!app.realtime_notification_matches_current_session(&legacy_close));
+        app.realtime_voice_ignore_legacy_notifications = false;
+        app.realtime_voice_submission_id = Some("current-submission".to_string());
+        assert!(!app.realtime_notification_matches_current_session(&legacy_close));
+    }
+
+    #[tokio::test]
+    async fn stale_normal_lifecycle_notifications_stay_fenced_during_calibration() {
+        let mut app = make_test_app().await;
+        app.realtime_voice_calibration = Some(VoiceCalibrationRun::new(
+            ThreadId::new(),
+            PathBuf::new(),
+            VoiceAudioFeatures {
+                duration_seconds: 0.0,
+                rms_db: 0.0,
+                peak_db: 0.0,
+                pitch_hz: 0.0,
+                brightness_hz: 0.0,
+                low_energy_ratio: 0.0,
+                high_energy_ratio: 0.0,
+                zero_crossing_rate: 0.0,
+            },
+            vec![RealtimeVoice::Arbor],
+        ));
+        app.realtime_voice_calibration
+            .as_mut()
+            .expect("calibration run should exist")
+            .realtime_submission_id = Some("calibration-submission".to_string());
+
+        let stale_normal_close =
+            codex_app_server_protocol::ServerNotification::ThreadRealtimeClosed(
+                codex_app_server_protocol::ThreadRealtimeClosedNotification {
+                    thread_id: "thread".to_string(),
+                    submission_id: "normal-submission".to_string(),
+                    reason: None,
+                },
+            );
+        assert!(!app.realtime_notification_matches_current_session(&stale_normal_close));
     }
 }

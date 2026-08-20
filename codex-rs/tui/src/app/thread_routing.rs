@@ -1621,8 +1621,20 @@ impl App {
         match event {
             ThreadBufferedEvent::Notification(notification) => {
                 self.cache_collab_receiver_threads_for_notification(notification.as_ref());
-                self.chat_widget
-                    .handle_server_notification(*notification, /*replay_kind*/ None);
+                let realtime_notification_is_current =
+                    self.realtime_notification_matches_current_session(notification.as_ref());
+                let suppress_calibration_output = self.realtime_voice_calibration.is_some()
+                    && matches!(
+                        notification.as_ref(),
+                        ServerNotification::ThreadRealtimeItemAdded(_)
+                            | ServerNotification::ThreadRealtimeOutputAudioDelta(_)
+                            | ServerNotification::ThreadRealtimeTranscriptDelta(_)
+                            | ServerNotification::ThreadRealtimeTranscriptDone(_)
+                    );
+                if realtime_notification_is_current && !suppress_calibration_output {
+                    self.chat_widget
+                        .handle_server_notification(*notification, /*replay_kind*/ None);
+                }
             }
             ThreadBufferedEvent::Request(request) => {
                 if self
@@ -1650,33 +1662,37 @@ impl App {
         tui: &mut tui::Tui,
         event: ThreadBufferedEvent,
     ) {
-        let realtime_debug_messages = match &event {
-            ThreadBufferedEvent::Notification(notification) => match notification.as_ref() {
-                ServerNotification::ThreadRealtimeItemAdded(notification) => [
-                    self.realtime_handoff_debug_message(notification),
-                    self.realtime_output_item_debug_message(notification),
-                ]
-                .into_iter()
-                .flatten()
-                .collect(),
-                ServerNotification::ThreadRealtimeTranscriptDone(notification) => self
-                    .realtime_output_transcript_debug_message(notification)
+        let realtime_debug_messages = if self.realtime_voice_calibration.is_some() {
+            Vec::new()
+        } else {
+            match &event {
+                ThreadBufferedEvent::Notification(notification) => match notification.as_ref() {
+                    ServerNotification::ThreadRealtimeItemAdded(notification) => [
+                        self.realtime_handoff_debug_message(notification),
+                        self.realtime_output_item_debug_message(notification),
+                    ]
                     .into_iter()
+                    .flatten()
                     .collect(),
-                ServerNotification::ThreadRealtimeTranscriptDelta(notification) => self
-                    .realtime_output_transcript_delta_debug_message(notification)
-                    .into_iter()
-                    .collect(),
-                ServerNotification::ThreadRealtimeOutputAudioDelta(notification) => self
-                    .realtime_output_audio_debug_message(notification)
-                    .into_iter()
-                    .collect(),
-                notification => self
-                    .realtime_main_agent_output_debug_message(notification)
-                    .into_iter()
-                    .collect(),
-            },
-            _ => Vec::new(),
+                    ServerNotification::ThreadRealtimeTranscriptDone(notification) => self
+                        .realtime_output_transcript_debug_message(notification)
+                        .into_iter()
+                        .collect(),
+                    ServerNotification::ThreadRealtimeTranscriptDelta(notification) => self
+                        .realtime_output_transcript_delta_debug_message(notification)
+                        .into_iter()
+                        .collect(),
+                    ServerNotification::ThreadRealtimeOutputAudioDelta(notification) => self
+                        .realtime_output_audio_debug_message(notification)
+                        .into_iter()
+                        .collect(),
+                    notification => self
+                        .realtime_main_agent_output_debug_message(notification)
+                        .into_iter()
+                        .collect(),
+                },
+                _ => Vec::new(),
+            }
         };
         self.handle_thread_event_now(event);
         let remaining_debug_messages = REALTIME_OUTPUT_DEBUG_MESSAGE_LIMIT

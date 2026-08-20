@@ -387,6 +387,16 @@ impl App {
             } => {
                 self.handle_realtime_voice_effect_update(preset, persist, bypass);
             }
+            AppEvent::RealtimeVoiceCalibrationPoll { run_id } => {
+                self.handle_realtime_voice_calibration_poll(tui, app_server, run_id)
+                    .await;
+            }
+            AppEvent::RealtimeVoiceCalibrationPrepared { request_id, result } => {
+                self.handle_realtime_voice_calibration_prepared(
+                    tui, app_server, request_id, result,
+                )
+                .await;
+            }
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell);
             }

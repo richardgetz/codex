@@ -700,6 +700,7 @@ struct ConversationState {
     audio_tx: Sender<RealtimeAudioFrame>,
     text_tx: Sender<ConversationTextParams>,
     session_kind: RealtimeSessionKind,
+    submission_id: String,
     handoff: RealtimeHandoffState,
     input_task: JoinHandle<()>,
     fanout_task: Option<JoinHandle<()>>,
@@ -708,6 +709,7 @@ struct ConversationState {
 }
 
 struct RealtimeStart {
+    submission_id: String,
     api_provider: ApiProvider,
     realtime_sideband_base_url: Option<String>,
     extra_headers: Option<HeaderMap>,
@@ -818,6 +820,7 @@ impl RealtimeConversationManager {
 
     async fn start_inner(&self, start: RealtimeStart) -> CodexResult<RealtimeStartOutput> {
         let RealtimeStart {
+            submission_id,
             api_provider,
             realtime_sideband_base_url,
             extra_headers,
@@ -937,6 +940,7 @@ impl RealtimeConversationManager {
             audio_tx,
             text_tx,
             session_kind,
+            submission_id,
             handoff,
             input_task: task,
             fanout_task: None,
@@ -1510,16 +1514,17 @@ impl RealtimeConversationManager {
         }
     }
 
-    pub(crate) async fn shutdown(&self) -> CodexResult<()> {
+    pub(crate) async fn shutdown(&self) -> CodexResult<Option<String>> {
         let state = {
             let mut guard = self.state.lock().await;
             guard.take()
         };
 
+        let submission_id = state.as_ref().map(|state| state.submission_id.clone());
         if let Some(state) = state {
             stop_conversation_state(state, RealtimeFanoutTaskStop::Await).await;
         }
-        Ok(())
+        Ok(submission_id)
     }
 }
 
@@ -1942,6 +1947,7 @@ async fn handle_start_inner(
         end: realtime_end_instructions,
     };
     let start = RealtimeStart {
+        submission_id: sub_id.to_string(),
         api_provider,
         realtime_sideband_base_url,
         extra_headers,
@@ -3070,8 +3076,11 @@ async fn end_realtime_conversation(
     sub_id: String,
     end: RealtimeConversationEnd,
 ) {
-    let _ = sess.conversation.shutdown().await;
-    send_realtime_conversation_closed(sess, sub_id, end).await;
+    if let Ok(Some(notification_submission_id)) = sess.conversation.shutdown().await {
+        send_realtime_conversation_closed(sess, notification_submission_id, end).await;
+    } else {
+        debug!(submission_id = %sub_id, "ignoring duplicate realtime close request");
+    }
 }
 
 async fn send_realtime_conversation_closed(

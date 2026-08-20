@@ -5,4 +5,8 @@
 /**
  * EXPERIMENTAL - emitted when thread realtime encounters an error.
  */
-export type ThreadRealtimeErrorNotification = { threadId: string, message: string, };
+export type ThreadRealtimeErrorNotification = { threadId: string,
+/**
+ * Stable submission identifier shared by all notifications from this realtime session.
+ */
+submissionId?: string, message: string, };

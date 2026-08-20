@@ -18,10 +18,22 @@ use crossterm::event::PushKeyboardEnhancementFlags;
 use ratatui::crossterm::execute;
 
 const DISABLE_KEYBOARD_ENHANCEMENT_ENV_VAR: &str = "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT";
+const CMUX_WORKSPACE_ID_ENV_VAR: &str = "CMUX_WORKSPACE_ID";
+const CMUX_SURFACE_ID_ENV_VAR: &str = "CMUX_SURFACE_ID";
 static REALTIME_VOICE_ENABLED: AtomicBool = AtomicBool::new(false);
+static RIGHT_OPTION_MONITOR_ENABLED: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn set_realtime_voice_enabled(enabled: bool) {
     REALTIME_VOICE_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+pub(super) fn set_right_option_monitor_enabled(enabled: bool) {
+    RIGHT_OPTION_MONITOR_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+pub(super) fn reconfigure_keyboard_enhancement() {
+    restore_keyboard_enhancement_stack();
+    enable_keyboard_enhancement();
 }
 
 pub(super) fn keyboard_enhancement_disabled() -> bool {
@@ -139,12 +151,28 @@ pub(super) fn enable_keyboard_enhancement() {
         None
     };
     let realtime_voice_enabled = REALTIME_VOICE_ENABLED.load(Ordering::Relaxed);
+    let terminal = terminal_info();
+    let kitty_terminal_protocol_supported = matches!(terminal.name, TerminalName::Kitty)
+        && (std::env::var_os("KITTY_WINDOW_ID").is_some()
+            || terminal
+                .term_program
+                .as_deref()
+                .is_some_and(|term_program| term_program.eq_ignore_ascii_case("kitty")));
+    let all_keys_supported = should_enable_all_keys(
+        terminal.name,
+        kitty_terminal_protocol_supported,
+        running_in_tmux_session,
+        running_in_cmux_session(),
+        RIGHT_OPTION_MONITOR_ENABLED.load(Ordering::Relaxed),
+    );
 
     let _ = execute!(
         stdout(),
         DisableModifyOtherKeys,
         PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
-            terminal_info().name,
+            terminal.name,
+            all_keys_supported,
+            running_in_tmux_session,
             tmux_extended_keys_format.as_deref(),
             realtime_voice_enabled,
         ))
@@ -160,27 +188,78 @@ pub(super) fn enable_keyboard_enhancement() {
 
 fn keyboard_enhancement_flags(
     terminal_name: TerminalName,
+    all_keys_supported: bool,
+    running_in_tmux_session: bool,
     tmux_extended_keys_format: Option<&str>,
     realtime_voice_enabled: bool,
 ) -> KeyboardEnhancementFlags {
     let mut flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS;
 
-    // iTerm and Ghostty can leak shortcut release events that the terminal consumes.
-    // tmux's xterm key format also loses Shift-Enter when event types are
-    // reported. Preserve the existing behavior unless live voice needs key
-    // release events for push-to-talk.
-    if realtime_voice_enabled {
+    // Physical modifier-only keys, including macOS Right Option, are only reported
+    // when all key events are encoded as CSI-u. Direct terminals use that mode for
+    // live voice when no macOS key-state monitor is available; the monitor provides
+    // Right Option separately so remote bridges can stay on the safer fallback.
+    if realtime_voice_enabled && all_keys_supported {
         flags |= KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
         flags | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-    // reported. Preserve repeat classification on transports that support it.
-    } else if matches!(terminal_name, TerminalName::Ghostty | TerminalName::Iterm2)
-        || matches!(tmux_extended_keys_format, Some("xterm"))
-    {
-        flags
+    } else if running_in_tmux_session && matches!(tmux_extended_keys_format, Some("xterm")) {
+        if realtime_voice_enabled {
+            flags | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+        } else {
+            flags
+        }
+    } else if matches!(terminal_name, TerminalName::Ghostty | TerminalName::Iterm2) {
+        if realtime_voice_enabled {
+            flags | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+        } else {
+            flags
+        }
     } else {
+        // Preserve repeat classification on transports that support it.
         flags | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
     }
+}
+
+fn direct_terminal_all_keys_supported(
+    terminal_name: TerminalName,
+    kitty_terminal_protocol_supported: bool,
+    running_in_tmux_session: bool,
+    running_in_cmux_session: bool,
+) -> bool {
+    if running_in_cmux_session || running_in_tmux_session {
+        return false;
+    }
+
+    kitty_terminal_protocol_supported
+        || matches!(terminal_name, TerminalName::Ghostty | TerminalName::Iterm2)
+}
+
+fn should_enable_all_keys(
+    terminal_name: TerminalName,
+    kitty_terminal_protocol_supported: bool,
+    running_in_tmux_session: bool,
+    running_in_cmux_session: bool,
+    right_option_monitor_enabled: bool,
+) -> bool {
+    direct_terminal_all_keys_supported(
+        terminal_name,
+        kitty_terminal_protocol_supported,
+        running_in_tmux_session,
+        running_in_cmux_session,
+    ) && !right_option_monitor_enabled
+}
+
+fn running_in_cmux_session() -> bool {
+    cmux_session_detected(
+        std::env::var(CMUX_WORKSPACE_ID_ENV_VAR).ok().as_deref(),
+        std::env::var(CMUX_SURFACE_ID_ENV_VAR).ok().as_deref(),
+    )
+}
+
+fn cmux_session_detected(workspace_id: Option<&str>, surface_id: Option<&str>) -> bool {
+    workspace_id.is_some_and(|value| !value.trim().is_empty())
+        || surface_id.is_some_and(|value| !value.trim().is_empty())
 }
 
 fn running_in_tmux_session() -> bool {
@@ -205,6 +284,10 @@ fn tmux_should_enable_modify_other_keys_for(
 }
 
 fn read_tmux_extended_keys_format() -> Option<String> {
+    if !read_tmux_extended_keys_enabled()? {
+        return None;
+    }
+
     for args in [
         ["display-message", "-p", "#{extended-keys-format}"],
         ["show-options", "-gqv", "extended-keys-format"],
@@ -230,6 +313,55 @@ fn read_tmux_extended_keys_format() -> Option<String> {
     }
 
     None
+}
+
+fn read_tmux_extended_keys_enabled() -> Option<bool> {
+    for args in [
+        ["display-message", "-p", "#{extended-keys}"],
+        ["show-options", "-gqv", "extended-keys"],
+    ] {
+        let output = match std::process::Command::new("tmux")
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+        {
+            Ok(output) => output,
+            Err(_) => continue,
+        };
+
+        if !output.status.success() {
+            continue;
+        }
+
+        let value = match String::from_utf8(output.stdout) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+
+        if let Some(enabled) = parse_tmux_bool(value.trim()) {
+            return Some(enabled);
+        }
+    }
+
+    None
+}
+
+fn parse_tmux_bool(value: &str) -> Option<bool> {
+    if value.eq_ignore_ascii_case("on")
+        || value.eq_ignore_ascii_case("always")
+        || value.eq_ignore_ascii_case("true")
+        || value == "1"
+    {
+        Some(true)
+    } else if value.eq_ignore_ascii_case("off")
+        || value.eq_ignore_ascii_case("false")
+        || value == "0"
+    {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 pub(super) fn restore_keyboard_enhancement_stack() {
@@ -320,9 +452,13 @@ mod tests {
     use super::DisableModifyOtherKeys;
     use super::EnableModifyOtherKeys;
     use super::ResetKeyboardEnhancementFlags;
+    use super::cmux_session_detected;
+    use super::direct_terminal_all_keys_supported;
     use super::keyboard_enhancement_disabled_for;
     use super::keyboard_enhancement_flags;
     use super::parse_bool_env;
+    use super::parse_tmux_bool;
+    use super::should_enable_all_keys;
     use super::tmux_session_detected;
     use super::tmux_should_enable_modify_other_keys_for;
     use super::vscode_terminal_detected;
@@ -342,6 +478,8 @@ mod tests {
         assert_eq!(
             ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
                 TerminalName::Iterm2,
+                /*all_keys_supported*/ false,
+                /*running_in_tmux_session*/ false,
                 /*tmux_extended_keys_format*/ None,
                 /*realtime_voice_enabled*/ false,
             ))),
@@ -354,6 +492,8 @@ mod tests {
         assert_eq!(
             ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
                 TerminalName::Ghostty,
+                /*all_keys_supported*/ false,
+                /*running_in_tmux_session*/ false,
                 /*tmux_extended_keys_format*/ None,
                 /*realtime_voice_enabled*/ false,
             ))),
@@ -366,6 +506,8 @@ mod tests {
         assert_eq!(
             ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
                 TerminalName::Kitty,
+                /*all_keys_supported*/ false,
+                /*running_in_tmux_session*/ false,
                 /*tmux_extended_keys_format*/ None,
                 /*realtime_voice_enabled*/ false,
             ))),
@@ -378,6 +520,8 @@ mod tests {
         assert_eq!(
             ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
                 TerminalName::Kitty,
+                /*all_keys_supported*/ false,
+                /*running_in_tmux_session*/ true,
                 Some("csi-u"),
                 /*realtime_voice_enabled*/ false,
             ))),
@@ -389,7 +533,9 @@ mod tests {
     fn keyboard_enhancement_preserves_shift_enter_for_xterm_tmux() {
         assert_eq!(
             ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
-                TerminalName::Kitty,
+                TerminalName::Ghostty,
+                /*all_keys_supported*/ false,
+                /*running_in_tmux_session*/ true,
                 Some("xterm"),
                 /*realtime_voice_enabled*/ false,
             ))),
@@ -402,6 +548,8 @@ mod tests {
         assert_eq!(
             ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
                 TerminalName::Unknown,
+                /*all_keys_supported*/ false,
+                /*running_in_tmux_session*/ false,
                 /*tmux_extended_keys_format*/ None,
                 /*realtime_voice_enabled*/ false,
             ))),
@@ -410,15 +558,195 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_enhancement_reports_releases_for_live_voice_on_iterm() {
+    fn keyboard_enhancement_reports_all_keys_for_live_direct_iterm() {
         assert_eq!(
             ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
                 TerminalName::Iterm2,
+                /*all_keys_supported*/ true,
+                /*running_in_tmux_session*/ false,
                 /*tmux_extended_keys_format*/ None,
                 /*realtime_voice_enabled*/ true,
             ))),
             "\x1b[>15u"
         );
+    }
+
+    #[test]
+    fn keyboard_enhancement_reports_releases_for_live_voice_on_kitty() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Kitty,
+                /*all_keys_supported*/ true,
+                /*running_in_tmux_session*/ false,
+                /*tmux_extended_keys_format*/ None,
+                /*realtime_voice_enabled*/ true,
+            ))),
+            "\x1b[>15u"
+        );
+    }
+
+    #[test]
+    fn keyboard_enhancement_does_not_trust_term_only_kitty_for_live_voice() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Kitty,
+                /*all_keys_supported*/ false,
+                /*running_in_tmux_session*/ false,
+                /*tmux_extended_keys_format*/ None,
+                /*realtime_voice_enabled*/ true,
+            ))),
+            "\x1b[>7u"
+        );
+    }
+
+    #[test]
+    fn keyboard_enhancement_reports_all_keys_for_live_direct_ghostty() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Ghostty,
+                /*all_keys_supported*/ true,
+                /*running_in_tmux_session*/ false,
+                /*tmux_extended_keys_format*/ None,
+                /*realtime_voice_enabled*/ true,
+            ))),
+            "\x1b[>15u"
+        );
+    }
+
+    #[test]
+    fn keyboard_enhancement_does_not_force_all_keys_for_live_voice_on_unknown_terminal() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Unknown,
+                /*all_keys_supported*/ false,
+                /*running_in_tmux_session*/ false,
+                /*tmux_extended_keys_format*/ None,
+                /*realtime_voice_enabled*/ true,
+            ))),
+            "\x1b[>7u"
+        );
+    }
+
+    #[test]
+    fn keyboard_enhancement_does_not_treat_unqueryable_tmux_as_direct_kitty() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Kitty,
+                /*all_keys_supported*/ false,
+                /*running_in_tmux_session*/ true,
+                /*tmux_extended_keys_format*/ None,
+                /*realtime_voice_enabled*/ true,
+            ))),
+            "\x1b[>7u"
+        );
+    }
+
+    #[test]
+    fn keyboard_enhancement_keeps_live_voice_on_safe_csi_u_tmux_fallback() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Ghostty,
+                /*all_keys_supported*/ false,
+                /*running_in_tmux_session*/ true,
+                Some("csi-u"),
+                /*realtime_voice_enabled*/ true,
+            ))),
+            "\x1b[>7u"
+        );
+    }
+
+    #[test]
+    fn keyboard_enhancement_does_not_force_all_keys_for_live_voice_on_xterm_tmux() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Iterm2,
+                /*all_keys_supported*/ false,
+                /*running_in_tmux_session*/ true,
+                Some("xterm"),
+                /*realtime_voice_enabled*/ true,
+            ))),
+            "\x1b[>7u"
+        );
+    }
+
+    #[test]
+    fn keyboard_enhancement_keeps_cmux_live_voice_on_safe_fallback() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Ghostty,
+                /*all_keys_supported*/ false,
+                /*running_in_tmux_session*/ false,
+                /*tmux_extended_keys_format*/ None,
+                /*realtime_voice_enabled*/ true,
+            ))),
+            "\x1b[>7u"
+        );
+    }
+
+    #[test]
+    fn direct_terminal_all_keys_requires_direct_transport() {
+        assert!(direct_terminal_all_keys_supported(
+            TerminalName::Ghostty,
+            /*kitty_terminal_protocol_supported*/ false,
+            /*running_in_tmux_session*/ false,
+            /*running_in_cmux_session*/ false,
+        ));
+        assert!(direct_terminal_all_keys_supported(
+            TerminalName::Iterm2,
+            /*kitty_terminal_protocol_supported*/ false,
+            /*running_in_tmux_session*/ false,
+            /*running_in_cmux_session*/ false,
+        ));
+        assert!(direct_terminal_all_keys_supported(
+            TerminalName::Kitty,
+            /*kitty_terminal_protocol_supported*/ true,
+            /*running_in_tmux_session*/ false,
+            /*running_in_cmux_session*/ false,
+        ));
+        assert!(!direct_terminal_all_keys_supported(
+            TerminalName::Ghostty,
+            /*kitty_terminal_protocol_supported*/ false,
+            /*running_in_tmux_session*/ true,
+            /*running_in_cmux_session*/ false,
+        ));
+        assert!(!direct_terminal_all_keys_supported(
+            TerminalName::Ghostty,
+            /*kitty_terminal_protocol_supported*/ false,
+            /*running_in_tmux_session*/ false,
+            /*running_in_cmux_session*/ true,
+        ));
+        assert!(!direct_terminal_all_keys_supported(
+            TerminalName::Kitty,
+            /*kitty_terminal_protocol_supported*/ false,
+            /*running_in_tmux_session*/ false,
+            /*running_in_cmux_session*/ false,
+        ));
+    }
+
+    #[test]
+    fn right_option_monitor_keeps_terminal_text_on_safe_encoding() {
+        assert!(!should_enable_all_keys(
+            TerminalName::Ghostty,
+            /*kitty_terminal_protocol_supported*/ false,
+            /*running_in_tmux_session*/ false,
+            /*running_in_cmux_session*/ false,
+            /*right_option_monitor_enabled*/ true,
+        ));
+        assert!(should_enable_all_keys(
+            TerminalName::Ghostty,
+            /*kitty_terminal_protocol_supported*/ false,
+            /*running_in_tmux_session*/ false,
+            /*running_in_cmux_session*/ false,
+            /*right_option_monitor_enabled*/ false,
+        ));
+    }
+
+    #[test]
+    fn cmux_session_detection_requires_a_nonempty_id() {
+        assert!(cmux_session_detected(Some("workspace"), None));
+        assert!(cmux_session_detected(None, Some("surface")));
+        assert!(!cmux_session_detected(Some("  "), Some("")));
+        assert!(!cmux_session_detected(None, None));
     }
 
     #[test]
@@ -431,6 +759,18 @@ mod tests {
         assert_eq!(parse_bool_env(Some("NO")), Some(false));
         assert_eq!(parse_bool_env(Some("unexpected")), None);
         assert_eq!(parse_bool_env(/*value*/ None), None);
+    }
+
+    #[test]
+    fn tmux_extended_keys_values_parse_enabled_state() {
+        assert_eq!(parse_tmux_bool("on"), Some(true));
+        assert_eq!(parse_tmux_bool("always"), Some(true));
+        assert_eq!(parse_tmux_bool("TRUE"), Some(true));
+        assert_eq!(parse_tmux_bool("1"), Some(true));
+        assert_eq!(parse_tmux_bool("off"), Some(false));
+        assert_eq!(parse_tmux_bool("FALSE"), Some(false));
+        assert_eq!(parse_tmux_bool("0"), Some(false));
+        assert_eq!(parse_tmux_bool("auto"), None);
     }
 
     #[test]

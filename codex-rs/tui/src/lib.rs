@@ -163,6 +163,7 @@ mod permission_compat;
 pub(crate) mod public_widgets;
 mod realtime_voice;
 mod realtime_voice_audio;
+mod realtime_voice_calibration;
 mod realtime_voice_devices;
 mod realtime_voice_dsp;
 mod realtime_voice_effects;
@@ -1336,6 +1337,7 @@ async fn run_ratatui_app(
         initialized_terminal.terminal,
         initialized_terminal.enhanced_keys_supported,
         initialized_terminal.stderr_guard,
+        initialized_terminal.mac_right_option_monitor,
     );
     let mut terminal_restore_guard = TerminalRestoreGuard::new();
 

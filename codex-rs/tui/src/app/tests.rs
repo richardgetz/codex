@@ -332,6 +332,7 @@ async fn realtime_handoff_debug_renders_selected_effort() {
             .send(ThreadBufferedEvent::Notification(Box::new(
                 ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
                     thread_id: thread_id.to_string(),
+                    submission_id: String::new(),
                     item: serde_json::json!({
                         "type": "handoff_request",
                         "handoff_id": handoff_id,
@@ -370,6 +371,7 @@ async fn realtime_output_debug_renders_returned_ids_and_metadata() {
     let mut tui = crate::tui::test_support::make_test_tui().expect("test TUI should initialize");
 
     app.realtime_voice_debug = true;
+    app.realtime_voice_legacy_notifications = true;
     let thread_id = ThreadId::new();
     app.enqueue_primary_thread_session(
         test_thread_session(thread_id, test_path_buf("/tmp/project")),
@@ -384,6 +386,7 @@ async fn realtime_output_debug_renders_returned_ids_and_metadata() {
         .send(ThreadBufferedEvent::Notification(Box::new(
             ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 item: serde_json::json!({
                     "type": "handoff_request",
                     "handoff_id": "handoff-1",
@@ -441,6 +444,7 @@ async fn realtime_output_debug_renders_returned_ids_and_metadata() {
         .send(ThreadBufferedEvent::Notification(Box::new(
             ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 item: serde_json::json!({
                     "type": "response.created",
                     "response_id": "response-1"
@@ -453,6 +457,7 @@ async fn realtime_output_debug_renders_returned_ids_and_metadata() {
         .send(ThreadBufferedEvent::Notification(Box::new(
             ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 item: serde_json::json!({
                     "type": "message",
                     "id": "output-item-1",
@@ -473,6 +478,7 @@ async fn realtime_output_debug_renders_returned_ids_and_metadata() {
             ServerNotification::ThreadRealtimeOutputAudioDelta(
                 ThreadRealtimeOutputAudioDeltaNotification {
                     thread_id: thread_id.to_string(),
+                    submission_id: String::new(),
                     audio: ThreadRealtimeAudioChunk {
                         data: "AQID".to_string(),
                         sample_rate: 24_000,
@@ -489,6 +495,7 @@ async fn realtime_output_debug_renders_returned_ids_and_metadata() {
         .send(ThreadBufferedEvent::Notification(Box::new(
             ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 item: serde_json::json!({
                     "type": "message",
                     "id": "output-item-2",
@@ -508,6 +515,7 @@ async fn realtime_output_debug_renders_returned_ids_and_metadata() {
             ServerNotification::ThreadRealtimeOutputAudioDelta(
                 ThreadRealtimeOutputAudioDeltaNotification {
                     thread_id: thread_id.to_string(),
+                    submission_id: String::new(),
                     audio: ThreadRealtimeAudioChunk {
                         data: "BAUG".to_string(),
                         sample_rate: 24_000,
@@ -524,6 +532,7 @@ async fn realtime_output_debug_renders_returned_ids_and_metadata() {
         .send(ThreadBufferedEvent::Notification(Box::new(
             ServerNotification::ThreadRealtimeItemAdded(ThreadRealtimeItemAddedNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 item: serde_json::json!({
                     "type": "response.done",
                     "response_id": "response-1"
@@ -537,6 +546,7 @@ async fn realtime_output_debug_renders_returned_ids_and_metadata() {
             ServerNotification::ThreadRealtimeTranscriptDelta(
                 ThreadRealtimeTranscriptDeltaNotification {
                     thread_id: thread_id.to_string(),
+                    submission_id: String::new(),
                     role: "assistant".to_string(),
                     delta: "The answer ".to_string(),
                 },
@@ -549,6 +559,7 @@ async fn realtime_output_debug_renders_returned_ids_and_metadata() {
             ServerNotification::ThreadRealtimeTranscriptDone(
                 ThreadRealtimeTranscriptDoneNotification {
                     thread_id: thread_id.to_string(),
+                    submission_id: String::new(),
                     role: "assistant".to_string(),
                     text: "The answer arrived.".to_string(),
                 },
@@ -5299,6 +5310,14 @@ async fn make_test_app() -> App {
         config,
         realtime_mic_mode,
         realtime_voice_session: None,
+        realtime_voice_calibration_preparing: None,
+        realtime_voice_calibration_preparation_abort: None,
+        realtime_voice_calibration_preparation_cancel: None,
+        realtime_voice_requested_session_id: None,
+        realtime_voice_submission_id: None,
+        realtime_voice_legacy_notifications: false,
+        realtime_voice_ignore_legacy_notifications: false,
+        realtime_voice_calibration: None,
         realtime_voice_profile: None,
         realtime_voice_rotation_selected: false,
         realtime_voice_debug: false,
@@ -5383,6 +5402,14 @@ async fn make_test_app_with_channels() -> (
             config,
             realtime_mic_mode,
             realtime_voice_session: None,
+            realtime_voice_calibration_preparing: None,
+            realtime_voice_calibration_preparation_abort: None,
+            realtime_voice_calibration_preparation_cancel: None,
+            realtime_voice_requested_session_id: None,
+            realtime_voice_submission_id: None,
+            realtime_voice_legacy_notifications: false,
+            realtime_voice_ignore_legacy_notifications: false,
+            realtime_voice_calibration: None,
             realtime_voice_profile: None,
             realtime_voice_rotation_selected: false,
             realtime_voice_debug: false,

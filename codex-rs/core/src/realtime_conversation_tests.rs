@@ -56,6 +56,53 @@ fn realtime_handoff_dedupe_evicts_old_ids() {
     assert!(!deduper.is_duplicate("handoff-1"));
 }
 
+#[tokio::test]
+async fn shutdown_returns_original_submission_id_for_requested_close() {
+    let (output_tx, _output_rx) = bounded(1);
+    let handoff = RealtimeHandoffState {
+        output_tx,
+        output_send_gate: Arc::new(Semaphore::new(1)),
+        last_output: Arc::new(Mutex::new(None)),
+        stream: Arc::new(Mutex::new(Default::default())),
+        transport_handoff_deduper: Arc::new(Mutex::new(RealtimeHandoffDeduper::default())),
+        suppress_preambles: false,
+        suppress_non_final_output: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        client_managed_handoffs: false,
+        codex_responses_as_items: false,
+        codex_response_item_prefix: None,
+        codex_response_handoff_mode: CodexResponseHandoffMode::Thinking,
+        codex_response_handoff_channel_prefixes: Arc::new(BTreeMap::new()),
+        session_kind: RealtimeSessionKind::V1,
+        event_parser: RealtimeEventParser::V1,
+    };
+    let manager = RealtimeConversationManager {
+        state: Mutex::new(Some(ConversationState {
+            audio_tx: bounded(1).0,
+            text_tx: bounded(1).0,
+            session_kind: RealtimeSessionKind::V1,
+            submission_id: "start-submission".to_string(),
+            handoff,
+            input_task: tokio::spawn(async {}),
+            fanout_task: None,
+            realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            stop_token: CancellationToken::new(),
+        })),
+        mode_instructions: Mutex::new(None),
+    };
+
+    assert_eq!(
+        manager.shutdown().await.expect("shutdown should succeed"),
+        Some("start-submission".to_string())
+    );
+    assert_eq!(
+        manager
+            .shutdown()
+            .await
+            .expect("repeated shutdown should succeed"),
+        None
+    );
+}
+
 #[test]
 fn prefers_handoff_input_transcript_over_active_transcript() {
     let handoff = RealtimeHandoffRequested {
@@ -320,6 +367,7 @@ async fn handoff_complete_preserves_pending_streamed_final_output() {
             audio_tx: bounded(1).0,
             text_tx: bounded(1).0,
             session_kind: RealtimeSessionKind::V1,
+            submission_id: "submission-1".to_string(),
             handoff,
             input_task: tokio::spawn(async {}),
             fanout_task: None,
@@ -378,6 +426,7 @@ async fn disabled_preambles_suppress_commentary_and_defer_unphased_output_until_
             audio_tx: bounded(1).0,
             text_tx: bounded(1).0,
             session_kind: RealtimeSessionKind::V1,
+            submission_id: "submission-2".to_string(),
             handoff,
             input_task: tokio::spawn(async {}),
             fanout_task: None,
@@ -480,6 +529,7 @@ async fn disabled_preambles_drop_phase_less_bridge_before_preserving_final_outpu
             audio_tx: bounded(1).0,
             text_tx: bounded(1).0,
             session_kind: RealtimeSessionKind::V1,
+            submission_id: "submission-3".to_string(),
             handoff,
             input_task: tokio::spawn(async {}),
             fanout_task: None,

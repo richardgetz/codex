@@ -23,6 +23,7 @@ use codex_http_client::OutboundProxyPolicy;
 use codex_install_context::InstallContext;
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 use self::connection::Connection;
 use self::connection::ConnectionError;
@@ -31,6 +32,7 @@ use self::connection::SessionCleanup;
 use crate::NoopCodeModeSessionDelegate;
 
 mod connection;
+mod local_build;
 
 type ShutdownResultReceiver = watch::Receiver<Option<Result<(), String>>>;
 
@@ -71,7 +73,7 @@ impl CodeModeSessionProvider for ProcessOwnedCodeModeSessionProvider {
         let HostEndpoint::Process(host_program) = &self.host.endpoint else {
             unreachable!("a process-owned provider always has a process endpoint");
         };
-        if host_program.is_file() {
+        if host_program.is_file() || local_build::can_build(host_program) {
             Ok(())
         } else {
             Err(ConnectionError::Spawn {
@@ -209,7 +211,10 @@ impl OwnedCodeModeHost {
         }
     }
 
-    async fn connection(&self) -> Result<Arc<Connection>, ConnectionError> {
+    async fn connection(
+        &self,
+        cancellation: CancellationToken,
+    ) -> Result<Arc<Connection>, ConnectionError> {
         if let Some(connection) = self.live_connection() {
             return Ok(connection);
         }
@@ -220,12 +225,26 @@ impl OwnedCodeModeHost {
         if let Some(connection) = self.live_connection() {
             return Ok(connection);
         }
-        let new_connection = match &self.endpoint {
-            HostEndpoint::Process(host_program) => Connection::spawn(host_program).await?,
-            HostEndpoint::WebSocket {
-                websocket_url,
-                http_client_factory,
-            } => Connection::connect_websocket(websocket_url, http_client_factory).await?,
+        let new_connection = tokio::select! {
+            _ = cancellation.cancelled() => {
+                return Err(ConnectionError::Other(
+                    "code-mode host connection was cancelled".into(),
+                ));
+            }
+            result = async {
+                match &self.endpoint {
+                    HostEndpoint::Process(host_program) => {
+                        local_build::ensure(host_program, cancellation.clone())
+                            .await
+                            .map_err(ConnectionError::Other)?;
+                        Connection::spawn(host_program).await
+                    }
+                    HostEndpoint::WebSocket {
+                        websocket_url,
+                        http_client_factory,
+                    } => Connection::connect_websocket(websocket_url, http_client_factory).await,
+                }
+            } => result?,
         };
         let new_connection = Arc::new(new_connection);
         *self
@@ -278,6 +297,7 @@ struct SessionInner {
     state: StdMutex<SessionState>,
     next_generation: AtomicU64,
     shutdown_requested: AtomicBool,
+    shutdown_token: CancellationToken,
     shutdown_result: StdMutex<Option<ShutdownResultReceiver>>,
     retired_cleanups: StdMutex<Vec<SessionCleanup>>,
 }
@@ -311,6 +331,7 @@ impl ProcessOwnedCodeModeSession {
                 state: StdMutex::new(SessionState::New),
                 next_generation: AtomicU64::new(1),
                 shutdown_requested: AtomicBool::new(false),
+                shutdown_token: CancellationToken::new(),
                 shutdown_result: StdMutex::new(None),
                 retired_cleanups: StdMutex::new(Vec::new()),
             }),
@@ -395,15 +416,22 @@ impl SessionInner {
         remote: RemoteSession,
         result_tx: watch::Sender<Option<Result<SessionBinding, String>>>,
     ) {
-        let result = match self.host.connection().await {
+        let result = match self.host.connection(self.shutdown_token.clone()).await {
             Ok(connection) => {
-                let cleanup = connection
-                    .open_session(
+                let cleanup = tokio::select! {
+                    _ = self.shutdown_token.cancelled() => {
+                        return self.finish_open(
+                            remote,
+                            result_tx,
+                            Err("code mode session is shutting down".to_string()),
+                        );
+                    }
+                    cleanup = connection.open_session(
                         remote.clone(),
                         Arc::clone(&self.delegate),
                         self.limits.clone(),
-                    )
-                    .await;
+                    ) => cleanup,
+                };
                 cleanup.map(|cleanup| SessionBinding {
                     connection,
                     remote: remote.clone(),
@@ -412,6 +440,15 @@ impl SessionInner {
             }
             Err(err) => Err(err.to_string()),
         };
+        self.finish_open(remote, result_tx, result)
+    }
+
+    fn finish_open(
+        &self,
+        remote: RemoteSession,
+        result_tx: watch::Sender<Option<Result<SessionBinding, String>>>,
+        result: Result<SessionBinding, String>,
+    ) {
         {
             let mut state = self
                 .state
@@ -435,6 +472,7 @@ impl SessionInner {
 
     fn request_shutdown(self: &Arc<Self>) -> ShutdownResultReceiver {
         self.shutdown_requested.store(true, Ordering::Release);
+        self.shutdown_token.cancel();
         let mut shutdown_result = self
             .shutdown_result
             .lock()

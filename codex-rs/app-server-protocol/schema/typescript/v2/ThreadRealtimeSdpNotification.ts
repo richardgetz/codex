@@ -5,4 +5,8 @@
 /**
  * EXPERIMENTAL - emitted with the remote SDP for a WebRTC realtime session.
  */
-export type ThreadRealtimeSdpNotification = { threadId: string, sdp: string, };
+export type ThreadRealtimeSdpNotification = { threadId: string,
+/**
+ * Stable submission identifier shared by all notifications from this realtime session.
+ */
+submissionId?: string, sdp: string, };

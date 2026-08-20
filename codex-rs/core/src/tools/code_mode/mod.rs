@@ -76,7 +76,6 @@ pub(crate) struct ExecContext {
 pub(crate) struct CodeModeService {
     session: OnceCell<Arc<dyn CodeModeSession>>,
     session_provider: Arc<dyn CodeModeSessionProvider>,
-    availability: Result<(), String>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
     default_exec_yield_time_override_ms: Option<u64>,
     shutting_down: AtomicBool,
@@ -89,11 +88,9 @@ impl CodeModeService {
         features: &Features,
     ) -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
-        let availability = session_provider.availability();
         Self {
             session: OnceCell::new(),
             session_provider,
-            availability,
             dispatch_broker,
             default_exec_yield_time_override_ms: default_exec_yield_time_override_ms(features),
             shutting_down: AtomicBool::new(false),
@@ -102,11 +99,11 @@ impl CodeModeService {
     }
 
     pub(crate) fn is_available(&self) -> bool {
-        self.availability.is_ok()
+        self.session_provider.availability().is_ok()
     }
 
     pub(crate) fn take_unavailable_warning(&self, tool_mode: ToolMode) -> Option<String> {
-        let error = self.availability.as_ref().err()?;
+        let error = self.session_provider.availability().err()?;
         let behavior = match tool_mode {
             ToolMode::Direct => "Falling back to direct tools",
             ToolMode::CodeMode | ToolMode::CodeModeOnly => "Code mode will fail closed",
@@ -116,7 +113,7 @@ impl CodeModeService {
             .swap(true, Ordering::Relaxed))
         .then(|| {
             format!(
-                "Code Mode is unavailable because {error}. {behavior}; enable `features.code_mode_host` and install `codex-code-mode-host`."
+                "Code Mode is unavailable because {error}. {behavior}; ensure `features.code_mode_host` is enabled. Local checkouts build `codex-code-mode-host` on first use; packaged installs must include the matching host binary."
             )
         })
     }

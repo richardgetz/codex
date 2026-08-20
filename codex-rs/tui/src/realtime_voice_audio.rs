@@ -34,6 +34,8 @@ use crate::realtime_voice::MAX_OUTPUT_SAMPLES;
 use crate::realtime_voice::SAMPLE_RATE;
 use crate::realtime_voice_dsp::VoiceEffectProcessor;
 
+pub(crate) const MAX_CALIBRATION_CAPTURE_SAMPLES: usize = SAMPLE_RATE as usize * 15 * 2;
+
 pub(crate) fn select_input_device(
     host: &cpal::Host,
     requested: Option<&str>,
@@ -613,11 +615,13 @@ pub(crate) fn install_remote_audio_handler(
     output_queue: Arc<Mutex<VecDeque<i16>>>,
     output_muted: Arc<AtomicBool>,
     effect_processor: Arc<Mutex<Option<VoiceEffectProcessor>>>,
+    captured_audio: Option<Arc<Mutex<VecDeque<i16>>>>,
 ) {
     peer_connection.on_track(Box::new(move |track, _receiver, _transceiver| {
         let output_queue = Arc::clone(&output_queue);
         let output_muted = Arc::clone(&output_muted);
         let effect_processor = Arc::clone(&effect_processor);
+        let captured_audio = captured_audio.clone();
         Box::pin(async move {
             let Ok(mut decoder) = Decoder::new(SAMPLE_RATE, Channels::Stereo) else {
                 return;
@@ -632,11 +636,29 @@ pub(crate) fn install_remote_audio_handler(
                     continue;
                 };
                 let decoded = &mut decoded[..samples_per_channel * 2];
+                append_captured_audio(&captured_audio, decoded);
                 process_remote_audio_effects(decoded, &effect_processor);
                 append_remote_audio(&output_queue, &output_muted, decoded);
             }
         })
     }));
+}
+
+fn append_captured_audio(captured_audio: &Option<Arc<Mutex<VecDeque<i16>>>>, decoded: &[i16]) {
+    let Some(captured_audio) = captured_audio else {
+        return;
+    };
+    let Ok(mut captured_audio) = captured_audio.lock() else {
+        return;
+    };
+    let excess = captured_audio
+        .len()
+        .saturating_add(decoded.len())
+        .saturating_sub(MAX_CALIBRATION_CAPTURE_SAMPLES);
+    if excess > 0 {
+        captured_audio.drain(..excess);
+    }
+    captured_audio.extend(decoded);
 }
 
 fn process_remote_audio_effects(
@@ -702,6 +724,19 @@ pub(crate) async fn encode_input_frames(
         }
 
         if !encode_and_write_frame(&mut encoder, &input_track, frame).await {
+            return;
+        }
+    }
+}
+
+pub(crate) async fn encode_silence_frames(
+    input_track: Arc<TrackLocalStaticSample>,
+    mut encoder: Encoder,
+) {
+    let mut interval = tokio::time::interval(FRAME_DURATION);
+    loop {
+        interval.tick().await;
+        if !encode_and_write_frame(&mut encoder, &input_track, [0; FRAME_SAMPLES]).await {
             return;
         }
     }

@@ -1084,6 +1084,18 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn open_realtime_voice_tuner(
+        &mut self,
+        preset: crate::realtime_voice_effects::VoiceEffectPreset,
+    ) {
+        self.bottom_pane
+            .show_view(Box::new(crate::bottom_pane::RealtimeVoiceTuner::new(
+                preset,
+                self.app_event_tx.clone(),
+            )));
+        self.request_redraw();
+    }
+
     pub(crate) fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) {
         // A remotely resolved request must not remain user-actionable. It may be
         // materialized in the bottom pane or still deferred behind active streaming.

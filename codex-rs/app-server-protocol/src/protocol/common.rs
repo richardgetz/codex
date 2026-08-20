@@ -4068,6 +4068,7 @@ mod tests {
         let notification = ServerNotification::ThreadRealtimeOutputAudioDelta(
             v2::ThreadRealtimeOutputAudioDeltaNotification {
                 thread_id: "thr_123".to_string(),
+                submission_id: "submission_123".to_string(),
                 audio: v2::ThreadRealtimeAudioChunk {
                     data: "AQID".to_string(),
                     sample_rate: 24_000,
@@ -4082,6 +4083,7 @@ mod tests {
                 "method": "thread/realtime/outputAudio/delta",
                 "params": {
                     "threadId": "thr_123",
+                    "submissionId": "submission_123",
                     "audio": {
                         "data": "AQID",
                         "sampleRate": 24000,
@@ -4303,6 +4305,7 @@ mod tests {
         let notification =
             ServerNotification::ThreadRealtimeStarted(v2::ThreadRealtimeStartedNotification {
                 thread_id: "thr_123".to_string(),
+                submission_id: "submission_123".to_string(),
                 realtime_session_id: Some("sess_456".to_string()),
                 version: RealtimeConversationVersion::V1,
             });
@@ -4311,10 +4314,23 @@ mod tests {
     }
 
     #[test]
+    fn realtime_started_notification_accepts_legacy_missing_submission_id() -> Result<()> {
+        let notification: v2::ThreadRealtimeStartedNotification = serde_json::from_value(json!({
+            "threadId": "thr_123",
+            "realtimeSessionId": "sess_456",
+            "version": "v1"
+        }))?;
+
+        assert_eq!(notification.submission_id, String::new());
+        Ok(())
+    }
+
+    #[test]
     fn thread_realtime_output_audio_delta_notification_is_marked_experimental() {
         let notification = ServerNotification::ThreadRealtimeOutputAudioDelta(
             v2::ThreadRealtimeOutputAudioDeltaNotification {
                 thread_id: "thr_123".to_string(),
+                submission_id: String::new(),
                 audio: v2::ThreadRealtimeAudioChunk {
                     data: "AQID".to_string(),
                     sample_rate: 24_000,
