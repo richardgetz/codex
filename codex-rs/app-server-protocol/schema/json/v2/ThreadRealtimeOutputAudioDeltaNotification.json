@@ -45,6 +45,10 @@
     "audio": {
       "$ref": "#/definitions/ThreadRealtimeAudioChunk"
     },
+    "submissionId": {
+      "description": "Stable submission identifier shared by all notifications from this realtime session.",
+      "type": "string"
+    },
     "threadId": {
       "type": "string"
     }

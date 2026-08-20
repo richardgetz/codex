@@ -26,6 +26,9 @@ use std::task::Context;
 use std::task::Poll;
 
 use crossterm::event::Event;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tokio_stream::Stream;
@@ -153,6 +156,10 @@ impl EventSource for CrosstermEventSource {
 pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSource> {
     broker: Arc<EventBroker<S>>,
     draw_stream: BroadcastStream<()>,
+    mac_keyboard_stream: Option<BroadcastStream<KeyEvent>>,
+    mac_keyboard_focused: Option<Arc<AtomicBool>>,
+    mac_keyboard_paused: Option<Arc<AtomicBool>>,
+    mac_keyboard_release_pending: Option<Arc<AtomicBool>>,
     resume_stream: WatchStream<()>,
     terminal_focused: Arc<AtomicBool>,
     poll_draw_first: bool,
@@ -166,6 +173,10 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
     pub fn new(
         broker: Arc<EventBroker<S>>,
         draw_rx: broadcast::Receiver<()>,
+        mac_keyboard_rx: Option<broadcast::Receiver<KeyEvent>>,
+        mac_keyboard_focused: Option<Arc<AtomicBool>>,
+        mac_keyboard_paused: Option<Arc<AtomicBool>>,
+        mac_keyboard_release_pending: Option<Arc<AtomicBool>>,
         terminal_focused: Arc<AtomicBool>,
         #[cfg(unix)] suspend_context: crate::tui::job_control::SuspendContext,
         #[cfg(unix)] alt_screen_active: Arc<AtomicBool>,
@@ -174,6 +185,10 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         Self {
             broker,
             draw_stream: BroadcastStream::new(draw_rx),
+            mac_keyboard_stream: mac_keyboard_rx.map(BroadcastStream::new),
+            mac_keyboard_focused,
+            mac_keyboard_paused,
+            mac_keyboard_release_pending,
             resume_stream,
             terminal_focused,
             poll_draw_first: false,
@@ -247,15 +262,102 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         }
     }
 
+    fn poll_mac_keyboard_event(&mut self, cx: &mut Context<'_>) -> Poll<Option<TuiEvent>> {
+        if self
+            .mac_keyboard_release_pending
+            .as_ref()
+            .is_some_and(|pending| pending.swap(false, Ordering::Relaxed))
+        {
+            // A native press queued just before a terminal handoff is stale: the synthetic
+            // release below supersedes it. Drain it before returning so it cannot re-open PTT.
+            self.drain_mac_keyboard_events(cx);
+            return Poll::Ready(Some(TuiEvent::Key(
+                super::mac_keyboard::MacRightOptionMonitor::release_event(),
+            )));
+        }
+
+        if self
+            .mac_keyboard_focused
+            .as_ref()
+            .is_some_and(|focused| !focused.load(Ordering::Relaxed))
+        {
+            self.drain_mac_keyboard_events(cx);
+            return Poll::Pending;
+        }
+
+        let Some(stream) = self.mac_keyboard_stream.as_mut() else {
+            return Poll::Pending;
+        };
+
+        loop {
+            match Pin::new(&mut *stream).poll_next(cx) {
+                Poll::Ready(Some(Ok(key_event))) => {
+                    return Poll::Ready(Some(TuiEvent::Key(key_event)));
+                }
+                Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(_)))) => continue,
+                Poll::Ready(None) => {
+                    self.mac_keyboard_stream = None;
+                    return Poll::Pending;
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+
+    fn drain_mac_keyboard_events(&mut self, cx: &mut Context<'_>) {
+        let Some(stream) = self.mac_keyboard_stream.as_mut() else {
+            return;
+        };
+
+        loop {
+            match Pin::new(&mut *stream).poll_next(cx) {
+                Poll::Ready(Some(Ok(_)))
+                | Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(_)))) => {}
+                Poll::Ready(None) => {
+                    self.mac_keyboard_stream = None;
+                    return;
+                }
+                Poll::Pending => return,
+            }
+        }
+    }
+
+    fn pause_mac_keyboard(&self) {
+        if let Some(paused) = &self.mac_keyboard_paused {
+            paused.store(true, Ordering::Relaxed);
+        }
+        if let Some(pending) = &self.mac_keyboard_release_pending {
+            pending.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn resume_mac_keyboard(&self) {
+        if let Some(paused) = &self.mac_keyboard_paused {
+            paused.store(false, Ordering::Relaxed);
+        }
+    }
+
     /// Map a crossterm event to a [`TuiEvent`], skipping events we don't use (mouse events, etc.).
     fn map_crossterm_event(&mut self, event: Event) -> Option<TuiEvent> {
         match event {
             Event::Key(key_event) => {
+                // A few CSI-u producers encode Backspace as codepoint 8 instead of the usual
+                // DEL codepoint 127. Crossterm intentionally preserves that CSI-u codepoint as
+                // a character, but it is still the user's Backspace key at the TUI boundary.
+                let key_event = normalize_terminal_key_event(key_event);
+                if let Some(focused) = &self.mac_keyboard_focused {
+                    // Some remote terminal bridges emit FocusLost without a matching
+                    // FocusGained. Any key arriving through the terminal proves that input has
+                    // resumed, so re-arm the native Right Option monitor here.
+                    focused.store(true, Ordering::Relaxed);
+                }
                 #[cfg(unix)]
                 if crate::tui::job_control::SUSPEND_KEY.is_press(key_event) {
+                    self.pause_mac_keyboard();
                     self.broker.pause_events();
                     let suspend_result = self.suspend_context.suspend(&self.alt_screen_active);
                     self.broker.resume_events();
+                    self.resume_mac_keyboard();
                     if let Err(err) = suspend_result {
                         tracing::warn!(
                             event = "tui_suspend_failed",
@@ -273,17 +375,42 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             Event::Paste(pasted) => Some(TuiEvent::Paste(pasted)),
             Event::FocusGained => {
                 self.terminal_focused.store(true, Ordering::Relaxed);
+                if let Some(focused) = &self.mac_keyboard_focused {
+                    focused.store(true, Ordering::Relaxed);
+                }
                 // Keep the startup-cached palette: querying terminal colors here blocks the
                 // input loop, and a direct probe would discard keys typed during the refresh.
                 Some(TuiEvent::Draw)
             }
             Event::FocusLost => {
                 self.terminal_focused.store(false, Ordering::Relaxed);
-                None
+                if let Some(focused) = &self.mac_keyboard_focused {
+                    focused.store(false, Ordering::Relaxed);
+                }
+                if let Some(pending) = &self.mac_keyboard_release_pending {
+                    pending.store(false, Ordering::Relaxed);
+                    Some(TuiEvent::Key(
+                        super::mac_keyboard::MacRightOptionMonitor::release_event(),
+                    ))
+                } else {
+                    None
+                }
             }
             _ => None,
         }
     }
+}
+
+fn normalize_terminal_key_event(mut key_event: KeyEvent) -> KeyEvent {
+    if key_event.modifiers == KeyModifiers::NONE
+        && matches!(
+            key_event.code,
+            KeyCode::Char('\u{8}') | KeyCode::Char('\u{7f}')
+        )
+    {
+        key_event.code = KeyCode::Backspace;
+    }
+    key_event
 }
 
 impl<S: EventSource + Default + Unpin> Unpin for TuiEventStream<S> {}
@@ -300,10 +427,16 @@ impl<S: EventSource + Default + Unpin> Stream for TuiEventStream<S> {
             if let Poll::Ready(event) = self.poll_draw_event(cx) {
                 return Poll::Ready(event);
             }
+            if let Poll::Ready(event) = self.poll_mac_keyboard_event(cx) {
+                return Poll::Ready(event);
+            }
             if let Poll::Ready(event) = self.poll_crossterm_event(cx) {
                 return Poll::Ready(event);
             }
         } else {
+            if let Poll::Ready(event) = self.poll_mac_keyboard_event(cx) {
+                return Poll::Ready(event);
+            }
             if let Poll::Ready(event) = self.poll_crossterm_event(cx) {
                 return Poll::Ready(event);
             }
@@ -387,6 +520,10 @@ mod tests {
         TuiEventStream::new(
             broker,
             draw_rx,
+            /*mac_keyboard_rx*/ None,
+            /*mac_keyboard_focused*/ None,
+            /*mac_keyboard_paused*/ None,
+            /*mac_keyboard_release_pending*/ None,
             terminal_focused,
             #[cfg(unix)]
             crate::tui::job_control::SuspendContext::new(),
@@ -492,6 +629,214 @@ mod tests {
         }
 
         assert!(saw_draw && saw_key, "expected both draw and key events");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mac_keyboard_events_are_forwarded_as_key_events() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let (mac_keyboard_tx, mac_keyboard_rx) = broadcast::channel(1);
+        let mac_keyboard_focused = Arc::new(AtomicBool::new(true));
+        let mut stream = TuiEventStream::new(
+            broker,
+            draw_rx,
+            Some(mac_keyboard_rx),
+            Some(mac_keyboard_focused),
+            /*mac_keyboard_paused*/ None,
+            /*mac_keyboard_release_pending*/ None,
+            terminal_focused,
+            #[cfg(unix)]
+            crate::tui::job_control::SuspendContext::new(),
+            #[cfg(unix)]
+            Arc::new(AtomicBool::new(false)),
+        );
+        let expected_key = KeyEvent::new(
+            KeyCode::Modifier(crossterm::event::ModifierKeyCode::RightAlt),
+            KeyModifiers::NONE,
+        );
+        let _ = mac_keyboard_tx.send(expected_key);
+        handle.send(Ok(Event::Resize(80, 24)));
+
+        let next = timeout(Duration::from_millis(/*millis*/ 100), stream.next())
+            .await
+            .expect("timed out waiting for macOS keyboard event")
+            .expect("macOS keyboard event stream ended");
+        match next {
+            TuiEvent::Key(key) => assert_eq!(key, expected_key),
+            other => panic!("expected macOS keyboard event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pending_mac_keyboard_release_is_forwarded_before_input() {
+        let (broker, _handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let (_mac_keyboard_tx, mac_keyboard_rx) = broadcast::channel(1);
+        let mac_keyboard_focused = Arc::new(AtomicBool::new(true));
+        let mac_keyboard_paused = Arc::new(AtomicBool::new(false));
+        let mac_keyboard_release_pending = Arc::new(AtomicBool::new(true));
+        let mut stream = TuiEventStream::new(
+            broker,
+            draw_rx,
+            Some(mac_keyboard_rx),
+            Some(mac_keyboard_focused),
+            Some(mac_keyboard_paused),
+            Some(mac_keyboard_release_pending.clone()),
+            terminal_focused,
+            #[cfg(unix)]
+            crate::tui::job_control::SuspendContext::new(),
+            #[cfg(unix)]
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let next = timeout(Duration::from_millis(/*millis*/ 100), stream.next())
+            .await
+            .expect("timed out waiting for pending macOS keyboard release")
+            .expect("macOS keyboard event stream ended");
+        match next {
+            TuiEvent::Key(key) => {
+                assert_eq!(key.kind, crossterm::event::KeyEventKind::Release);
+                assert_eq!(
+                    key.code,
+                    KeyCode::Modifier(crossterm::event::ModifierKeyCode::RightAlt)
+                );
+            }
+            other => panic!("expected macOS keyboard release, got {other:?}"),
+        }
+        assert!(!mac_keyboard_release_pending.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pending_mac_keyboard_release_discards_queued_press() {
+        let (broker, _handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let (mac_keyboard_tx, mac_keyboard_rx) = broadcast::channel(1);
+        let mac_keyboard_focused = Arc::new(AtomicBool::new(true));
+        let mac_keyboard_paused = Arc::new(AtomicBool::new(true));
+        let mac_keyboard_release_pending = Arc::new(AtomicBool::new(true));
+        let mut stream = TuiEventStream::new(
+            broker,
+            draw_rx,
+            Some(mac_keyboard_rx),
+            Some(mac_keyboard_focused),
+            Some(mac_keyboard_paused),
+            Some(mac_keyboard_release_pending),
+            terminal_focused,
+            #[cfg(unix)]
+            crate::tui::job_control::SuspendContext::new(),
+            #[cfg(unix)]
+            Arc::new(AtomicBool::new(false)),
+        );
+        let stale_press = KeyEvent::new(
+            KeyCode::Modifier(crossterm::event::ModifierKeyCode::RightAlt),
+            KeyModifiers::NONE,
+        );
+        let _ = mac_keyboard_tx.send(stale_press);
+
+        let next = timeout(Duration::from_millis(/*millis*/ 100), stream.next())
+            .await
+            .expect("timed out waiting for pending macOS keyboard release")
+            .expect("macOS keyboard event stream ended");
+        assert!(matches!(
+            next,
+            TuiEvent::Key(KeyEvent {
+                kind: crossterm::event::KeyEventKind::Release,
+                ..
+            })
+        ));
+
+        let fresh_press = KeyEvent::new(
+            KeyCode::Modifier(crossterm::event::ModifierKeyCode::RightAlt),
+            KeyModifiers::NONE,
+        );
+        let _ = mac_keyboard_tx.send(fresh_press);
+        let next = timeout(Duration::from_millis(/*millis*/ 100), stream.next())
+            .await
+            .expect("timed out waiting for a fresh macOS keyboard press")
+            .expect("macOS keyboard event stream ended");
+        match next {
+            TuiEvent::Key(key) => assert_eq!(key, fresh_press),
+            other => panic!("expected a fresh macOS keyboard press, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn focus_loss_forwards_mac_keyboard_release() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let (_mac_keyboard_tx, mac_keyboard_rx) = broadcast::channel(1);
+        let mac_keyboard_focused = Arc::new(AtomicBool::new(true));
+        let mac_keyboard_paused = Arc::new(AtomicBool::new(false));
+        let mac_keyboard_release_pending = Arc::new(AtomicBool::new(false));
+        let mut stream = TuiEventStream::new(
+            broker,
+            draw_rx,
+            Some(mac_keyboard_rx),
+            Some(mac_keyboard_focused),
+            Some(mac_keyboard_paused),
+            Some(mac_keyboard_release_pending),
+            terminal_focused.clone(),
+            #[cfg(unix)]
+            crate::tui::job_control::SuspendContext::new(),
+            #[cfg(unix)]
+            Arc::new(AtomicBool::new(false)),
+        );
+        handle.send(Ok(Event::FocusLost));
+
+        let next = timeout(Duration::from_millis(/*millis*/ 100), stream.next())
+            .await
+            .expect("timed out waiting for focus-loss release")
+            .expect("macOS keyboard event stream ended");
+        match next {
+            TuiEvent::Key(key) => {
+                assert_eq!(key.kind, crossterm::event::KeyEventKind::Release);
+                assert_eq!(
+                    key.code,
+                    KeyCode::Modifier(crossterm::event::ModifierKeyCode::RightAlt)
+                );
+            }
+            other => panic!("expected focus-loss release, got {other:?}"),
+        }
+        assert!(!terminal_focused.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn terminal_key_rearms_mac_keyboard_after_focus_loss() {
+        let (broker, _handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let (_mac_keyboard_tx, mac_keyboard_rx) = broadcast::channel(1);
+        let mac_keyboard_focused = Arc::new(AtomicBool::new(false));
+        let mut stream = TuiEventStream::new(
+            broker,
+            draw_rx,
+            Some(mac_keyboard_rx),
+            Some(mac_keyboard_focused.clone()),
+            /*mac_keyboard_paused*/ None,
+            /*mac_keyboard_release_pending*/ None,
+            terminal_focused,
+            #[cfg(unix)]
+            crate::tui::job_control::SuspendContext::new(),
+            #[cfg(unix)]
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let mapped = stream.map_crossterm_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+        )));
+
+        assert!(matches!(mapped, Some(TuiEvent::Key(_))));
+        assert!(mac_keyboard_focused.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn csi_u_backspace_codepoints_map_to_backspace() {
+        let (broker, _handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker, draw_rx, terminal_focused);
+
+        for codepoint in ['\u{8}', '\u{7f}'] {
+            let Some(TuiEvent::Key(key_event)) = stream.map_crossterm_event(Event::Key(
+                KeyEvent::new(KeyCode::Char(codepoint), KeyModifiers::NONE),
+            )) else {
+                panic!("expected a key event");
+            };
+            assert_eq!(key_event.code, KeyCode::Backspace);
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

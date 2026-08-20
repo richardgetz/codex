@@ -19,6 +19,7 @@ use opus::Application;
 use opus::Channels;
 use opus::Encoder;
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
@@ -39,9 +40,11 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
+use crate::realtime_voice_audio::MAX_CALIBRATION_CAPTURE_SAMPLES;
 use crate::realtime_voice_audio::build_input_stream;
 use crate::realtime_voice_audio::build_output_stream;
 use crate::realtime_voice_audio::encode_input_frames;
+use crate::realtime_voice_audio::encode_silence_frames;
 use crate::realtime_voice_audio::install_remote_audio_handler;
 use crate::realtime_voice_audio::list_input_devices;
 use crate::realtime_voice_audio::list_output_devices;
@@ -66,6 +69,12 @@ pub(crate) const INPUT_SIGNAL_THRESHOLD: i16 = 98;
 pub(crate) const DEFAULT_REALTIME_HOTKEY: &str = "right-option";
 pub(crate) fn realtime_start_prompt(enable_preambles: bool) -> Option<Option<String>> {
     (!enable_preambles).then(|| Some(REALTIME_NO_PREAMBLES_PROMPT.to_string()))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RealtimeVoiceAudioMode {
+    Interactive,
+    Calibration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -155,6 +164,7 @@ pub(crate) enum RealtimeVoiceCommand {
     Debug(RealtimeVoiceDebugCommand),
     Effect(RealtimeVoiceEffectCommand),
     Profile(RealtimeVoiceProfileCommand),
+    Calibrate(PathBuf),
     Set(RealtimeVoice),
 }
 
@@ -245,13 +255,15 @@ pub(crate) struct RealtimeVoiceSession {
     peer_connection: Arc<RTCPeerConnection>,
     input_muted: Arc<AtomicBool>,
     output_muted: Arc<AtomicBool>,
-    input_stream: cpal::Stream,
-    output_stream: cpal::Stream,
+    input_stream: Option<cpal::Stream>,
+    output_stream: Option<cpal::Stream>,
     output_queue: Arc<Mutex<VecDeque<i16>>>,
+    captured_output: Option<Arc<Mutex<VecDeque<i16>>>>,
     acknowledgement_queue: Arc<Mutex<VecDeque<i16>>>,
     effect_processor: Arc<Mutex<Option<VoiceEffectProcessor>>>,
     acknowledgement_samples: Option<Vec<i16>>,
     input_task: JoinHandle<()>,
+    connected: Arc<AtomicBool>,
 }
 
 impl RealtimeVoiceSession {
@@ -261,72 +273,127 @@ impl RealtimeVoiceSession {
         acknowledgement_sound: &RealtimeAcknowledgementSound,
         voice_effect: Option<VoiceEffectPreset>,
     ) -> Result<(Self, String)> {
+        Self::start_with_capture(
+            audio_config,
+            acknowledgement_sound,
+            voice_effect,
+            None,
+            Arc::new(AtomicBool::new(false)),
+            RealtimeVoiceAudioMode::Interactive,
+        )
+        .await
+    }
+
+    /// Creates a muted native WebRTC peer whose raw decoded output can be inspected by calibration.
+    pub(crate) async fn start_for_calibration(
+        audio_config: &RealtimeAudioConfig,
+    ) -> Result<(Self, String)> {
+        let captured_output = Arc::new(Mutex::new(VecDeque::with_capacity(
+            MAX_CALIBRATION_CAPTURE_SAMPLES,
+        )));
+        let input_muted = Arc::new(AtomicBool::new(true));
+        Self::start_with_capture(
+            audio_config,
+            &RealtimeAcknowledgementSound::Disabled,
+            None,
+            Some(captured_output),
+            input_muted,
+            RealtimeVoiceAudioMode::Calibration,
+        )
+        .await
+    }
+
+    async fn start_with_capture(
+        audio_config: &RealtimeAudioConfig,
+        acknowledgement_sound: &RealtimeAcknowledgementSound,
+        voice_effect: Option<VoiceEffectPreset>,
+        captured_output: Option<Arc<Mutex<VecDeque<i16>>>>,
+        input_muted: Arc<AtomicBool>,
+        audio_mode: RealtimeVoiceAudioMode,
+    ) -> Result<(Self, String)> {
         let effect_processor = voice_effect
             .as_ref()
             .map(VoiceEffectProcessor::new)
             .transpose()
             .context("creating the GPT-Live voice effect processor")?;
         let effect_processor = Arc::new(Mutex::new(effect_processor));
-        let host = cpal::default_host();
-        let input_device = match audio_config.microphone.as_deref() {
-            Some(requested) => {
-                let devices = list_input_devices()?;
-                let resolved = resolve_device_name(
-                    requested,
-                    &devices,
-                    &audio_config.microphone_aliases,
-                )
-                .with_context(|| {
-                    format!(
-                        "configured realtime microphone `{requested}` or its alias was not found"
+        let native_audio = matches!(audio_mode, RealtimeVoiceAudioMode::Interactive);
+        let (input_device, input_supported, output_device, output_supported) = if native_audio {
+            let host = cpal::default_host();
+            let input_device = match audio_config.microphone.as_deref() {
+                Some(requested) => {
+                    let devices = list_input_devices()?;
+                    let resolved = resolve_device_name(
+                        requested,
+                        &devices,
+                        &audio_config.microphone_aliases,
                     )
-                })?;
-                select_input_device(&host, Some(&resolved))?
-            }
-            None => select_input_device(&host, None)?,
+                    .with_context(|| {
+                        format!(
+                            "configured realtime microphone `{requested}` or its alias was not found"
+                        )
+                    })?;
+                    select_input_device(&host, Some(&resolved))?
+                }
+                None => select_input_device(&host, None)?,
+            };
+            let output_device = match audio_config.speaker.as_deref() {
+                Some(requested) => {
+                    let devices = list_output_devices()?;
+                    let resolved = resolve_device_name(
+                        requested,
+                        &devices,
+                        &audio_config.speaker_aliases,
+                    )
+                    .with_context(|| {
+                        format!(
+                            "configured realtime speaker `{requested}` or its alias was not found"
+                        )
+                    })?;
+                    select_output_device(&host, Some(&resolved))?
+                }
+                None => select_output_device(&host, None)?,
+            };
+            let input_supported = select_input_config(&input_device)?;
+            let output_supported = select_output_config(&output_device)?;
+            (
+                Some(input_device),
+                Some(input_supported),
+                Some(output_device),
+                Some(output_supported),
+            )
+        } else {
+            (None, None, None, None)
         };
-        let output_device = match audio_config.speaker.as_deref() {
-            Some(requested) => {
-                let devices = list_output_devices()?;
-                let resolved = resolve_device_name(
-                    requested,
-                    &devices,
-                    &audio_config.speaker_aliases,
-                )
-                .with_context(|| {
-                    format!("configured realtime speaker `{requested}` or its alias was not found")
-                })?;
-                select_output_device(&host, Some(&resolved))?
-            }
-            None => select_output_device(&host, None)?,
-        };
-        let input_supported = select_input_config(&input_device)?;
-        let output_supported = select_output_config(&output_device)?;
-        let input_config = input_supported.config();
-        let output_config = output_supported.config();
-        let input_muted = Arc::new(AtomicBool::new(false));
-        let output_muted = Arc::new(AtomicBool::new(false));
+        let output_muted = Arc::new(AtomicBool::new(!native_audio));
+        let connected = Arc::new(AtomicBool::new(false));
         let output_queue = Arc::new(Mutex::new(VecDeque::new()));
         let acknowledgement_queue = Arc::new(Mutex::new(VecDeque::new()));
         let acknowledgement_samples = load_acknowledgement_sound(acknowledgement_sound)?;
         let (input_tx, input_rx) = mpsc::channel(8);
 
-        let input_stream = build_input_stream(
-            &input_device,
-            input_config,
-            input_supported.sample_format(),
-            input_supported.channels(),
-            input_tx,
-            Arc::clone(&input_muted),
-        )?;
-        let output_stream = build_output_stream(
-            &output_device,
-            output_config,
-            output_supported.sample_format(),
-            output_supported.channels(),
-            Arc::clone(&output_queue),
-            Arc::clone(&acknowledgement_queue),
-        )?;
+        let input_stream = match (&input_device, &input_supported) {
+            (Some(input_device), Some(input_supported)) => Some(build_input_stream(
+                input_device,
+                input_supported.config(),
+                input_supported.sample_format(),
+                input_supported.channels(),
+                input_tx,
+                Arc::clone(&input_muted),
+            )?),
+            _ => None,
+        };
+        let output_stream = match (&output_device, &output_supported) {
+            (Some(output_device), Some(output_supported)) => Some(build_output_stream(
+                output_device,
+                output_supported.config(),
+                output_supported.sample_format(),
+                output_supported.channels(),
+                Arc::clone(&output_queue),
+                Arc::clone(&acknowledgement_queue),
+            )?),
+            _ => None,
+        };
 
         let mut media_engine = MediaEngine::default();
         media_engine
@@ -343,14 +410,24 @@ impl RealtimeVoiceSession {
                 .await
                 .context("creating WebRTC peer connection")?,
         );
-        let input_released = Arc::new(AtomicBool::new(false));
+        let input_released = Arc::new(AtomicBool::new(!native_audio));
         let input_released_for_handler = Arc::clone(&input_released);
+        let connected_for_handler = Arc::clone(&connected);
         peer_connection.on_peer_connection_state_change(Box::new(
             move |state: RTCPeerConnectionState| {
                 let input_released = Arc::clone(&input_released_for_handler);
+                let connected = Arc::clone(&connected_for_handler);
                 Box::pin(async move {
                     if state == RTCPeerConnectionState::Connected {
                         input_released.store(true, Ordering::Relaxed);
+                        connected.store(true, Ordering::Relaxed);
+                    } else if matches!(
+                        state,
+                        RTCPeerConnectionState::Closed
+                            | RTCPeerConnectionState::Failed
+                            | RTCPeerConnectionState::Disconnected
+                    ) {
+                        connected.store(false, Ordering::Relaxed);
                     }
                 })
             },
@@ -383,6 +460,7 @@ impl RealtimeVoiceSession {
             Arc::clone(&output_queue),
             Arc::clone(&output_muted),
             Arc::clone(&effect_processor),
+            captured_output.clone(),
         );
 
         let mut gather_complete = peer_connection.gathering_complete_promise().await;
@@ -402,17 +480,25 @@ impl RealtimeVoiceSession {
 
         let encoder = Encoder::new(SAMPLE_RATE, Channels::Mono, Application::Voip)
             .context("creating realtime Opus encoder")?;
-        let input_task = tokio::spawn(encode_input_frames(
-            input_rx,
-            input_track,
-            encoder,
-            input_released,
-        ));
+        let input_task = if native_audio {
+            tokio::spawn(encode_input_frames(
+                input_rx,
+                input_track,
+                encoder,
+                input_released,
+            ))
+        } else {
+            tokio::spawn(encode_silence_frames(input_track, encoder))
+        };
 
-        input_stream.play().context("starting microphone capture")?;
-        output_stream
-            .play()
-            .context("starting realtime audio playback")?;
+        if let Some(input_stream) = &input_stream {
+            input_stream.play().context("starting microphone capture")?;
+        }
+        if let Some(output_stream) = &output_stream {
+            output_stream
+                .play()
+                .context("starting realtime audio playback")?;
+        }
 
         Ok((
             Self {
@@ -422,10 +508,12 @@ impl RealtimeVoiceSession {
                 input_stream,
                 output_stream,
                 output_queue,
+                captured_output,
                 acknowledgement_queue,
                 effect_processor,
                 acknowledgement_samples,
                 input_task,
+                connected,
             },
             local_description.sdp,
         ))
@@ -444,6 +532,25 @@ impl RealtimeVoiceSession {
 
     pub(crate) fn set_input_muted(&self, muted: bool) {
         self.input_muted.store(muted, Ordering::Relaxed);
+    }
+
+    pub(crate) fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn captured_frame_count(&self) -> usize {
+        self.captured_output
+            .as_ref()
+            .and_then(|captured_output| captured_output.lock().ok())
+            .map_or(0, |captured_output| captured_output.len() / 2)
+    }
+
+    pub(crate) fn take_captured_audio(&self) -> Vec<i16> {
+        self.captured_output
+            .as_ref()
+            .and_then(|captured_output| captured_output.lock().ok())
+            .map(|mut captured_output| captured_output.drain(..).collect())
+            .unwrap_or_default()
     }
 
     pub(crate) fn set_output_muted(&self, muted: bool) {

@@ -5,4 +5,8 @@
 /**
  * EXPERIMENTAL - emitted when thread realtime transport closes.
  */
-export type ThreadRealtimeClosedNotification = { threadId: string, reason: string | null, };
+export type ThreadRealtimeClosedNotification = { threadId: string,
+/**
+ * Stable submission identifier shared by all notifications from this realtime session.
+ */
+submissionId?: string, reason: string | null, };

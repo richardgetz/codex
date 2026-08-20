@@ -1093,6 +1093,7 @@ Then send `offer.sdp` to app-server. Core uses `experimental_realtime_ws_backend
 { "id": 40, "result": {} }
 { "method": "thread/realtime/sdp", "params": {
     "threadId": "thr_123",
+    "submissionId": "turn_123",
     "sdp": "v=0\r\no=..."
 } }
 ```
@@ -1601,13 +1602,14 @@ The fuzzy file search session API emits per-query notifications:
 
 The thread realtime API emits thread-scoped notifications for session lifecycle and streaming media:
 
-- `thread/realtime/started` — `{ threadId, realtimeSessionId }` once realtime starts for the thread (experimental). `realtimeSessionId` is the upstream Realtime API session identifier, not a Codex session/thread-group id.
-- `thread/realtime/itemAdded` — `{ threadId, item }` for raw non-audio realtime items that do not have a dedicated typed app-server notification, including `handoff_request` (experimental). `item` is forwarded as raw JSON while the upstream websocket item schema remains unstable.
-- `thread/realtime/transcript/delta` — `{ threadId, role, delta }` for live realtime transcript deltas (experimental).
-- `thread/realtime/transcript/done` — `{ threadId, role, text }` when realtime emits the final full text for a transcript part (experimental).
-- `thread/realtime/outputAudio/delta` — `{ threadId, audio }` for streamed output audio chunks (experimental). `audio` uses camelCase fields (`data`, `sampleRate`, `numChannels`, `samplesPerChannel`).
-- `thread/realtime/error` — `{ threadId, message }` when realtime encounters a transport or backend error (experimental).
-- `thread/realtime/closed` — `{ threadId, reason }` when the realtime transport closes (experimental).
+- `thread/realtime/started` — `{ threadId, submissionId, realtimeSessionId }` once realtime starts for the thread (experimental). `submissionId` identifies the core realtime start submission and is shared by the session's lifecycle, SDP, error, and closed notifications. `realtimeSessionId` is the upstream Realtime API session identifier, not a Codex session/thread-group id.
+- `thread/realtime/sdp` — `{ threadId, submissionId, sdp }` with the server's WebRTC answer SDP (experimental).
+- `thread/realtime/itemAdded` — `{ threadId, submissionId, item }` for raw non-audio realtime items that do not have a dedicated typed app-server notification, including `handoff_request` (experimental). `submissionId` identifies the realtime session, and `item` is forwarded as raw JSON while the upstream websocket item schema remains unstable.
+- `thread/realtime/transcript/delta` — `{ threadId, submissionId, role, delta }` for live realtime transcript deltas (experimental).
+- `thread/realtime/transcript/done` — `{ threadId, submissionId, role, text }` when realtime emits the final full text for a transcript part (experimental).
+- `thread/realtime/outputAudio/delta` — `{ threadId, submissionId, audio }` for streamed output audio chunks (experimental). `audio` uses camelCase fields (`data`, `sampleRate`, `numChannels`, `samplesPerChannel`).
+- `thread/realtime/error` — `{ threadId, submissionId, message }` when realtime encounters a transport or backend error (experimental).
+- `thread/realtime/closed` — `{ threadId, submissionId, reason }` when the realtime transport closes (experimental).
 
 Because audio is intentionally separate from `ThreadItem`, clients can opt out of `thread/realtime/outputAudio/delta` independently with `optOutNotificationMethods`.
 

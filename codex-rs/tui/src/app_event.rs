@@ -49,6 +49,7 @@ use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::UserMessage;
 use crate::goal_files::GoalDraft;
+use crate::realtime_voice_calibration::VoiceCalibrationPreparation;
 use codex_app_server_protocol::AskForApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
@@ -215,6 +216,17 @@ pub(crate) enum AppEvent {
         preset: VoiceEffectPreset,
         persist: bool,
         bypass: bool,
+    },
+
+    /// Poll a running GPT-Live reference calibration candidate.
+    RealtimeVoiceCalibrationPoll {
+        run_id: Uuid,
+    },
+
+    /// Deliver a background GPT-Live reference calibration preparation result.
+    RealtimeVoiceCalibrationPrepared {
+        request_id: Uuid,
+        result: Result<VoiceCalibrationPreparation, String>,
     },
 
     /// Open the agent picker for switching active threads.

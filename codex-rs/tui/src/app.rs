@@ -70,6 +70,8 @@ use crate::realtime_voice::RealtimeMicCommand;
 use crate::realtime_voice::RealtimeMicMode;
 use crate::realtime_voice::RealtimeVoiceCommand;
 use crate::realtime_voice::RealtimeVoiceSession;
+use crate::realtime_voice::realtime_hotkey_matches;
+use crate::realtime_voice_calibration::VoiceCalibrationRun;
 use crate::realtime_voice_profiles::VoiceProfile;
 use crate::realtime_voice_profiles::load_active_profile;
 use crate::realtime_voice_profiles::load_named_profile;
@@ -232,6 +234,7 @@ mod pending_interactive_replay;
 mod pets;
 mod platform_actions;
 mod plugin_mentions;
+mod realtime_voice_calibration;
 mod replay_filter;
 mod resize_reflow;
 mod safety_buffering;
@@ -546,6 +549,14 @@ pub(crate) struct App {
     pub(crate) config: Config,
     realtime_mic_mode: RealtimeMicMode,
     realtime_voice_session: Option<RealtimeVoiceSession>,
+    realtime_voice_calibration_preparing: Option<Uuid>,
+    realtime_voice_calibration_preparation_abort: Option<tokio::task::AbortHandle>,
+    realtime_voice_calibration_preparation_cancel: Option<Arc<AtomicBool>>,
+    realtime_voice_requested_session_id: Option<String>,
+    realtime_voice_submission_id: Option<String>,
+    realtime_voice_legacy_notifications: bool,
+    realtime_voice_ignore_legacy_notifications: bool,
+    realtime_voice_calibration: Option<VoiceCalibrationRun>,
     realtime_voice_profile: Option<VoiceProfile>,
     realtime_voice_rotation_selected: bool,
     realtime_voice_debug: bool,
@@ -1100,6 +1111,14 @@ See the Codex keymap documentation for supported actions and examples."
             config,
             realtime_mic_mode,
             realtime_voice_session: None,
+            realtime_voice_calibration_preparing: None,
+            realtime_voice_calibration_preparation_abort: None,
+            realtime_voice_calibration_preparation_cancel: None,
+            realtime_voice_requested_session_id: None,
+            realtime_voice_submission_id: None,
+            realtime_voice_legacy_notifications: false,
+            realtime_voice_ignore_legacy_notifications: false,
+            realtime_voice_calibration: None,
             realtime_voice_profile: startup_profile,
             realtime_voice_rotation_selected: startup_rotation_selected,
             realtime_voice_debug: false,
@@ -1373,6 +1392,24 @@ See the Codex keymap documentation for supported actions and examples."
             self.handle_draw_pre_render(tui, screen_size)?;
         }
 
+        if matches!(&event, TuiEvent::Resume)
+            && let Some(session) = &self.realtime_voice_session
+        {
+            session.set_input_muted(true);
+        }
+
+        if let TuiEvent::Key(key_event) = &event
+            && key_event.kind == KeyEventKind::Release
+            && self.config.realtime.enabled
+            && realtime_hotkey_matches(self.config.realtime.hotkey.as_deref(), *key_event)
+        {
+            // A release must reach push-to-talk before chord and overlay routing. Lifecycle
+            // cleanup can synthesize this event, and those routers intentionally ignore or
+            // consume releases, which could otherwise leave the microphone unmuted.
+            self.handle_key_event(tui, app_server, *key_event).await;
+            return Ok(AppRunControl::Continue);
+        }
+
         let event = if let TuiEvent::Key(key_event) = event {
             let Some(key_event) = self.route_key_chord_event(tui, key_event) else {
                 return Ok(AppRunControl::Continue);
@@ -1488,6 +1525,12 @@ See the Codex keymap documentation for supported actions and examples."
 
 impl Drop for App {
     fn drop(&mut self) {
+        if let Some(cancellation) = self.realtime_voice_calibration_preparation_cancel.take() {
+            cancellation.store(true, Ordering::Release);
+        }
+        if let Some(abort_handle) = self.realtime_voice_calibration_preparation_abort.take() {
+            abort_handle.abort();
+        }
         if let Err(err) = self.chat_widget.clear_managed_terminal_title() {
             tracing::debug!(error = %err, "failed to clear terminal title on app drop");
         }

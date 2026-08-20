@@ -7,6 +7,7 @@ use crate::realtime_voice::RealtimeVoiceEffectCommand;
 use crate::realtime_voice::RealtimeVoiceProfileCommand;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
+use std::path::Path;
 
 fn force_pet_image_support(chat: &mut ChatWidget) {
     chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
@@ -285,6 +286,28 @@ async fn mic_slash_command_dispatches_mode_controls() {
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::List))
+    );
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Voice,
+        "calibrate '/tmp/jarvis reference.mp4'".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Calibrate(path)))
+            if path.as_path() == Path::new("/tmp/jarvis reference.mp4")
+    );
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Voice,
+        r"calibrate C:\Users\Rick\voice reference.wav".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Calibrate(path)))
+            if path.as_path() == Path::new(r"C:\Users\Rick\voice reference.wav")
     );
 
     chat.dispatch_command_with_args(

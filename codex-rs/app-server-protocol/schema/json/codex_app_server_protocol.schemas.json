@@ -20935,6 +20935,10 @@
               "null"
             ]
           },
+          "submissionId": {
+            "description": "Stable submission identifier shared by all notifications from this realtime session.",
+            "type": "string"
+          },
           "threadId": {
             "type": "string"
           }
@@ -20950,6 +20954,10 @@
         "description": "EXPERIMENTAL - emitted when thread realtime encounters an error.",
         "properties": {
           "message": {
+            "type": "string"
+          },
+          "submissionId": {
+            "description": "Stable submission identifier shared by all notifications from this realtime session.",
             "type": "string"
           },
           "threadId": {
@@ -20984,6 +20992,10 @@
         "description": "EXPERIMENTAL - raw non-audio thread realtime item emitted by the backend.",
         "properties": {
           "item": true,
+          "submissionId": {
+            "description": "Stable submission identifier shared by all notifications from this realtime session.",
+            "type": "string"
+          },
           "threadId": {
             "type": "string"
           }
@@ -21002,6 +21014,10 @@
           "audio": {
             "$ref": "#/definitions/v2/ThreadRealtimeAudioChunk"
           },
+          "submissionId": {
+            "description": "Stable submission identifier shared by all notifications from this realtime session.",
+            "type": "string"
+          },
           "threadId": {
             "type": "string"
           }
@@ -21018,6 +21034,10 @@
         "description": "EXPERIMENTAL - emitted with the remote SDP for a WebRTC realtime session.",
         "properties": {
           "sdp": {
+            "type": "string"
+          },
+          "submissionId": {
+            "description": "Stable submission identifier shared by all notifications from this realtime session.",
             "type": "string"
           },
           "threadId": {
@@ -21083,6 +21103,10 @@
               "null"
             ]
           },
+          "submissionId": {
+            "description": "Stable submission identifier shared by all notifications from this realtime session.",
+            "type": "string"
+          },
           "threadId": {
             "type": "string"
           },
@@ -21108,6 +21132,10 @@
           "role": {
             "type": "string"
           },
+          "submissionId": {
+            "description": "Stable submission identifier shared by all notifications from this realtime session.",
+            "type": "string"
+          },
           "threadId": {
             "type": "string"
           }
@@ -21125,6 +21153,10 @@
         "description": "EXPERIMENTAL - final transcript text emitted when realtime completes a transcript part.",
         "properties": {
           "role": {
+            "type": "string"
+          },
+          "submissionId": {
+            "description": "Stable submission identifier shared by all notifications from this realtime session.",
             "type": "string"
           },
           "text": {

@@ -47,8 +47,9 @@ const OUTCOMES_USAGE: &str = "Usage: /outcomes [on|off|status|report]";
 const SCRATCHPAD_ABSORB_USAGE: &str = "Usage: /scratchpad-absorb <scratchpad_id> [--exclude-pending] [--exclude-blocked] [--exclude-notes] [--exclude-outcomes] [--exclude-delegations] [--exclude-artifacts] [--exclude-worktrees] [--exclude-completed] [--exclude-next-steps] [--exclude-git-refs]";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
 const MIC_USAGE: &str = "Usage: /mic [help|on|off|status|hot|push|hotkey|change|devices|aliases|alias <name> [device]|device <name>|speakers|speaker change|speaker aliases|speaker alias <name> [device]|speaker <name>]";
-const VOICE_USAGE: &str = "Usage: /voice [help|on|off|status|debug [on|off|status]|list|history [count]|effect [list|status|off|use <name>]|profile [list|status|off|use <name>]|tune|<voice>]";
+const VOICE_USAGE: &str = "Usage: /voice [help|on|off|status|debug [on|off|status]|list|history [count]|calibrate <audio-path>|effect [list|status|off|use <name>]|profile [list|status|off|use <name>]|tune|<voice>]";
 const VOICE_HISTORY_USAGE: &str = "Usage: /voice history [count] (count: 1-20)";
+const VOICE_CALIBRATION_USAGE: &str = "Usage: /voice calibrate <audio-path> (wav, mp3, ogg/vorbis, mp4/m4a, or a supported audio track in a video file; max 50 MB)";
 const VOICE_EFFECT_USAGE: &str = "Usage: /voice effect [list|status|off|use <name>]";
 const VOICE_PROFILE_USAGE: &str = "Usage: /voice profile [list|status|off|use <name>]";
 const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
@@ -65,6 +66,30 @@ fn realtime_alias_args(value: &str) -> Option<(String, Option<String>)> {
         .filter(|device| !device.is_empty())
         .map(str::to_string);
     Some((alias.to_string(), device))
+}
+
+fn realtime_calibration_path(value: &str) -> Option<PathBuf> {
+    let (_, path) = value.split_once(char::is_whitespace)?;
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+    if path.len() < 2 {
+        return (!matches!(path.as_bytes().first(), Some(b'\'' | b'"')))
+            .then(|| PathBuf::from(path));
+    }
+    let quoted = path
+        .as_bytes()
+        .first()
+        .copied()
+        .zip(path.as_bytes().last().copied());
+    match quoted {
+        Some((first, last)) if first == last && (first == b'\'' || first == b'"') => {
+            Some(PathBuf::from(&path[1..path.len() - 1]))
+        }
+        Some((b'\'' | b'"', _)) | Some((_, b'\'' | b'"')) => None,
+        _ => Some(PathBuf::from(path)),
+    }
 }
 
 fn scratchpad_update_event_from_value(value: &serde_json::Value) -> Option<ScratchpadUpdateEvent> {
@@ -1514,6 +1539,15 @@ impl ChatWidget {
                     "debug status" => self.app_event_tx.send(AppEvent::RealtimeVoiceControl(
                         RealtimeVoiceCommand::Debug(RealtimeVoiceDebugCommand::Status),
                     )),
+                    "calibrate" => self.add_error_message(VOICE_CALIBRATION_USAGE.to_string()),
+                    _ if normalized.starts_with("calibrate ") => {
+                        match realtime_calibration_path(trimmed) {
+                            Some(path) => self.app_event_tx.send(AppEvent::RealtimeVoiceControl(
+                                RealtimeVoiceCommand::Calibrate(path),
+                            )),
+                            None => self.add_error_message(VOICE_CALIBRATION_USAGE.to_string()),
+                        }
+                    }
                     "list" | "voices" => self
                         .app_event_tx
                         .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::List)),

@@ -469,7 +469,7 @@ pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<
     }
 }
 
-fn jarvis_preset() -> VoiceEffectPreset {
+pub(crate) fn jarvis_preset() -> VoiceEffectPreset {
     VoiceEffectPreset {
         version: PRESET_VERSION,
         name: "jarvis".to_string(),

@@ -244,6 +244,9 @@ pub struct ThreadRealtimeListVoicesResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartedNotification {
     pub thread_id: String,
+    /// Stable submission identifier shared by all notifications from this realtime session.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub submission_id: String,
     pub realtime_session_id: Option<String>,
     pub version: RealtimeConversationVersion,
 }
@@ -254,6 +257,9 @@ pub struct ThreadRealtimeStartedNotification {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeItemAddedNotification {
     pub thread_id: String,
+    /// Stable submission identifier shared by all notifications from this realtime session.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub submission_id: String,
     pub item: JsonValue,
 }
 
@@ -264,6 +270,9 @@ pub struct ThreadRealtimeItemAddedNotification {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeTranscriptDeltaNotification {
     pub thread_id: String,
+    /// Stable submission identifier shared by all notifications from this realtime session.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub submission_id: String,
     pub role: String,
     /// Live transcript delta from the realtime event.
     pub delta: String,
@@ -276,6 +285,9 @@ pub struct ThreadRealtimeTranscriptDeltaNotification {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeTranscriptDoneNotification {
     pub thread_id: String,
+    /// Stable submission identifier shared by all notifications from this realtime session.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub submission_id: String,
     pub role: String,
     /// Final complete text for the transcript part.
     pub text: String,
@@ -287,6 +299,9 @@ pub struct ThreadRealtimeTranscriptDoneNotification {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeOutputAudioDeltaNotification {
     pub thread_id: String,
+    /// Stable submission identifier shared by all notifications from this realtime session.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub submission_id: String,
     pub audio: ThreadRealtimeAudioChunk,
 }
 
@@ -296,6 +311,9 @@ pub struct ThreadRealtimeOutputAudioDeltaNotification {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeSdpNotification {
     pub thread_id: String,
+    /// Stable submission identifier shared by all notifications from this realtime session.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub submission_id: String,
     pub sdp: String,
 }
 
@@ -305,6 +323,9 @@ pub struct ThreadRealtimeSdpNotification {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeErrorNotification {
     pub thread_id: String,
+    /// Stable submission identifier shared by all notifications from this realtime session.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub submission_id: String,
     pub message: String,
 }
 
@@ -314,5 +335,8 @@ pub struct ThreadRealtimeErrorNotification {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeClosedNotification {
     pub thread_id: String,
+    /// Stable submission identifier shared by all notifications from this realtime session.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub submission_id: String,
     pub reason: Option<String>,
 }

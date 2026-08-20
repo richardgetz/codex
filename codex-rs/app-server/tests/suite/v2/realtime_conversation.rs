@@ -793,6 +793,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
             .await?;
     assert_eq!(started.thread_id, thread_start.thread.id);
+    assert!(!started.submission_id.is_empty());
     assert!(started.realtime_session_id.is_some());
     assert_eq!(started.version, RealtimeConversationVersion::V2);
 
@@ -867,6 +868,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     )
     .await?;
     assert_eq!(response_created.thread_id, thread_start.thread.id);
+    assert_eq!(response_created.submission_id, started.submission_id);
     assert_eq!(
         response_created.item,
         json!({
@@ -880,6 +882,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         "thread/realtime/outputAudio/delta",
     )
     .await?;
+    assert_eq!(output_audio.submission_id, started.submission_id);
     assert_eq!(output_audio.audio.data, "AQID");
     assert_eq!(output_audio.audio.sample_rate, 24_000);
     assert_eq!(output_audio.audio.num_channels, 1);
@@ -891,6 +894,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     )
     .await?;
     assert_eq!(item_added.thread_id, output_audio.thread_id);
+    assert_eq!(item_added.submission_id, started.submission_id);
     assert_eq!(item_added.item["type"], json!("message"));
 
     let first_transcript_delta = read_notification::<ThreadRealtimeTranscriptDeltaNotification>(
@@ -899,6 +903,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     )
     .await?;
     assert_eq!(first_transcript_delta.thread_id, output_audio.thread_id);
+    assert_eq!(first_transcript_delta.submission_id, started.submission_id);
     assert_eq!(first_transcript_delta.role, "user");
     assert_eq!(first_transcript_delta.delta, "delegate now");
 
@@ -908,6 +913,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     )
     .await?;
     assert_eq!(second_transcript_delta.thread_id, output_audio.thread_id);
+    assert_eq!(second_transcript_delta.submission_id, started.submission_id);
     assert_eq!(second_transcript_delta.role, "assistant");
     assert_eq!(second_transcript_delta.delta, "working");
 
@@ -917,6 +923,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     )
     .await?;
     assert_eq!(final_transcript_done.thread_id, output_audio.thread_id);
+    assert_eq!(final_transcript_done.submission_id, started.submission_id);
     assert_eq!(final_transcript_done.role, "assistant");
     assert_eq!(final_transcript_done.text, "working on it");
 
@@ -926,6 +933,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     )
     .await?;
     assert_eq!(response_done.thread_id, output_audio.thread_id);
+    assert_eq!(response_done.submission_id, started.submission_id);
     assert_eq!(
         response_done.item,
         json!({
@@ -940,6 +948,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     )
     .await?;
     assert_eq!(handoff_item_added.thread_id, output_audio.thread_id);
+    assert_eq!(handoff_item_added.submission_id, started.submission_id);
     assert_eq!(handoff_item_added.item["type"], json!("handoff_request"));
     assert_eq!(handoff_item_added.item["handoff_id"], json!("handoff_1"));
     assert_eq!(handoff_item_added.item["item_id"], json!("item_2"));
@@ -959,12 +968,14 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         read_notification::<ThreadRealtimeErrorNotification>(&mut mcp, "thread/realtime/error")
             .await?;
     assert_eq!(realtime_error.thread_id, output_audio.thread_id);
+    assert_eq!(realtime_error.submission_id, started.submission_id);
     assert_eq!(realtime_error.message, "upstream boom");
 
     let closed =
         read_notification::<ThreadRealtimeClosedNotification>(&mut mcp, "thread/realtime/closed")
             .await?;
     assert_eq!(closed.thread_id, output_audio.thread_id);
+    assert_eq!(closed.submission_id, started.submission_id);
     assert_eq!(closed.reason.as_deref(), Some("error"));
 
     let connections = realtime_server.connections();
@@ -1220,16 +1231,20 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
         "thread/realtime/transcript/done",
     )
     .await?;
+    let submission_id = first_delta.submission_id.clone();
+    assert!(!submission_id.is_empty());
     assert_eq!(
         vec![first_delta, second_delta],
         vec![
             ThreadRealtimeTranscriptDeltaNotification {
                 thread_id: thread_start.thread.id.clone(),
+                submission_id: submission_id.clone(),
                 role: "assistant".to_string(),
                 delta: "hello ".to_string(),
             },
             ThreadRealtimeTranscriptDeltaNotification {
                 thread_id: thread_start.thread.id.clone(),
+                submission_id: submission_id.clone(),
                 role: "assistant".to_string(),
                 delta: "world".to_string(),
             },
@@ -1239,6 +1254,7 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
         done,
         ThreadRealtimeTranscriptDoneNotification {
             thread_id: thread_start.thread.id,
+            submission_id,
             role: "assistant".to_string(),
             text: "hello world".to_string(),
         }
@@ -1392,6 +1408,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
         read_notification::<ThreadRealtimeClosedNotification>(&mut mcp, "thread/realtime/closed")
             .await?;
     assert_eq!(closed.thread_id, started.thread_id);
+    assert_eq!(closed.submission_id, started.submission_id);
     assert!(matches!(
         closed.reason.as_deref(),
         Some("requested" | "transport_closed")
@@ -1595,10 +1612,12 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
 
     let sdp_notification =
         read_notification::<ThreadRealtimeSdpNotification>(&mut mcp, "thread/realtime/sdp").await?;
+    assert_eq!(sdp_notification.submission_id, started.submission_id);
     assert_eq!(
         sdp_notification,
         ThreadRealtimeSdpNotification {
             thread_id: thread_id.clone(),
+            submission_id: sdp_notification.submission_id.clone(),
             sdp: "v=answer\r\n".to_string()
         }
     );
@@ -1701,15 +1720,19 @@ async fn webrtc_v1_start_posts_offer_returns_sdp_and_joins_sideband() -> Result<
         StartedWebrtcRealtime {
             started: ThreadRealtimeStartedNotification {
                 thread_id: harness.thread_id.clone(),
+                submission_id: started.started.submission_id.clone(),
                 realtime_session_id: Some(harness.thread_id.clone()),
                 version: RealtimeConversationVersion::V1,
             },
             sdp: ThreadRealtimeSdpNotification {
                 thread_id: harness.thread_id.clone(),
+                submission_id: started.sdp.submission_id.clone(),
                 sdp: "v=answer\r\n".to_string(),
             },
         }
     );
+    assert!(!started.started.submission_id.is_empty());
+    assert_eq!(started.started.submission_id, started.sdp.submission_id);
 
     // Phase 3: verify the HTTP call-create leg, the direct sideband join, and the normal v1
     // session.update; the WebRTC transport should remain alive instead of closing after SDP.
@@ -1766,15 +1789,19 @@ async fn webrtc_v3_start_posts_live_session_and_joins_without_session_update() -
         StartedWebrtcRealtime {
             started: ThreadRealtimeStartedNotification {
                 thread_id: harness.thread_id.clone(),
+                submission_id: started.started.submission_id.clone(),
                 realtime_session_id: Some(harness.thread_id.clone()),
                 version: RealtimeConversationVersion::V3,
             },
             sdp: ThreadRealtimeSdpNotification {
                 thread_id: harness.thread_id.clone(),
+                submission_id: started.sdp.submission_id.clone(),
                 sdp: "v=answer\r\n".to_string(),
             },
         }
     );
+    assert!(!started.started.submission_id.is_empty());
+    assert_eq!(started.started.submission_id, started.sdp.submission_id);
 
     assert_call_create_multipart(
         harness.call_capture.single_request(),

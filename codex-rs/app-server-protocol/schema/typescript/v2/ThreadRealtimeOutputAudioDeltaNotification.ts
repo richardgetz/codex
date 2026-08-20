@@ -6,4 +6,8 @@ import type { ThreadRealtimeAudioChunk } from "./ThreadRealtimeAudioChunk";
 /**
  * EXPERIMENTAL - streamed output audio emitted by thread realtime.
  */
-export type ThreadRealtimeOutputAudioDeltaNotification = { threadId: string, audio: ThreadRealtimeAudioChunk, };
+export type ThreadRealtimeOutputAudioDeltaNotification = { threadId: string,
+/**
+ * Stable submission identifier shared by all notifications from this realtime session.
+ */
+submissionId?: string, audio: ThreadRealtimeAudioChunk, };
