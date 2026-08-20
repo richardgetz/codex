@@ -694,9 +694,11 @@ impl Tui {
 
     pub(crate) fn configure_realtime_voice(&mut self, enabled: bool) {
         let monitor = MacRightOptionMonitor::new(enabled);
-        keyboard_modes::set_right_option_monitor_enabled(monitor.is_some());
-        keyboard_modes::set_realtime_voice_enabled(enabled);
+        let monitor_enabled = monitor.is_some();
         self.mac_right_option_monitor = monitor;
+        keyboard_modes::set_right_option_monitor_enabled(monitor_enabled);
+        keyboard_modes::set_realtime_voice_enabled(enabled);
+        keyboard_modes::reconfigure_keyboard_enhancement();
     }
 
     pub fn is_alt_screen_active(&self) -> bool {

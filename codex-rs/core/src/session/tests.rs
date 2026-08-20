@@ -94,6 +94,7 @@ use codex_skills_extension::HostSkillsSnapshot;
 use codex_skills_extension::SkillLoadOutcome;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_utils_output_truncation::approx_token_count;
 use codex_utils_path_uri::PathUri;
 use core_test_support::test_codex::TurnInputRequest as ExternalTurnInputRequest;
 use core_test_support::test_codex::local_selections;
@@ -10969,6 +10970,34 @@ async fn build_initial_context_bounds_active_scratchpad_completed_ledger() {
     assert!(!developer_texts.contains("completed step 00"));
     assert!(!developer_texts.contains("completed step 01"));
     assert!(!developer_texts.contains("\"completed\": ["));
+}
+
+#[tokio::test]
+async fn build_initial_context_bounds_active_scratchpad_context() {
+    let (session, turn_context) = make_session_and_context().await;
+    let oversized_value = "oversized scratchpad field ".repeat(20_000);
+
+    write_thread_scratchpad(
+        &turn_context,
+        session.thread_id,
+        serde_json::json!({
+            "scratchpad_id": session.thread_id.to_string(),
+            "objective": oversized_value,
+            "status": "active",
+            "next_steps": ["ship fix"],
+            "pending_waits": [],
+            "created_at": "2026-04-29T00:00:00Z",
+            "updated_at": "2026-04-29T00:00:00Z"
+        }),
+    );
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let active_scratchpad = developer_input_texts(&initial_context)
+        .into_iter()
+        .find(|text| text.contains("<active_scratchpad>"))
+        .expect("expected active scratchpad context");
+
+    assert!(approx_token_count(active_scratchpad) < 10_000);
 }
 
 #[tokio::test]

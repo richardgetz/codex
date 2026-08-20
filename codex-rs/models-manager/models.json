@@ -12,6 +12,7 @@
         "image"
       ],
       "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
       "truncation_policy": {
         "mode": "tokens",
         "limit": 10000
@@ -126,6 +127,7 @@
         "image"
       ],
       "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
       "truncation_policy": {
         "mode": "tokens",
         "limit": 10000
@@ -238,6 +240,7 @@
         "image"
       ],
       "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
       "truncation_policy": {
         "mode": "tokens",
         "limit": 10000
@@ -346,6 +349,7 @@
         "image"
       ],
       "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
       "truncation_policy": {
         "mode": "tokens",
         "limit": 10000
@@ -452,6 +456,7 @@
         "image"
       ],
       "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
       "truncation_policy": {
         "mode": "tokens",
         "limit": 10000
@@ -556,6 +561,7 @@
         "image"
       ],
       "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
       "truncation_policy": {
         "mode": "tokens",
         "limit": 10000
@@ -655,6 +661,7 @@
         "image"
       ],
       "supports_image_detail_original": false,
+      "supports_parallel_tool_calls": true,
       "truncation_policy": {
         "mode": "bytes",
         "limit": 10000
@@ -751,6 +758,7 @@
         "image"
       ],
       "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
       "truncation_policy": {
         "mode": "tokens",
         "limit": 10000

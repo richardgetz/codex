@@ -63,11 +63,7 @@ impl HostSkillsSnapshot {
         for skill in selected_skills {
             match self.read_skill_text(skill).await {
                 Ok(contents) => {
-                    let (contents, truncated) = if self.outcome().is_agent_plugin_skill(skill) {
-                        truncate_main_prompt_contents(&contents)
-                    } else {
-                        (contents, false)
-                    };
+                    let (contents, truncated) = truncate_main_prompt_contents(&contents);
                     if truncated {
                         prompts.warnings.push(format!(
                             "Skill `{}` exceeded the main prompt context limit and was truncated.",

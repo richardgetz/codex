@@ -1272,6 +1272,8 @@ async fn plain_name_selection_prefers_executor_skill_over_host_name_collision() 
             session_source: &session_source,
             persistent_thread_state_available: true,
             environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
             session_store: &session_store,
             thread_store: &thread_store,
         })
@@ -1287,6 +1289,7 @@ async fn plain_name_selection_prefers_executor_skill_over_host_name_collision() 
                 }],
                 environments: Vec::new(),
             },
+            /*extension_metrics*/ None,
             &session_store,
             &thread_store,
             &ExtensionData::new("turn-1"),

@@ -1899,7 +1899,9 @@ impl App {
                     self.realtime_voice_legacy_notifications = false;
                     self.realtime_voice_ignore_legacy_notifications = false;
                     self.clear_realtime_debug_state();
-                    self.realtime_voice_session.take();
+                    if let Some(session) = self.realtime_voice_session.take() {
+                        session.close_in_background();
+                    }
                 }
             }
             ServerNotification::ThreadRealtimeClosed(_) => {
@@ -1914,7 +1916,9 @@ impl App {
                     self.realtime_voice_legacy_notifications = false;
                     self.realtime_voice_ignore_legacy_notifications = false;
                     self.clear_realtime_debug_state();
-                    self.realtime_voice_session.take();
+                    if let Some(session) = self.realtime_voice_session.take() {
+                        session.close_in_background();
+                    }
                 }
             }
             _ => {}

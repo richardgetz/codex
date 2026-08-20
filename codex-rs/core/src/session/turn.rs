@@ -1658,7 +1658,7 @@ pub(crate) fn build_prompt(
     Prompt {
         input,
         tools: step_context.tool_router.model_visible_specs(),
-        parallel_tool_calls: true,
+        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
         output_schema: turn_context.final_output_json_schema.clone(),
         output_schema_strict: !crate::guardian::is_guardian_reviewer_source(

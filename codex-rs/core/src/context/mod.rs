@@ -1,5 +1,6 @@
 //! Context fragments injected into model input.
 
+mod active_scratchpad;
 mod approved_command_prefix_saved;
 mod apps_instructions;
 mod available_mcp_instructions;
@@ -45,6 +46,7 @@ mod user_instructions;
 mod user_shell_command;
 pub(crate) mod world_state;
 
+pub(crate) use active_scratchpad::ActiveScratchpadContext;
 pub(crate) use approved_command_prefix_saved::APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX;
 pub(crate) use approved_command_prefix_saved::ApprovedCommandPrefixSaved;
 pub(crate) use apps_instructions::AppsInstructions;

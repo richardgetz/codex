@@ -1,4 +1,8 @@
 use super::ContextualUserFragment;
+use codex_protocol::protocol::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
+
+const MULTI_AGENT_ROLE_INSTRUCTIONS_MAX_TOKENS: usize = 8_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MultiAgentRoleInstructions {
@@ -9,17 +13,24 @@ pub(crate) struct MultiAgentRoleInstructions {
 impl MultiAgentRoleInstructions {
     pub(crate) fn unmarked(text: impl Into<String>) -> Self {
         Self {
-            text: text.into(),
+            text: bounded_text(text.into()),
             marked: false,
         }
     }
 
     pub(crate) fn catalog(text: impl Into<String>) -> Self {
         Self {
-            text: text.into(),
+            text: bounded_text(text.into()),
             marked: true,
         }
     }
+}
+
+fn bounded_text(text: String) -> String {
+    truncate_text(
+        &text,
+        TruncationPolicy::Tokens(MULTI_AGENT_ROLE_INSTRUCTIONS_MAX_TOKENS),
+    )
 }
 
 impl ContextualUserFragment for MultiAgentRoleInstructions {
@@ -47,3 +58,7 @@ impl ContextualUserFragment for MultiAgentRoleInstructions {
         self.text.clone()
     }
 }
+
+#[cfg(test)]
+#[path = "multi_agent_role_instructions_tests.rs"]
+mod tests;

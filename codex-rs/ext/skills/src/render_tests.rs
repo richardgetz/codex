@@ -30,6 +30,39 @@ fn skill_prompt_contents_are_bounded_at_utf8_boundaries() {
     assert_eq!(truncated, true);
 }
 
+#[tokio::test]
+async fn host_skill_prompts_bound_non_plugin_skill_contents()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let skill_path = temp_dir.path().join("SKILL.md");
+    std::fs::write(
+        &skill_path,
+        format!("{}\nTAIL_CANARY", "a".repeat(MAX_SKILL_PROMPT_BYTES)),
+    )?;
+    let skill_path = AbsolutePathBuf::try_from(std::fs::canonicalize(skill_path)?)?;
+    let skill = codex_skills::SkillMetadata {
+        name: "large-skill".to_string(),
+        description: "A large skill".to_string(),
+        short_description: None,
+        model: None,
+        interface: None,
+        dependencies: None,
+        policy: None,
+        path_to_skills_md: skill_path,
+        scope: SkillScope::User,
+        plugin_id: None,
+        remote_plugin_id: None,
+    };
+    let snapshot = HostSkillsSnapshot::new(Arc::new(crate::SkillLoadOutcome::default()));
+
+    let prompts = snapshot.load_skill_prompts(&[skill]).await;
+
+    assert_eq!(prompts.fragments.len(), 1);
+    assert_eq!(prompts.warnings.len(), 1);
+    assert!(!prompts.fragments[0].render().contains("TAIL_CANARY"));
+    Ok(())
+}
+
 fn entry(name: &str, description: &str, short_description: Option<&str>) -> SkillCatalogEntry {
     entry_with_path(
         name,

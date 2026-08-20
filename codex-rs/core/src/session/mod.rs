@@ -21,6 +21,7 @@ use crate::compact::CompactedHistoryMetadata;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
 use crate::connectors;
+use crate::context::ActiveScratchpadContext;
 use crate::context::AppsInstructions;
 use crate::context::AvailableMcpInstructions;
 use crate::context::ContextualUserFragment;
@@ -1988,7 +1989,10 @@ impl Session {
         })
     }
 
-    fn build_active_scratchpad_context(codex_home: &Path, thread_id: ThreadId) -> Option<String> {
+    fn build_active_scratchpad_context(
+        codex_home: &Path,
+        thread_id: ThreadId,
+    ) -> Option<ActiveScratchpadContext> {
         let scratchpad_id = thread_id.to_string();
         let path = codex_home
             .join("scratchpad")
@@ -2004,9 +2008,7 @@ impl Session {
         }
         let summary = compact_active_scratchpad_summary(&value);
         let summary_text = serde_json::to_string_pretty(&summary).ok()?;
-        Some(format!(
-            "<active_scratchpad>\nThe built-in scratchpad for this thread/session is `{scratchpad_id}`. Continue using this scratchpad id for recovery notes, next steps, waits, and durable working state.\n\n```json\n{summary_text}\n```\n</active_scratchpad>"
-        ))
+        Some(ActiveScratchpadContext::new(scratchpad_id, &summary_text))
     }
 
     async fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
@@ -4134,7 +4136,7 @@ impl Session {
                     self.thread_id,
                 )
             {
-                developer_sections.push(active_scratchpad);
+                developer_sections.push(active_scratchpad.render());
             }
         }
         if !separate_guardian_developer_message
@@ -4318,6 +4320,11 @@ impl Session {
         // Render the active mode after the usage hint so it can override that hint.
         let mut initial_multi_agent_mode = None;
         for fragment in world_state.render_full() {
+            if fragment.markers().0 == codex_protocol::protocol::CONTEXT_WINDOW_OPEN_TAG {
+                // The full-context token budget metadata below includes the MCP thread hint.
+                // Keep the world-state copy for agent-path diffs, but do not duplicate it here.
+                continue;
+            }
             match fragment.role() {
                 "developer"
                     if fragment.markers().0 == ModelSwitchInstructions::type_markers().0 =>
