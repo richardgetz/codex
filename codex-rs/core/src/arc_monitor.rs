@@ -224,7 +224,8 @@ async fn build_arc_monitor_request(
     protection_client_callsite: &'static str,
 ) -> ArcMonitorRequest {
     let history = sess.clone_history().await;
-    let mut messages = build_arc_monitor_messages(history.raw_items());
+    let history_items = history.raw_items().cloned().collect::<Vec<_>>();
+    let mut messages = build_arc_monitor_messages(&history_items);
     if messages.is_empty() {
         messages.push(build_arc_monitor_message(
             "user",

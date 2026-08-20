@@ -41,6 +41,10 @@ use tokio::sync::broadcast;
 use tokio_stream::Stream;
 
 pub use self::frame_requester::FrameRequester;
+use self::input_boundary::TerminalInitializationGuard;
+pub(crate) use self::input_boundary::discard_pending_terminal_input;
+#[cfg(all(test, unix))]
+use self::input_boundary::terminal_input_is_readable;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::insert_history::HistoryLineWrapPolicy;
@@ -61,11 +65,16 @@ use codex_config::types::NotificationMethod;
 mod event_stream;
 mod frame_rate_limiter;
 mod frame_requester;
+mod history_tail;
+mod input_boundary;
 #[cfg(unix)]
 mod job_control;
 mod keyboard_modes;
 mod mac_keyboard;
 mod screen_size;
+#[cfg(all(test, unix))]
+#[path = "tui_startup_tests.rs"]
+mod startup_tests;
 mod terminal_stderr;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -422,9 +431,8 @@ pub(crate) fn init(realtime_voice_enabled: bool) -> Result<InitializedTerminal> 
     let mac_right_option_monitor = MacRightOptionMonitor::new(realtime_voice_enabled);
     keyboard_modes::set_right_option_monitor_enabled(mac_right_option_monitor.is_some());
     keyboard_modes::set_realtime_voice_enabled(realtime_voice_enabled);
+    let mut restore_guard = TerminalInitializationGuard { active: true };
     set_modes()?;
-
-    flush_terminal_input_buffer();
 
     set_panic_hook();
 
@@ -499,12 +507,14 @@ pub(crate) fn init(realtime_voice_enabled: bool) -> Result<InitializedTerminal> 
 
     let tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
     let stderr_guard = terminal_stderr::TerminalStderrGuard::install()?;
-    Ok(InitializedTerminal {
+    let initialized_terminal = InitializedTerminal {
         terminal: tui,
         enhanced_keys_supported,
         stderr_guard,
         mac_right_option_monitor,
-    })
+    };
+    restore_guard.active = false;
+    Ok(initialized_terminal)
 }
 
 #[cfg(not(unix))]
@@ -682,6 +692,13 @@ impl Tui {
         keyboard_modes::reconfigure_keyboard_enhancement();
     }
 
+    pub(crate) fn configure_realtime_voice(&mut self, enabled: bool) {
+        let monitor = MacRightOptionMonitor::new(enabled);
+        keyboard_modes::set_right_option_monitor_enabled(monitor.is_some());
+        keyboard_modes::set_realtime_voice_enabled(enabled);
+        self.mac_right_option_monitor = monitor;
+    }
+
     pub fn is_alt_screen_active(&self) -> bool {
         self.alt_screen_active.load(Ordering::Relaxed)
     }
@@ -701,6 +718,28 @@ impl Tui {
         if let Some(monitor) = &self.mac_right_option_monitor {
             monitor.resume();
         }
+    }
+
+    /// Reclaim terminal modes and stderr after a panic hook ran inside a recovery boundary.
+    pub(crate) fn recover_after_caught_panic(&mut self) -> Result<()> {
+        set_modes()?;
+        self._stderr_guard.recover_after_caught_panic()?;
+        self.terminal.invalidate_viewport();
+        self.frame_requester().schedule_frame();
+        Ok(())
+    }
+
+    /// Discard buffered typeahead before a startup screen that can confirm an action.
+    ///
+    /// Startup probes can leave parsed key events in crossterm's queue, while later bootstrap
+    /// work can leave additional bytes in the terminal input buffer. Neither should activate an
+    /// update, trust, or migration prompt before the user has seen it. Pause the event stream,
+    /// drain all input through crossterm so incomplete bracketed paste remains safely framed.
+    pub(crate) fn discard_pending_input_before_interactive_screen(&mut self) -> Result<()> {
+        self.pause_events();
+        let drain_result = discard_pending_terminal_input();
+        self.resume_events();
+        drain_result
     }
 
     /// Temporarily restore terminal state to run an external interactive program `f`.
@@ -1125,13 +1164,17 @@ impl Tui {
             let terminal = &mut self.terminal;
             let needs_full_repaint =
                 Self::update_inline_viewport_for_resize_reflow(terminal, height, screen_size)?;
+            // A zero- or one-row history region cannot isolate raw history writes from the
+            // viewport, so replayed rows can leave stale cells inside the composer.
+            let history_can_overlap_viewport =
+                !self.pending_history_lines.is_empty() && terminal.viewport_area.top() <= 1;
             Self::flush_pending_history_lines(
                 terminal,
                 &mut self.pending_history_lines,
                 self.is_zellij,
             )?;
 
-            if needs_full_repaint {
+            if needs_full_repaint || history_can_overlap_viewport {
                 terminal.invalidate_viewport();
             }
 

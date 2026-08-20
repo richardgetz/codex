@@ -1,12 +1,26 @@
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::SkillConfig;
+pub use codex_config::SkillConfigRule;
+pub use codex_config::SkillConfigRuleSelector;
+pub use codex_config::SkillConfigRules;
 use codex_config::SkillsConfig;
-pub use codex_skills::SkillConfigRule;
-pub use codex_skills::SkillConfigRuleSelector;
-pub use codex_skills::SkillConfigRules;
-pub use codex_skills::resolve_disabled_skill_paths;
+use codex_skills::SkillMetadata;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::HashSet;
 use tracing::warn;
+
+/// Resolves disabled skill paths using the effective ordered config rules.
+pub fn resolve_disabled_skill_paths(
+    skills: &[SkillMetadata],
+    rules: &SkillConfigRules,
+) -> HashSet<AbsolutePathBuf> {
+    rules.resolve_disabled_paths(
+        skills
+            .iter()
+            .map(|skill| (skill.name.as_str(), &skill.path_to_skills_md)),
+    )
+}
 
 pub fn skill_config_rules_from_stack(config_layer_stack: &ConfigLayerStack) -> SkillConfigRules {
     let mut entries = Vec::new();

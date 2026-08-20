@@ -56,6 +56,7 @@ use codex_core_api::SessionSource;
 use codex_core_api::SituationalRequirementsConfig;
 use codex_core_api::SkillsConfig;
 use codex_core_api::SqliteConfig;
+use codex_core_api::StartIfIdleSubmission;
 use codex_core_api::StartThreadOptions;
 use codex_core_api::TerminalResizeReflowConfig;
 use codex_core_api::ThreadControlConfig;
@@ -65,6 +66,7 @@ use codex_core_api::ToolSuggestConfig;
 use codex_core_api::TuiKeymap;
 use codex_core_api::TuiNotificationSettings;
 use codex_core_api::TuiPetAnchor;
+use codex_core_api::TurnInputRequest;
 use codex_core_api::UriBasedFileOpener;
 use codex_core_api::UserInput;
 use codex_core_api::UserPreferencesMemoryConfig;
@@ -128,7 +130,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let state_db = init_state_db(&config).await;
 
     let auth_manager =
-        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await?;
     let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
         config.codex_self_exe.clone(),
         config.codex_linux_sandbox_exe.clone(),
@@ -199,7 +201,6 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         config_layer_stack: ConfigLayerStack::default(),
         startup_warnings: Vec::new(),
         bypass_hook_trust: false,
-        psp: false,
         model,
         service_tier: None,
         review_model: None,
@@ -220,6 +221,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
         base_instructions: None,
+        base_instructions_provenance: None,
         developer_instructions: None,
         commit_attribution: None,
         conventional_commits: ConventionalCommitsConfig::default(),
@@ -307,6 +309,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         respect_system_proxy: false,
         apps_mcp_product_sku: None,
+        responses_api_metadata: BTreeMap::new(),
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_ws_base_url: None,
         experimental_realtime_webrtc_call_base_url: None,
@@ -329,6 +332,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         background_terminal_max_timeout: 300_000,
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
+        max_goal_token_budget: None,
         token_budget: None,
         rollout_budget: None,
         current_time_reminder: None,
@@ -351,19 +355,16 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
 }
 
 async fn run_turn(thread: &CodexThread, thread_id: &str, prompt: String) -> anyhow::Result<()> {
-    thread
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: prompt,
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+    let submission = thread
+        .start_turn_if_idle(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: prompt,
+            text_elements: Vec::new(),
+        }]))
         .await
         .context("submit user input")?;
+    if let StartIfIdleSubmission::NotSubmitted { reason } = submission {
+        bail!("turn input was not submitted: {reason:?}");
+    }
 
     let mut current_turn_id: Option<String> = None;
     let mut stdout = std::io::stdout().lock();

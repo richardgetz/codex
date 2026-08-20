@@ -56,6 +56,7 @@ pub(super) fn start_thread_inbound_message_poller(
                     },
                     parent_turn_id: None,
                     trace: None,
+                    root_turn_id: None,
                 };
                 if tx_sub.send(submission).await.is_err() {
                     return;
@@ -145,16 +146,22 @@ mod tests {
             .await
             .expect("receive queued message")
             .expect("submission channel open");
-        assert_eq!(
-            submission.op,
+        match submission.op {
             Op::UserInput {
-                items: input,
-                additional_context: Default::default(),
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                thread_settings: Default::default(),
+                items,
+                additional_context,
+                final_output_json_schema,
+                responsesapi_client_metadata,
+                thread_settings,
+            } => {
+                assert_eq!(items, input);
+                assert!(additional_context.is_empty());
+                assert_eq!(final_output_json_schema, None);
+                assert_eq!(responsesapi_client_metadata, None);
+                assert_eq!(thread_settings, Default::default());
             }
-        );
+            other => panic!("expected user input submission, got {other:?}"),
+        }
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

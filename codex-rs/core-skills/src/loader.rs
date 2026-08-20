@@ -425,6 +425,7 @@ async fn parse_skill_file(
         name: base_name,
         description,
         short_description,
+        model,
     } = parse_skill_frontmatter_metadata(&contents, || default_skill_name(path))?;
     let LoadedSkillMetadata {
         interface,
@@ -436,6 +437,7 @@ async fn parse_skill_file(
         name: base_name,
         description,
         short_description,
+        model,
         interface,
         dependencies,
         policy,
@@ -590,6 +592,7 @@ fn resolve_dependency_tool(tool: DependencyTool) -> Option<SkillToolDependency> 
         transport,
         command,
         url,
+        oauth_callback_port: None,
     })
 }
 

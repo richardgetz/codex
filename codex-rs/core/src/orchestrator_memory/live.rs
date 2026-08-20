@@ -78,7 +78,8 @@ async fn process_completed_turn(
         return Ok(());
     }
 
-    let current_turn_user_texts = heuristics::collect_current_turn_user_texts(history.raw_items());
+    let history_items = history.raw_items().cloned().collect::<Vec<_>>();
+    let current_turn_user_texts = heuristics::collect_current_turn_user_texts(&history_items);
     if current_turn_user_texts.is_empty() {
         append_diagnostic_event_if_writes_enabled(
             session,
@@ -94,7 +95,7 @@ async fn process_completed_turn(
     let user_preferences_memory = &turn_context.config.user_preferences_memory;
     let memory_config = user_preferences_memory.memory_config();
     let recent_user_turns = heuristics::collect_recent_user_turns(
-        history.raw_items(),
+        &history_items,
         user_preferences_memory.recent_turn_window,
     );
     let forced_trigger = heuristics::detect_forced_memory_trigger(&current_turn_user_texts);

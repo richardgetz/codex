@@ -39,3 +39,12 @@ Its incoming thread-section migrations are appended as:
 0047_upstream_threads_section.sql
 0048_upstream_threads_section_order.sql
 ```
+
+The `rust-v0.148.0` refresh keeps those already-shipped migrations unchanged.
+Its incoming rollout migration and thread-section appearance migration collided
+with the fork's later additions at `0047` and `0048`, so they are appended as:
+
+```text
+0049_upstream_rollout_migration_state.sql
+0050_upstream_thread_section_appearance.sql
+```

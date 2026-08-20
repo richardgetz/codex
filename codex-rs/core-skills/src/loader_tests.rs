@@ -252,6 +252,7 @@ async fn load_user_skills_root(root: &Path) -> SkillLoadOutcome {
 
 fn expected_user_skill(path: &Path, name: &str, description: &str) -> SkillMetadata {
     SkillMetadata {
+        model: None,
         name: name.to_string(),
         description: description.to_string(),
         short_description: None,
@@ -312,6 +313,7 @@ async fn loads_skill_dependencies_metadata_from_yaml() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "dep-skill".to_string(),
             description: "from json".to_string(),
             short_description: None,
@@ -319,6 +321,7 @@ async fn loads_skill_dependencies_metadata_from_yaml() {
             dependencies: Some(SkillDependencies {
                 tools: vec![
                     SkillToolDependency {
+                        oauth_callback_port: None,
                         r#type: "mcp".to_string(),
                         value: "github".to_string(),
                         description: Some("GitHub MCP server".to_string()),
@@ -327,6 +330,7 @@ async fn loads_skill_dependencies_metadata_from_yaml() {
                         url: Some("https://example.com/mcp".to_string()),
                     },
                     SkillToolDependency {
+                        oauth_callback_port: None,
                         r#type: "cli".to_string(),
                         value: "gh".to_string(),
                         description: Some("GitHub CLI".to_string()),
@@ -335,6 +339,7 @@ async fn loads_skill_dependencies_metadata_from_yaml() {
                         url: None,
                     },
                     SkillToolDependency {
+                        oauth_callback_port: None,
                         r#type: "mcp".to_string(),
                         value: "local-gh".to_string(),
                         description: Some("Local GH MCP server".to_string()),
@@ -388,6 +393,7 @@ interface:
     assert_eq!(
         user_skills,
         vec![SkillMetadata {
+            model: None,
             name: "ui-skill".to_string(),
             description: "from json".to_string(),
             short_description: None,
@@ -559,6 +565,7 @@ interface:
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "send-message".to_string(),
             description: "send messages".to_string(),
             short_description: None,
@@ -611,6 +618,7 @@ async fn loads_skills_via_symlinked_subdir_for_user_scope() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "linked-skill".to_string(),
             description: "from link".to_string(),
             short_description: None,
@@ -711,6 +719,7 @@ async fn does_not_loop_on_symlink_cycle_for_user_scope() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "cycle-skill".to_string(),
             description: "still loads".to_string(),
             short_description: None,
@@ -759,6 +768,7 @@ async fn loads_skills_via_symlinked_subdir_for_admin_scope() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "admin-linked-skill".to_string(),
             description: "from link".to_string(),
             short_description: None,
@@ -798,6 +808,7 @@ async fn loads_skills_via_symlinked_subdir_for_repo_scope() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "repo-linked-skill".to_string(),
             description: "from link".to_string(),
             short_description: None,
@@ -896,6 +907,7 @@ async fn respects_max_scan_depth_for_user_scope() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "within-depth-skill".to_string(),
             description: "loads".to_string(),
             short_description: None,
@@ -923,6 +935,7 @@ async fn loads_valid_skill() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "demo-skill".to_string(),
             description: "does things carefully".to_string(),
             short_description: None,
@@ -955,6 +968,7 @@ async fn falls_back_to_directory_name_when_skill_name_is_missing() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "directory-derived".to_string(),
             description: "fallback name".to_string(),
             short_description: None,
@@ -1011,6 +1025,7 @@ async fn namespaces_plugin_skills_using_provided_namespace() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "sample:sample-search".to_string(),
             description: "search sample data".to_string(),
             short_description: None,
@@ -1264,6 +1279,7 @@ async fn plugin_skill_name_length_limit_allows_max_qualified_name() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: format!("{plugin_name}:{skill_name}"),
             description: "search sample data".to_string(),
             short_description: None,
@@ -1350,6 +1366,7 @@ async fn direct_child_discovery_ignores_nested_skills() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "plugin:direct".to_string(),
             description: "direct skill".to_string(),
             short_description: None,
@@ -1415,6 +1432,7 @@ async fn loads_short_description_from_metadata() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "demo-skill".to_string(),
             description: "long description".to_string(),
             short_description: Some("short summary".to_string()),
@@ -1447,6 +1465,7 @@ async fn loads_unquoted_description_containing_colon_space() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "colon-description".to_string(),
             description: "AWS deployment patterns: ECS Fargate, Lambda, and S3".to_string(),
             short_description: None,
@@ -1479,6 +1498,7 @@ async fn loads_unquoted_short_description_containing_colon_space_and_apostrophe(
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "colon-short-description".to_string(),
             description: "long description".to_string(),
             short_description: Some("What's included: builds and tests".to_string()),
@@ -1511,6 +1531,7 @@ async fn loads_unrecognized_frontmatter_fields_that_need_quotes() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "repaired-unknown-fields".to_string(),
             description: "valid description".to_string(),
             short_description: None,
@@ -1543,6 +1564,7 @@ async fn preserves_block_scalar_body_while_repairing_other_fields() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "block-description-with-repair".to_string(),
             description: "Build for AWS: ECS".to_string(),
             short_description: None,
@@ -1655,6 +1677,7 @@ async fn loads_skills_from_repo_scoped_root() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "repo-skill".to_string(),
             description: "from repo".to_string(),
             short_description: None,
@@ -1699,6 +1722,7 @@ async fn loads_skills_from_multiple_repo_scoped_roots() {
         outcome.skills,
         vec![
             SkillMetadata {
+                model: None,
                 name: "nested-skill".to_string(),
                 description: "from nested".to_string(),
                 short_description: None,
@@ -1711,6 +1735,7 @@ async fn loads_skills_from_multiple_repo_scoped_roots() {
                 remote_plugin_id: None,
             },
             SkillMetadata {
+                model: None,
                 name: "root-skill".to_string(),
                 description: "from root".to_string(),
                 short_description: None,
@@ -1890,6 +1915,7 @@ async fn deduplicates_by_path_preferring_first_root() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "dupe-skill".to_string(),
             description: "from repo".to_string(),
             short_description: None,
@@ -1965,6 +1991,7 @@ async fn keeps_duplicate_names_from_repo_and_user() {
         outcome.skills,
         vec![
             SkillMetadata {
+                model: None,
                 name: "dupe-skill".to_string(),
                 description: "from repo".to_string(),
                 short_description: None,
@@ -1977,6 +2004,7 @@ async fn keeps_duplicate_names_from_repo_and_user() {
                 remote_plugin_id: None,
             },
             SkillMetadata {
+                model: None,
                 name: "dupe-skill".to_string(),
                 description: "from user".to_string(),
                 short_description: None,
@@ -2032,6 +2060,7 @@ async fn keeps_duplicate_names_from_nested_codex_dirs() {
         outcome.skills,
         vec![
             SkillMetadata {
+                model: None,
                 name: "dupe-skill".to_string(),
                 description: first_description.to_string(),
                 short_description: None,
@@ -2044,6 +2073,7 @@ async fn keeps_duplicate_names_from_nested_codex_dirs() {
                 remote_plugin_id: None,
             },
             SkillMetadata {
+                model: None,
                 name: "dupe-skill".to_string(),
                 description: second_description.to_string(),
                 short_description: None,
@@ -2074,6 +2104,7 @@ async fn loads_skills_from_system_scoped_root() {
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            model: None,
             name: "system-skill".to_string(),
             description: "from system".to_string(),
             short_description: None,
