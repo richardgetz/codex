@@ -40,6 +40,29 @@ read `NPM_TOKEN`; if a bootstrap token was used for the first publish, revoke th
 npm token and remove the GitHub Actions `NPM_TOKEN` secret after Trusted
 Publishing is configured.
 
+The npm trusted publisher should continue to use no npm environment. The separate
+GitHub `codesigning` environment is used only by the macOS signing job.
+
+## One-time macOS signing setup
+
+The macOS release job signs the native Codex binaries before it creates the
+archives consumed by npm. Configure a GitHub Environment named `codesigning`,
+restrict it to the `stable` branch, and add these environment secrets:
+
+- `MACOS_SIGNING_P12_BASE64`: the base64-encoded Developer ID Application `.p12`
+  export, including its private key.
+- `MACOS_SIGNING_P12_PASSWORD`: the password used for that `.p12` export.
+
+The workflow imports the certificate into a temporary keychain on the macOS
+runner, signs the `codex` and `codex-code-mode-host` binaries with the Developer
+ID Application identity for team `W9HW8JL7CP`, verifies the signatures, and
+deletes the temporary keychain before the job ends. The private key is never
+stored in the repository or included in an npm package.
+
+The App Store Connect API key used for notarization is separate from this setup;
+it is not what makes macOS recognize successive Codex builds as the same program
+for the `Codex MCP Credentials` Keychain item.
+
 Before any publish step runs, the workflow audits the generated npm tarballs and
 fails if they contain secret-like paths such as `.npmrc`, `.env*`, `.ssh/`,
 `.aws/`, or key/certificate files. The publish step also redacts auth-shaped
@@ -62,11 +85,12 @@ Merge or push to `stable` and the workflow will:
 1. Read the base version from `codex-rs/Cargo.toml`.
 2. Compute the next fork counter for that base release line.
 3. Build the macOS release binaries with the derived display version.
-4. Create the matching `rick-v<base>-rick.<n>` tag on the merge commit.
-5. Generate GitHub release notes that separate fork changes from mainline
+4. Sign and verify the macOS binaries before packaging them.
+5. Create the matching `rick-v<base>-rick.<n>` tag on the merge commit.
+6. Generate GitHub release notes that separate fork changes from mainline
    Codex refreshes.
-6. Create a GitHub release.
-7. Publish the npm package.
+7. Create a GitHub release.
+8. Publish the npm package.
 
 ## Release notes
 
