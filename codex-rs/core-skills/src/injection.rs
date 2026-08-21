@@ -6,6 +6,7 @@ use crate::SkillMetadata;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
+use codex_analytics::SkillInvocationLocation;
 use codex_analytics::TrackEventsContext;
 use codex_exec_server::LOCAL_FS;
 use codex_otel::SessionTelemetry;
@@ -121,8 +122,10 @@ pub async fn build_skill_injections(
                 emit_skill_injected_metric(otel, skill, "ok");
                 invocations.push(SkillInvocation {
                     skill_name: skill.name.clone(),
-                    skill_scope: skill.scope,
-                    skill_path: skill.path_to_skills_md.to_path_buf(),
+                    location: SkillInvocationLocation::Host {
+                        path: skill.path_to_skills_md.to_path_buf(),
+                        scope: skill.scope,
+                    },
                     plugin_id: skill.plugin_id.clone(),
                     remote_plugin_id: skill.remote_plugin_id.clone(),
                     invocation_type: InvocationType::Explicit,

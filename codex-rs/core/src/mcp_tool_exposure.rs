@@ -1,9 +1,13 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_connectors::AppToolPolicyInput;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::McpBinding;
 use codex_mcp::ToolInfo as McpToolInfo;
 use codex_mcp::tool_is_model_visible;
 use codex_tools::ToolExposure;
@@ -19,13 +23,62 @@ use crate::connectors;
 use crate::tools::handlers::McpHandler;
 use crate::tools::registry::ToolRegistry;
 
+#[derive(Default)]
+pub(crate) struct McpHandlerCache {
+    cached: Mutex<Option<CachedMcpHandlers>>,
+}
+
+struct CachedMcpHandlers {
+    binding: usize,
+    handlers: HashMap<ToolName, Arc<McpHandler>>,
+}
+
+impl McpHandlerCache {
+    pub(crate) fn append_mcp_tools(
+        &self,
+        binding: &McpBinding,
+        config: &Config,
+        apps_enabled: bool,
+        mcp_server_catalog: &codex_mcp::ResolvedMcpCatalog,
+        search_tool_enabled: bool,
+        registry: &mut ToolRegistry,
+    ) -> HashSet<ToolName> {
+        let mut cached = self
+            .cached
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let binding_ptr = std::ptr::from_ref(binding) as usize;
+        if cached
+            .as_ref()
+            .is_none_or(|cached| cached.binding != binding_ptr)
+        {
+            *cached = None;
+        }
+
+        let cached = cached.get_or_insert_with(|| CachedMcpHandlers {
+            binding: binding_ptr,
+            handlers: HashMap::new(),
+        });
+        append_mcp_tools(
+            binding.tools(),
+            config,
+            apps_enabled,
+            mcp_server_catalog,
+            search_tool_enabled,
+            &mut cached.handlers,
+            registry,
+        )
+    }
+}
+
 #[instrument(level = "trace", skip_all)]
-pub(crate) fn append_mcp_tools(
+fn append_mcp_tools(
     all_mcp_tools: &[McpToolInfo],
     config: &Config,
     apps_enabled: bool,
     mcp_server_catalog: &codex_mcp::ResolvedMcpCatalog,
     search_tool_enabled: bool,
+    handlers: &mut HashMap<ToolName, Arc<McpHandler>>,
     registry: &mut ToolRegistry,
 ) -> HashSet<ToolName> {
     append_mcp_tools_with_selection(
@@ -37,6 +90,7 @@ pub(crate) fn append_mcp_tools(
         apps_enabled,
         mcp_server_catalog,
         search_tool_enabled,
+        handlers,
         registry,
     )
 }
@@ -53,6 +107,7 @@ pub(crate) fn append_mcp_tools_for_input(
     search_tool_enabled: bool,
     registry: &mut ToolRegistry,
 ) -> HashSet<ToolName> {
+    let mut handlers = HashMap::new();
     append_mcp_tools_with_selection(
         all_mcp_tools,
         connectors,
@@ -62,6 +117,7 @@ pub(crate) fn append_mcp_tools_for_input(
         apps_enabled,
         mcp_server_catalog,
         search_tool_enabled,
+        &mut handlers,
         registry,
     )
 }
@@ -76,6 +132,7 @@ fn append_mcp_tools_with_selection(
     apps_enabled: bool,
     mcp_server_catalog: &codex_mcp::ResolvedMcpCatalog,
     search_tool_enabled: bool,
+    handlers: &mut HashMap<ToolName, Arc<McpHandler>>,
     registry: &mut ToolRegistry,
 ) -> HashSet<ToolName> {
     // Keep regular MCP tools first; Apps tools also require connector and policy checks.
@@ -133,43 +190,47 @@ fn append_mcp_tools_with_selection(
         let agent_plugin = mcp_server_catalog
             .server(&tool.server_name)
             .is_some_and(|server| server.source().is_agent_plugin());
-        let handler = if agent_plugin {
-            McpHandler::new_agent_plugin(tool.clone())
-        } else {
-            McpHandler::new(tool.clone(), /*namespace_tools_enabled*/ true)
-        };
-        match handler {
-            Ok(handler) => {
-                let fits_agent_budget = if agent_plugin {
-                    handler.model_spec_bytes().is_ok_and(|bytes| {
-                        if bytes > MAX_AGENT_PLUGIN_MCP_SPEC_BYTES {
-                            return false;
-                        }
-                        let next = agent_plugin_bytes.saturating_add(bytes);
-                        if next <= MAX_AGENT_PLUGIN_MCP_TOTAL_BYTES {
-                            agent_plugin_bytes = next;
-                            true
-                        } else {
-                            false
-                        }
-                    })
+        let handler = match handlers.entry(tool_name.clone()) {
+            Entry::Occupied(entry) => Arc::clone(entry.get()),
+            Entry::Vacant(entry) => {
+                let handler = if agent_plugin {
+                    McpHandler::new_agent_plugin(tool.clone())
                 } else {
-                    true
+                    McpHandler::new(tool.clone(), /*namespace_tools_enabled*/ true)
                 };
-                let tool_exposure = if fits_agent_budget {
-                    exposure(&tool)
-                } else {
-                    ToolExposure::Hidden
-                };
-                if registry.register_external_with_exposure(Arc::new(handler), tool_exposure)
-                    && fits_agent_budget
-                {
-                    registered_tools.insert(tool_name);
+                match handler {
+                    Ok(handler) => Arc::clone(entry.insert(Arc::new(handler))),
+                    Err(err) => {
+                        warn!("Skipping MCP tool `{tool_name}`: failed to build tool spec: {err}");
+                        continue;
+                    }
                 }
             }
-            Err(err) => {
-                warn!("Skipping MCP tool `{tool_name}`: failed to build tool spec: {err}");
-            }
+        };
+
+        let fits_agent_budget = if agent_plugin {
+            handler.model_spec_bytes().is_ok_and(|bytes| {
+                if bytes > MAX_AGENT_PLUGIN_MCP_SPEC_BYTES {
+                    return false;
+                }
+                let next = agent_plugin_bytes.saturating_add(bytes);
+                if next <= MAX_AGENT_PLUGIN_MCP_TOTAL_BYTES {
+                    agent_plugin_bytes = next;
+                    true
+                } else {
+                    false
+                }
+            })
+        } else {
+            true
+        };
+        let tool_exposure = if fits_agent_budget {
+            exposure(&tool)
+        } else {
+            ToolExposure::Hidden
+        };
+        if registry.register_external_with_exposure(handler, tool_exposure) && fits_agent_budget {
+            registered_tools.insert(tool_name);
         }
     }
     registered_tools

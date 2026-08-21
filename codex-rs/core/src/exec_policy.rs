@@ -41,6 +41,10 @@ use codex_shell_command::bash::parse_shell_lc_single_command_prefix;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use shlex::try_join as shlex_try_join;
 
+mod model_policy;
+
+pub(crate) use model_policy::AllowPrefixRules;
+
 const PROMPT_CONFLICT_REASON: &str =
     "approval required by policy, but AskForApproval is set to Never";
 const REJECT_SANDBOX_APPROVAL_REASON: &str =
@@ -305,6 +309,7 @@ pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) prefix_rule: Option<Vec<String>>,
+    pub(crate) allow_prefix_rules: AllowPrefixRules,
 }
 
 impl ExecPolicyManager {
@@ -363,8 +368,9 @@ impl ExecPolicyManager {
             windows_sandbox_level,
             sandbox_permissions,
             prefix_rule,
+            allow_prefix_rules,
         } = req;
-        let exec_policy = self.current();
+        let exec_policy = self.current_for_prefix_rules(allow_prefix_rules);
         let ExecPolicyCommands {
             commands,
             used_complex_parsing,
@@ -373,7 +379,11 @@ impl ExecPolicyManager {
         // Keep heredoc prefix parsing for rule evaluation so existing
         // allow/prompt/forbidden rules still apply, but avoid auto-derived
         // amendments when only the heredoc fallback parser matched.
-        let auto_amendment_allowed = !used_complex_parsing;
+        // Keep heredoc prefix parsing for the rules that apply to this model,
+        // but avoid reusable approvals for cyber models or when only the
+        // heredoc fallback parser matched.
+        let auto_amendment_allowed =
+            !used_complex_parsing && allow_prefix_rules == AllowPrefixRules::Honor;
         let exec_policy_fallback = |cmd: &[String]| match self.unmatched_command_policy {
             UnmatchedCommandPolicy::Default => render_decision_for_unmatched_command(
                 cmd,

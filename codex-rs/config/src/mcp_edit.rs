@@ -156,6 +156,7 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
             bearer_token_env_var,
             http_headers,
             env_http_headers,
+            http_headers_helper,
         } => {
             entry["url"] = value(url.clone());
             if let Some(env_var) = bearer_token_env_var {
@@ -170,6 +171,9 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
                 && !headers.is_empty()
             {
                 entry["env_http_headers"] = table_from_pairs(headers.iter());
+            }
+            if let Some(command) = http_headers_helper {
+                entry["http_headers_helper"] = value(command.clone());
             }
         }
     }

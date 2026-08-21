@@ -40,6 +40,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         }),
         include_skills_usage_instructions: false,
@@ -65,10 +66,12 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         use_responses_lite: false,
+        node_repl_auto_review_required: false,
+        node_repl_disabled: false,
         auto_review_model_override: None,
         model_specialty: None,
         tool_mode: None,
-        multi_agent_version: None,
+        multi_agent_version: preset.multi_agent_version,
     }
 }
 

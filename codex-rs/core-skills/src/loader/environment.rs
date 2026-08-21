@@ -57,6 +57,7 @@ impl ParsedEnvironmentSkill {
             name: base_name,
             description,
             short_description,
+            ..
         } = parse_skill_frontmatter_metadata(&contents, || default_skill_name(&skill.path))
             .map_err(|err| err.to_string())?;
         let (dependencies, policy) = match &skill.metadata {

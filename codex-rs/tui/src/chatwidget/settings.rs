@@ -215,6 +215,7 @@ impl ChatWidget {
     ) {
         // Account-update notifications are the identity boundary. The visible account fields can
         // be identical across two accounts, so always invalidate account-scoped requests and data.
+        self.invalidate_connector_scope();
         self.clear_pending_token_activity_refreshes();
         self.clear_pending_rate_limit_reset_requests();
         self.codex_rate_limit_reached_type = None;
@@ -235,12 +236,16 @@ impl ChatWidget {
         self.status_line_workspace_headline_pending_request_id = None;
         self.status_line_workspace_headline_last_requested_at = None;
         self.status_line_workspace_messages_disabled = false;
+        self.clear_thread_usage_state();
         self.status_account_display = status_account_display;
         self.plan_type = plan_type;
         self.has_chatgpt_account = has_chatgpt_account;
         self.has_codex_backend_auth = has_codex_backend_auth;
         self.bottom_pane
             .set_connectors_enabled(self.connectors_enabled());
+        if self.thread_id.is_some() {
+            self.prefetch_connectors();
+        }
         self.bottom_pane
             .set_token_activity_command_enabled(has_codex_backend_auth);
         self.refresh_status_surfaces();
@@ -488,6 +493,77 @@ impl ChatWidget {
         self.refresh_status_line();
     }
 
+    fn apply_thread_settings(&mut self, mut settings: ThreadSettings) {
+        let cwd_changed = self.config.cwd != settings.cwd;
+        self.apply_thread_settings_cwd(settings.cwd.clone());
+        self.config.model_provider_id = settings.model_provider.clone();
+        self.set_service_tier(settings.service_tier.clone());
+        self.set_approval_policy(settings.approval_policy);
+        self.set_approvals_reviewer(settings.approvals_reviewer.to_core());
+        self.config.personality = settings.personality;
+
+        let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+            &settings.sandbox_policy.to_core(),
+            settings.cwd.as_path(),
+        );
+        let permission_snapshot = PermissionProfileSnapshot::from_session_snapshot(
+            permission_profile,
+            settings.active_permission_profile.take().map(Into::into),
+        );
+        if let Err(err) = self
+            .config
+            .permissions
+            .set_permission_profile_from_session_snapshot(permission_snapshot.clone())
+        {
+            tracing::warn!(%err, "failed to sync permissions from ThreadSettingsUpdated");
+            if let Err(replace_err) = self
+                .config
+                .permissions
+                .replace_permission_profile_from_session_snapshot(permission_snapshot)
+            {
+                tracing::error!(
+                    %replace_err,
+                    "failed to replace permissions from ThreadSettingsUpdated after constraint fallback"
+                );
+            }
+        }
+
+        settings.collaboration_mode.settings.model = settings.model;
+        settings.collaboration_mode.settings.reasoning_effort = settings.effort;
+        self.set_effective_collaboration_mode(settings.collaboration_mode);
+        self.refresh_effective_service_tier();
+        self.refresh_status_surfaces();
+        self.sync_service_tier_commands();
+        self.sync_personality_command_enabled();
+        if cwd_changed {
+            self.invalidate_connector_scope();
+            self.refresh_skills_for_current_cwd(/*force_reload*/ true);
+            self.prefetch_connectors();
+        }
+        self.refresh_plugin_mentions();
+        self.request_redraw();
+    }
+
+    fn apply_thread_settings_cwd(&mut self, cwd: AbsolutePathBuf) {
+        let previous_cwd = std::mem::replace(&mut self.config.cwd, cwd.clone());
+        self.current_cwd = Some(cwd.to_path_buf());
+        self.status_line_project_root_name_cache = None;
+
+        if !self.config.workspace_roots.contains(&previous_cwd) {
+            return;
+        }
+
+        let previous_roots = std::mem::take(&mut self.config.workspace_roots);
+        self.config.workspace_roots.push(cwd);
+        for root in previous_roots {
+            if root != previous_cwd && !self.config.workspace_roots.contains(&root) {
+                self.config.workspace_roots.push(root);
+            }
+        }
+        self.config
+            .permissions
+            .set_workspace_roots(self.config.workspace_roots.clone());
+    }
     pub(super) fn set_effective_collaboration_mode(&mut self, mode: CollaborationMode) {
         let mode_kind = mode.mode;
         let settings = mode.settings;
@@ -673,70 +749,5 @@ impl ChatWidget {
             return;
         }
         self.apply_thread_settings(notification.thread_settings);
-    }
-
-    fn apply_thread_settings(&mut self, mut settings: ThreadSettings) {
-        let cwd_changed = self.config.cwd != settings.cwd;
-        self.apply_thread_settings_cwd(settings.cwd.clone());
-        self.config.model_provider_id = settings.model_provider.clone();
-        self.effective_service_tier = settings.service_tier.clone();
-        self.set_approval_policy(settings.approval_policy);
-        self.set_approvals_reviewer(settings.approvals_reviewer.to_core());
-        self.config.personality = settings.personality;
-        let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
-            &settings.sandbox_policy.to_core(),
-            settings.cwd.as_path(),
-        );
-        let permission_snapshot = PermissionProfileSnapshot::from_session_snapshot(
-            permission_profile,
-            settings.active_permission_profile.take().map(Into::into),
-        );
-        let permission_sync = self
-            .config
-            .permissions
-            .set_permission_profile_from_session_snapshot(permission_snapshot.clone());
-        if let Err(err) = permission_sync {
-            tracing::warn!(%err, "failed to sync permissions from ThreadSettingsUpdated");
-            if let Err(replace_err) = self
-                .config
-                .permissions
-                .replace_permission_profile_from_session_snapshot(permission_snapshot)
-            {
-                tracing::error!(
-                    %replace_err,
-                    "failed to replace permissions from ThreadSettingsUpdated after constraint fallback"
-                );
-            }
-        }
-        settings.collaboration_mode.settings.model = settings.model;
-        settings.collaboration_mode.settings.reasoning_effort = settings.effort;
-        self.set_effective_collaboration_mode(settings.collaboration_mode);
-        self.refresh_status_surfaces();
-        self.sync_service_tier_commands();
-        self.sync_personality_command_enabled();
-        if cwd_changed {
-            self.refresh_skills_for_current_cwd(/*force_reload*/ true);
-        }
-        self.refresh_plugin_mentions();
-        self.request_redraw();
-    }
-
-    fn apply_thread_settings_cwd(&mut self, cwd: AbsolutePathBuf) {
-        let previous_cwd = std::mem::replace(&mut self.config.cwd, cwd.clone());
-        self.current_cwd = Some(cwd.to_path_buf());
-        self.status_line_project_root_name_cache = None;
-        if !self.config.workspace_roots.contains(&previous_cwd) {
-            return;
-        }
-        let previous_roots = std::mem::take(&mut self.config.workspace_roots);
-        self.config.workspace_roots.push(cwd);
-        for root in previous_roots {
-            if root != previous_cwd && !self.config.workspace_roots.contains(&root) {
-                self.config.workspace_roots.push(root);
-            }
-        }
-        self.config
-            .permissions
-            .set_workspace_roots(self.config.workspace_roots.clone());
     }
 }

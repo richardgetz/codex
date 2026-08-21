@@ -121,7 +121,7 @@ fn save_session_resolved_fields(sc: &SessionConfiguration, lock_config: &mut Con
     lock_config.service_tier = sc.service_tier.clone();
     lock_config.instructions = Some(sc.base_instructions.clone());
     lock_config.developer_instructions = sc.developer_instructions.clone();
-    lock_config.compact_prompt = sc.compact_prompt.clone();
+    lock_config.compact_prompt = sc.original_config_do_not_use.compact_prompt.clone();
     lock_config.personality = sc.personality;
     lock_config.approval_policy = Some(sc.approval_policy.value());
     lock_config.approvals_reviewer = Some(sc.approvals_reviewer);
@@ -157,6 +157,9 @@ fn save_config_resolved_fields(
     if config.tool_registry.error_on_tool_collisions || features.tool_registry.is_some() {
         features.tool_registry = Some(ToolRegistryConfigToml {
             error_on_tool_collisions: Some(config.tool_registry.error_on_tool_collisions),
+            turn_metadata_includes_tool_info: Some(
+                config.tool_registry.turn_metadata_includes_tool_info,
+            ),
         });
     }
     let mut multi_agent_v2: MultiAgentV2ConfigToml =
@@ -272,7 +275,6 @@ mod tests {
         config.multi_agent_v2.subagent_developer_instructions =
             Some("Locked subagent developer instructions.".to_string());
         config.token_budget = Some(crate::config::TokenBudgetConfig {
-            mode: codex_features::TokenBudgetMode::Thread,
             reminder_threshold_tokens: Some(16_000),
             reminder_message_template: "Locked reminder: {n_remaining} tokens.".to_string(),
             guidance_message: Some("Locked context-window guidance.".to_string()),
@@ -298,17 +300,20 @@ mod tests {
             .features
             .enable(Feature::CurrentTimeReminder)
             .expect("current_time_reminder should be enableable in tests");
+        config.compact_prompt = Some("resolved compact prompt".to_string());
         sc.original_config_do_not_use = Arc::new(config);
         sc.base_instructions = "resolved instructions".to_string();
         sc.developer_instructions = Some("resolved developer instructions".to_string());
-        sc.compact_prompt = Some("resolved compact prompt".to_string());
 
         let lockfile = sc.to_config_lockfile_toml().expect("lock should serialize");
         let lock = &lockfile.config;
 
         assert_eq!(lock.instructions, Some(sc.base_instructions.clone()));
         assert_eq!(lock.developer_instructions, sc.developer_instructions);
-        assert_eq!(lock.compact_prompt, sc.compact_prompt);
+        assert_eq!(
+            lock.compact_prompt,
+            sc.original_config_do_not_use.compact_prompt
+        );
         assert_eq!(lock.model, Some(sc.collaboration_mode.model().to_string()));
         assert_eq!(
             lock.model_reasoning_effort,
@@ -330,6 +335,7 @@ mod tests {
             features.tool_registry,
             Some(ToolRegistryConfigToml {
                 error_on_tool_collisions: Some(true),
+                turn_metadata_includes_tool_info: Some(false),
             })
         );
         let feature_entries = features.entries();
@@ -372,7 +378,6 @@ mod tests {
             features.token_budget,
             Some(FeatureToml::Config(TokenBudgetConfigToml {
                 enabled: Some(true),
-                mode: Some(codex_features::TokenBudgetMode::Thread),
                 reminder_threshold_tokens: Some(16_000),
                 reminder_message_template: Some(
                     "Locked reminder: {n_remaining} tokens.".to_string()
@@ -440,7 +445,6 @@ mod tests {
         sc.original_config_do_not_use = Arc::new(config);
         sc.base_instructions = "catalog instructions".to_string();
         sc.developer_instructions = Some("catalog developer instructions".to_string());
-        sc.compact_prompt = Some("catalog compact prompt".to_string());
         sc.service_tier = Some("flex".to_string());
 
         let lockfile = sc.to_config_lockfile_toml().expect("lock should serialize");

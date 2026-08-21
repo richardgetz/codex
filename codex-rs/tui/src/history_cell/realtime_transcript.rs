@@ -1,6 +1,7 @@
 //! Live user and assistant transcript cells for realtime voice.
 
 use super::*;
+use std::borrow::Cow;
 use std::sync::Mutex;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,7 +69,7 @@ impl HistoryCell for RealtimeTranscriptHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         for entry in &self.entries {
-            let text = sanitize_user_text(&entry.text);
+            let text = sanitize_user_text(Cow::Borrowed(entry.text.as_str()));
             if text.is_empty() {
                 continue;
             }
@@ -87,7 +88,11 @@ impl HistoryCell for RealtimeTranscriptHistoryCell {
     fn raw_lines(&self) -> Vec<Line<'static>> {
         self.entries
             .iter()
-            .flat_map(|entry| raw_lines_from_source(sanitize_user_text(&entry.text).as_str()))
+            .flat_map(|entry| {
+                raw_lines_from_source(
+                    sanitize_user_text(Cow::Borrowed(entry.text.as_str())).as_ref(),
+                )
+            })
             .collect()
     }
 }
@@ -145,7 +150,7 @@ fn append_transcript_delta(text: &mut String, delta: &str) {
 
 impl HistoryCell for RealtimeTranscriptCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let text = sanitize_user_text(&self.text());
+        let text = sanitize_user_text(Cow::Owned(self.text()));
         if text.is_empty() {
             return Vec::new();
         }
@@ -162,7 +167,9 @@ impl HistoryCell for RealtimeTranscriptCell {
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        raw_lines_from_source(sanitize_user_text(&self.text()).trim_end_matches(['\r', '\n']))
+        raw_lines_from_source(
+            sanitize_user_text(Cow::Owned(self.text())).trim_end_matches(['\r', '\n']),
+        )
     }
 
     fn has_stable_transcript_height(&self) -> bool {

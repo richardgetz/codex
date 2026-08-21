@@ -225,10 +225,11 @@ async fn classify_with_model(
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         }],
-        tools: Vec::new(),
+        tools: Vec::new().into(),
         parallel_tool_calls: false,
         base_instructions: BaseInstructions {
             text: CLASSIFIER_INSTRUCTIONS.to_string(),
+            provenance: None,
         },
         output_schema: Some(json!({
             "type": "object",

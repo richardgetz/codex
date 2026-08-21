@@ -57,6 +57,7 @@ policy:
             short_description: None,
             dependencies: Some(SkillDependencies {
                 tools: vec![SkillToolDependency {
+                    oauth_callback_port: None,
                     r#type: "mcp".to_string(),
                     value: "deploy-server".to_string(),
                     description: Some("Deploy MCP".to_string()),

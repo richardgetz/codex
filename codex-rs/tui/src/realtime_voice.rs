@@ -600,6 +600,15 @@ impl RealtimeVoiceSession {
         let _ = self.peer_connection.close().await;
         let _ = (&self.input_stream, &self.output_stream);
     }
+
+    pub(crate) fn close_in_background(self) {
+        self.input_task.abort();
+        let peer_connection = Arc::clone(&self.peer_connection);
+        tokio::spawn(async move {
+            let _ = peer_connection.close().await;
+        });
+        let _ = (&self.input_stream, &self.output_stream);
+    }
 }
 
 #[cfg(test)]
