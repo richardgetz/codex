@@ -1,10 +1,11 @@
 set working-directory := "codex-rs"
 set positional-arguments
+export CODEX_REPO_ROOT := justfile_directory()
 export JUST_SHELL := justfile_directory() / "scripts/just-shell.py"
 set shell := ["python3", "-c", 'import os, runpy; runpy.run_path(os.environ["JUST_SHELL"], run_name="__main__")']
 set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.environ["JUST_SHELL"], run_name="__main__")']
 
-rust_min_stack := "8388608" # 8 MiB
+rust_min_stack := "16777216" # 16 MiB
 python := if os_family() == "windows" { "python" } else { "python3" }
 
 # Display help
@@ -36,6 +37,11 @@ file-search *args:
 # Run the standalone code-mode host from source.
 code-mode-host *args:
     {{ python }} ../scripts/run_local_cargo.py run --bin codex-code-mode-host -- {args}
+
+# Assemble a local Codex package.
+[no-cd]
+assemble-codex-package *args:
+    {{ python }} {{ justfile_directory() }}/scripts/build_codex_package.py {args}
 
 # Build the CLI and run the app-server test client
 app-server-test-client *args:

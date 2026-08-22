@@ -8,9 +8,13 @@ const TRANSCRIPT_TRUNCATION_MARKER: &str = "… earlier transcript truncated …
 
 #[derive(Clone, Copy)]
 enum TruncationPlacement {
+    PreserveStart,
     Middle,
     PreserveTail,
 }
+
+const MAX_REALTIME_DELEGATION_FIELD_BYTES: usize = 4 * 1024;
+const TRUNCATION_MARKER: &str = "…";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RealtimeDelegationSource {
@@ -77,17 +81,20 @@ impl ContextualUserFragment for RealtimeDelegation<'_> {
             ))
         } else {
             content_budget
-        };
+        }
+        .min(MAX_REALTIME_DELEGATION_FIELD_BYTES);
         let input = escape_xml_text_bounded(
             self.input,
             input_budget,
             INPUT_TRUNCATION_MARKER,
-            TruncationPlacement::Middle,
+            TruncationPlacement::PreserveStart,
         );
         let transcript_delta = transcript_delta.map(|transcript_delta| {
             escape_xml_text_bounded(
                 transcript_delta,
-                content_budget.saturating_sub(input.len()),
+                content_budget
+                    .saturating_sub(input.len())
+                    .min(MAX_REALTIME_DELEGATION_FIELD_BYTES),
                 TRANSCRIPT_TRUNCATION_MARKER,
                 TruncationPlacement::PreserveTail,
             )
@@ -131,6 +138,7 @@ fn escape_xml_text_bounded(
 
     let content_budget = max_escaped_bytes.saturating_sub(truncation_marker.len());
     let (prefix_budget, suffix_budget) = match placement {
+        TruncationPlacement::PreserveStart => (content_budget, 0),
         TruncationPlacement::Middle => {
             let prefix_budget = content_budget / 2;
             (prefix_budget, content_budget - prefix_budget)

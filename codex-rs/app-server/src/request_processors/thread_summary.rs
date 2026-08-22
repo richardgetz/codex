@@ -242,7 +242,6 @@ pub(crate) fn thread_settings_from_core_snapshot(
         user_preferences_memory_policy,
     }
 }
-
 #[cfg(test)]
 fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     timestamp.and_then(|ts| {
@@ -317,6 +316,7 @@ pub(crate) fn summary_to_thread(
         ephemeral: false,
         section: None,
         section_entered_at: None,
+        project_id: None,
         history_mode: ThreadHistoryMode::Legacy,
         model_provider,
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),

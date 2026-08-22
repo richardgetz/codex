@@ -16,8 +16,17 @@ impl ChatWidget {
                     .is::<history_cell::SessionHeaderHistoryCell>()
             });
 
+        let history_width = self
+            .last_rendered_width
+            .get()
+            .map(|width| self.history_wrap_width(width))
+            .unwrap_or(u16::MAX);
         let mut cells = Vec::new();
-        if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
+        if !keep_placeholder_header_active
+            && !cell
+                .display_lines_for_mode(history_width, self.history_render_mode())
+                .is_empty()
+        {
             // Only break exec grouping if the cell renders visible lines.
             if !self.has_active_stream_tail()
                 && let Some(active) = self.transcript.active_cell.take()
@@ -27,6 +36,15 @@ impl ChatWidget {
                 self.request_pending_usage_output_insertion();
             }
             self.transcript.needs_final_message_separator = true;
+        } else if !keep_placeholder_header_active
+            && self
+                .transcript
+                .active_cell
+                .as_ref()
+                .is_some_and(|active_cell| active_cell.as_any().is::<ExecCell>())
+            && !cell.transcript_lines(history_width).is_empty()
+        {
+            self.flush_completed_command_activity();
         }
         cells.push(cell);
         cells

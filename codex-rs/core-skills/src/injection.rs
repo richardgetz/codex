@@ -9,6 +9,7 @@ use codex_analytics::SkillInvocation;
 use codex_analytics::SkillInvocationLocation;
 use codex_analytics::TrackEventsContext;
 use codex_exec_server::LOCAL_FS;
+use codex_exec_server::ReadFileOptions;
 use codex_otel::SessionTelemetry;
 use codex_otel::sanitize_metric_tag_value;
 pub use codex_skills::ToolMentionKind;
@@ -105,7 +106,10 @@ pub async fn build_skill_injections(
             .and_then(|outcome| outcome.file_system_for_skill(skill))
             .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
         let path = PathUri::from_abs_path(&skill.path_to_skills_md);
-        match fs.read_file_text(&path, /*sandbox*/ None).await {
+        match fs
+            .read_file_text(&path, ReadFileOptions::default(), /*sandbox*/ None)
+            .await
+        {
             Ok(contents) => {
                 let (contents, truncated) =
                     if loaded_skills.is_some_and(|outcome| outcome.is_agent_plugin_skill(skill)) {

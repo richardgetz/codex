@@ -102,6 +102,8 @@ use tracing::instrument;
 use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
+// Reject pathological selected cwd values at the environment-selection boundary.
+const MAX_TURN_ENVIRONMENT_CWD_BYTES: usize = 8 * 1024;
 
 /// Test-only override for enabling thread-manager behaviors used by integration
 /// tests.
@@ -251,6 +253,8 @@ pub struct StartThreadOptions {
     pub environments: Option<Vec<TurnEnvironmentSelection>>,
     pub thread_extension_init: ExtensionDataInit,
     pub client_mcp_extensions: ClientMcpExtensions,
+    /// Thread ID reserved before startup so the caller can associate host-owned state with it.
+    pub reserved_thread_id: Option<ThreadId>,
 }
 
 impl StartThreadOptions {
@@ -268,6 +272,7 @@ impl StartThreadOptions {
             environments: None,
             thread_extension_init: ExtensionDataInit::default(),
             client_mcp_extensions: ClientMcpExtensions::default(),
+            reserved_thread_id: None,
         }
     }
 }
@@ -342,6 +347,7 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) agent_control: AgentControl,
     pub(crate) session_source: SessionSource,
     pub(crate) parent_thread_id: Option<ThreadId>,
+    pub(crate) environment_selections: Option<Vec<TurnEnvironmentSelection>>,
     pub(crate) inherited_environments: Option<TurnEnvironmentSnapshot>,
     pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
 }
@@ -460,7 +466,7 @@ impl ThreadManager {
         let plugins_manager = Arc::new(PluginsManager::new_with_options(
             codex_home.to_path_buf(),
             restriction_product,
-            auth_manager.get_api_auth_mode(),
+            Arc::clone(&auth_manager),
             skills_service.clone(),
         ));
         let mcp_manager = Arc::new(McpManager::new_with_extensions(
@@ -607,7 +613,7 @@ impl ThreadManager {
         let plugins_manager = Arc::new(PluginsManager::new_with_options(
             codex_home.clone(),
             restriction_product,
-            auth_manager.get_api_auth_mode(),
+            Arc::clone(&auth_manager),
             skills_service.clone(),
         ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
@@ -743,6 +749,12 @@ impl ThreadManager {
     ) -> CodexResult<()> {
         let mut environment_ids = HashSet::with_capacity(environments.len());
         for environment in environments {
+            if environment.cwd.inferred_native_path_string().len() > MAX_TURN_ENVIRONMENT_CWD_BYTES
+            {
+                return Err(CodexErr::InvalidRequest(
+                    "turn environment working directory exceeds the maximum size".to_string(),
+                ));
+            }
             if !environment_ids.insert(environment.environment_id.as_str()) {
                 return Err(CodexErr::InvalidRequest(format!(
                     "duplicate turn environment id `{}`",
@@ -851,19 +863,22 @@ impl ThreadManager {
         }
     }
 
-    /// Moves a persisted thread to, within, or out of a server-ordered section.
+    /// Moves a thread to, within, or out of a server-ordered section.
     pub async fn move_thread_to_section(
         &self,
         thread_id: ThreadId,
         section: Option<&str>,
         before_thread_id: Option<ThreadId>,
     ) -> CodexResult<()> {
-        if let Ok(thread) = self.get_thread(thread_id).await
-            && thread.config_snapshot().await.ephemeral
-        {
-            return Err(CodexErr::InvalidRequest(format!(
-                "ephemeral thread does not support section moves: {thread_id}"
-            )));
+        if let Ok(thread) = self.get_thread(thread_id).await {
+            if thread.config_snapshot().await.ephemeral {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "ephemeral thread does not support section moves: {thread_id}"
+                )));
+            }
+            // Explicit placement must work before the first turn materializes the thread.
+            thread.ensure_rollout_materialized().await;
+            thread.flush_rollout().await?;
         }
 
         self.state
@@ -916,6 +931,11 @@ impl ThreadManager {
 
     pub async fn start_thread(&self, options: StartThreadOptions) -> CodexResult<NewThread> {
         Box::pin(self.start_thread_inner(options, /*forked_from_thread_id*/ None)).await
+    }
+
+    /// Allocates a thread ID before startup so a caller can associate host-owned state with it.
+    pub fn reserve_thread_id(&self) -> ThreadId {
+        self.state.thread_id_generator.as_ref()()
     }
 
     async fn start_thread_inner(
@@ -1200,6 +1220,7 @@ impl ThreadManager {
             thread_source,
             parent_trace,
             ClientMcpExtensions::default(),
+            /*reserved_thread_id*/ None,
         )
         .await
     }
@@ -1223,6 +1244,7 @@ impl ThreadManager {
     }
 
     /// Fork an existing thread from already-loaded store history.
+    #[allow(clippy::too_many_arguments)]
     pub async fn fork_thread_from_history<S>(
         &self,
         snapshot: S,
@@ -1231,6 +1253,7 @@ impl ThreadManager {
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
+        reserved_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread>
     where
         S: Into<ForkSnapshot>,
@@ -1245,6 +1268,7 @@ impl ThreadManager {
             thread_source,
             parent_trace,
             client_mcp_extensions,
+            reserved_thread_id,
         )
         .await
     }
@@ -1257,6 +1281,7 @@ impl ThreadManager {
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
+        reserved_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread> {
         let history = InitialHistory::Resumed(ResumedHistory {
             conversation_id: prepared.source_thread_id,
@@ -1278,6 +1303,7 @@ impl ThreadManager {
                 thread_source,
                 parent_trace,
                 client_mcp_extensions,
+                reserved_thread_id,
             )
             .await;
         drop(prepared);
@@ -1291,6 +1317,7 @@ impl ThreadManager {
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
+        reserved_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread> {
         let ForkHistory {
             snapshot,
@@ -1333,6 +1360,7 @@ impl ThreadManager {
             thread_source,
             parent_trace,
             client_mcp_extensions,
+            reserved_thread_id,
             ..StartThreadOptions::new(config)
         };
         let mut request =
@@ -1718,15 +1746,17 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             parent_thread_id,
+            environment_selections,
             inherited_environments,
             inherited_exec_policy,
         } = options;
         let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
         let thread_source = initial_history.get_resumed_thread_source();
-        let environments = inherited_environments
-            .as_ref()
-            .filter(|_| initial_history.get_multi_agent_version() == Some(MultiAgentVersion::V2))
-            .map(TurnEnvironmentSnapshot::to_selections);
+        let environments = environment_selections.or_else(|| {
+            inherited_environments
+                .as_ref()
+                .map(TurnEnvironmentSnapshot::to_selections)
+        });
         let options = StartThreadOptions {
             initial_history,
             session_source: Some(session_source),
@@ -1821,6 +1851,7 @@ impl ThreadManagerState {
             environments,
             thread_extension_init,
             client_mcp_extensions,
+            reserved_thread_id,
         } = options;
         let session_source = session_source.unwrap_or_else(|| self.session_source.clone());
         let environments = environments.unwrap_or_else(|| {
@@ -1831,6 +1862,11 @@ impl ThreadManagerState {
             )
         });
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
+        if reserved_thread_id.is_some() && matches!(&initial_history, InitialHistory::Resumed(_)) {
+            return Err(CodexErr::InvalidRequest(
+                "reserved thread ID cannot be used when resuming a thread".to_string(),
+            ));
+        }
         if let InitialHistory::Resumed(resumed) = &initial_history {
             let mut threads = self.threads.write().await;
             if let Some(thread) = threads.get(&resumed.conversation_id).cloned() {
@@ -1918,6 +1954,7 @@ impl ThreadManagerState {
             environment_selections: environments,
             thread_extension_init,
             client_mcp_extensions,
+            reserved_thread_id,
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),

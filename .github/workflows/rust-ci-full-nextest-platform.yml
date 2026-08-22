@@ -163,14 +163,6 @@ jobs:
           tool: nextest
           version: 0.9.103
 
-      - name: Enable unprivileged user namespaces (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo sysctl -w kernel.unprivileged_userns_clone=1
-          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-
       - name: Build nextest archive
         shell: bash
         run: |
@@ -312,14 +304,6 @@ jobs:
           tool: nextest
           version: 0.9.103
 
-      - name: Enable unprivileged user namespaces (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo sysctl -w kernel.unprivileged_userns_clone=1
-          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-
       - name: Set up remote test env (Docker)
         if: ${{ runner.os == 'Linux' && inputs.remote_env }}
         shell: bash
@@ -406,7 +390,7 @@ jobs:
           "${test_command[@]}"
         env:
           RUST_BACKTRACE: 1
-          RUST_MIN_STACK: "8388608" # 8 MiB
+          RUST_MIN_STACK: "16777216" # 16 MiB
           NEXTEST_STATUS_LEVEL: leak
 
       - name: Upload nextest JUnit report

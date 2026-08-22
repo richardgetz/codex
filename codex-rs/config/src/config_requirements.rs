@@ -1,3 +1,4 @@
+use codex_features::FeatureToml;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::SandboxMode;
@@ -17,16 +18,19 @@ use std::fmt;
 use std::path::PathBuf;
 use wildmatch::WildMatchPattern;
 
-use super::requirements_exec_policy::RequirementsExecPolicy;
 use super::requirements_exec_policy::RequirementsExecPolicyToml;
 use crate::Constrained;
 use crate::ConstraintError;
 use crate::ManagedAuthPolicy;
 use crate::ManagedHooksRequirementsToml;
+use crate::McpServerRequirement;
+use crate::PluginRequirementsToml;
+use crate::RequirementsExecPolicy;
 use crate::config_toml::ConfigToml;
-use crate::mcp_requirements::McpServerRequirement;
+use crate::mcp_requirements::validate_mcp_server_requirement;
 use crate::mcp_types::AppToolApproval;
 use crate::permissions_toml::PermissionProfileToml;
+use crate::types::AuthCredentialsStoreMode;
 use crate::types::FeedbackConfigToml;
 use crate::types::WindowsSandboxModeToml;
 
@@ -152,6 +156,8 @@ impl<T> std::ops::DerefMut for ConstrainedWithSource<T> {
 pub struct ConfigRequirements {
     pub allowed_login_methods: Option<Sourced<Vec<ForcedLoginMethod>>>,
     pub allowed_chatgpt_workspaces: Option<Sourced<Vec<String>>>,
+    pub cli_auth_credentials_store: Option<Sourced<AuthCredentialsStoreMode>>,
+    pub chatgpt_base_url: Option<Sourced<String>>,
     pub sqlite_home: Option<Sourced<AbsolutePathBuf>>,
     pub log_dir: Option<Sourced<AbsolutePathBuf>>,
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
@@ -190,6 +196,8 @@ impl Default for ConfigRequirements {
         Self {
             allowed_login_methods: None,
             allowed_chatgpt_workspaces: None,
+            cli_auth_credentials_store: None,
+            chatgpt_base_url: None,
             sqlite_home: None,
             log_dir: None,
             model_catalog_json: None,
@@ -288,11 +296,6 @@ impl ConfigRequirements {
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-pub struct PluginRequirementsToml {
-    pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
-}
-
-#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct MarketplaceRequirementsToml {
     pub restrict_to_allowed_sources: Option<bool>,
@@ -325,12 +328,6 @@ pub enum MarketplaceAllowedSourceKind {
     Git,
     HostPattern,
     Local,
-}
-
-impl PluginRequirementsToml {
-    pub fn is_empty(&self) -> bool {
-        self.mcp_servers.as_ref().is_none_or(BTreeMap::is_empty)
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -927,6 +924,8 @@ pub(crate) fn merge_app_requirements_descending(
 pub struct ConfigRequirementsToml {
     pub allowed_login_methods: Option<Vec<ForcedLoginMethod>>,
     pub allowed_chatgpt_workspaces: Option<Vec<String>>,
+    pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
+    pub chatgpt_base_url: Option<String>,
     pub sqlite_home: Option<AbsolutePathBuf>,
     pub log_dir: Option<AbsolutePathBuf>,
     pub model_catalog_json: Option<AbsolutePathBuf>,
@@ -1028,6 +1027,8 @@ impl<T> std::ops::Deref for Sourced<T> {
 pub struct ConfigRequirementsWithSources {
     pub allowed_login_methods: Option<Sourced<Vec<ForcedLoginMethod>>>,
     pub allowed_chatgpt_workspaces: Option<Sourced<Vec<String>>>,
+    pub cli_auth_credentials_store: Option<Sourced<AuthCredentialsStoreMode>>,
+    pub chatgpt_base_url: Option<Sourced<String>>,
     pub sqlite_home: Option<Sourced<AbsolutePathBuf>>,
     pub log_dir: Option<Sourced<AbsolutePathBuf>>,
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
@@ -1083,6 +1084,8 @@ impl ConfigRequirementsWithSources {
         let ConfigRequirementsToml {
             allowed_login_methods: _,
             allowed_chatgpt_workspaces: _,
+            cli_auth_credentials_store: _,
+            chatgpt_base_url: _,
             sqlite_home: _,
             log_dir: _,
             model_catalog_json: _,
@@ -1133,6 +1136,8 @@ impl ConfigRequirementsWithSources {
             {
                 allowed_login_methods,
                 allowed_chatgpt_workspaces,
+                cli_auth_credentials_store,
+                chatgpt_base_url,
                 sqlite_home,
                 log_dir,
                 model_catalog_json,
@@ -1211,6 +1216,8 @@ impl ConfigRequirementsWithSources {
         let ConfigRequirementsWithSources {
             allowed_login_methods,
             allowed_chatgpt_workspaces,
+            cli_auth_credentials_store,
+            chatgpt_base_url,
             sqlite_home,
             log_dir,
             model_catalog_json,
@@ -1247,6 +1254,8 @@ impl ConfigRequirementsWithSources {
         ConfigRequirementsToml {
             allowed_login_methods: allowed_login_methods.map(|sourced| sourced.value),
             allowed_chatgpt_workspaces: allowed_chatgpt_workspaces.map(|sourced| sourced.value),
+            cli_auth_credentials_store: cli_auth_credentials_store.map(|sourced| sourced.value),
+            chatgpt_base_url: chatgpt_base_url.map(|sourced| sourced.value),
             sqlite_home: sqlite_home.map(|sourced| sourced.value),
             log_dir: log_dir.map(|sourced| sourced.value),
             model_catalog_json: model_catalog_json.map(|sourced| sourced.value),
@@ -1350,6 +1359,8 @@ impl ConfigRequirementsToml {
     pub fn is_empty(&self) -> bool {
         self.allowed_login_methods.is_none()
             && self.allowed_chatgpt_workspaces.is_none()
+            && self.cli_auth_credentials_store.is_none()
+            && self.chatgpt_base_url.is_none()
             && self.sqlite_home.is_none()
             && self.log_dir.is_none()
             && self.model_catalog_json.is_none()
@@ -1436,12 +1447,22 @@ impl ConfigRequirementsToml {
             };
         }
 
+        apply_exact!(cli_auth_credentials_store);
+        apply_exact!(chatgpt_base_url);
         apply_exact!(sqlite_home);
         apply_exact!(log_dir);
         apply_exact!(model_catalog_json);
         apply_exact!(check_for_update_on_startup);
         apply_exact!(allow_login_shell);
         apply_exact!(allow_browser);
+
+        if self
+            .allowed_approvals_reviewers
+            .as_ref()
+            .is_some_and(|reviewers| !reviewers.contains(&ApprovalsReviewer::User))
+        {
+            config.features.get_or_insert_default().guardianv2 = Some(FeatureToml::Enabled(false));
+        }
 
         if let Some(enabled) = self.feedback.as_ref().and_then(|feedback| feedback.enabled) {
             config.feedback.get_or_insert_default().enabled = Some(enabled);
@@ -1460,7 +1481,7 @@ impl ConfigRequirementsToml {
 
     /// Returns the exact managed field affected by editing `segments`.
     pub fn exact_requirement_for_config_path(&self, segments: &[String]) -> Option<&'static str> {
-        let managed_fields: [(bool, &[&str], &'static str); 8] = [
+        let managed_fields: [(bool, &[&str], &'static str); 10] = [
             (self.sqlite_home.is_some(), &["sqlite_home"], "sqlite_home"),
             (self.log_dir.is_some(), &["log_dir"], "log_dir"),
             (
@@ -1499,6 +1520,16 @@ impl ConfigRequirementsToml {
                 &["windows", "sandbox_private_desktop"],
                 "windows.sandbox_private_desktop",
             ),
+            (
+                self.cli_auth_credentials_store.is_some(),
+                &["cli_auth_credentials_store"],
+                "cli_auth_credentials_store",
+            ),
+            (
+                self.chatgpt_base_url.is_some(),
+                &["chatgpt_base_url"],
+                "chatgpt_base_url",
+            ),
         ];
 
         managed_fields
@@ -1522,15 +1553,15 @@ fn validate_mcp_server_requirements(
     plugin_name: Option<&str>,
 ) -> Result<(), ConstraintError> {
     for (server_name, requirement) in requirements {
-        requirement
-            .validate()
-            .map_err(|reason| ConstraintError::McpServerRequirementParse {
+        validate_mcp_server_requirement(requirement).map_err(|reason| {
+            ConstraintError::McpServerRequirementParse {
                 server_name: plugin_name
                     .map(|plugin_name| format!("{plugin_name}/{server_name}"))
                     .unwrap_or_else(|| server_name.clone()),
                 requirement_source: source.clone(),
                 reason,
-            })?;
+            }
+        })?;
     }
     Ok(())
 }
@@ -1546,6 +1577,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         let ConfigRequirementsWithSources {
             allowed_login_methods,
             allowed_chatgpt_workspaces,
+            cli_auth_credentials_store,
+            chatgpt_base_url,
             sqlite_home,
             log_dir,
             model_catalog_json,
@@ -1905,6 +1938,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         Ok(ConfigRequirements {
             allowed_login_methods,
             allowed_chatgpt_workspaces,
+            cli_auth_credentials_store,
+            chatgpt_base_url,
             sqlite_home,
             log_dir,
             model_catalog_json,
@@ -1992,6 +2027,8 @@ mod tests {
         let managed_path = AbsolutePathBuf::try_from(std::env::temp_dir().join("managed"))
             .expect("managed path should be absolute");
         let requirements = ConfigRequirementsToml {
+            cli_auth_credentials_store: Some(AuthCredentialsStoreMode::Ephemeral),
+            chatgpt_base_url: Some("https://managed.example/backend-api/".to_string()),
             sqlite_home: Some(managed_path.clone()),
             log_dir: Some(managed_path.clone()),
             model_catalog_json: Some(managed_path),
@@ -2008,6 +2045,11 @@ mod tests {
             ..Default::default()
         };
         let cases: &[(&[&str], Option<&str>)] = &[
+            (
+                &["cli_auth_credentials_store"],
+                Some("cli_auth_credentials_store"),
+            ),
+            (&["chatgpt_base_url"], Some("chatgpt_base_url")),
             (&["sqlite_home"], Some("sqlite_home")),
             (&["log_dir"], Some("log_dir")),
             (&["model_catalog_json"], Some("model_catalog_json")),
@@ -2065,6 +2107,8 @@ mod tests {
         let ConfigRequirementsToml {
             allowed_login_methods,
             allowed_chatgpt_workspaces,
+            cli_auth_credentials_store,
+            chatgpt_base_url,
             sqlite_home,
             log_dir,
             model_catalog_json,
@@ -2103,6 +2147,10 @@ mod tests {
             allowed_login_methods: allowed_login_methods
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_chatgpt_workspaces: allowed_chatgpt_workspaces
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            cli_auth_credentials_store: cli_auth_credentials_store
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            chatgpt_base_url: chatgpt_base_url
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             sqlite_home: sqlite_home.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             log_dir: log_dir.map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -2411,6 +2459,8 @@ mod tests {
         let other = ConfigRequirementsToml {
             allowed_login_methods: Some(vec![ForcedLoginMethod::Chatgpt]),
             allowed_chatgpt_workspaces: Some(vec!["managed-workspace".to_string()]),
+            cli_auth_credentials_store: Some(AuthCredentialsStoreMode::Keyring),
+            chatgpt_base_url: Some("https://managed.example/backend-api/".to_string()),
             sqlite_home: Some(sqlite_home.clone()),
             log_dir: Some(log_dir.clone()),
             model_catalog_json: Some(model_catalog_json.clone()),
@@ -2457,6 +2507,14 @@ mod tests {
                 )),
                 allowed_chatgpt_workspaces: Some(Sourced::new(
                     vec!["managed-workspace".to_string()],
+                    source.clone(),
+                )),
+                cli_auth_credentials_store: Some(Sourced::new(
+                    AuthCredentialsStoreMode::Keyring,
+                    source.clone(),
+                )),
+                chatgpt_base_url: Some(Sourced::new(
+                    "https://managed.example/backend-api/".to_string(),
                     source.clone(),
                 )),
                 sqlite_home: Some(Sourced::new(sqlite_home, source.clone())),
@@ -3180,21 +3238,15 @@ allowed_approvals_reviewers = ["user"]
     #[test]
     fn deserialize_allowed_approval_policies() -> Result<()> {
         let toml_str = r#"
-            allowed_approval_policies = ["untrusted", "on-request"]
+            allowed_approval_policies = ["on-request", "never"]
         "#;
         let config: ConfigRequirementsToml = from_str(toml_str)?;
         let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
 
         assert_eq!(
             requirements.approval_policy.value(),
-            AskForApproval::UnlessTrusted,
+            AskForApproval::OnRequest,
             "currently, there is no way to specify the default value for approval policy in the toml, so it picks the first allowed value"
-        );
-        assert!(
-            requirements
-                .approval_policy
-                .can_set(&AskForApproval::UnlessTrusted)
-                .is_ok()
         );
         assert!(
             requirements
@@ -3203,11 +3255,13 @@ allowed_approvals_reviewers = ["user"]
                 .is_ok()
         );
         assert_eq!(
-            requirements.approval_policy.can_set(&AskForApproval::Never),
+            requirements
+                .approval_policy
+                .can_set(&AskForApproval::UnlessTrusted),
             Err(ConstraintError::InvalidValue {
                 field_name: "approval_policy",
-                candidate: "Never".into(),
-                allowed: "[UnlessTrusted, OnRequest]".into(),
+                candidate: "UnlessTrusted".into(),
+                allowed: "[OnRequest, Never]".into(),
                 requirement_source: RequirementSource::Unknown,
             })
         );

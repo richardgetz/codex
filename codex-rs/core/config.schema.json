@@ -275,13 +275,6 @@
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
         {
-          "description": "Under this policy, only \"known safe\" commands—as determined by `is_safe_command()`—that **only read files** are auto‑approved. Everything else will ask the user to approve.",
-          "enum": [
-            "untrusted"
-          ],
-          "type": "string"
-        },
-        {
           "description": "The model decides when to ask the user for approval.",
           "enum": [
             "on-request"
@@ -369,6 +362,35 @@
           "type": "string"
         }
       },
+      "type": "object"
+    },
+    "AwsAuthRefreshConfig": {
+      "additionalProperties": false,
+      "description": "Command used to refresh AWS credentials for a model provider.",
+      "properties": {
+        "args": {
+          "default": [],
+          "description": "Arguments passed to the refresh command.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "description": "Executable to invoke directly, without a shell.",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "default": 300000,
+          "description": "Maximum time to wait for the refresh command to complete.",
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command"
+      ],
       "type": "object"
     },
     "BundledSkillsConfig": {
@@ -538,6 +560,9 @@
             "current_time_reminder": {
               "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
             },
+            "cwd_relative_turn_diffs": {
+              "type": "boolean"
+            },
             "default_mode_request_user_input": {
               "type": "boolean"
             },
@@ -623,6 +648,12 @@
               "type": "boolean"
             },
             "in_app_browser": {
+              "type": "boolean"
+            },
+            "in_app_chat": {
+              "type": "boolean"
+            },
+            "in_app_dictation": {
               "type": "boolean"
             },
             "in_app_updates": {
@@ -737,6 +768,9 @@
               "type": "boolean"
             },
             "secret_auth_storage": {
+              "type": "boolean"
+            },
+            "send_async_message": {
               "type": "boolean"
             },
             "shell_snapshot": {
@@ -1414,8 +1448,22 @@
           "minimum": 100.0,
           "type": "integer"
         },
+        "max_parent_compaction_tokens": {
+          "format": "uint",
+          "maximum": 100000.0,
+          "minimum": 100.0,
+          "type": "integer"
+        },
+        "max_tool_call_lag": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
+        },
+        "review_scope": {
+          "$ref": "#/definitions/GuardianV2ReviewScopeConfigToml"
         },
         "review_threshold": {
           "format": "double",
@@ -1429,10 +1477,25 @@
       },
       "type": "object"
     },
+    "GuardianV2ReviewScopeConfigToml": {
+      "additionalProperties": false,
+      "description": "Optional tool-call categories available to the Guardian v2 classifier.",
+      "properties": {
+        "sandboxed_exec_commands": {
+          "description": "Include sandboxed shell command calls in Guardian v2 classification.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "GuardianV2TranscriptConfigToml": {
       "additionalProperties": false,
       "description": "Bounds and optional sources for the Guardian v2 conversation transcript.",
       "properties": {
+        "include_images": {
+          "description": "Include recent screenshots from messages and configured tool outputs.",
+          "type": "boolean"
+        },
         "max_message_entry_tokens": {
           "format": "uint",
           "maximum": 100000.0,
@@ -2106,6 +2169,14 @@
       "additionalProperties": false,
       "description": "AWS SigV4 auth configuration for a model provider.",
       "properties": {
+        "auth_refresh": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AwsAuthRefreshConfig"
+            }
+          ],
+          "description": "Optional command used to reauthenticate after a refreshable AWS auth failure."
+        },
         "profile": {
           "description": "AWS profile name to use. When unset, the AWS SDK default chain decides.",
           "type": "string"
@@ -4088,6 +4159,12 @@
           "description": "Whether turns receive the automatic skills instructions block.",
           "type": "boolean"
         },
+        "max_context_tokens": {
+          "description": "Maximum tokens used by the available-skills catalog. Defaults to 2% of the model context window and is capped at 10,000 tokens when set.",
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
+        },
         "modes": {
           "additionalProperties": {
             "$ref": "#/definitions/SkillModeFilterConfig"
@@ -4319,6 +4396,13 @@
             }
           ],
           "default": {
+            "agents": {
+              "new_task": null,
+              "rename": null,
+              "search": null,
+              "stop": null,
+              "toggle_grouping": null
+            },
             "approval": {
               "approve": null,
               "approve_for_prefix": null,
@@ -4364,6 +4448,7 @@
             "global": {
               "clear_terminal": null,
               "copy": null,
+              "open_agents": null,
               "open_external_editor": null,
               "open_transcript": null,
               "queue": null,
@@ -4419,6 +4504,7 @@
               "open_line_above": null,
               "open_line_below": null,
               "paste_after": null,
+              "replace_char": null,
               "start_change_operator": null,
               "start_delete_operator": null,
               "start_yank_operator": null,
@@ -4582,6 +4668,53 @@
           "default": false,
           "description": "Start the composer in Vim mode (`Normal`) by default. Defaults to `false`.",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "TuiAgentsKeymap": {
+      "additionalProperties": false,
+      "description": "Shortcuts specific to the shared agents overview.",
+      "properties": {
+        "new_task": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Start composing a new agent task."
+        },
+        "rename": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Rename the selected task."
+        },
+        "search": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Search the available agent tasks."
+        },
+        "stop": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Stop the selected running task."
+        },
+        "toggle_grouping": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle grouping tasks by status or project."
         }
       },
       "type": "object"
@@ -4906,6 +5039,14 @@
           ],
           "description": "Copy the last agent response to the clipboard."
         },
+        "open_agents": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open the shared agent-session overview."
+        },
         "open_external_editor": {
           "allOf": [
             {
@@ -4985,6 +5126,20 @@
       "additionalProperties": false,
       "description": "Raw keymap configuration from `[tui.keymap]`.\n\nEach context contains action-level overrides. Missing actions inherit from built-in defaults, and selected chat/composer actions can fall back through `global` during runtime resolution.\n\nThis type is intentionally a persistence shape, not the structure used by input handlers. Runtime consumers should resolve it into `RuntimeKeymap` first so precedence, empty-list unbinding, and duplicate-key validation are applied consistently.",
       "properties": {
+        "agents": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiAgentsKeymap"
+            }
+          ],
+          "default": {
+            "new_task": null,
+            "rename": null,
+            "search": null,
+            "stop": null,
+            "toggle_grouping": null
+          }
+        },
         "approval": {
           "allOf": [
             {
@@ -5064,6 +5219,7 @@
           "default": {
             "clear_terminal": null,
             "copy": null,
+            "open_agents": null,
             "open_external_editor": null,
             "open_transcript": null,
             "queue": null,
@@ -5140,6 +5296,7 @@
             "open_line_above": null,
             "open_line_below": null,
             "paste_after": null,
+            "replace_char": null,
             "start_change_operator": null,
             "start_delete_operator": null,
             "start_yank_operator": null,
@@ -5629,6 +5786,14 @@
             }
           ],
           "description": "Paste after cursor (`p`)."
+        },
+        "replace_char": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Replace the character under the cursor (`r`)."
         },
         "start_change_operator": {
           "allOf": [
@@ -6287,10 +6452,6 @@
       "description": "Experimental / do not use. Replaces the synthesized realtime startup context appended to websocket session instructions. An empty string disables startup context injection entirely.",
       "type": "string"
     },
-    "experimental_thread_config_endpoint": {
-      "description": "Experimental / do not use. When set, app-server fetches thread-scoped config from a remote service at this endpoint.",
-      "type": "string"
-    },
     "experimental_thread_store": {
       "allOf": [
         {
@@ -6395,6 +6556,9 @@
         "current_time_reminder": {
           "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
         },
+        "cwd_relative_turn_diffs": {
+          "type": "boolean"
+        },
         "default_mode_request_user_input": {
           "type": "boolean"
         },
@@ -6480,6 +6644,12 @@
           "type": "boolean"
         },
         "in_app_browser": {
+          "type": "boolean"
+        },
+        "in_app_chat": {
+          "type": "boolean"
+        },
+        "in_app_dictation": {
           "type": "boolean"
         },
         "in_app_updates": {
@@ -6594,6 +6764,9 @@
           "type": "boolean"
         },
         "secret_auth_storage": {
+          "type": "boolean"
+        },
+        "send_async_message": {
           "type": "boolean"
         },
         "shell_snapshot": {

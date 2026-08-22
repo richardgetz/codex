@@ -1932,6 +1932,19 @@
     },
     "McpResourceReadParams": {
       "properties": {
+        "connectorId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "originCallId": {
+          "description": "Originating MCP tool call used to select the resource's app.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "server": {
           "type": "string"
         },
@@ -2583,6 +2596,17 @@
       "required": [
         "cols",
         "rows"
+      ],
+      "type": "object"
+    },
+    "ProjectRoot": {
+      "properties": {
+        "path": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      },
+      "required": [
+        "path"
       ],
       "type": "object"
     },
