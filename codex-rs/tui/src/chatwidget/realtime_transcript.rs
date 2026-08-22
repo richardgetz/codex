@@ -147,19 +147,25 @@ impl ChatWidget {
         }
     }
 
-    pub(super) fn finish_realtime_transcript_stream(&mut self) {
-        if self.transcript.realtime_handoff_output_suppressed {
-            self.transcript.realtime_user_transcript_cell = None;
-            self.transcript.realtime_assistant_transcript_cell = None;
-            return;
-        }
-        if self.transcript.realtime_user_transcript_cell.is_some()
-            || self.transcript.realtime_assistant_transcript_cell.is_some()
-        {
-            self.flush_realtime_transcript_cell(RealtimeTranscriptRole::User);
-            self.flush_realtime_transcript_cell(RealtimeTranscriptRole::Assistant);
+    pub(crate) fn clear_realtime_transcript(&mut self) {
+        let had_user_transcript = self
+            .transcript
+            .realtime_user_transcript_cell
+            .take()
+            .is_some();
+        let had_assistant_transcript = self
+            .transcript
+            .realtime_assistant_transcript_cell
+            .take()
+            .is_some();
+        if had_user_transcript || had_assistant_transcript {
+            self.transcript.bump_active_cell_revision();
             self.request_redraw();
         }
+    }
+
+    pub(super) fn finish_realtime_transcript_stream(&mut self) {
+        self.clear_realtime_transcript();
     }
 
     fn ensure_realtime_transcript_cell(&mut self, role: RealtimeTranscriptRole) {

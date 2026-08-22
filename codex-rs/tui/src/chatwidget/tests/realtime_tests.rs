@@ -110,6 +110,68 @@ async fn realtime_transcript_notifications_render_live_and_finalize() {
 }
 
 #[tokio::test]
+async fn stopping_realtime_stream_hides_live_output_but_keeps_completed_history() {
+    let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            ThreadRealtimeTranscriptDoneNotification {
+                thread_id: thread_id.to_string(),
+                submission_id: String::new(),
+                role: "user".to_string(),
+                text: "what did you change?".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDelta(
+            ThreadRealtimeTranscriptDeltaNotification {
+                thread_id: thread_id.to_string(),
+                submission_id: String::new(),
+                role: "assistant".to_string(),
+                delta: "the live answer should disappear".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_some());
+
+    chat.finish_realtime_transcript_stream();
+
+    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDelta(
+            ThreadRealtimeTranscriptDeltaNotification {
+                thread_id: thread_id.to_string(),
+                submission_id: String::new(),
+                role: "assistant".to_string(),
+                delta: "the direct stop path should also disappear".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_some());
+
+    chat.clear_realtime_transcript();
+
+    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
+
+    chat.dispatch_command_with_args(SlashCommand::Voice, "history 1".to_string(), Vec::new());
+    let history = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => render_lines(cell.as_ref()),
+        other => panic!("expected realtime history output, got {other:?}"),
+    };
+    insta::assert_snapshot!("stopping_realtime_stream_keeps_history", history);
+}
+
+#[tokio::test]
 async fn disabled_preambles_allow_realtime_answer_after_handoff_turn_completion() {
     let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     chat.config.realtime.enable_preambles = false;
