@@ -15,6 +15,8 @@ use crate::model::SkillMetadata;
 use crate::model::SkillPolicy;
 use crate::model::SkillToolDependency;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::GetMetadataOptions;
+use codex_exec_server::ReadFileOptions;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_skills::ParsedSkillFrontmatter;
@@ -295,7 +297,14 @@ async fn load_skills_under_root(
                     );
                     return None;
                 }
-                match fs.get_metadata(&path_uri, /*sandbox*/ None).await {
+                match fs
+                    .get_metadata(
+                        &path_uri,
+                        GetMetadataOptions::default(),
+                        /*sandbox*/ None,
+                    )
+                    .await
+                {
                     Ok(metadata) if metadata.is_file => {}
                     Ok(_) => {
                         error!(
@@ -417,7 +426,7 @@ async fn parse_skill_file(
     }
     .unwrap_or(SkillMetadataDiscovery::Absent);
     let (contents, loaded_metadata) = tokio::join!(
-        fs.read_file_text(path_uri, /*sandbox*/ None),
+        fs.read_file_text(path_uri, ReadFileOptions::default(), /*sandbox*/ None),
         load_skill_metadata(fs, path, &metadata, plugin_root),
     );
     let contents = contents.map_err(SkillLoadError::Read)?;
@@ -425,7 +434,6 @@ async fn parse_skill_file(
         name: base_name,
         description,
         short_description,
-        model,
     } = parse_skill_frontmatter_metadata(&contents, || default_skill_name(path))?;
     let LoadedSkillMetadata {
         interface,
@@ -437,7 +445,6 @@ async fn parse_skill_file(
         name: base_name,
         description,
         short_description,
-        model,
         interface,
         dependencies,
         policy,
@@ -474,7 +481,10 @@ async fn load_skill_metadata(
         SkillMetadataDiscovery::Present(path) => path,
         SkillMetadataDiscovery::Absent => return LoadedSkillMetadata::default(),
         SkillMetadataDiscovery::Probe(path) => {
-            match fs.get_metadata(path, /*sandbox*/ None).await {
+            match fs
+                .get_metadata(path, GetMetadataOptions::default(), /*sandbox*/ None)
+                .await
+            {
                 Ok(metadata) if metadata.is_file => {}
                 Ok(_) => return LoadedSkillMetadata::default(),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -493,7 +503,14 @@ async fn load_skill_metadata(
         }
     };
 
-    let contents = match fs.read_file_text(metadata_path_uri, /*sandbox*/ None).await {
+    let contents = match fs
+        .read_file_text(
+            metadata_path_uri,
+            ReadFileOptions::default(),
+            /*sandbox*/ None,
+        )
+        .await
+    {
         Ok(contents) => contents,
         Err(error) => {
             tracing::warn!(

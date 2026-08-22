@@ -11,6 +11,7 @@ use crate::runtime::SpawnedConsolidationAgent;
 use crate::sync_rollout_summaries_from_memories;
 use crate::workspace::memory_workspace_diff;
 use crate::workspace::prepare_memory_workspace;
+use crate::workspace::remove_memory_symlinks;
 use crate::workspace::reset_memory_workspace_baseline;
 use crate::workspace::validate_consolidation_artifacts;
 use crate::workspace::write_workspace_diff;
@@ -476,6 +477,11 @@ mod agent {
                         "failed marking global memory consolidation job succeeded after resetting workspace baseline"
                     );
                 }
+            } else if !agent_completed {
+                if let Err(err) = remove_memory_symlinks(&memory_root).await {
+                    tracing::error!("failed removing memory workspace symbolic links: {err}");
+                }
+                job::failed(context.as_ref(), &db, &claim, "failed_agent").await;
             }
         } else if !agent_completed {
             job::failed(context.as_ref(), &db, &claim, "failed_agent").await;

@@ -305,7 +305,9 @@ jobs:
   build-windows-source:
     name: Build ptrcomp-sandbox ${{ matrix.target }} from source
     needs: metadata
-    if: ${{ needs.metadata.outputs.windows_source_required == 'true' }}
+    # The fork publishes Darwin artifacts only. Keep the expensive Windows
+    # source matrix for upstream validation without running it in the fork.
+    if: ${{ github.repository == 'openai/codex' && needs.metadata.outputs.windows_source_required == 'true' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read

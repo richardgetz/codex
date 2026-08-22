@@ -459,7 +459,7 @@ async fn handle_approved_mcp_tool_call(
     let result = async {
         let mut prepared_request = None;
         let result = prepared_call
-            .call_with_preparation(|| async {
+            .call_with_preparation(/*requested_timeout*/ None, || async {
                 if let McpToolApprovalApplication::Apply { decision, policy } =
                     &approval_application
                 {
@@ -571,7 +571,7 @@ async fn handle_approved_mcp_tool_call(
                 .clone()
                 .ok_or_else(|| "MCP smart wait request was not prepared".to_string())?;
             result = prepared_call
-                .call(rewritten_arguments, request_meta)
+                .call(rewritten_arguments, request_meta, /*timeout*/ None)
                 .await
                 .map_err(|error| format!("tool call error: {error:?}"))?;
             result = sanitize_mcp_tool_result_for_model(

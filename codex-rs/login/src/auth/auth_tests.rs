@@ -1370,6 +1370,36 @@ fn external_chatgpt_auth(account_id: &str) -> CodexAuth {
         .expect("external ChatGPT auth")
 }
 
+struct RefreshingExternalAuth {
+    initial: CodexAuth,
+    refreshed: CodexAuth,
+}
+
+impl ExternalAuth for RefreshingExternalAuth {
+    fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(self.initial.clone()) })
+    }
+
+    fn refresh(&self, _context: ExternalAuthRefreshContext) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(self.refreshed.clone()) })
+    }
+}
+
+fn external_header_auth(account_id: Option<&'static str>) -> CodexAuth {
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        http::header::AUTHORIZATION,
+        http::HeaderValue::from_static("Bearer external"),
+    );
+    if let Some(account_id) = account_id {
+        headers.insert(
+            "chatgpt-account-id",
+            http::HeaderValue::from_static(account_id),
+        );
+    }
+    CodexAuth::Headers(AuthHeaders::new(headers))
+}
+
 struct FailingExternalAuth {
     auth: CodexAuth,
     resolve_count: AtomicUsize,
@@ -1642,6 +1672,49 @@ async fn rejected_external_refresh_does_not_replace_current_auth() {
         external_auth.resolve().await.expect("resolve current auth"),
         accepted
     );
+}
+
+#[tokio::test]
+async fn external_header_auth_obeys_workspace_policy() {
+    for (account_id, should_succeed) in [
+        (Some(WORKSPACE_ID_ALLOWED), true),
+        (Some(WORKSPACE_ID_DISALLOWED), false),
+        (None, false),
+    ] {
+        let auth = external_header_auth(account_id);
+        let expected_auth = should_succeed.then_some(auth.clone());
+        let manager = AuthManager::from_optional_auth_for_testing(/*auth*/ None);
+        manager.set_forced_chatgpt_workspace_id(Some(vec![WORKSPACE_ID_ALLOWED.to_string()]));
+
+        let result = manager
+            .set_external_auth(Arc::new(StaticExternalAuth(auth)))
+            .await;
+
+        assert_eq!(result.is_ok(), should_succeed, "account ID: {account_id:?}");
+        assert_eq!(manager.auth_cached(), expected_auth);
+    }
+}
+
+#[tokio::test]
+async fn external_header_auth_rejects_a_disallowed_workspace_on_refresh() {
+    let allowed_auth = external_header_auth(Some(WORKSPACE_ID_ALLOWED));
+    let disallowed_auth = external_header_auth(Some(WORKSPACE_ID_DISALLOWED));
+    let manager = AuthManager::from_optional_auth_for_testing(/*auth*/ None);
+    manager.set_forced_chatgpt_workspace_id(Some(vec![WORKSPACE_ID_ALLOWED.to_string()]));
+    manager
+        .set_external_auth(Arc::new(RefreshingExternalAuth {
+            initial: allowed_auth.clone(),
+            refreshed: disallowed_auth,
+        }))
+        .await
+        .expect("initial external header auth should install");
+
+    manager
+        .refresh_token_from_authority()
+        .await
+        .expect_err("external header auth from a disallowed workspace must not replace the cache");
+
+    assert_eq!(manager.auth_cached(), Some(allowed_auth));
 }
 
 #[tokio::test]

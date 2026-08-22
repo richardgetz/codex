@@ -43,6 +43,7 @@ pub enum SlashCommand {
     Agent,
     #[strum(serialize = "agents-prune")]
     AgentsPrune,
+    Agents,
     Side,
     Btw,
     Copy,
@@ -53,6 +54,9 @@ pub enum SlashCommand {
     Status,
     Mic,
     Voice,
+    Cd,
+    #[strum(to_string = "pwd", serialize = "cwd")]
+    Pwd,
     Usage,
     DebugConfig,
     Title,
@@ -127,6 +131,8 @@ impl SlashCommand {
             SlashCommand::Voice => {
                 "enable realtime voice, select voices, or tune client-side effects/profiles"
             }
+            SlashCommand::Cd => "change the current working directory",
+            SlashCommand::Pwd => "show the current working directory",
             SlashCommand::Usage => "view account usage or use a usage limit reset",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
@@ -146,6 +152,7 @@ impl SlashCommand {
             SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::AgentsPrune => "close idle agents in this session",
+            SlashCommand::Agents => "view and switch between all active agent sessions",
             SlashCommand::Side | SlashCommand::Btw => {
                 "start a side conversation in an ephemeral fork"
             }
@@ -214,6 +221,8 @@ impl SlashCommand {
                 | SlashCommand::ScratchpadAbsorb
                 | SlashCommand::Export
                 | SlashCommand::Raw
+                | SlashCommand::Cd
+                | SlashCommand::Pwd
                 | SlashCommand::Usage
                 | SlashCommand::Pets
                 | SlashCommand::Side
@@ -231,11 +240,13 @@ impl SlashCommand {
         matches!(
             self,
             SlashCommand::Copy
+                | SlashCommand::Agents
                 | SlashCommand::Export
                 | SlashCommand::Raw
                 | SlashCommand::Diff
                 | SlashCommand::Mention
                 | SlashCommand::Status
+                | SlashCommand::Pwd
                 | SlashCommand::Usage
                 | SlashCommand::Ide
         )
@@ -260,6 +271,7 @@ impl SlashCommand {
             | SlashCommand::Import
             | SlashCommand::Review
             | SlashCommand::Plan
+            | SlashCommand::Cd
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::Account
@@ -279,6 +291,7 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::Mic
             | SlashCommand::Voice
+            | SlashCommand::Pwd
             | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
@@ -308,7 +321,7 @@ impl SlashCommand {
             | SlashCommand::Btw => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
-            SlashCommand::Agent | SlashCommand::MultiAgents => true,
+            SlashCommand::Agent | SlashCommand::Agents | SlashCommand::MultiAgents => true,
             SlashCommand::Theme | SlashCommand::Pets => false,
         }
     }

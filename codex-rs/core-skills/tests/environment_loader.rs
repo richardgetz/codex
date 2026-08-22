@@ -237,7 +237,6 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
         outcome.skills,
         vec![
             SkillMetadata {
-                model: None,
                 name: "linked:first".to_string(),
                 description: "first skill.".to_string(),
                 short_description: None,
@@ -253,7 +252,6 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
                 remote_plugin_id: None,
             },
             SkillMetadata {
-                model: None,
                 name: "linked:second".to_string(),
                 description: "second skill.".to_string(),
                 short_description: None,

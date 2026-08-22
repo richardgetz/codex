@@ -5,9 +5,13 @@ use super::REALTIME_HANDOFF_DEDUPE_CAPACITY;
 use super::RealtimeConversationManager;
 use super::RealtimeHandoffDeduper;
 use super::RealtimeHandoffState;
+use super::RealtimeInputTaskExit;
 use super::RealtimeOutbound;
+use super::RealtimePendingOutbound;
 use super::RealtimeSessionKind;
 use super::RealtimeStreamedItem;
+use super::classify_realtime_input_error;
+use super::classify_realtime_input_error_with_pending;
 use super::realtime_delegation_from_handoff;
 use super::realtime_delegation_with_routing_input;
 use super::realtime_request_headers;
@@ -16,9 +20,12 @@ use super::wrap_realtime_delegation_input;
 use crate::context::REALTIME_DELEGATION_MAX_ESTIMATED_TOKENS;
 use crate::context::RealtimeDelegationSource;
 use async_channel::bounded;
+use codex_api::ApiError;
 use codex_api::RealtimeEventParser;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::CodexResponseHandoffMode;
+use codex_protocol::protocol::ConversationTextParams;
+use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeTranscriptEntry;
 use codex_utils_string::approx_token_count;
@@ -275,6 +282,55 @@ fn bounds_oversized_realtime_delegation_and_preserves_transcript_tail() {
     assert!(rendered.contains("input truncated"));
     assert!(rendered.contains("earlier transcript truncated"));
     assert!(rendered.contains(transcript_tail));
+}
+
+#[test]
+fn bounds_realtime_delegation_fields_and_keeps_latest_transcript() {
+    let input = format!("start{}input-end", "x".repeat(8 * 1024));
+    let transcript = format!("transcript-start{}latest", "y".repeat(8 * 1024));
+    let rendered = wrap_realtime_delegation_input(
+        &input,
+        Some(&transcript),
+        RealtimeDelegationSource::Handoff,
+    );
+
+    assert!(rendered.len() < 9 * 1024);
+    assert!(rendered.contains("<input>start"));
+    assert!(!rendered.contains("input-end"));
+    assert!(!rendered.contains("transcript-start"));
+    assert!(rendered.contains("latest</transcript_delta>"));
+}
+
+#[test]
+fn classifies_outbound_api_failures_as_transport_loss() {
+    for pending_outbound in [
+        RealtimePendingOutbound::Text(ConversationTextParams {
+            text: "retry me".to_string(),
+            role: ConversationTextRole::User,
+        }),
+        RealtimePendingOutbound::Handoff(RealtimeOutbound::StandaloneHandoff {
+            text: "retry this handoff".to_string(),
+            phase: Some(MessagePhase::FinalAnswer),
+        }),
+    ] {
+        let exit = classify_realtime_input_error_with_pending(
+            ApiError::Stream("failed to send realtime request".to_string()).into(),
+            Some(Box::new(pending_outbound.clone())),
+        );
+        let RealtimeInputTaskExit::TransportLost {
+            err: ApiError::Stream(_),
+            pending_outbound: Some(actual_pending_outbound),
+        } = exit
+        else {
+            panic!("outbound API failure should preserve pending output for reconnect");
+        };
+        assert_eq!(*actual_pending_outbound, pending_outbound);
+    }
+
+    assert!(matches!(
+        classify_realtime_input_error(anyhow::anyhow!("input channel closed")),
+        RealtimeInputTaskExit::Terminal
+    ));
 }
 
 #[tokio::test]

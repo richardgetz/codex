@@ -59,6 +59,20 @@ version = "149.2.0"
                     windows_source_required(changed_files, "149.2.0", "149.2.0")
                 )
 
+    def test_windows_source_build_is_upstream_only(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[1] / "workflows" / "v8-canary.yml"
+        ).read_text()
+        _, separator, windows_job = workflow.partition("\n  build-windows-source:\n")
+        self.assertTrue(separator)
+        job_header, separator, _ = windows_job.partition("\n    runs-on:")
+        self.assertTrue(separator)
+        self.assertIn(
+            "if: ${{ github.repository == 'openai/codex' && "
+            "needs.metadata.outputs.windows_source_required == 'true' }}",
+            job_header,
+        )
+
     def test_manual_dispatch_requires_source_build(self) -> None:
         self.assertTrue(
             windows_source_required(

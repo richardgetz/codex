@@ -42,6 +42,7 @@ use codex_app_server_protocol::SwitchAccountResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_http_client::HttpClientBuilder;
 use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::CLIENT_ID_OVERRIDE_ENV_VAR;
@@ -59,6 +60,7 @@ use serial_test::serial;
 use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::time::timeout;
 use url::Url;
 use wiremock::Mock;
@@ -2276,9 +2278,9 @@ async fn login_account_chatgpt_redirects_to_hosted_success_page() -> Result<()> 
         .query_pairs()
         .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
         .ok_or_else(|| anyhow::anyhow!("missing state"))?;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
+    let client = HttpClientBuilder::new()
+        .without_redirects()
+        .build_direct()?;
 
     let token_redirect_uri = callback_url.clone();
     let mut callback_url = Url::parse(&callback_url)?;
@@ -2790,8 +2792,14 @@ async fn get_account_with_chatgpt() -> Result<()> {
     Ok(())
 }
 
+#[test_case("self_serve_business_prolite", AccountPlanType::SelfServeBusinessProLite; "business_prolite")]
+#[test_case("edu_plus", AccountPlanType::EduPlus; "edu_plus")]
+#[test_case("edu_pro", AccountPlanType::EduPro; "edu_pro")]
 #[tokio::test]
-async fn get_account_with_business_prolite_returns_plan_type() -> Result<()> {
+async fn get_account_with_chatgpt_plan_variants_returns_plan_type(
+    plan_type: &str,
+    expected_plan: AccountPlanType,
+) -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(
         codex_home.path(),
@@ -2804,7 +2812,7 @@ async fn get_account_with_business_prolite_returns_plan_type() -> Result<()> {
         codex_home.path(),
         ChatGptAuthFixture::new("access-chatgpt")
             .email("user@example.com")
-            .plan_type("self_serve_business_prolite"),
+            .plan_type(plan_type),
         AuthCredentialsStoreMode::File,
     )?;
 
@@ -2828,7 +2836,7 @@ async fn get_account_with_business_prolite_returns_plan_type() -> Result<()> {
         GetAccountResponse {
             account: Some(Account::Chatgpt {
                 email: Some("user@example.com".to_string()),
-                plan_type: AccountPlanType::SelfServeBusinessProLite,
+                plan_type: expected_plan,
             }),
             requires_openai_auth: true,
         }
