@@ -26,6 +26,21 @@ class MacosSigningEntitlementsTest(unittest.TestCase):
             with self.subTest(binary=binary):
                 self.assertEqual(self.load(binary), expected)
 
+    def test_fork_release_applies_v8_entitlements_before_packaging(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "fork-release.yml").read_text()
+
+        self.assertIn(
+            'entitlements_file="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/${binary}.entitlements.plist"',
+            workflow,
+        )
+        self.assertIn("for binary in codex codex-code-mode-host; do", workflow)
+        self.assertIn('--entitlements "${entitlements_file}"', workflow)
+        self.assertIn('verify_signed_binary "${binary_path}" "${binary}"', workflow)
+        self.assertIn(
+            'verify_signed_binary "${package_dir}/bin/${binary}" "${binary}"',
+            workflow,
+        )
+
     def test_responses_proxy_keeps_existing_entitlements(self) -> None:
         self.assertEqual(
             self.load("codex-responses-api-proxy"),

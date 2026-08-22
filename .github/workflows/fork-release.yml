@@ -305,6 +305,24 @@ jobs:
           keychain_password="$(openssl rand -hex 32)"
           signing_script="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/sign_macos_code.sh"
 
+          verify_signed_binary() {
+            local path="$1"
+            local binary="$2"
+            local actual_entitlements expected_entitlements normalized_actual normalized_expected
+
+            codesign --verify --strict --verbose=2 "$path"
+            expected_entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/${binary}.entitlements.plist"
+            test -f "$expected_entitlements"
+            actual_entitlements="$(mktemp)"
+            normalized_actual="$(mktemp)"
+            normalized_expected="$(mktemp)"
+            codesign -d --entitlements :- "$path" >"$actual_entitlements"
+            plutil -convert xml1 -o "$normalized_actual" "$actual_entitlements"
+            plutil -convert xml1 -o "$normalized_expected" "$expected_entitlements"
+            diff -u "$normalized_expected" "$normalized_actual"
+            rm -f "$actual_entitlements" "$normalized_actual" "$normalized_expected"
+          }
+
           cleanup() {
             security delete-keychain "${keychain_path}" >/dev/null 2>&1 || true
             rm -f "${p12_path}"
@@ -354,13 +372,16 @@ jobs:
 
           for binary in codex codex-code-mode-host; do
             binary_path="${release_dir}/${binary}"
+            entitlements_file="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/${binary}.entitlements.plist"
+            test -f "${entitlements_file}"
             "${signing_script}" \
               --target "${binary_path}" \
               --identity "${signing_identity}" \
               --identifier "${binary}" \
               --options runtime \
+              --entitlements "${entitlements_file}" \
               --timestamp true
-            codesign --verify --strict --verbose=2 "${binary_path}"
+            verify_signed_binary "${binary_path}" "${binary}"
             codesign -d -r- -- "${binary_path}" 2>&1
           done
 
@@ -377,7 +398,7 @@ jobs:
 
           package_dir="${RUNNER_TEMP}/codex-package-${TARGET_TRIPLE}"
           for binary in codex codex-code-mode-host; do
-            codesign --verify --strict --verbose=2 "${package_dir}/bin/${binary}"
+            verify_signed_binary "${package_dir}/bin/${binary}" "${binary}"
           done
 
       - name: "[75%] Upload signed build artifacts"
