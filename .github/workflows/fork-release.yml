@@ -25,6 +25,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: "[5%] Fetch tags"
         run: git fetch --tags --force
@@ -54,6 +55,8 @@ jobs:
     steps:
       - name: "[20%] Check out release source"
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: "[25%] Compute Cargo cache key"
         id: cargo-cache-key
@@ -79,6 +82,16 @@ jobs:
         uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           targets: ${{ matrix.target }}
+
+      - name: "[32%] Install Python runtime"
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+
+      - name: "[33%] Configure Codex-built V8 artifacts"
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
 
       - name: "[35%] Prefetch Cargo dependencies"
         shell: bash
@@ -263,6 +276,8 @@ jobs:
     steps:
       - name: "[72%] Check out release source"
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: "[73%] Download unsigned build outputs"
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -493,7 +508,7 @@ jobs:
           scope: "@rickgetz"
 
       - name: "[99%] Download npm tarballs"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: fork-npm-tarballs
           path: dist/npm
@@ -532,7 +547,7 @@ jobs:
           shopt -s nullglob
 
           sanitize_publish_output() {
-            python3 -c 'import re, sys; text = sys.stdin.read(); text = re.sub(r"(_authToken=)[^\\s&\\\"]+", r"\\1***REDACTED***", text); text = re.sub(r"(Bearer\\s+)[A-Za-z0-9._~-]+", r"\\1***REDACTED***", text); print(text, end="")'
+            python3 -c 'import re, sys; text = sys.stdin.read(); text = re.sub(r"(_authToken=)[^\s&\"]+", r"\1***REDACTED***", text); text = re.sub(r"(Bearer\s+)[A-Za-z0-9._~-]+", r"\1***REDACTED***", text); print(text, end="")'
           }
 
           platform_tarballs=(dist/npm/codex-npm-*-"${VERSION}".tgz)

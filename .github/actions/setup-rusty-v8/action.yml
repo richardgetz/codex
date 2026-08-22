@@ -33,22 +33,47 @@ runs:
         archive_path="${binding_dir}/${archive_name}"
         binding_path="${binding_dir}/${binding_name}"
         checksums_path="${binding_dir}/${checksums_name}"
+        normalized_checksums_path="${checksums_path}.normalized"
 
         mkdir -p "${binding_dir}"
-        curl -fsSL "${base_url}/${archive_name}" -o "${archive_path}"
-        curl -fsSL "${base_url}/${binding_name}" -o "${binding_path}"
-        curl -fsSL "${base_url}/${checksums_name}" -o "${checksums_path}"
+        download_artifact() {
+          if ! curl -fsSL \
+            --connect-timeout 20 \
+            --max-time 120 \
+            --retry 5 \
+            --retry-connrefused \
+            --retry-delay 2 \
+            --retry-max-time 120 \
+            "${1}" \
+            -o "${2}"; then
+            echo "::error::Codex-built V8 asset unavailable for ${TARGET}; publish ${release_tag} before merging this V8 version." >&2
+            return 1
+          fi
+        }
 
-        if [[ "$(wc -l < "${checksums_path}")" -ne 2 ]]; then
+        download_artifact "${base_url}/${checksums_name}" "${checksums_path}"
+        download_artifact "${base_url}/${archive_name}" "${archive_path}"
+        download_artifact "${base_url}/${binding_name}" "${binding_path}"
+
+        tr -d '\r' < "${checksums_path}" > "${normalized_checksums_path}"
+        if [[ "$(wc -l < "${normalized_checksums_path}")" -ne 2 ]]; then
           echo "Expected exactly two checksums for ${TARGET} in ${checksums_path}" >&2
           exit 1
         fi
 
-        # Existing Windows-built release manifests use CRLF line endings.
+        if ! awk \
+          -v archive_name="${archive_name}" \
+          -v binding_name="${binding_name}" \
+          'NF != 2 || $1 !~ /^[0-9a-fA-F]{64}$/ || ($2 != archive_name && $2 != binding_name) { invalid = 1 } { seen[$2]++ } END { exit invalid || seen[archive_name] != 1 || seen[binding_name] != 1 }' \
+          "${normalized_checksums_path}"; then
+          echo "Checksum manifest for ${TARGET} must contain one valid entry for each expected V8 artifact." >&2
+          exit 1
+        fi
+
         if command -v sha256sum >/dev/null 2>&1; then
-          (cd "${binding_dir}" && tr -d '\r' < "${checksums_path}" | sha256sum -c -)
+          (cd "${binding_dir}" && sha256sum -c "${normalized_checksums_path}")
         else
-          (cd "${binding_dir}" && tr -d '\r' < "${checksums_path}" | shasum -a 256 -c -)
+          (cd "${binding_dir}" && shasum -a 256 -c "${normalized_checksums_path}")
         fi
         echo "RUSTY_V8_ARCHIVE=${archive_path}" >> "${GITHUB_ENV}"
         echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "${GITHUB_ENV}"
