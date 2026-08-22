@@ -1789,6 +1789,7 @@ impl App {
         self.realtime_voice_requested_session_id = None;
         self.realtime_voice_submission_id = None;
         self.realtime_voice_legacy_notifications = false;
+        self.chat_widget.clear_realtime_transcript();
         let Some(session) = self.realtime_voice_session.take() else {
             return;
         };
