@@ -12,6 +12,8 @@ concurrency:
 jobs:
   compute-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       base_version: ${{ steps.compute.outputs.base_version }}
       fork_counter: ${{ steps.compute.outputs.fork_counter }}
@@ -36,6 +38,8 @@ jobs:
     needs: compute-release
     name: Build - ${{ matrix.target }}
     runs-on: macos-15
+    permissions:
+      contents: read
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     defaults:
@@ -186,7 +190,10 @@ jobs:
           append_summary "- [40%] Starting cargo build for ${TARGET_TRIPLE}"
           log_progress "[40%] Starting cargo build for ${TARGET_TRIPLE}"
 
-          cargo build --target "${TARGET_TRIPLE}" --release --bin codex -vv &
+          cargo build --target "${TARGET_TRIPLE}" --release \
+            --bin codex \
+            --bin codex-code-mode-host \
+            -vv &
           build_pid=$!
           started_at="$(date +%s)"
 
@@ -218,22 +225,147 @@ jobs:
           log_progress "[60%] Cargo build completed in ${duration_min}m (${duration_sec}s)"
           append_summary "- [60%] Cargo build completed in ${duration_min}m (${duration_sec}s)"
 
-      - name: "[65%] Stage artifacts"
+      - name: "[65%] Stage unsigned build outputs"
         shell: bash
         run: |
           set -euo pipefail
-          dest="../dist/${{ matrix.target }}"
+          dest="../dist/${{ matrix.target }}/unsigned-build"
           mkdir -p "${dest}"
-          cp "target/${{ matrix.target }}/release/codex" "${dest}/codex-${{ matrix.target }}"
-          tar -C "${dest}" -czf "${dest}/codex-${{ matrix.target }}.tar.gz" "codex-${{ matrix.target }}"
-          zstd -T0 -19 --rm "${dest}/codex-${{ matrix.target }}"
+          for binary in codex codex-code-mode-host; do
+            source_path="target/${{ matrix.target }}/release/${binary}"
+            test -f "${source_path}"
+            cp "${source_path}" "${dest}/${binary}"
+            chmod 0755 "${dest}/${binary}"
+          done
+
+      - name: "[70%] Upload unsigned build outputs"
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: ${{ matrix.target }}-unsigned-build
+          path: dist/${{ matrix.target }}/unsigned-build/*
+
+  sign-macos:
+    needs: build
+    if: ${{ github.ref == 'refs/heads/stable' }}
+    name: Sign - ${{ matrix.target }}
+    runs-on: macos-15
+    timeout-minutes: 45
+    environment:
+      name: codesigning
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-darwin
+
+    steps:
+      - name: "[72%] Check out release source"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: "[73%] Download unsigned build outputs"
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ matrix.target }}-unsigned-build
+          path: ${{ runner.temp }}/unsigned-build
+
+      - name: "[74%] Sign macOS binaries before packaging"
+        shell: bash
+        env:
+          APPLE_TEAM_ID: W9HW8JL7CP
+          MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+          TARGET_TRIPLE: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+
+          : "${MACOS_SIGNING_P12_BASE64:?MACOS_SIGNING_P12_BASE64 is required in the codesigning environment}"
+          : "${MACOS_SIGNING_P12_PASSWORD:?MACOS_SIGNING_P12_PASSWORD is required in the codesigning environment}"
+
+          unsigned_root="${RUNNER_TEMP}/unsigned-build"
+          release_dir="${GITHUB_WORKSPACE}/codex-rs/target/${TARGET_TRIPLE}/release"
+          keychain_path="${RUNNER_TEMP}/codex-signing.keychain-db"
+          p12_path="${RUNNER_TEMP}/codex-signing.p12"
+          keychain_password="$(openssl rand -hex 32)"
+          signing_script="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/sign_macos_code.sh"
+
+          cleanup() {
+            security delete-keychain "${keychain_path}" >/dev/null 2>&1 || true
+            rm -f "${p12_path}"
+          }
+          trap cleanup EXIT
+
+          mkdir -p "${release_dir}"
+          for binary in codex codex-code-mode-host; do
+            source_path="${unsigned_root}/${binary}"
+            test -f "${source_path}"
+            cp "${source_path}" "${release_dir}/${binary}"
+            chmod 0755 "${release_dir}/${binary}"
+          done
+
+          P12_PATH="${p12_path}" python3 -c \
+            'import base64, os, pathlib; pathlib.Path(os.environ["P12_PATH"]).write_bytes(base64.b64decode(os.environ["MACOS_SIGNING_P12_BASE64"]))'
+          security create-keychain -p "${keychain_password}" "${keychain_path}"
+          security set-keychain-settings -lut 21600 "${keychain_path}"
+          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+          security import "${p12_path}" \
+            -k "${keychain_path}" \
+            -P "${MACOS_SIGNING_P12_PASSWORD}" \
+            -f pkcs12 \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "${keychain_password}" \
+            "${keychain_path}"
+          security list-keychains -d user -s "${keychain_path}"
+
+          identities="$(
+            security find-identity -v -p codesigning "${keychain_path}" \
+              | sed -n 's/^[[:space:]]*[0-9]*) [0-9A-F]* "\(.*\)"$/\1/p' \
+              | grep -F 'Developer ID Application:' \
+              | grep -F "(${APPLE_TEAM_ID})" \
+              || true
+          )"
+          identity_count="$(printf '%s\n' "${identities}" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+          if [[ "${identity_count}" != "1" ]]; then
+            echo "Expected exactly one Developer ID Application identity for team ${APPLE_TEAM_ID}; found ${identity_count}." >&2
+            printf '%s\n' "${identities}" >&2
+            exit 1
+          fi
+          signing_identity="$(printf '%s\n' "${identities}" | sed -n '1p')"
+          echo "::notice::Using ${signing_identity} for ${TARGET_TRIPLE}"
+
+          for binary in codex codex-code-mode-host; do
+            binary_path="${release_dir}/${binary}"
+            "${signing_script}" \
+              --target "${binary_path}" \
+              --identity "${signing_identity}" \
+              --identifier "${binary}" \
+              --options runtime \
+              --timestamp true
+            codesign --verify --strict --verbose=2 "${binary_path}"
+            codesign -d -r- -- "${binary_path}" 2>&1
+          done
+
+          dest="${GITHUB_WORKSPACE}/dist/${TARGET_TRIPLE}"
+          mkdir -p "${dest}"
+          cp "${release_dir}/codex" "${dest}/codex-${TARGET_TRIPLE}"
+          tar -C "${dest}" -czf "${dest}/codex-${TARGET_TRIPLE}.tar.gz" "codex-${TARGET_TRIPLE}"
+          zstd -T0 -19 --rm "${dest}/codex-${TARGET_TRIPLE}"
           bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
-            --target "${{ matrix.target }}" \
+            --target "${TARGET_TRIPLE}" \
             --bundle primary \
-            --entrypoint-dir "target/${{ matrix.target }}/release" \
+            --entrypoint-dir "${release_dir}" \
             --archive-dir "${dest}"
 
-      - name: "[70%] Upload build artifacts"
+          package_dir="${RUNNER_TEMP}/codex-package-${TARGET_TRIPLE}"
+          for binary in codex codex-code-mode-host; do
+            codesign --verify --strict --verbose=2 "${package_dir}/bin/${binary}"
+          done
+
+      - name: "[75%] Upload signed build artifacts"
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: ${{ matrix.target }}
@@ -242,7 +374,7 @@ jobs:
   release:
     needs:
       - compute-release
-      - build
+      - sign-macos
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -260,7 +392,7 @@ jobs:
         run: git fetch --tags --force
 
       - name: "[80%] Download build artifacts"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: dist
 
