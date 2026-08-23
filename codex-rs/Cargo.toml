@@ -335,7 +335,7 @@ eventsource-stream = "0.2.3"
 flate2 = "1.1.8"
 futures = { version = "0.3", default-features = false }
 gethostname = "1.1.0"
-gix = { version = "0.81.0", default-features = false, features = ["sha1"] }
+gix = { version = "0.83.0", default-features = false, features = ["sha1"] }
 glob = "0.3"
 globset = "0.4"
 hmac = "0.12.1"
@@ -353,7 +353,7 @@ insta = "1.46.3"
 inventory = "0.3.19"
 itertools = "0.14.0"
 jsonptr = { version = "0.7.1", default-features = false }
-jsonwebtoken = "9.3.1"
+jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.4"
 lazy_static = "1"
@@ -372,11 +372,11 @@ nucleo = { git = "https://github.com/helix-editor/nucleo.git", rev = "4253de9faa
 once_cell = "1.20.2"
 opus = "0.3.0"
 openssl-sys = "*"
-opentelemetry = "0.31.0"
-opentelemetry-appender-tracing = "0.31.0"
-opentelemetry-otlp = "0.31.0"
-opentelemetry-semantic-conventions = "0.31.0"
-opentelemetry_sdk = "0.31.0"
+opentelemetry = "0.32.0"
+opentelemetry-appender-tracing = "0.32.0"
+opentelemetry-otlp = "0.32.0"
+opentelemetry-semantic-conventions = "0.32.1"
+opentelemetry_sdk = "0.32.1"
 os_info = "3.12.0"
 owo-colors = "4.3.0"
 pathdiff = "0.2"
@@ -398,7 +398,11 @@ rcgen = { version = "0.14.7", default-features = false, features = [
 ] }
 regex = "1.12.3"
 regex-lite = "0.1.8"
-reqwest = { version = "0.12", features = ["cookies"] }
+reqwest = {
+    version = "0.13",
+    default-features = false,
+    features = ["charset", "cookies", "http2", "native-tls", "query", "system-proxy"],
+}
 rmcp = { version = "=3.1.2", default-features = false }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
 rustix = { version = "1.1.4", features = ["net"] }
@@ -416,7 +420,7 @@ serde = { version = "1", features = ["rc"] }
 serde_ignored = "0.1.14"
 serde_json = "1"
 serde_path_to_error = "0.1.20"
-serde_with = "3.17"
+serde_with = "3.21"
 serde_yaml = "0.9"
 serial_test = "3.2.0"
 sha1 = "0.10.6"
@@ -455,7 +459,7 @@ supports-color = "3.0.2"
 syntect = "5"
 sys-locale = "0.3.2"
 system-configuration = "0.7"
-tar = { version = "=0.4.45", default-features = false }
+tar = { version = "=0.4.46", default-features = false }
 tempfile = "3.23.0"
 test-log = "0.2.19"
 textwrap = "0.16.2"
@@ -475,7 +479,7 @@ toml = "0.9.5"
 toml_edit = "0.24.0"
 tracing = "0.1.44"
 tracing-appender = "0.2.3"
-tracing-opentelemetry = "0.32.0"
+tracing-opentelemetry = "0.33.0"
 tracing-subscriber = "0.3.22"
 tracing-test = "0.2.5"
 tonic = { version = "0.14.3", default-features = false, features = ["channel", "codegen"] }
