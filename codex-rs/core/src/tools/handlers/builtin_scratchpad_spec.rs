@@ -46,78 +46,79 @@ pub(crate) const DELEGATION_STATUS_VALUES: &[&str] = &[
     "failed",
 ];
 
-pub(crate) fn scratchpad_namespace_spec() -> ToolSpec {
-    const TOOLS: [(&str, &str); 18] = [
-        (
-            TOOL_OPEN,
-            "Open the current thread scratchpad for the same objective/session, or create it.",
-        ),
-        (
-            TOOL_RESUME,
-            "Resume the current thread scratchpad without creating a new one.",
-        ),
-        (TOOL_GET, "Fetch the current thread scratchpad."),
-        (
-            TOOL_SUMMARY,
-            "Fetch a compact current-state summary for the current thread scratchpad.",
-        ),
-        (
-            TOOL_APPEND_NOTE,
-            "Append a timestamped working note to a scratchpad.",
-        ),
-        (
-            TOOL_SET_NEXT_STEPS,
-            "Replace the scratchpad's current next-step list.",
-        ),
-        (
-            TOOL_SET_PENDING_WAITS,
-            "Replace the scratchpad's structured pending wait list.",
-        ),
-        (
-            TOOL_SET_ACTION_POLICY,
-            "Replace the scratchpad's structured action policy.",
-        ),
-        (
-            TOOL_MARK_WAIT_CHECKED,
-            "Mark one pending wait as checked, update its reuse details, or resolve it.",
-        ),
-        (TOOL_UPDATE, "Update structured scratchpad fields."),
-        (
-            TOOL_ARCHIVE,
-            "Archive a scratchpad when the objective is finished.",
-        ),
-        (
-            TOOL_UNARCHIVE,
-            "Restore an archived scratchpad to active use.",
-        ),
-        (
-            TOOL_LOOKUP,
-            "Search active or archived scratchpads by id/objective/session/status text.",
-        ),
-        (
-            TOOL_SCHEMA,
-            "Return the canonical scratchpad schema and tool contract.",
-        ),
-        (
-            TOOL_CHECK_ACTION,
-            "Check whether an action appears allowed by the scratchpad action policy.",
-        ),
-        (
-            TOOL_RECORD_OUTCOME,
-            "Append a measured outcome/progress datapoint with scope, metric, value, provenance, and summary.",
-        ),
-        (
-            TOOL_EXPORT_OUTCOMES,
-            "Export scratchpad outcome measurements as portable JSON plus a markdown summary.",
-        ),
-        (
-            TOOL_RECORD_DELEGATION,
-            "Record or update parent scratchpad lineage for work delegated to a subagent.",
-        ),
-    ];
+pub(crate) const SCRATCHPAD_TOOL_DESCRIPTIONS: &[(&str, &str)] = &[
+    (
+        TOOL_OPEN,
+        "Open the current thread scratchpad for the same objective/session, or create it.",
+    ),
+    (
+        TOOL_RESUME,
+        "Resume the current thread scratchpad without creating a new one.",
+    ),
+    (TOOL_GET, "Fetch the current thread scratchpad."),
+    (
+        TOOL_SUMMARY,
+        "Fetch a compact current-state summary for the current thread scratchpad.",
+    ),
+    (
+        TOOL_APPEND_NOTE,
+        "Append a timestamped working note to a scratchpad.",
+    ),
+    (
+        TOOL_SET_NEXT_STEPS,
+        "Replace the scratchpad's current next-step list.",
+    ),
+    (
+        TOOL_SET_PENDING_WAITS,
+        "Replace the scratchpad's structured pending wait list.",
+    ),
+    (
+        TOOL_SET_ACTION_POLICY,
+        "Replace the scratchpad's structured action policy.",
+    ),
+    (
+        TOOL_MARK_WAIT_CHECKED,
+        "Mark one pending wait as checked, update its reuse details, or resolve it.",
+    ),
+    (TOOL_UPDATE, "Update structured scratchpad fields."),
+    (
+        TOOL_ARCHIVE,
+        "Archive a scratchpad when the objective is finished.",
+    ),
+    (
+        TOOL_UNARCHIVE,
+        "Restore an archived scratchpad to active use.",
+    ),
+    (
+        TOOL_LOOKUP,
+        "Search active or archived scratchpads by id/objective/session/status text.",
+    ),
+    (
+        TOOL_SCHEMA,
+        "Return the canonical scratchpad schema and tool contract.",
+    ),
+    (
+        TOOL_CHECK_ACTION,
+        "Check whether an action appears allowed by the scratchpad action policy.",
+    ),
+    (
+        TOOL_RECORD_OUTCOME,
+        "Append a measured outcome/progress datapoint with scope, metric, value, provenance, and summary.",
+    ),
+    (
+        TOOL_EXPORT_OUTCOMES,
+        "Export scratchpad outcome measurements as portable JSON plus a markdown summary.",
+    ),
+    (
+        TOOL_RECORD_DELEGATION,
+        "Record or update parent scratchpad lineage for work delegated to a subagent.",
+    ),
+];
 
-    let tools = TOOLS
-        .into_iter()
+pub(crate) fn scratchpad_namespace_spec() -> ToolSpec {
+    let tools = SCRATCHPAD_TOOL_DESCRIPTIONS
+        .iter()
+        .copied()
         .map(|(name, description)| {
             ResponsesApiNamespaceTool::Function(ResponsesApiTool {
                 name: name.to_string(),

@@ -36,6 +36,8 @@ use crate::tools::handlers::WaitForEnvironmentHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::builtin_schedule::BuiltinScheduleHandler;
 use crate::tools::handlers::builtin_scratchpad::BuiltinScratchpadHandler;
+use crate::tools::handlers::builtin_scratchpad_spec::SCRATCHPAD_TOOL_DESCRIPTIONS;
+use crate::tools::handlers::builtin_scratchpad_spec::TOOL_OPEN;
 use crate::tools::handlers::extension_tools::ExtensionToolAdapter;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
@@ -1137,7 +1139,14 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     }
 
     if turn_context.tools_config.builtin_scratchpad_enabled {
-        registry.add(BuiltinScratchpadHandler);
+        for &(tool_name, _) in SCRATCHPAD_TOOL_DESCRIPTIONS {
+            let handler = BuiltinScratchpadHandler::new(tool_name);
+            if tool_name == TOOL_OPEN {
+                registry.add(handler);
+            } else {
+                registry.add_with_exposure(handler, ToolExposure::Hidden);
+            }
+        }
     }
 
     if turn_context.tools_config.builtin_schedule_enabled {
