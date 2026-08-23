@@ -11238,7 +11238,7 @@ async fn builtin_scratchpad_handler_rejects_custom_active_id_with_state_home() {
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let state_home = tempfile::tempdir().expect("state home");
-    let handler = BuiltinScratchpadHandler;
+    let handler = BuiltinScratchpadHandler::new("open_scratchpad");
 
     let result = handler
         .handle(ToolInvocation {
@@ -11282,7 +11282,7 @@ async fn builtin_scratchpad_handler_uses_configured_storage_root() {
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let state_home = tempfile::tempdir().expect("state home");
-    let handler = BuiltinScratchpadHandler;
+    let handler = BuiltinScratchpadHandler::new("open_scratchpad");
 
     handler
         .handle(ToolInvocation {

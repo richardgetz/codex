@@ -113,11 +113,19 @@ pub struct ScratchpadAbsorbResult {
     pub excluded_control_fields: Vec<String>,
 }
 
-pub(crate) struct BuiltinScratchpadHandler;
+pub(crate) struct BuiltinScratchpadHandler {
+    tool_name: &'static str,
+}
+
+impl BuiltinScratchpadHandler {
+    pub(crate) const fn new(tool_name: &'static str) -> Self {
+        Self { tool_name }
+    }
+}
 
 impl ToolExecutor<ToolInvocation> for BuiltinScratchpadHandler {
     fn tool_name(&self) -> ToolName {
-        ToolName::namespaced(SCRATCHPAD_NAMESPACE, TOOL_OPEN)
+        ToolName::namespaced(SCRATCHPAD_NAMESPACE, self.tool_name)
     }
 
     fn spec(&self) -> ToolSpec {

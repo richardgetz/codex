@@ -49,12 +49,16 @@ use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::mcp_config_for_test;
 use crate::session::turn_context::TurnContext;
+use crate::tools::context::ToolPayload;
 use crate::tools::handlers::McpHandler;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::WaitForEnvironmentHandler;
+use crate::tools::handlers::builtin_scratchpad_spec::TOOL_OPEN;
+use crate::tools::handlers::builtin_scratchpad_spec::scratchpad_namespace_spec;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::RegisteredTool;
+use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolSuggestCandidates;
 use crate::tools::router::ToolSuggestPresentation;
@@ -77,6 +81,7 @@ struct ToolPlanProbe {
     visible_names: Vec<String>,
     namespace_functions: BTreeMap<String, Vec<String>>,
     registered_names: Vec<String>,
+    resolved_names: Vec<String>,
     exposures: BTreeMap<String, ToolExposure>,
 }
 
@@ -112,6 +117,22 @@ impl ToolPlanProbe {
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>();
+        let resolved_names = registered_tool_names
+            .iter()
+            .filter(|name| {
+                router
+                    .tool_runtime(&ToolCall {
+                        tool_name: (*name).clone(),
+                        call_id: "scratchpad-registry-test".to_string(),
+                        payload: ToolPayload::Function {
+                            arguments: "{}".to_string(),
+                        },
+                        encrypted_function_args: None,
+                    })
+                    .is_some()
+            })
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
         let exposures = registered_tool_names
             .iter()
             .filter_map(|name| {
@@ -126,6 +147,7 @@ impl ToolPlanProbe {
             visible_names,
             namespace_functions,
             registered_names,
+            resolved_names,
             exposures,
         }
     }
@@ -171,6 +193,16 @@ impl ToolPlanProbe {
                     .any(|registered| registered == name),
                 "expected registered tool `{name}` to be absent from {:?}",
                 self.registered_names
+            );
+        }
+    }
+
+    fn assert_resolved_contains(&self, expected: &[&str]) {
+        for name in expected {
+            assert!(
+                self.resolved_names.iter().any(|resolved| resolved == name),
+                "expected resolvable tool `{name}` in {:?}",
+                self.resolved_names
             );
         }
     }
@@ -634,6 +666,29 @@ async fn built_in_scratchpad_and_schedule_follow_mode_config() {
             .iter()
             .any(|name| name == "open_scratchpad")
     );
+    let ToolSpec::Namespace(namespace) = scratchpad_namespace_spec() else {
+        panic!("scratchpad should publish a namespace spec");
+    };
+    let published_tool_count = namespace.tools.len();
+    assert_eq!(
+        default_plan.namespace_function_names("scratchpad").len(),
+        published_tool_count
+    );
+    for tool in namespace.tools {
+        let tool_name = match tool {
+            ResponsesApiNamespaceTool::Function(tool) => tool.name,
+            ResponsesApiNamespaceTool::Custom(tool) => tool.name,
+        };
+        let expected_exposure = if tool_name == TOOL_OPEN {
+            ToolExposure::Direct
+        } else {
+            ToolExposure::Hidden
+        };
+        let registered_name = ToolName::namespaced(namespace.name.clone(), tool_name).to_string();
+        default_plan.assert_registered_contains(&[registered_name.as_str()]);
+        default_plan.assert_resolved_contains(&[registered_name.as_str()]);
+        assert_eq!(default_plan.exposure(&registered_name), expected_exposure);
+    }
 
     let schedule_enabled = probe(|turn| {
         update_config(turn, |config| {
