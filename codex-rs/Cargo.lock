@@ -3575,7 +3575,9 @@ dependencies = [
 name = "codex-keyring-store"
 version = "0.149.0"
 dependencies = [
+ "core-foundation 0.10.1",
  "keyring",
+ "security-framework 3.5.1",
  "tracing",
 ]
 

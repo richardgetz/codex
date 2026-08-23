@@ -15,7 +15,9 @@ tracing = { workspace = true }
 keyring = { workspace = true, features = ["linux-native-async-persistent"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
 keyring = { workspace = true, features = ["apple-native"] }
+security-framework = "3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { workspace = true, features = ["windows-native"] }

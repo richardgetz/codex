@@ -21,6 +21,7 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_keyring_store::KeyringAccessPolicy;
 use codex_keyring_store::KeyringStore;
 use rand::TryRngCore;
 use rand::rngs::OsRng;
@@ -236,11 +237,17 @@ impl LocalSecretsBackend {
 
     fn load_or_create_passphrase(&self) -> Result<SecretString> {
         let account = compute_keyring_account(&self.codex_home);
-        let loaded = self
-            .keyring_store
-            .load(keyring_service(), &account)
-            .map_err(|err| anyhow::anyhow!(err.message()))
-            .with_context(|| format!("failed to load secrets key from keyring for {account}"))?;
+        let loaded = if self.namespace == LocalSecretsNamespace::McpOAuth {
+            self.keyring_store.load_with_access_policy(
+                keyring_service(),
+                &account,
+                KeyringAccessPolicy::StableSignedCodex,
+            )
+        } else {
+            self.keyring_store.load(keyring_service(), &account)
+        }
+        .map_err(anyhow::Error::new)
+        .with_context(|| format!("failed to load secrets key from keyring for {account}"))?;
         match loaded {
             Some(existing) => Ok(SecretString::from(existing)),
             None => {
@@ -248,9 +255,19 @@ impl LocalSecretsBackend {
                 // This keeps secrets out of plaintext config while remaining
                 // fully local/offline for the MVP.
                 let generated = generate_passphrase()?;
-                self.keyring_store
-                    .save(keyring_service(), &account, generated.expose_secret())
-                    .map_err(|err| anyhow::anyhow!(err.message()))
+                let result = if self.namespace == LocalSecretsNamespace::McpOAuth {
+                    self.keyring_store.save_with_access_policy(
+                        keyring_service(),
+                        &account,
+                        generated.expose_secret(),
+                        KeyringAccessPolicy::StableSignedCodex,
+                    )
+                } else {
+                    self.keyring_store
+                        .save(keyring_service(), &account, generated.expose_secret())
+                };
+                result
+                    .map_err(anyhow::Error::new)
                     .context("failed to persist secrets key in keyring")?;
                 Ok(generated)
             }

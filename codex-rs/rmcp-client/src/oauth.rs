@@ -64,7 +64,9 @@ use self::store_lock::OAuthStore;
 use self::store_lock::OAuthStoreLock;
 use self::store_lock::OAuthStoreLockFailure;
 
+use codex_keyring_store::CredentialStoreError;
 use codex_keyring_store::DefaultKeyringStore;
+use codex_keyring_store::KeyringAccessPolicy;
 use codex_keyring_store::KeyringStore;
 use rmcp::transport::auth::AuthorizationManager;
 use tokio::sync::Mutex;
@@ -349,8 +351,19 @@ fn load_oauth_tokens_from_keyring<K: KeyringStore + Clone + 'static>(
 ) -> std::result::Result<Option<StoredOAuthTokens>, OAuthKeyringLoadError> {
     match keyring_backend_kind {
         AuthKeyringBackendKind::Direct => {
-            load_oauth_tokens_from_direct_keyring(keyring_store, server_name, url)
-                .map_err(OAuthKeyringLoadError::Backend)
+            match load_oauth_tokens_from_direct_keyring(keyring_store, server_name, url) {
+                Ok(tokens) => Ok(tokens),
+                Err(error) => match error.downcast::<CredentialStoreError>() {
+                    Ok(error) if error.is_access_policy_failure() => {
+                        Err(OAuthKeyringLoadError::AccessPolicy(error))
+                    }
+                    Ok(error) => Err(OAuthKeyringLoadError::Backend(anyhow::Error::new(error))),
+                    Err(error) => match error.downcast::<OAuthStoreLockFailure>() {
+                        Ok(error) => Err(OAuthKeyringLoadError::StoreLock(error)),
+                        Err(error) => Err(OAuthKeyringLoadError::Backend(error)),
+                    },
+                },
+            }
         }
         AuthKeyringBackendKind::Secrets => {
             load_oauth_tokens_from_secrets_keyring(keyring_store, server_name, url)
@@ -364,7 +377,11 @@ fn load_oauth_tokens_from_direct_keyring<K: KeyringStore>(
     url: &str,
 ) -> Result<Option<StoredOAuthTokens>> {
     let key = compute_store_key(server_name, url)?;
-    match keyring_store.load(KEYRING_SERVICE, &key) {
+    match keyring_store.load_with_access_policy(
+        KEYRING_SERVICE,
+        &key,
+        KeyringAccessPolicy::StableSignedCodex,
+    ) {
         Ok(Some(serialized)) => {
             let mut tokens: StoredOAuthTokens = serde_json::from_str(&serialized)
                 .context("failed to deserialize OAuth tokens from keyring")?;
@@ -372,7 +389,7 @@ fn load_oauth_tokens_from_direct_keyring<K: KeyringStore>(
             Ok(Some(tokens))
         }
         Ok(None) => Ok(None),
-        Err(error) => Err(Error::new(error.into_error())),
+        Err(error) => Err(Error::new(error)),
     }
 }
 
@@ -418,6 +435,9 @@ enum OAuthKeyringLoadError {
     /// Store coordination failed, so consulting another authority would be unsafe.
     #[error(transparent)]
     StoreLock(#[from] OAuthStoreLockFailure),
+    /// An existing credential could not be proven to have the stable ACL policy.
+    #[error(transparent)]
+    AccessPolicy(#[from] CredentialStoreError),
     /// The selected keyring backend itself was unavailable or its data was invalid.
     #[error(transparent)]
     Backend(#[from] anyhow::Error),
@@ -473,7 +493,12 @@ fn save_oauth_tokens_to_direct_keyring<K: KeyringStore>(
     let serialized = serde_json::to_string(tokens).context("failed to serialize OAuth tokens")?;
 
     let key = compute_store_key(server_name, &tokens.url)?;
-    match keyring_store.save(KEYRING_SERVICE, &key, &serialized) {
+    match keyring_store.save_with_access_policy(
+        KEYRING_SERVICE,
+        &key,
+        &serialized,
+        KeyringAccessPolicy::StableSignedCodex,
+    ) {
         Ok(()) => Ok(()),
         Err(error) => {
             let message = format!(
@@ -481,7 +506,12 @@ fn save_oauth_tokens_to_direct_keyring<K: KeyringStore>(
                 error.message()
             );
             warn!("{message}");
-            Err(Error::new(error.into_error()).context(message))
+            let error = if error.is_access_policy_failure() {
+                Error::new(error)
+            } else {
+                Error::new(error.into_error())
+            };
+            Err(error.context(message))
         }
     }
 }
@@ -559,6 +589,15 @@ fn save_oauth_tokens_with_keyring_with_fallback_to_file<K: KeyringStore + Clone 
         // the keyring backend is unavailable. Falling back could leave a newer File token hidden
         // behind a stale Secrets entry.
         Err(error) if error.downcast_ref::<OAuthStoreLockFailure>().is_some() => Err(error),
+        Err(error)
+            if error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<CredentialStoreError>()
+                    .is_some_and(CredentialStoreError::is_access_policy_failure)
+            }) =>
+        {
+            Err(error)
+        }
         Err(error) => {
             let message = error.to_string();
             warn!("falling back to file storage for OAuth tokens: {message}");
@@ -639,7 +678,11 @@ fn delete_oauth_tokens_from_direct_keyring<K: KeyringStore>(
 ) -> Result<bool> {
     let key = compute_store_key(server_name, url)?;
     keyring_store
-        .delete(KEYRING_SERVICE, &key)
+        .delete_with_access_policy(
+            KEYRING_SERVICE,
+            &key,
+            KeyringAccessPolicy::StableSignedCodex,
+        )
         .map_err(|error| Error::new(error.into_error()))
 }
 
@@ -1086,6 +1129,8 @@ fn sha_256_prefix(value: &Value) -> Result<String> {
 mod tests {
     use super::*;
     use anyhow::Result;
+    use codex_keyring_store::CredentialStoreError;
+    use codex_keyring_store::KeyringAccessPolicy;
     use codex_keyring_store::tests::MockKeyringStore;
     use codex_secrets::compute_keyring_account;
     use keyring::Error as KeyringError;
@@ -1160,6 +1205,10 @@ mod tests {
             ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct)
         );
         assert_tokens_match_without_expiry(&resolved.tokens, &expected);
+        assert_eq!(
+            store.access_policy(&key),
+            Some(KeyringAccessPolicy::StableSignedCodex)
+        );
         Ok(())
     }
 
@@ -1206,6 +1255,64 @@ mod tests {
         .expect("tokens should load from fallback");
         assert_eq!(resolved.store, ResolvedOAuthCredentialStore::File);
         assert_tokens_match_without_expiry(&resolved.tokens, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn load_oauth_tokens_does_not_fallback_when_access_policy_fails() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = MockKeyringStore::default();
+        let tokens = sample_tokens();
+        let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
+        store.set_access_policy_error(
+            &key,
+            KeyringError::Invalid("error".into(), "access policy".into()),
+        );
+        super::save_oauth_tokens_to_file(&tokens)?;
+
+        let error = super::resolve_oauth_tokens_from_store_policy(
+            &store,
+            &tokens.server_name,
+            &tokens.url,
+            OAuthCredentialsStoreMode::Auto,
+            AuthKeyringBackendKind::Direct,
+        )
+        .expect_err("access policy failures must not fall back to file storage");
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<CredentialStoreError>()
+                .is_some_and(CredentialStoreError::is_access_policy_failure)
+        }));
+        assert!(super::read_fallback_file_unlocked()?.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_refresh_does_not_fallback_when_access_policy_fails() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = MockKeyringStore::default();
+        let tokens = sample_tokens();
+        let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
+        store.set_access_policy_error(
+            &key,
+            KeyringError::Invalid("error".into(), "access policy".into()),
+        );
+        super::save_oauth_tokens_to_file(&tokens)?;
+
+        let error = super::try_resolve_oauth_tokens_from_store_policy(
+            &store,
+            &tokens.server_name,
+            &tokens.url,
+            OAuthCredentialsStoreMode::Auto,
+            AuthKeyringBackendKind::Direct,
+        )
+        .expect_err("runtime policy failures must not fall back to file storage");
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<CredentialStoreError>()
+                .is_some_and(CredentialStoreError::is_access_policy_failure)
+        }));
+        assert!(super::read_fallback_file_unlocked()?.is_some());
         Ok(())
     }
 
@@ -1258,6 +1365,10 @@ mod tests {
         assert!(!fallback_path.exists(), "fallback file should be removed");
         let stored = store.saved_value(&key).expect("value saved to keyring");
         assert_eq!(serde_json::from_str::<StoredOAuthTokens>(&stored)?, tokens);
+        assert_eq!(
+            store.access_policy(&key),
+            Some(KeyringAccessPolicy::StableSignedCodex)
+        );
         Ok(())
     }
 
@@ -1288,6 +1399,34 @@ mod tests {
             entry.access_token,
             tokens.token_response.0.access_token().secret().as_str()
         );
+        assert!(store.saved_value(&key).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn save_oauth_tokens_does_not_fallback_when_access_policy_fails() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = MockKeyringStore::default();
+        let tokens = sample_tokens();
+        let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
+        store.set_access_policy_error(
+            &key,
+            KeyringError::Invalid("error".into(), "access policy".into()),
+        );
+
+        let error = super::save_oauth_tokens_with_keyring_with_fallback_to_file(
+            &store,
+            AuthKeyringBackendKind::Direct,
+            &tokens.server_name,
+            &tokens,
+        )
+        .expect_err("access policy failures must not fall back to file storage");
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<CredentialStoreError>()
+                .is_some_and(CredentialStoreError::is_access_policy_failure)
+        }));
+        assert!(!super::fallback_file_path()?.exists());
         assert!(store.saved_value(&key).is_none());
         Ok(())
     }
@@ -1539,6 +1678,10 @@ mod tests {
         )?;
         assert!(removed);
         assert!(!store.contains(&key));
+        assert_eq!(
+            store.access_policy(&key),
+            Some(KeyringAccessPolicy::StableSignedCodex)
+        );
         assert!(!super::fallback_file_path()?.exists());
         Ok(())
     }

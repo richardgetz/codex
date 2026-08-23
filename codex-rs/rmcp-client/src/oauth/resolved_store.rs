@@ -174,6 +174,7 @@ pub(crate) fn resolve_oauth_tokens_from_store_policy<K: KeyringStore + Clone + '
                 // aggregate-lock failure means authority may be changing. Consulting File in
                 // that state could replay credentials hidden behind a newer Secrets entry.
                 Err(OAuthKeyringLoadError::StoreLock(error)) => Err(error.into()),
+                Err(OAuthKeyringLoadError::AccessPolicy(error)) => Err(error.into()),
                 Err(error) => {
                     warn!("failed to read OAuth tokens from keyring: {error}");
                     Ok(load_oauth_tokens_from_file(server_name, url)
@@ -228,6 +229,17 @@ pub(crate) fn try_resolve_oauth_tokens_from_store_policy<K: KeyringStore + Clone
             Ok(Some(tokens)) => Ok(Some(tokens)),
             Ok(None) => load(ResolvedOAuthCredentialStore::File),
             Err(error) if error.downcast_ref::<OAuthStoreLockFailure>().is_some() => Err(error),
+            Err(error)
+                if error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<codex_keyring_store::CredentialStoreError>()
+                        .is_some_and(
+                            codex_keyring_store::CredentialStoreError::is_access_policy_failure,
+                        )
+                }) =>
+            {
+                Err(error)
+            }
             Err(error) => {
                 warn!("failed to read OAuth tokens from keyring: {error}");
                 load(ResolvedOAuthCredentialStore::File)
