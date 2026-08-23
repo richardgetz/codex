@@ -275,9 +275,14 @@ impl HttpClientBuilder {
 
     fn base_reqwest_builder(self) -> reqwest::ClientBuilder {
         let mut builder = reqwest::Client::builder();
-        if self.tls_backend == TlsBackend::Rustls {
-            ensure_rustls_crypto_provider();
-            builder = builder.use_rustls_tls();
+        match self.tls_backend {
+            TlsBackend::TransportDefault => {
+                builder = builder.use_native_tls();
+            }
+            TlsBackend::Rustls => {
+                ensure_rustls_crypto_provider();
+                builder = builder.use_rustls_tls();
+            }
         }
         if let Some(default_headers) = self.default_headers {
             builder = builder.default_headers(default_headers);
