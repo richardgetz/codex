@@ -11269,6 +11269,57 @@ async fn builtin_scratchpad_handler_rejects_custom_active_id_with_state_home() {
 }
 
 #[tokio::test]
+async fn builtin_scratchpad_handler_uses_configured_storage_root() {
+    let (session, turn_context) = make_session_and_context().await;
+    let thread_id = session.thread_id.to_string();
+    let configured_entries = turn_context
+        .config
+        .codex_home
+        .join("scratchpad")
+        .join("entries");
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
+    let state_home = tempfile::tempdir().expect("state home");
+    let handler = BuiltinScratchpadHandler;
+
+    handler
+        .handle(ToolInvocation {
+            session,
+            turn: turn_context,
+            step_context,
+            cancellation_token: CancellationToken::new(),
+            tracker,
+            call_id: "scratchpad-open-storage-root".to_string(),
+            tool_name: codex_tools::ToolName::plain("open_scratchpad"),
+            source: ToolCallSource::Direct,
+            payload: ToolPayload::Function {
+                arguments: serde_json::json!({
+                    "state_home": state_home.path(),
+                    "objective": "use configured scratchpad storage"
+                })
+                .to_string(),
+            },
+        })
+        .await
+        .expect("scratchpad handler should ignore internal storage override");
+
+    assert!(
+        configured_entries
+            .join(format!("{thread_id}.json"))
+            .exists()
+    );
+    assert!(
+        !state_home
+            .path()
+            .join("entries")
+            .join(format!("{thread_id}.json"))
+            .exists()
+    );
+}
+
+#[tokio::test]
 async fn build_initial_context_omits_completed_or_archived_scratchpad_loopback() {
     let (session, turn_context) = make_session_and_context().await;
     write_thread_scratchpad(
