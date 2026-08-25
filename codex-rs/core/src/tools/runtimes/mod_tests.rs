@@ -571,6 +571,49 @@ fn maybe_wrap_shell_lc_with_snapshot_bootstraps_in_user_shell() {
 }
 
 #[test]
+fn maybe_wrap_shell_lc_with_snapshot_restores_managed_temp_environment() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\nexport TMPDIR=/stale/tmpdir\nexport TMP=/stale/tmp\nexport TEMP=/stale/temp\n",
+    )
+    .expect("write snapshot");
+    let (session_shell, shell_snapshot) =
+        shell_with_snapshot(ShellType::Bash, "/bin/bash", snapshot_path.abs());
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf '%s|%s|%s' \"$TMPDIR\" \"$TMP\" \"$TEMP\"".to_string(),
+    ];
+    let env = HashMap::from([
+        ("TMPDIR".to_string(), "/managed/session/tmpdir".to_string()),
+        ("TMP".to_string(), "/managed/session/tmp".to_string()),
+        ("TEMP".to_string(), "/managed/session/temp".to_string()),
+    ]);
+
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        Some(&shell_snapshot),
+        &HashMap::new(),
+        &env,
+        &RuntimePathPrepends::default(),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .envs(&env)
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "/managed/session/tmpdir|/managed/session/tmp|/managed/session/temp"
+    );
+}
+
+#[test]
 fn maybe_wrap_shell_lc_with_snapshot_escapes_single_quotes() {
     let dir = tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("snapshot.sh");

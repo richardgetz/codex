@@ -45,6 +45,7 @@ const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const CONTINUOUS_USAGE: &str = "Usage: /continuous [on|off|status]";
 const OUTCOMES_USAGE: &str = "Usage: /outcomes [on|off|status|report]";
 const SPEND_USAGE: &str = "Usage: /spend [days|YYYY-MM|YYYY-MM-DD..YYYY-MM-DD]";
+const SESSION_TMP_REAP_USAGE: &str = "Usage: /tmp reap [days]";
 const SCRATCHPAD_ABSORB_USAGE: &str = "Usage: /scratchpad-absorb <scratchpad_id> [--exclude-pending] [--exclude-blocked] [--exclude-notes] [--exclude-outcomes] [--exclude-delegations] [--exclude-artifacts] [--exclude-worktrees] [--exclude-completed] [--exclude-next-steps] [--exclude-git-refs]";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
 const MIC_USAGE: &str = "Usage: /mic [help|on|off|status|hot|push|hotkey|change|devices|aliases|alias <name> [device]|device <name>|speakers|speaker change|speaker aliases|speaker alias <name> [device]|speaker <name>]";
@@ -568,6 +569,89 @@ impl ChatWidget {
             format!("Scratchpad outcome tracking is {state}."),
             Some(OUTCOMES_USAGE.to_string()),
         );
+    }
+
+    fn dispatch_session_tmp_command(&mut self, args: &str) {
+        let Some(thread_id) = self.thread_id else {
+            self.add_error_message("'/tmp' is unavailable before the session starts.".to_string());
+            return;
+        };
+        let config = crate::chatwidget::session_tmp_command::config(&self.config);
+        let manager = match codex_session_tmp::SessionTmpManager::open_for_user(
+            &config,
+            self.config.codex_home.as_path(),
+            &thread_id.to_string(),
+            &thread_id.to_string(),
+        ) {
+            Ok(Some(manager)) => manager,
+            Ok(None) => {
+                self.add_info_message(
+                    "Session temporary storage is disabled. Add `[session_tmp].enabled = true` to config.toml to enable it.".to_string(),
+                    Some(crate::chatwidget::session_tmp_command::USAGE.to_string()),
+                );
+                return;
+            }
+            Err(error) => {
+                self.add_error_message(format!(
+                    "Could not open managed session temporary storage: {error}"
+                ));
+                return;
+            }
+        };
+        match args.split_whitespace().collect::<Vec<_>>().as_slice() {
+            [] | ["status"] | ["list"] => match manager.list() {
+                Ok(listing) => self.add_info_message(
+                    crate::chatwidget::session_tmp_command::status_message(&listing),
+                    Some(crate::chatwidget::session_tmp_command::USAGE.to_string()),
+                ),
+                Err(error) => {
+                    self.add_error_message(format!("Could not list session temporary files: {error}"));
+                }
+            },
+            ["clean"] => match manager.clean() {
+                Ok(report) => self.add_info_message(
+                    crate::chatwidget::session_tmp_command::cleanup_message("cleanup", &report),
+                    Some("Session-retained and expired entries were removed; manual entries were preserved.".to_string()),
+                ),
+                Err(error) => {
+                    self.add_error_message(format!("Could not clean session temporary files: {error}"));
+                }
+            },
+            ["clear"] => match manager.clear() {
+                Ok(report) => self.add_info_message(
+                    crate::chatwidget::session_tmp_command::cleanup_message("clear", &report),
+                    Some("All entries in the current session were removed, including manual-retention entries.".to_string()),
+                ),
+                Err(error) => {
+                    self.add_error_message(format!("Could not clear session temporary files: {error}"));
+                }
+            },
+            ["reap"] => self.reap_session_tmp(&manager, config.stale_after),
+            ["reap", days] => match days.parse::<u64>() {
+                Ok(days) => self.reap_session_tmp(
+                    &manager,
+                    Duration::from_secs(days.saturating_mul(24 * 60 * 60)),
+                ),
+                Err(_) => self.add_error_message(SESSION_TMP_REAP_USAGE.to_string()),
+            },
+            _ => self.add_error_message(crate::chatwidget::session_tmp_command::USAGE.to_string()),
+        }
+    }
+
+    fn reap_session_tmp(
+        &mut self,
+        manager: &codex_session_tmp::SessionTmpManager,
+        max_age: Duration,
+    ) {
+        match manager.reap(max_age) {
+            Ok(report) => self.add_info_message(
+                crate::chatwidget::session_tmp_command::cleanup_message("stale-session reap", &report),
+                Some("Only sessions older than the selected age were force-removed; the current session was protected.".to_string()),
+            ),
+            Err(error) => {
+                self.add_error_message(format!("Could not reap stale session temporary files: {error}"));
+            }
+        }
     }
 
     fn dispatch_outcomes_command(&mut self, args: Option<&str>) {
@@ -1164,6 +1248,9 @@ impl ChatWidget {
             SlashCommand::Scratchpad => {
                 self.add_current_scratchpad_output();
             }
+            SlashCommand::SessionTmp => {
+                self.dispatch_session_tmp_command("");
+            }
             SlashCommand::ScratchpadAbsorb => {
                 self.add_error_message(SCRATCHPAD_ABSORB_USAGE.to_string());
             }
@@ -1414,6 +1501,9 @@ impl ChatWidget {
             }
             SlashCommand::Outcomes => {
                 self.dispatch_outcomes_command(Some(trimmed));
+            }
+            SlashCommand::SessionTmp => {
+                self.dispatch_session_tmp_command(trimmed);
             }
             SlashCommand::ScratchpadAbsorb => {
                 self.dispatch_scratchpad_absorb_command(trimmed);
@@ -2096,6 +2186,7 @@ impl ChatWidget {
             | SlashCommand::OrchestratorMemoryConsolidate
             | SlashCommand::UserPreferencesMemoryMigrate
             | SlashCommand::Scratchpad
+            | SlashCommand::SessionTmp
             | SlashCommand::ScratchpadAbsorb
             | SlashCommand::ScratchpadUnarchive
             | SlashCommand::Outcomes

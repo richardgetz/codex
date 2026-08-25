@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: rendered
+---
+• Session temporary clear complete: removed 1 path(s), preserved 0 path(s), removed 0 session(s). All entries in the current session were removed, including manual-retention entries.

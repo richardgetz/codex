@@ -992,6 +992,11 @@ impl Session {
                             .turn_environments
                             .update_thread_config(&environment_config);
                     }
+                    if let Some(root) = next.session_tmp_agent_root.as_ref() {
+                        self.services
+                            .turn_environments
+                            .add_local_writable_root(root);
+                    }
                     Ok((
                         next,
                         mcp_inputs_changed,

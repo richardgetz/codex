@@ -5,6 +5,7 @@ use crate::realtime_voice::RealtimeVoiceCommand;
 use crate::realtime_voice::RealtimeVoiceDebugCommand;
 use crate::realtime_voice::RealtimeVoiceEffectCommand;
 use crate::realtime_voice::RealtimeVoiceProfileCommand;
+use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 use std::path::Path;
@@ -1626,6 +1627,80 @@ async fn clearing_pending_token_activity_refreshes_discards_late_result() {
             Err("stale token activity result".to_string()),
         )
     );
+}
+
+#[tokio::test]
+async fn session_tmp_clear_slash_command_force_cleans_current_session() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let managed_root = tempdir().expect("managed session temporary root");
+    let thread_id = ThreadId::new();
+    chat.set_thread_id_for_test(thread_id);
+    chat.config.session_tmp.enabled = true;
+    chat.config.session_tmp.root = Some(managed_root.path().abs());
+
+    let config = codex_session_tmp::SessionTmpConfig {
+        enabled: true,
+        root: Some(managed_root.path().to_path_buf()),
+        stale_after: Duration::from_secs(60),
+    };
+    let manager = codex_session_tmp::SessionTmpManager::open_for_user(
+        &config,
+        chat.config.codex_home.as_path(),
+        &thread_id.to_string(),
+        &thread_id.to_string(),
+    )
+    .expect("open managed session temporary storage")
+    .expect("managed session temporary storage should be enabled");
+    let manual_entry = manager
+        .create(
+            Some("keep-until-clear.txt"),
+            "slash command cleanup test",
+            codex_session_tmp::Retention::Manual,
+            codex_session_tmp::TempKind::File,
+        )
+        .expect("create manual entry");
+    assert!(manual_entry.absolute_path.exists());
+    drop(manager);
+
+    chat.dispatch_command_with_args(SlashCommand::SessionTmp, "clear".to_string(), Vec::new());
+
+    let reopened = codex_session_tmp::SessionTmpManager::open_for_user(
+        &config,
+        chat.config.codex_home.as_path(),
+        &thread_id.to_string(),
+        &thread_id.to_string(),
+    )
+    .expect("reopen managed session temporary storage")
+    .expect("managed session temporary storage should remain enabled");
+    assert!(
+        reopened
+            .list()
+            .expect("list cleared session")
+            .entries
+            .is_empty()
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell).trim().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!("session_tmp_clear_slash_command", rendered);
+}
+
+#[tokio::test]
+async fn session_tmp_slash_command_reports_opt_in_requirement_when_disabled() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_thread_id_for_test(ThreadId::new());
+
+    chat.dispatch_command_with_args(SlashCommand::SessionTmp, "status".to_string(), Vec::new());
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell).trim().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!("session_tmp_disabled_slash_command", rendered);
 }
 
 #[tokio::test]

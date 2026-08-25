@@ -2898,6 +2898,7 @@ dependencies = [
  "codex-rollout",
  "codex-rollout-trace",
  "codex-sandboxing",
+ "codex-session-tmp",
  "codex-shell-command",
  "codex-shell-escalation",
  "codex-skills",
@@ -4271,6 +4272,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-session-tmp"
+version = "0.149.0"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "codex-shell-command"
 version = "0.149.0"
 dependencies = [
@@ -4525,6 +4539,7 @@ dependencies = [
  "codex-protocol",
  "codex-rollout",
  "codex-sandboxing",
+ "codex-session-tmp",
  "codex-shell-command",
  "codex-state",
  "codex-terminal-detection",

@@ -12,9 +12,23 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
+use std::ffi::OsString;
+#[cfg(target_os = "macos")]
 use std::ffi::c_void;
 #[cfg(target_os = "macos")]
+use std::io::Read;
+#[cfg(target_os = "macos")]
+use std::process::Command;
+#[cfg(target_os = "macos")]
+use std::process::Stdio;
+#[cfg(target_os = "macos")]
 use std::ptr::null;
+#[cfg(target_os = "macos")]
+use std::sync::Mutex;
+#[cfg(target_os = "macos")]
+use std::thread::JoinHandle;
+#[cfg(target_os = "macos")]
+use std::time::Instant;
 
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -29,6 +43,18 @@ const RIGHT_OPTION_KEY_CODE: u16 = 61;
 // kVK_Option from Carbon HIToolbox.
 const LEFT_OPTION_KEY_CODE: u16 = 58;
 const POLL_INTERVAL: Duration = Duration::from_millis(8);
+#[cfg(target_os = "macos")]
+const CMUX_SURFACE_ID_ENV_VAR: &str = "CMUX_SURFACE_ID";
+#[cfg(target_os = "macos")]
+const CMUX_BUNDLED_CLI_PATH_ENV_VAR: &str = "CMUX_BUNDLED_CLI_PATH";
+#[cfg(target_os = "macos")]
+const CMUX_CODEX_HOOK_CMUX_BIN_ENV_VAR: &str = "CMUX_CODEX_HOOK_CMUX_BIN";
+#[cfg(target_os = "macos")]
+const CMUX_IDENTIFY_TIMEOUT: Duration = Duration::from_millis(100);
+#[cfg(target_os = "macos")]
+const CMUX_IDENTIFY_MAX_OUTPUT_BYTES: u64 = 64 * 1024;
+#[cfg(target_os = "macos")]
+const CMUX_FOCUS_POLL_INTERVAL: Duration = Duration::from_millis(50);
 // kCGEventSourceStateHIDSystemState from CoreGraphics.
 const HID_SYSTEM_STATE: u32 = 1;
 // kCGEventFlagsChanged from CoreGraphics.
@@ -89,9 +115,95 @@ pub(crate) struct MacRightOptionMonitor {
     events_tx: broadcast::Sender<KeyEvent>,
     paused: Arc<AtomicBool>,
     focused: Arc<AtomicBool>,
+    cmux_focus_probe: Option<CmuxFocusProbe>,
     release_pending: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Identifies the cmux surface that owns a Codex process so native modifier events can be
+/// delivered only to the surface currently receiving keyboard input.
+#[derive(Clone)]
+pub(crate) struct CmuxFocusProbe {
+    #[cfg(target_os = "macos")]
+    state: Arc<CmuxFocusState>,
+}
+
+impl CmuxFocusProbe {
+    pub(crate) fn from_environment() -> Option<Self> {
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let surface_id = nonempty_env(CMUX_SURFACE_ID_ENV_VAR)?;
+            let focused = Arc::new(AtomicBool::new(false));
+            let stop = Arc::new(AtomicBool::new(false));
+            let focused_for_thread = Arc::clone(&focused);
+            let stop_for_thread = Arc::clone(&stop);
+            let thread = std::thread::Builder::new()
+                .name("codex-cmux-focus-probe".to_string())
+                .spawn(move || {
+                    while !stop_for_thread.load(Ordering::Relaxed) {
+                        let is_focused = run_cmux_identify()
+                            .and_then(|output| cmux_identify_focus_matches(&output, &surface_id))
+                            .unwrap_or(false);
+                        focused_for_thread.store(is_focused, Ordering::Relaxed);
+                        std::thread::sleep(CMUX_FOCUS_POLL_INTERVAL);
+                    }
+                })
+                .map_err(|error| {
+                    tracing::warn!(
+                        error = %error,
+                        "failed to start cmux focus probe; native push-to-talk will remain disabled"
+                    );
+                })
+                .ok();
+            Some(Self {
+                state: Arc::new(CmuxFocusState {
+                    focused,
+                    stop,
+                    thread: Mutex::new(thread),
+                }),
+            })
+        }
+    }
+
+    pub(crate) fn is_focused(&self) -> bool {
+        #[cfg(not(target_os = "macos"))]
+        {
+            true
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            self.state.focused.load(Ordering::Relaxed)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct CmuxFocusState {
+    focused: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+    thread: Mutex<Option<JoinHandle<()>>>,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for CmuxFocusState {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self
+            .thread
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            let _ = thread.join();
+        }
+    }
 }
 
 impl MacRightOptionMonitor {
@@ -110,6 +222,7 @@ impl MacRightOptionMonitor {
             let (events_tx, _) = broadcast::channel(8);
             let paused = Arc::new(AtomicBool::new(false));
             let focused = Arc::new(AtomicBool::new(true));
+            let cmux_focus_probe = CmuxFocusProbe::from_environment();
             let release_pending = Arc::new(AtomicBool::new(false));
             let stop = Arc::new(AtomicBool::new(false));
             let paused_for_thread = Arc::clone(&paused);
@@ -154,6 +267,7 @@ impl MacRightOptionMonitor {
                 events_tx,
                 paused,
                 focused,
+                cmux_focus_probe,
                 release_pending,
                 stop,
                 thread: Some(thread),
@@ -176,6 +290,10 @@ impl MacRightOptionMonitor {
 
     pub(crate) fn focus_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.focused)
+    }
+
+    pub(crate) fn cmux_focus_probe(&self) -> Option<CmuxFocusProbe> {
+        self.cmux_focus_probe.clone()
     }
 
     pub(crate) fn pause_handle(&self) -> Arc<AtomicBool> {
@@ -410,8 +528,76 @@ fn right_option_event(kind: KeyEventKind) -> KeyEvent {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn nonempty_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+#[cfg(target_os = "macos")]
+fn run_cmux_identify() -> Option<Vec<u8>> {
+    let cli_path = std::env::var_os(CMUX_BUNDLED_CLI_PATH_ENV_VAR)
+        .or_else(|| std::env::var_os(CMUX_CODEX_HOOK_CMUX_BIN_ENV_VAR))
+        .unwrap_or_else(|| OsString::from("cmux"));
+    let mut child = Command::new(cli_path)
+        .args(["--json", "--id-format", "uuids", "identify", "--no-caller"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        stdout
+            .take(CMUX_IDENTIFY_MAX_OUTPUT_BYTES.saturating_add(1))
+            .read_to_end(&mut output)
+            .ok()?;
+        Some(output)
+    });
+    let deadline = Instant::now() + CMUX_IDENTIFY_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    let output = reader.join().ok().flatten()?;
+    let status = status?;
+    if !status.success() || output.len() > CMUX_IDENTIFY_MAX_OUTPUT_BYTES as usize {
+        return None;
+    }
+    Some(output)
+}
+
+fn cmux_identify_focus_matches(output: &[u8], surface_id: &str) -> Option<bool> {
+    let document: serde_json::Value = serde_json::from_slice(output).ok()?;
+    let focused = document.get("focused")?;
+    let focused_surface = focused
+        .get("surface_id")
+        .or_else(|| focused.get("surface_ref"))
+        .or_else(|| focused.get("panel_id"))
+        .or_else(|| focused.get("panel_ref"))?
+        .as_str()?;
+    Some(focused_surface == surface_id)
+}
+
 #[cfg(test)]
 mod tests {
+    use super::cmux_identify_focus_matches;
     use super::right_option_event;
     use super::right_option_state_from_event;
     use super::update_option_state_from_event;
@@ -488,5 +674,44 @@ mod tests {
             ),
             Some((super::RIGHT_OPTION_KEY_CODE, false))
         );
+    }
+
+    #[test]
+    fn cmux_focus_matches_only_the_current_surface() {
+        let identify = br#"{
+            "focused": {
+                "surface_id": "surface-active",
+                "surface_type": "terminal"
+            }
+        }"#;
+
+        assert_eq!(
+            cmux_identify_focus_matches(identify, "surface-active"),
+            Some(true)
+        );
+        assert_eq!(
+            cmux_identify_focus_matches(identify, "surface-background"),
+            Some(false)
+        );
+
+        let legacy_identify = br#"{
+            "focused": {
+                "surface_ref": "surface-active"
+            }
+        }"#;
+        assert_eq!(
+            cmux_identify_focus_matches(legacy_identify, "surface-active"),
+            Some(true)
+        );
+        let panel_identify = br#"{
+            "focused": {
+                "panel_ref": "surface-active"
+            }
+        }"#;
+        assert_eq!(
+            cmux_identify_focus_matches(panel_identify, "surface-active"),
+            Some(true)
+        );
+        assert_eq!(cmux_identify_focus_matches(b"{}", "surface-active"), None);
     }
 }

@@ -31,6 +31,7 @@ use crate::types::ResumeToml;
 use crate::types::SandboxWorkspaceWrite;
 use crate::types::ScheduleToml;
 use crate::types::ScratchpadToml;
+use crate::types::SessionTmpToml;
 use crate::types::ShellEnvironmentPolicyToml;
 use crate::types::SituationalRequirementsToml;
 use crate::types::SkillsConfig;
@@ -507,6 +508,9 @@ pub struct ConfigToml {
 
     /// Built-in scratchpad subsystem settings.
     pub scratchpad: Option<ScratchpadToml>,
+
+    /// Opt-in persistent session-owned temporary storage.
+    pub session_tmp: Option<SessionTmpToml>,
 
     /// Opt-in situational trigger/action requirements.
     pub situational_requirements: Option<SituationalRequirementsToml>,

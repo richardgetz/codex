@@ -152,6 +152,11 @@ impl Session {
             &environments,
             &state.session_configuration.inferred_environment_config(),
         );
+        if let Some(root) = state.session_configuration.session_tmp_agent_root.as_ref() {
+            self.services
+                .turn_environments
+                .add_local_writable_root(root);
+        }
         Ok(())
     }
 

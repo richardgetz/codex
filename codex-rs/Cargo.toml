@@ -91,6 +91,7 @@ members = [
     "responses-api-proxy",
     "response-debug-context",
     "sandboxing",
+    "session-tmp",
     "stdio-to-uds",
     "otel",
     "tui",
@@ -241,6 +242,7 @@ codex-rollout = { path = "rollout" }
 codex-rollout-trace = { path = "rollout-trace" }
 codex-sandboxing = { path = "sandboxing" }
 codex-secrets = { path = "secrets" }
+codex-session-tmp = { path = "session-tmp" }
 codex-shell-command = { path = "shell-command" }
 codex-shell-escalation = { path = "shell-escalation" }
 codex-skills-extension = { path = "ext/skills" }

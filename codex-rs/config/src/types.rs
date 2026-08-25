@@ -60,6 +60,7 @@ pub const DEFAULT_DAILY_SPEND_RETENTION_DAYS: u32 = 30;
 pub const MAX_DAILY_SPEND_RETENTION_DAYS: u32 = 3650;
 pub const DEFAULT_RESUME_LOAD_TIMEOUT_SECONDS: u64 = 60;
 pub const DEFAULT_RESUME_VISIBLE_TURN_LIMIT: usize = 80;
+pub const DEFAULT_SESSION_TMP_STALE_AFTER_DAYS: u64 = 7;
 const MIN_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 1;
 const MAX_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 4096;
 const MIN_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 1;
@@ -717,6 +718,61 @@ pub struct ScratchpadToml {
         skip_serializing_if = "HashMap::is_empty"
     )]
     pub modes: HashMap<ModeKind, ScratchpadModeToml>,
+}
+
+/// Persistent session-owned temporary storage settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SessionTmpToml {
+    /// Enables managed session temporary storage and its cleanup behavior.
+    /// Defaults to false so existing temporary-file behavior is unchanged.
+    pub enabled: Option<bool>,
+    /// Absolute parent directory for managed storage. Defaults to
+    /// `<codex_home>/session-tmp`.
+    pub root: Option<AbsolutePathBuf>,
+    /// Age of inactive sessions eligible for forced stale cleanup. Set to 0 to
+    /// disable automatic stale-session cleanup.
+    #[schemars(range(min = 0))]
+    pub stale_after_days: Option<u64>,
+}
+
+/// Effective persistent session-owned temporary storage settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionTmpConfig {
+    pub enabled: bool,
+    pub root: Option<AbsolutePathBuf>,
+    pub stale_after: std::time::Duration,
+}
+
+impl Default for SessionTmpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            root: None,
+            stale_after: std::time::Duration::from_secs(
+                DEFAULT_SESSION_TMP_STALE_AFTER_DAYS * 24 * 60 * 60,
+            ),
+        }
+    }
+}
+
+impl From<Option<SessionTmpToml>> for SessionTmpConfig {
+    fn from(toml: Option<SessionTmpToml>) -> Self {
+        let defaults = Self::default();
+        let Some(toml) = toml else {
+            return defaults;
+        };
+        let stale_after_days = toml
+            .stale_after_days
+            .unwrap_or(DEFAULT_SESSION_TMP_STALE_AFTER_DAYS);
+        Self {
+            enabled: toml.enabled.unwrap_or(false),
+            root: toml.root,
+            stale_after: std::time::Duration::from_secs(
+                stale_after_days.saturating_mul(24 * 60 * 60),
+            ),
+        }
+    }
 }
 
 /// Model-capacity retry settings loaded from config.toml.
