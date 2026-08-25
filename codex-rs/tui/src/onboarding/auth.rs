@@ -853,7 +853,7 @@ impl AuthModeWidget {
     fn handle_existing_chatgpt_login(&mut self) -> bool {
         if matches!(
             self.login_status,
-            LoginStatus::AuthMode(auth_mode) if auth_mode.has_chatgpt_account()
+            LoginStatus::AuthMode(AuthMode::ChatgptAuthTokens | AuthMode::PersonalAccessToken)
         ) {
             *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
             self.request_frame.schedule_frame();
@@ -865,8 +865,10 @@ impl AuthModeWidget {
 
     /// Kicks off the ChatGPT auth flow and keeps the UI state consistent with the attempt.
     fn start_chatgpt_login(&mut self) {
-        // If we're already authenticated with ChatGPT, don't start a new login –
-        // just proceed to the success message flow.
+        // External ChatGPT credentials and personal access tokens cannot be
+        // refreshed by this flow. Managed ChatGPT OAuth credentials must be
+        // allowed to start a new login because a failed refresh can leave an
+        // expired credential cached in the keychain.
         if self.handle_existing_chatgpt_login() {
             return;
         }
@@ -1153,6 +1155,20 @@ mod tests {
                 SignInState::ChatGptSuccess
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn managed_chatgpt_login_does_not_skip_reauthentication() {
+        let (mut widget, _tmp) = widget_forced_chatgpt().await;
+        widget.login_status = LoginStatus::AuthMode(AuthMode::Chatgpt);
+
+        let handled = widget.handle_existing_chatgpt_login();
+
+        assert!(!handled);
+        assert!(matches!(
+            &*widget.sign_in_state.read().unwrap(),
+            SignInState::PickMode
+        ));
     }
 
     #[tokio::test]

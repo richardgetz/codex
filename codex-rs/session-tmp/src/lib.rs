@@ -275,6 +275,7 @@ impl SessionTmpManager {
             self.agent_dir.join(path)
         };
         ensure_directory_not_symlink(&self.agent_dir)?;
+        let canonical_session = fs::canonicalize(&self.session_dir)?;
         let canonical_agent = fs::canonicalize(&self.agent_dir)?;
         let canonical_path = fs::canonicalize(&path)?;
         if canonical_path == canonical_agent || !canonical_path.starts_with(&canonical_agent) {
@@ -287,7 +288,7 @@ impl SessionTmpManager {
             session_id: self.session_id.clone(),
             thread_id: self.thread_id.clone(),
             path: canonical_path
-                .strip_prefix(&self.session_dir)
+                .strip_prefix(&canonical_session)
                 .map_err(|_| SessionTmpError::PathOutsideAgent(path.clone()))?
                 .to_path_buf(),
             purpose: purpose.to_string(),

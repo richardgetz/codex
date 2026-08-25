@@ -89,11 +89,11 @@ impl BuiltinSessionTmpHandler {
                 "namespace": SESSION_TMP_NAMESPACE,
                 "retention": {
                     "session": "remove when the owning session ends",
-                    "manual": "keep until explicit cleanup",
+                    "manual": "survive normal session cleanup; removable by /tmp clear or stale-session reap",
                     "ttl": "ttl:<seconds>, with <seconds> replaced by a non-negative integer",
                 },
-                "lineage": "Paths under the returned agent_root belong to the current session and thread.",
-                "cleanup": "Session retention is removed when the root session ends; manual retention requires user cleanup or stale reap.",
+                "lineage": "Paths under the returned agent_root belong to the current session and thread. Treat every path there as disposable; untracked shell-created paths are also eligible for cleanup.",
+                "cleanup": "Session retention is removed when the root session ends; manual retention survives normal cleanup but can be removed by user clear or stale reap.",
             })),
             _ => Err(format!("unknown session_tmp tool: {tool_name}")),
         }

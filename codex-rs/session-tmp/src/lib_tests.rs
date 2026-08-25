@@ -466,6 +466,45 @@ fn clean_preserves_live_agent_roots_and_allows_follow_up_creation() {
 }
 
 #[test]
+fn clear_preserves_live_agent_trees() {
+    let root = tempfile::tempdir().unwrap();
+    let root_manager = SessionTmpManager::open(
+        &config(&root),
+        root.path(),
+        "session-1",
+        "root-thread",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+    let agent_manager = SessionTmpManager::open(
+        &config(&root),
+        root.path(),
+        "session-1",
+        "agent-thread",
+        SessionTmpOwner::Agent,
+    )
+    .unwrap()
+    .unwrap();
+    let agent_entry = agent_manager
+        .create(None, "live agent output", Retention::Manual, TempKind::File)
+        .unwrap();
+    root_manager
+        .create(None, "root output", Retention::Manual, TempKind::File)
+        .unwrap();
+
+    root_manager.clear().unwrap();
+
+    assert!(agent_entry.absolute_path.exists());
+    assert_eq!(agent_manager.list().unwrap().entries.len(), 1);
+    assert_eq!(root_manager.list().unwrap().entries.len(), 1);
+    assert_eq!(
+        root_manager.list().unwrap().entries[0].metadata.thread_id,
+        "agent-thread"
+    );
+}
+
+#[test]
 fn drop_cleans_session_retention_but_preserves_manual_retention() {
     let root = tempfile::tempdir().unwrap();
     let session_root;
@@ -524,6 +563,37 @@ fn cleanup_preserves_contents_of_manual_directories() {
     }
 
     assert!(manual_dir.join("nested.txt").exists());
+}
+
+#[test]
+fn cleanup_preserves_nested_manual_entries_without_preserving_untracked_siblings() {
+    let root = tempfile::tempdir().unwrap();
+    let manager =
+        SessionTmpManager::open_for_user(&config(&root), root.path(), "session-1", "thread-1")
+            .unwrap()
+            .unwrap();
+    let session_dir = manager
+        .create(
+            None,
+            "session directory",
+            Retention::Session,
+            TempKind::Directory,
+        )
+        .unwrap()
+        .absolute_path;
+    let nested_manual = session_dir.join("manual.txt");
+    let untracked_sibling = session_dir.join("remove.txt");
+    fs::write(&nested_manual, "keep me").unwrap();
+    fs::write(&untracked_sibling, "remove me").unwrap();
+    manager
+        .register(&nested_manual, "nested manual artifact", Retention::Manual)
+        .unwrap();
+
+    manager.clean().unwrap();
+
+    assert!(nested_manual.exists());
+    assert!(!untracked_sibling.exists());
+    assert_eq!(manager.list().unwrap().entries.len(), 2);
 }
 
 #[test]
@@ -648,6 +718,41 @@ fn root_open_reaps_stale_sessions_but_zero_disables_reaping() {
     .unwrap()
     .unwrap();
     assert!(old_session_root.exists());
+}
+
+#[test]
+fn session_operation_lock_serializes_new_leases_with_cleanup() {
+    let root = tempfile::tempdir().unwrap();
+    let user_manager =
+        SessionTmpManager::open_for_user(&config(&root), root.path(), "session-1", "thread-1")
+            .unwrap()
+            .unwrap();
+    let session_lock = crate::storage::lock_session(user_manager.session_root()).unwrap();
+
+    let result = SessionTmpManager::open(
+        &config(&root),
+        root.path(),
+        "session-1",
+        "agent-thread",
+        SessionTmpOwner::Agent,
+    );
+    assert!(matches!(
+        result,
+        Err(SessionTmpError::SessionAlreadyOwned(thread_id)) if thread_id == "agent-thread"
+    ));
+
+    drop(session_lock);
+    assert!(
+        SessionTmpManager::open(
+            &config(&root),
+            root.path(),
+            "session-1",
+            "agent-thread",
+            SessionTmpOwner::Agent,
+        )
+        .unwrap()
+        .is_some()
+    );
 }
 
 #[test]

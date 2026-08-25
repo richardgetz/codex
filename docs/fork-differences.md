@@ -94,6 +94,57 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   - `codex --disable enable_mcp_approvals`
 - `codex features list` marks Rick-owned features with `(rick)`.
 
+### Session-owned temporary storage
+
+- Managed temporary storage is opt-in so existing use of the operating system's
+  temporary directory is unchanged. Enable it with:
+
+  ```toml
+  [session_tmp]
+  enabled = true
+  # Optional; defaults to <codex_home>/session-tmp.
+  root = "/Users/me/.codex/session-tmp"
+  # Optional; defaults to 7. Set to 0 to disable stale-session cleanup.
+  stale_after_days = 7
+  ```
+
+- When enabled, Codex gives the root session and each spawned agent an isolated
+  managed directory and durable metadata for created or registered paths. The
+  configured parent is treated as managed storage, not as a general deletion
+  target; cleanup is restricted to the managed layout and its ownership data.
+- Agents receive explicit guidance that every file under their managed agent
+  directory is disposable, including untracked files created by shell commands.
+  Source files, deliverables, checkpoints, credentials, and other durable data
+  must stay in the workspace or another explicitly persistent location.
+- `/tmp` (an alias for the fork-only session-temp command) supports `status`,
+  `list`, `clean`, `clear`, and `reap [days]`. `clean` removes session-retained
+  and expired entries while preserving manual-retention entries; `clear` removes
+  all entries belonging to the current session; `reap` force-cleans sessions
+  older than the selected age while protecting the current session.
+
+### Local token usage and spend tracking
+
+- `/status` can show per-thread API-equivalent token usage and estimated cost.
+  It is disabled by default and can be enabled with:
+
+  ```toml
+  [tui.status_token_usage]
+  enabled = true
+  daily_spend_retention_days = 30
+
+  [tui.status_token_usage.model_rates."my-model"]
+  input_usd_per_1m = 1.0
+  cached_input_usd_per_1m = 0.1
+  cache_write_usd_per_1m = 0.0
+  output_usd_per_1m = 4.0
+  ```
+
+- `/spend [days|YYYY-MM|YYYY-MM-DD..YYYY-MM-DD]` renders local daily token
+  totals, estimated USD, model totals, and trends. History is kept under
+  `<codex_home>/usage/daily_spend.json`; the retention setting defaults to 30
+  days and is capped at ten years. These are API-equivalent estimates, not a
+  billing statement.
+
 ### GPT-Live voice in the native TUI
 
 - The fork includes a native live voice mode that matches the Codex desktop
@@ -727,6 +778,17 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   `<codex_home>/accounts/<alias>` folders, the root default auth store, and
   first use of `--account` or `/account`, so keychain-only aliases can still be
   discoverable before an `auth.json` fallback file exists.
+
+### Authentication recovery
+
+- If a managed ChatGPT OAuth refresh fails permanently, the TUI no longer treats
+  the stale cached `Chatgpt` credential as a completed login when the user
+  chooses ChatGPT again. It starts a fresh browser/device login and can replace
+  the existing keychain value without requiring the user to delete it first.
+- Embedded sessions open the returned login URL in the local browser. Remote
+  app-server clients must use the device-code/headless flow or explicitly
+  forward the app-server callback port; the browser callback URL belongs to the
+  app-server host and cannot be opened safely as a local-client URL.
 
 ### MCP visibility and inventory
 

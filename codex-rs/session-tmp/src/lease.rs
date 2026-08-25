@@ -33,6 +33,9 @@ impl SessionLease {
         session_id: &str,
         thread_id: &str,
     ) -> Result<Self, SessionTmpError> {
+        let Some(_session_lock) = super::storage::try_lock_session(session_dir)? else {
+            return Err(SessionTmpError::SessionAlreadyOwned(thread_id.to_string()));
+        };
         let leases_dir = session_dir.join(LEASES_DIR);
         ensure_directory_not_symlink(&leases_dir)?;
         fs::create_dir_all(&leases_dir)?;

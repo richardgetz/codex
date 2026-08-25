@@ -31,6 +31,33 @@ stable/mainline is pulled in.
     directories, `[accounts].active`, `[accounts].rotation`, and first alias
     use through `--account` or `/account`, so keychain-only aliases remain
     discoverable for app-server UIs even when no fallback `auth.json` exists.
+- Managed session temporary storage:
+  - Config: `[session_tmp]`; `enabled` defaults to `false`, `root` defaults to
+    `<codex_home>/session-tmp`, and `stale_after_days` defaults to `7`.
+  - When enabled, each root session and spawned agent receives an isolated
+    managed directory with durable path lineage and ownership metadata. Only
+    managed-layout paths are eligible for cleanup; agents are told that all
+    files under their managed directory are disposable and must not store
+    durable artifacts, credentials, or source files there.
+  - Slash command: `/tmp [status|list|clean|clear|reap [days]]`. The current
+    root session owns cleanup; `clear` also removes manual-retention entries,
+    while `reap` force-cleans only sessions older than the selected age.
+- Local token usage and spend tracking:
+  - `/status` can show API-equivalent token usage and estimated cost when
+    `[tui.status_token_usage].enabled = true`.
+  - `/spend [days|YYYY-MM|YYYY-MM-DD..YYYY-MM-DD]` renders local daily spend
+    rollups from `<codex_home>/usage/daily_spend.json`.
+  - Config: `[tui.status_token_usage]` with `daily_spend_retention_days`
+    (default `30`) and per-model `model_rates`/`service_tiers` overrides in USD
+    per 1M tokens. Estimates are not billing statements.
+- Managed ChatGPT reauthentication recovery:
+  - A permanently failed refresh no longer causes the TUI to treat a stale
+    managed OAuth keychain entry as a completed ChatGPT login. Choosing ChatGPT
+    starts a fresh browser/device flow and lets the new credential replace the
+    old keychain entry without requiring manual deletion.
+  - Embedded TUI sessions open the login URL locally; remote app-server clients
+    use the device-code/headless flow or explicitly forward the app-server
+    callback port because the callback URL belongs to the remote host.
 - Removed collaboration-mode remnants:
   - Mainline `/collab` remains absent; use `/plan` for Plan mode.
   - Fork-only `codex --collab <mode>` startup selection is removed.

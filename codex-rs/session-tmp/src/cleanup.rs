@@ -46,9 +46,15 @@ impl SessionTmpManager {
             return Err(SessionTmpError::CleanupNotOwned);
         }
         self.ensure_session_layout()?;
+        let _session_lock = storage::lock_session(&self.session_dir)?;
         let mut report = CleanupReport::default();
         let metadata_dir = self.session_dir.join(ENTRY_METADATA_DIR);
         super::storage::ensure_directory_not_symlink(&metadata_dir)?;
+        let active_agent_threads = self.active_agent_threads()?;
+        let preserved_directories = active_agent_threads
+            .iter()
+            .map(|thread_id| self.session_dir.join(AGENTS_DIR).join(thread_id))
+            .collect::<HashSet<_>>();
         if metadata_dir.is_dir() {
             for item in fs::read_dir(&metadata_dir)? {
                 let metadata_path = item?.path();
@@ -60,6 +66,12 @@ impl SessionTmpManager {
                     continue;
                 }
                 let metadata = read_metadata(&metadata_path)?;
+                if active_agent_threads.contains(&metadata.thread_id)
+                    && metadata.thread_id != self.thread_id
+                {
+                    report.preserved_paths += 1;
+                    continue;
+                }
                 let absolute_path = self.entry_path(&metadata)?;
                 if remove_path(&absolute_path)? {
                     report.removed_paths += 1;
@@ -71,7 +83,7 @@ impl SessionTmpManager {
         remove_untracked_paths(
             &self.session_dir.join(AGENTS_DIR),
             &HashSet::new(),
-            &HashSet::new(),
+            &preserved_directories,
             &protected_directories,
             &mut report,
         )?;
@@ -93,12 +105,14 @@ impl SessionTmpManager {
 
     fn clean_paths(&self) -> Result<CleanupReport, SessionTmpError> {
         self.ensure_session_layout()?;
+        let _session_lock = storage::lock_session(&self.session_dir)?;
         let metadata_dir = self.session_dir.join(ENTRY_METADATA_DIR);
         super::storage::ensure_directory_not_symlink(&metadata_dir)?;
         super::storage::ensure_directory_not_symlink(&self.session_dir.join(AGENTS_DIR))?;
         let mut report = CleanupReport::default();
         let mut preserved_paths = HashSet::new();
         let active_agent_threads = self.active_agent_threads()?;
+        let mut metadata_entries = Vec::new();
         if metadata_dir.is_dir() {
             for item in fs::read_dir(&metadata_dir)? {
                 let metadata_path = item?.path();
@@ -111,25 +125,47 @@ impl SessionTmpManager {
                 }
                 let metadata = read_metadata(&metadata_path)?;
                 let absolute_path = self.entry_path(&metadata)?;
-                if active_agent_threads.contains(&metadata.thread_id)
-                    && metadata.thread_id != self.thread_id
-                {
+                metadata_entries.push((metadata_path, metadata, absolute_path));
+            }
+        }
+        for (_, metadata, absolute_path) in &metadata_entries {
+            if active_agent_threads.contains(&metadata.thread_id)
+                && metadata.thread_id != self.thread_id
+            {
+                preserved_paths.insert(absolute_path.clone());
+            } else if !metadata
+                .retention
+                .eligible_for_cleanup(now_seconds(), metadata.created_at)
+            {
+                preserved_paths.insert(absolute_path.clone());
+            }
+        }
+        for (metadata_path, metadata, absolute_path) in metadata_entries {
+            if active_agent_threads.contains(&metadata.thread_id)
+                && metadata.thread_id != self.thread_id
+            {
+                report.preserved_paths += 1;
+                preserved_paths.insert(absolute_path);
+                continue;
+            }
+            if metadata
+                .retention
+                .eligible_for_cleanup(now_seconds(), metadata.created_at)
+            {
+                let has_preserved_descendant = preserved_paths.iter().any(|preserved| {
+                    *preserved != absolute_path && preserved.starts_with(&absolute_path)
+                });
+                if has_preserved_descendant {
                     report.preserved_paths += 1;
-                    preserved_paths.insert(absolute_path);
                     continue;
                 }
-                if metadata
-                    .retention
-                    .eligible_for_cleanup(now_seconds(), metadata.created_at)
-                {
-                    if remove_path(&absolute_path)? {
-                        report.removed_paths += 1;
-                    }
-                    fs::remove_file(metadata_path)?;
-                } else {
-                    report.preserved_paths += 1;
-                    preserved_paths.insert(absolute_path);
+                if remove_path(&absolute_path)? {
+                    report.removed_paths += 1;
                 }
+                fs::remove_file(metadata_path)?;
+            } else {
+                report.preserved_paths += 1;
+                preserved_paths.insert(absolute_path);
             }
         }
         let protected_directories = self.agent_directories()?;

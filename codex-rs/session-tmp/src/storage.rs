@@ -11,6 +11,7 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
+use std::fs::File;
 use std::fs::OpenOptions;
 use std::io;
 use std::io::ErrorKind;
@@ -23,6 +24,7 @@ use std::time::UNIX_EPOCH;
 use uuid::Uuid;
 
 pub(super) const LEASES_DIR: &str = "leases";
+const SESSION_LOCKS_DIR: &str = ".locks";
 pub(super) const LEASE_STALE_AFTER: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -119,21 +121,34 @@ pub(super) fn reap_stale_sessions(
         {
             continue;
         }
-        let record_path = session_dir.join(super::SESSION_METADATA_FILE);
-        let Ok(record) = read_session_record(&record_path) else {
-            continue;
-        };
         let Some(directory_session_id) = session_dir.file_name().and_then(|name| name.to_str())
         else {
             continue;
         };
+        let record_path = session_dir.join(super::SESSION_METADATA_FILE);
+        let Ok(record) = read_session_record(&record_path) else {
+            continue;
+        };
         if record.schema_version != 1
             || record.session_id != directory_session_id
+            || now.saturating_sub(record.updated_at) < max_age
+        {
+            continue;
+        }
+        let Some(_session_lock) = try_lock_session(&session_dir)? else {
+            continue;
+        };
+        let Ok(record) = read_session_record(&record_path) else {
+            continue;
+        };
+        if record.schema_version != 1
+            || record.session_id != directory_session_id
+            || now.saturating_sub(record.updated_at) < max_age
             || has_fresh_lease(&session_dir.join(LEASES_DIR), LEASE_STALE_AFTER)?
         {
             continue;
         }
-        if now.saturating_sub(record.updated_at) >= max_age && remove_path(&session_dir)? {
+        if remove_path(&session_dir)? {
             report.removed_sessions += 1;
         }
     }
@@ -282,6 +297,49 @@ pub(super) fn lease_is_fresh_for_thread(session_dir: &Path, thread_id: &str) -> 
         return true;
     }
     lease_is_fresh(&path, LEASE_STALE_AFTER)
+}
+
+fn open_session_lock(session_dir: &Path) -> Result<File, SessionTmpError> {
+    ensure_directory_not_symlink(session_dir)?;
+    let sessions_dir = session_dir
+        .parent()
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "session path has no parent"))?;
+    let locks_dir = sessions_dir.join(SESSION_LOCKS_DIR);
+    ensure_directory_not_symlink(&locks_dir)?;
+    fs::create_dir_all(&locks_dir)?;
+    set_private_directory(&locks_dir)?;
+    let session_id = session_dir
+        .file_name()
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "session path has no name"))?;
+    let lock_path = locks_dir.join(format!("{}.lock", session_id.to_string_lossy()));
+    if fs::symlink_metadata(&lock_path)
+        .map(|metadata| file_type_is_link(metadata.file_type()))
+        .unwrap_or(false)
+    {
+        return Err(SessionTmpError::UnsafeManagedPath(lock_path));
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&lock_path)?;
+    set_private_file(&lock_path)?;
+    Ok(file)
+}
+
+pub(super) fn lock_session(session_dir: &Path) -> Result<File, SessionTmpError> {
+    let file = open_session_lock(session_dir)?;
+    file.lock()?;
+    Ok(file)
+}
+
+pub(super) fn try_lock_session(session_dir: &Path) -> Result<Option<File>, SessionTmpError> {
+    let file = open_session_lock(session_dir)?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+    }
 }
 
 pub(super) fn write_json_atomically<T: Serialize>(

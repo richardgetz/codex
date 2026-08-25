@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
 #[cfg(unix)]
@@ -157,6 +158,51 @@ pub(super) fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> 
         Ok(()) => Ok(true),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(err) => Err(err),
+    }
+}
+
+const KEYRING_FALLBACK_MARKER: &str = ".auth-keyring-fallback";
+
+fn keyring_fallback_marker_path(codex_home: &Path) -> PathBuf {
+    codex_home.join(KEYRING_FALLBACK_MARKER)
+}
+
+fn keyring_fallback_marker_exists(path: &Path) -> std::io::Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.file_type().is_file() => {
+            Err(std::io::Error::other(format!(
+                "auth fallback marker is not a regular file: {}",
+                path.display()
+            )))
+        }
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn mark_keyring_fallback(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    keyring_fallback_marker_exists(path)?;
+    let mut options = OpenOptions::new();
+    options.truncate(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(b"file fallback is authoritative\n")?;
+    file.flush()?;
+    Ok(())
+}
+
+fn delete_keyring_fallback_marker(path: &Path) -> std::io::Result<bool> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
     }
 }
 
@@ -405,6 +451,7 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
 struct AutoAuthStorage {
     keyring_storage: Arc<dyn AuthStorageBackend>,
     file_storage: Arc<FileAuthStorage>,
+    fallback_marker: PathBuf,
 }
 
 impl AutoAuthStorage {
@@ -419,13 +466,19 @@ impl AutoAuthStorage {
                 keyring_store,
                 keyring_backend_kind,
             ),
-            file_storage: Arc::new(FileAuthStorage::new(codex_home)),
+            file_storage: Arc::new(FileAuthStorage::new(codex_home.clone())),
+            fallback_marker: keyring_fallback_marker_path(&codex_home),
         }
     }
 }
 
 impl AuthStorageBackend for AutoAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+        if keyring_fallback_marker_exists(&self.fallback_marker)?
+            && let Some(auth) = self.file_storage.load()?
+        {
+            return Ok(Some(auth));
+        }
         match self.keyring_storage.load() {
             Ok(Some(auth)) => Ok(Some(auth)),
             Ok(None) => self.file_storage.load(),
@@ -438,17 +491,25 @@ impl AuthStorageBackend for AutoAuthStorage {
 
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
         match self.keyring_storage.save(auth) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                if let Err(error) = delete_keyring_fallback_marker(&self.fallback_marker) {
+                    warn!("failed to remove auth fallback marker: {error}");
+                }
+                Ok(())
+            }
             Err(err) => {
                 warn!("failed to save auth to keyring, falling back to file storage: {err}");
-                self.file_storage.save(auth)
+                self.file_storage.save(auth)?;
+                mark_keyring_fallback(&self.fallback_marker)
             }
         }
     }
 
     fn delete(&self) -> std::io::Result<bool> {
         // Keyring storage will delete from disk as well
-        self.keyring_storage.delete()
+        let keyring_removed = self.keyring_storage.delete()?;
+        let marker_removed = delete_keyring_fallback_marker(&self.fallback_marker)?;
+        Ok(keyring_removed || marker_removed)
     }
 }
 
