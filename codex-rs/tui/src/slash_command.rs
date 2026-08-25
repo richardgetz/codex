@@ -52,6 +52,7 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Spend,
     Mic,
     Voice,
     Cd,
@@ -127,6 +128,7 @@ impl SlashCommand {
             SlashCommand::Import => "import setup, this project, and recent chats from Claude Code",
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Spend => "show daily estimated API spend and token trends",
             SlashCommand::Mic => "control realtime voice, microphone, and speaker devices",
             SlashCommand::Voice => {
                 "enable realtime voice, select voices, or tune client-side effects/profiles"
@@ -216,6 +218,7 @@ impl SlashCommand {
                 | SlashCommand::Mcp
                 | SlashCommand::Mic
                 | SlashCommand::Voice
+                | SlashCommand::Spend
                 | SlashCommand::Continuous
                 | SlashCommand::Outcomes
                 | SlashCommand::ScratchpadAbsorb
@@ -246,6 +249,7 @@ impl SlashCommand {
                 | SlashCommand::Diff
                 | SlashCommand::Mention
                 | SlashCommand::Status
+                | SlashCommand::Spend
                 | SlashCommand::Pwd
                 | SlashCommand::Usage
                 | SlashCommand::Ide
@@ -289,6 +293,7 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Hooks
             | SlashCommand::Status
+            | SlashCommand::Spend
             | SlashCommand::Mic
             | SlashCommand::Voice
             | SlashCommand::Pwd

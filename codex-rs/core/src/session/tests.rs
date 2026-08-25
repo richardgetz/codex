@@ -2884,6 +2884,8 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
         },
         usage_by_service_tier: Default::default(),
         usage_by_service_tier_and_context_length: Default::default(),
+        usage_by_model: Default::default(),
+        usage_by_model_and_service_tier_and_context_length: Default::default(),
         model_context_window: Some(1_000),
     };
     let info2 = TokenUsageInfo {
@@ -2907,6 +2909,8 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
         },
         usage_by_service_tier: Default::default(),
         usage_by_service_tier_and_context_length: Default::default(),
+        usage_by_model: Default::default(),
+        usage_by_model_and_service_tier_and_context_length: Default::default(),
         model_context_window: Some(2_000),
     };
 
@@ -2999,6 +3003,8 @@ async fn recompute_token_usage_updates_model_context_window() {
             last_token_usage: TokenUsage::default(),
             usage_by_service_tier: Default::default(),
             usage_by_service_tier_and_context_length: Default::default(),
+            usage_by_model: Default::default(),
+            usage_by_model_and_service_tier_and_context_length: Default::default(),
             model_context_window: Some(258_400),
         }));
     }
@@ -3125,6 +3131,8 @@ async fn record_token_usage_info_notifies_extension_contributors() {
                         first_usage.clone(),
                     )]),
                 )]),
+                usage_by_model: Default::default(),
+                usage_by_model_and_service_tier_and_context_length: Default::default(),
                 model_context_window: turn_context.model_context_window(),
             },
             saw_session_store: true,
@@ -3145,6 +3153,8 @@ async fn record_token_usage_info_notifies_extension_contributors() {
                         expected_total_usage.clone(),
                     )]),
                 )]),
+                usage_by_model: Default::default(),
+                usage_by_model_and_service_tier_and_context_length: Default::default(),
                 model_context_window: turn_context.model_context_window(),
             },
             saw_session_store: true,
@@ -13874,6 +13884,8 @@ async fn set_total_token_usage(sess: &Session, total_token_usage: TokenUsage) {
         last_token_usage: TokenUsage::default(),
         usage_by_service_tier: Default::default(),
         usage_by_service_tier_and_context_length: Default::default(),
+        usage_by_model: Default::default(),
+        usage_by_model_and_service_tier_and_context_length: Default::default(),
         model_context_window: None,
     }));
 }

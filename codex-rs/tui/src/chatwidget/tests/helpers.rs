@@ -366,6 +366,8 @@ pub(super) fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUs
         last_token_usage: usage(total_tokens),
         usage_by_service_tier: Default::default(),
         usage_by_service_tier_and_context_length: Default::default(),
+        usage_by_model: Default::default(),
+        usage_by_model_and_service_tier_and_context_length: Default::default(),
         model_context_window: Some(context_window),
     }
 }
@@ -417,6 +419,37 @@ pub(super) fn handle_token_count(chat: &mut ChatWidget, info: Option<TokenUsageI
                                             .into_iter()
                                             .map(|(context_length, usage)| {
                                                 (context_length, token_usage_breakdown(usage))
+                                            })
+                                            .collect(),
+                                    )
+                                })
+                                .collect(),
+                            usage_by_model: info
+                                .usage_by_model
+                                .into_iter()
+                                .map(|(model, usage)| (model, token_usage_breakdown(usage)))
+                                .collect(),
+                            usage_by_model_and_service_tier_and_context_length: info
+                                .usage_by_model_and_service_tier_and_context_length
+                                .into_iter()
+                                .map(|(model, tier_usages)| {
+                                    (
+                                        model,
+                                        tier_usages
+                                            .into_iter()
+                                            .map(|(service_tier, context_usages)| {
+                                                (
+                                                    service_tier,
+                                                    context_usages
+                                                        .into_iter()
+                                                        .map(|(context_length, usage)| {
+                                                            (
+                                                                context_length,
+                                                                token_usage_breakdown(usage),
+                                                            )
+                                                        })
+                                                        .collect(),
+                                                )
                                             })
                                             .collect(),
                                     )

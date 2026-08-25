@@ -54,6 +54,7 @@ use crate::bottom_pane::StatusSurfacePreviewData;
 use crate::bottom_pane::StatusSurfacePreviewItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
+use crate::daily_spend;
 use crate::diff_model::FileChange;
 use crate::git_action_directives::parse_assistant_markdown;
 use crate::legacy_core::config::Config;
@@ -587,6 +588,7 @@ pub(crate) struct ChatWidget {
     runtime_model_provider_base_url: Option<String>,
     pub(crate) remote_connection: Option<RemoteConnectionStatus>,
     token_info: Option<TokenUsageInfo>,
+    daily_spend: daily_spend::DailySpendTracker,
     account_generation: u64,
     token_usage_pending: bool,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
@@ -1007,6 +1009,57 @@ fn token_usage_info_from_app_server(token_usage: ThreadTokenUsage) -> TokenUsage
                                     output_tokens: usage.output_tokens,
                                     reasoning_output_tokens: usage.reasoning_output_tokens,
                                 },
+                            )
+                        })
+                        .collect(),
+                )
+            })
+            .collect(),
+        usage_by_model: token_usage
+            .usage_by_model
+            .into_iter()
+            .map(|(model, usage)| {
+                (
+                    model,
+                    TokenUsage {
+                        total_tokens: usage.total_tokens,
+                        input_tokens: usage.input_tokens,
+                        cached_input_tokens: usage.cached_input_tokens,
+                        cache_write_tokens: usage.cache_write_input_tokens,
+                        output_tokens: usage.output_tokens,
+                        reasoning_output_tokens: usage.reasoning_output_tokens,
+                    },
+                )
+            })
+            .collect(),
+        usage_by_model_and_service_tier_and_context_length: token_usage
+            .usage_by_model_and_service_tier_and_context_length
+            .into_iter()
+            .map(|(model, tier_usages)| {
+                (
+                    model,
+                    tier_usages
+                        .into_iter()
+                        .map(|(service_tier, context_usages)| {
+                            (
+                                service_tier,
+                                context_usages
+                                    .into_iter()
+                                    .map(|(context_length, usage)| {
+                                        (
+                                            context_length,
+                                            TokenUsage {
+                                                total_tokens: usage.total_tokens,
+                                                input_tokens: usage.input_tokens,
+                                                cached_input_tokens: usage.cached_input_tokens,
+                                                cache_write_tokens: usage.cache_write_input_tokens,
+                                                output_tokens: usage.output_tokens,
+                                                reasoning_output_tokens: usage
+                                                    .reasoning_output_tokens,
+                                            },
+                                        )
+                                    })
+                                    .collect(),
                             )
                         })
                         .collect(),

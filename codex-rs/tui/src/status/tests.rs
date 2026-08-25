@@ -55,6 +55,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::*;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tempfile::TempDir;
 use unicode_width::UnicodeWidthStr;
@@ -242,6 +243,8 @@ fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> Toke
         last_token_usage: usage.clone(),
         usage_by_service_tier: Default::default(),
         usage_by_service_tier_and_context_length: Default::default(),
+        usage_by_model: Default::default(),
+        usage_by_model_and_service_tier_and_context_length: Default::default(),
         model_context_window: context_window,
     }
 }
@@ -1637,6 +1640,83 @@ async fn status_snapshot_prices_fast_usage_with_priority_rates() {
 }
 
 #[tokio::test]
+async fn status_snapshot_keeps_multiple_model_prices_separate() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("model-a".to_string());
+    config.model_provider_id = "custom".to_string();
+    config.tui_status_token_usage.enabled = true;
+    config.tui_status_token_usage.model_rates = BTreeMap::from([
+        (
+            "model-a".to_string(),
+            codex_config::types::TuiStatusTokenUsageRate {
+                input_usd_per_1m: 2.0,
+                cached_input_usd_per_1m: 1.0,
+                cache_write_usd_per_1m: 0.0,
+                output_usd_per_1m: 4.0,
+                service_tiers: BTreeMap::new(),
+            },
+        ),
+        (
+            "model-b".to_string(),
+            codex_config::types::TuiStatusTokenUsageRate {
+                input_usd_per_1m: 10.0,
+                cached_input_usd_per_1m: 5.0,
+                cache_write_usd_per_1m: 0.0,
+                output_usd_per_1m: 20.0,
+                service_tiers: BTreeMap::new(),
+            },
+        ),
+    ]);
+    set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
+
+    let account_display = test_status_account_display();
+    let model_a_usage = TokenUsage {
+        input_tokens: 1_000_000,
+        total_tokens: 1_000_000,
+        ..TokenUsage::default()
+    };
+    let model_b_usage = TokenUsage {
+        input_tokens: 2_000_000,
+        total_tokens: 2_000_000,
+        ..TokenUsage::default()
+    };
+    let usage = TokenUsage {
+        input_tokens: 3_000_000,
+        total_tokens: 3_000_000,
+        ..TokenUsage::default()
+    };
+    let mut token_info = token_info_for("model-a", &config, &usage);
+    token_info.usage_by_model = BTreeMap::from([
+        ("model-a".to_string(), model_a_usage),
+        ("model-b".to_string(), model_b_usage),
+    ]);
+
+    let composite = new_status_output(
+        &config,
+        account_display.as_ref(),
+        Some(&token_info),
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
+        None,
+        Local
+            .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+            .single()
+            .expect("timestamp"),
+        "model-a",
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+    );
+    let rendered =
+        sanitize_directory(render_lines(&composite.display_lines(/*width*/ 120))).join("\n");
+
+    assert_snapshot!(rendered);
+}
+
+#[tokio::test]
 async fn status_snapshot_truncates_in_narrow_terminal() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
@@ -2373,6 +2453,8 @@ async fn status_context_window_uses_last_usage() {
         last_token_usage: last_usage,
         usage_by_service_tier: Default::default(),
         usage_by_service_tier_and_context_length: Default::default(),
+        usage_by_model: Default::default(),
+        usage_by_model_and_service_tier_and_context_length: Default::default(),
         model_context_window: config.model_context_window,
     };
     let composite = new_status_output(

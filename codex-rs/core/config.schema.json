@@ -4639,6 +4639,7 @@
             }
           ],
           "default": {
+            "daily_spend_retention_days": 30,
             "enabled": false,
             "model_rates": {}
           },
@@ -5543,6 +5544,14 @@
     "TuiStatusTokenUsage": {
       "additionalProperties": false,
       "properties": {
+        "daily_spend_retention_days": {
+          "default": 30,
+          "description": "Number of daily spend rollups to retain. Values above the built-in ten-year cap are trimmed to that cap so forgotten configuration cannot grow the local history forever.",
+          "format": "uint32",
+          "maximum": 3650.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
         "enabled": {
           "default": false,
           "description": "Show per-thread API-equivalent token usage and estimated cost in `/status`.\n\nDefaults to `false`.",

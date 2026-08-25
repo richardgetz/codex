@@ -10,16 +10,18 @@ expression: rendered
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date               │
 │ information on rate limits and credits                                      │
 │                                                                             │
-│  Model:            gpt-5.3-codex (reasoning none, summaries auto)           │
+│  Model:            model-a (reasoning none, summaries auto)                 │
 │  Directory: [[workspace]]                                                   │
 │  Permissions:      Custom (workspace with network access, Ask for approval) │
 │  Agents.md:        <none>                                                   │
 │                                                                             │
-│  Token usage:      64.8K total  (32.4K input + 32.4K output)                │
-│  Context window:   34% left (184K used / 272K)                              │
+│  Token usage:      3M total  (3M input + 0 output)                          │
+│  Context window:   0% left (3M used / 272K)                                 │
 │  Limits:           data not available yet                                   │
 │                                                                             │
-│  Token usage:      184K API-equivalent tokens  ~$0.53                       │
-│    Input:          152K total, 119K cached, 32.4K billable  ~$0.08          │
-│    Output:         32.4K total, 8.7K reasoning  ~$0.45                      │
+│  Token usage:      3M API-equivalent tokens  ~$22.00                        │
+│    Input:          3M total, 0 cached, 3M billable  ~$22.00                 │
+│    Output:         0 total, 0 reasoning  ~$0.0000                           │
+│    Model:          model-a: 1M API-equivalent tokens  ~$2.00                │
+│    Model:          model-b: 2M API-equivalent tokens  ~$20.00               │
 ╰─────────────────────────────────────────────────────────────────────────────╯

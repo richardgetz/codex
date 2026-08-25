@@ -23064,6 +23064,28 @@
           "total": {
             "$ref": "#/definitions/v2/TokenUsageBreakdown"
           },
+          "usageByModel": {
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/TokenUsageBreakdown"
+            },
+            "default": {},
+            "description": "Cumulative usage attributed to each model used by the thread.",
+            "type": "object"
+          },
+          "usageByModelAndServiceTierAndContextLength": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "$ref": "#/definitions/v2/TokenUsageBreakdown"
+                },
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "default": {},
+            "description": "Cumulative usage attributed to each model, service tier, and context length.",
+            "type": "object"
+          },
           "usageByServiceTier": {
             "additionalProperties": {
               "$ref": "#/definitions/v2/TokenUsageBreakdown"

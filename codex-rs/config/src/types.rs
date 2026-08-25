@@ -56,6 +56,8 @@ pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
 pub const DEFAULT_MEMORIES_MIN_RATE_LIMIT_REMAINING_PERCENT: i64 = 25;
 pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 256;
 pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
+pub const DEFAULT_DAILY_SPEND_RETENTION_DAYS: u32 = 30;
+pub const MAX_DAILY_SPEND_RETENTION_DAYS: u32 = 3650;
 pub const DEFAULT_RESUME_LOAD_TIMEOUT_SECONDS: u64 = 60;
 pub const DEFAULT_RESUME_VISIBLE_TURN_LIMIT: usize = 80;
 const MIN_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 1;
@@ -2006,7 +2008,7 @@ pub struct Tui {
     pub terminal_resize_reflow_max_rows: Option<usize>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiStatusTokenUsage {
     /// Show per-thread API-equivalent token usage and estimated cost in `/status`.
@@ -2014,6 +2016,14 @@ pub struct TuiStatusTokenUsage {
     /// Defaults to `false`.
     #[serde(default)]
     pub enabled: bool,
+
+    /// Number of daily spend rollups to retain for `/spend`. The command accepts a day count,
+    /// `YYYY-MM`, or an inclusive `YYYY-MM-DD..YYYY-MM-DD` range. Values above the built-in
+    /// ten-year cap are trimmed to that cap so forgotten configuration cannot grow local history
+    /// forever.
+    #[serde(default = "default_daily_spend_retention_days")]
+    #[schemars(range(min = 1, max = 3650))]
+    pub daily_spend_retention_days: u32,
 
     /// Per-model standard pricing overrides in USD per 1M tokens.
     ///
@@ -2037,6 +2047,16 @@ pub struct TuiStatusTokenUsage {
     /// ```
     #[serde(default)]
     pub model_rates: BTreeMap<String, TuiStatusTokenUsageRate>,
+}
+
+impl Default for TuiStatusTokenUsage {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            daily_spend_retention_days: DEFAULT_DAILY_SPEND_RETENTION_DAYS,
+            model_rates: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
@@ -2065,6 +2085,10 @@ pub struct TuiStatusTokenUsageServiceTierRate {
 
 const fn default_true() -> bool {
     true
+}
+
+const fn default_daily_spend_retention_days() -> u32 {
+    DEFAULT_DAILY_SPEND_RETENTION_DAYS
 }
 
 /// Settings for notices we display to users via the tui and app-server clients

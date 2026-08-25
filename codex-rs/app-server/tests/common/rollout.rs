@@ -136,6 +136,8 @@ pub fn create_fake_rollout_with_token_usage(
             },
             usage_by_service_tier: Default::default(),
             usage_by_service_tier_and_context_length: Default::default(),
+            usage_by_model: Default::default(),
+            usage_by_model_and_service_tier_and_context_length: Default::default(),
             model_context_window: Some(200_000),
         }),
         rate_limits: None,

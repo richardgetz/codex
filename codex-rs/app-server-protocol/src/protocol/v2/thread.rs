@@ -1900,6 +1900,13 @@ pub struct ThreadTokenUsage {
     #[serde(default)]
     pub usage_by_service_tier_and_context_length:
         BTreeMap<String, BTreeMap<String, TokenUsageBreakdown>>,
+    /// Cumulative usage attributed to each model used by the thread.
+    #[serde(default)]
+    pub usage_by_model: BTreeMap<String, TokenUsageBreakdown>,
+    /// Cumulative usage attributed to each model, service tier, and context length.
+    #[serde(default)]
+    pub usage_by_model_and_service_tier_and_context_length:
+        BTreeMap<String, BTreeMap<String, BTreeMap<String, TokenUsageBreakdown>>>,
     // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
@@ -2045,6 +2052,34 @@ impl From<CoreTokenUsageInfo> for ThreadTokenUsage {
                         context_usages
                             .into_iter()
                             .map(|(context_length, usage)| (context_length, usage.into()))
+                            .collect(),
+                    )
+                })
+                .collect(),
+            usage_by_model: value
+                .usage_by_model
+                .into_iter()
+                .map(|(model, usage)| (model, usage.into()))
+                .collect(),
+            usage_by_model_and_service_tier_and_context_length: value
+                .usage_by_model_and_service_tier_and_context_length
+                .into_iter()
+                .map(|(model, tier_usages)| {
+                    (
+                        model,
+                        tier_usages
+                            .into_iter()
+                            .map(|(service_tier, context_usages)| {
+                                (
+                                    service_tier,
+                                    context_usages
+                                        .into_iter()
+                                        .map(|(context_length, usage)| {
+                                            (context_length, usage.into())
+                                        })
+                                        .collect(),
+                                )
+                            })
                             .collect(),
                     )
                 })

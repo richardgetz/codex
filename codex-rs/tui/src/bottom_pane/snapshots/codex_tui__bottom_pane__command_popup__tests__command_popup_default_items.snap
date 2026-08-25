@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/command_popup.rs
-assertion_line: 431
 expression: commands
 ---
 /model - choose what model and reasoning effort to use
@@ -34,6 +33,7 @@ expression: commands
 /diff - show git diff (including untracked files)
 /mention - mention a file
 /status - show current session configuration and token usage
+/spend - show daily estimated API spend and token trends
 /mic - control realtime voice, microphone, and speaker devices
 /voice - enable realtime voice, select voices, or tune client-side effects/profiles
 /cd - change the current working directory

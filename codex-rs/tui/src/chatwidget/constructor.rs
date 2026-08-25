@@ -37,6 +37,7 @@ impl ChatWidget {
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
         config.model = model.clone();
+        let daily_spend = daily_spend::DailySpendTracker::new(config.codex_home.as_path());
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let placeholder = PLACEHOLDER.to_string();
         let side_placeholder = SIDE_PLACEHOLDER.to_string();
@@ -132,6 +133,7 @@ impl ChatWidget {
             runtime_model_provider_base_url,
             remote_connection: None,
             token_info: None,
+            daily_spend,
             account_generation: 0,
             token_usage_pending: false,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),

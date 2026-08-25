@@ -32,9 +32,18 @@ impl ChatWidget {
         }
         match notification {
             ServerNotification::ThreadTokenUsageUpdated(notification) => {
-                self.set_token_info(Some(token_usage_info_from_app_server(
-                    notification.token_usage,
-                )));
+                let info = token_usage_info_from_app_server(notification.token_usage);
+                let current_model = self.current_model().to_string();
+                if let Err(err) = self.daily_spend.observe(
+                    &info,
+                    from_replay,
+                    &self.config.tui_status_token_usage,
+                    &self.config.model_provider_id,
+                    &current_model,
+                ) {
+                    tracing::warn!(%err, "failed to record daily spend");
+                }
+                self.set_token_info(Some(info));
             }
             ServerNotification::ThreadNameUpdated(notification) => {
                 match ThreadId::from_string(&notification.thread_id) {

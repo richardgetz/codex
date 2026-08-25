@@ -1395,6 +1395,8 @@ impl GoalExtensionHarness {
             model_context_window: None,
             usage_by_service_tier: Default::default(),
             usage_by_service_tier_and_context_length: Default::default(),
+            usage_by_model: Default::default(),
+            usage_by_model_and_service_tier_and_context_length: Default::default(),
         };
         for contributor in self.registry.token_usage_contributors() {
             contributor
