@@ -170,9 +170,10 @@ impl SessionState {
         usage: &TokenUsage,
         service_tier: Option<&str>,
         model_context_window: Option<i64>,
+        model: Option<&str>,
     ) {
         self.history
-            .update_token_info(usage, service_tier, model_context_window);
+            .update_token_info(usage, service_tier, model_context_window, model);
     }
 
     pub(crate) fn ensure_auto_compact_window_server_prefill_from_usage(

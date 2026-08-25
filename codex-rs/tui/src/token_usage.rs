@@ -55,13 +55,16 @@ impl TokenUsage {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TokenUsageInfo {
     pub(crate) total_token_usage: TokenUsage,
     pub(crate) last_token_usage: TokenUsage,
     pub(crate) usage_by_service_tier: BTreeMap<String, TokenUsage>,
     pub(crate) usage_by_service_tier_and_context_length:
         BTreeMap<String, BTreeMap<String, TokenUsage>>,
+    pub(crate) usage_by_model: BTreeMap<String, TokenUsage>,
+    pub(crate) usage_by_model_and_service_tier_and_context_length:
+        BTreeMap<String, BTreeMap<String, BTreeMap<String, TokenUsage>>>,
     pub(crate) model_context_window: Option<i64>,
 }
 

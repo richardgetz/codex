@@ -10,6 +10,7 @@ use ratatui::style::Stylize;
 use std::collections::BTreeMap;
 
 const TOKENS_PER_MILLION: f64 = 1_000_000.0;
+const UNATTRIBUTED_MODEL_LABEL: &str = "unattributed";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StatusTokenUsageCostData {
@@ -21,6 +22,7 @@ pub(crate) struct StatusTokenUsageCostData {
     output_tokens: i64,
     reasoning_output_tokens: i64,
     cost: Option<StatusTokenUsageCostBreakdown>,
+    model_breakdowns: Vec<StatusTokenUsageCostModelData>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -28,6 +30,13 @@ struct StatusTokenUsageCostBreakdown {
     total_usd: f64,
     input_usd: f64,
     output_usd: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct StatusTokenUsageCostModelData {
+    model: String,
+    total_tokens: i64,
+    cost: Option<StatusTokenUsageCostBreakdown>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -64,7 +73,147 @@ pub(crate) fn compose_status_token_usage_cost_with_context_length(
     usage_by_service_tier: &BTreeMap<String, TokenUsage>,
     usage_by_service_tier_and_context_length: &BTreeMap<String, BTreeMap<String, TokenUsage>>,
 ) -> Option<StatusTokenUsageCostData> {
+    compose_status_token_usage_cost_with_models(
+        config,
+        model_provider_id,
+        model,
+        usage,
+        usage_by_service_tier,
+        usage_by_service_tier_and_context_length,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+}
+
+pub(crate) fn compose_status_token_usage_cost_with_models(
+    config: &TuiStatusTokenUsage,
+    model_provider_id: &str,
+    model: &str,
+    usage: &TokenUsage,
+    usage_by_service_tier: &BTreeMap<String, TokenUsage>,
+    usage_by_service_tier_and_context_length: &BTreeMap<String, BTreeMap<String, TokenUsage>>,
+    usage_by_model: &BTreeMap<String, TokenUsage>,
+    usage_by_model_and_service_tier_and_context_length: &BTreeMap<
+        String,
+        BTreeMap<String, BTreeMap<String, TokenUsage>>,
+    >,
+) -> Option<StatusTokenUsageCostData> {
     if !config.enabled || usage.is_zero() {
+        return None;
+    }
+
+    if !usage_by_model.is_empty() {
+        let mut attributed_usage = TokenUsage::default();
+        let mut model_breakdowns = Vec::new();
+        let mut aggregate_cost = StatusTokenUsageCostBreakdown::default();
+        let mut cost_available = true;
+
+        for (model, model_usage) in usage_by_model {
+            if model_usage.is_zero() {
+                continue;
+            }
+            let model_context_usages = usage_by_model_and_service_tier_and_context_length
+                .get(model)
+                .cloned()
+                .unwrap_or_default();
+            let model_tier_usage = model_context_usages
+                .iter()
+                .map(|(service_tier, context_usages)| {
+                    let mut total = TokenUsage::default();
+                    for context_usage in context_usages.values() {
+                        add_usage(&mut total, context_usage);
+                    }
+                    (service_tier.clone(), total)
+                })
+                .collect::<BTreeMap<_, _>>();
+            let model_data = compose_single_model_cost(
+                config,
+                model_provider_id,
+                model,
+                model_usage,
+                &model_tier_usage,
+                &model_context_usages,
+            )?;
+            add_usage(&mut attributed_usage, model_usage);
+            if let Some(cost) = model_data.cost.as_ref() {
+                aggregate_cost.add_assign(cost.clone());
+            } else {
+                cost_available = false;
+            }
+            model_breakdowns.push(StatusTokenUsageCostModelData {
+                model: model.clone(),
+                total_tokens: model_data.total_tokens,
+                cost: model_data.cost,
+            });
+        }
+
+        let unattributed_usage = unbucketed_usage(usage, &attributed_usage);
+        if !unattributed_usage.is_zero() {
+            model_breakdowns.push(StatusTokenUsageCostModelData {
+                model: UNATTRIBUTED_MODEL_LABEL.to_string(),
+                total_tokens: input_token_breakdown(&unattributed_usage)
+                    .0
+                    .saturating_add(unattributed_usage.output_tokens.max(0)),
+                cost: None,
+            });
+            cost_available = false;
+        }
+
+        if model_breakdowns.is_empty() {
+            return None;
+        }
+        return Some(status_token_usage_cost_data(
+            usage,
+            if cost_available {
+                Some(aggregate_cost)
+            } else {
+                None
+            },
+            model_breakdowns,
+        ));
+    }
+
+    compose_single_model_cost(
+        config,
+        model_provider_id,
+        model,
+        usage,
+        usage_by_service_tier,
+        usage_by_service_tier_and_context_length,
+    )
+}
+
+pub(crate) fn estimate_cost_usd_for_usage(
+    config: &TuiStatusTokenUsage,
+    model_provider_id: &str,
+    model: &str,
+    usage: &TokenUsage,
+    usage_by_service_tier: &BTreeMap<String, TokenUsage>,
+    usage_by_service_tier_and_context_length: &BTreeMap<String, BTreeMap<String, TokenUsage>>,
+) -> Option<f64> {
+    if usage.is_zero() {
+        return Some(0.0);
+    }
+    cost_for_usage_by_service_tier(
+        config,
+        model_provider_id,
+        model,
+        usage,
+        usage_by_service_tier,
+        usage_by_service_tier_and_context_length,
+    )
+    .map(|cost| cost.total_usd)
+}
+
+fn compose_single_model_cost(
+    config: &TuiStatusTokenUsage,
+    model_provider_id: &str,
+    model: &str,
+    usage: &TokenUsage,
+    usage_by_service_tier: &BTreeMap<String, TokenUsage>,
+    usage_by_service_tier_and_context_length: &BTreeMap<String, BTreeMap<String, TokenUsage>>,
+) -> Option<StatusTokenUsageCostData> {
+    if usage.is_zero() {
         return None;
     }
 
@@ -91,7 +240,30 @@ pub(crate) fn compose_status_token_usage_cost_with_context_length(
         output_tokens,
         reasoning_output_tokens,
         cost,
+        model_breakdowns: Vec::new(),
     })
+}
+
+fn status_token_usage_cost_data(
+    usage: &TokenUsage,
+    cost: Option<StatusTokenUsageCostBreakdown>,
+    model_breakdowns: Vec<StatusTokenUsageCostModelData>,
+) -> StatusTokenUsageCostData {
+    let (input_tokens, cached_input_tokens, cache_write_tokens, billable_input_tokens) =
+        input_token_breakdown(usage);
+    let output_tokens = usage.output_tokens.max(0);
+    let reasoning_output_tokens = usage.reasoning_output_tokens.max(0).min(output_tokens);
+    StatusTokenUsageCostData {
+        total_tokens: input_tokens.saturating_add(output_tokens),
+        input_tokens,
+        cached_input_tokens,
+        cache_write_tokens,
+        billable_input_tokens,
+        output_tokens,
+        reasoning_output_tokens,
+        cost,
+        model_breakdowns,
+    }
 }
 
 impl StatusTokenUsageCostData {
@@ -131,6 +303,29 @@ impl StatusTokenUsageCostData {
         push_optional_cost(&mut spans, self.cost.as_ref().map(|cost| cost.output_usd));
         spans
     }
+
+    pub(crate) fn has_multiple_models(&self) -> bool {
+        self.model_breakdowns.len() > 1
+    }
+
+    pub(crate) fn model_spans(&self) -> Vec<Vec<Span<'static>>> {
+        self.model_breakdowns
+            .iter()
+            .map(|breakdown| {
+                let mut spans = vec![
+                    Span::from(breakdown.model.clone()),
+                    Span::from(": "),
+                    Span::from(format_token_count(breakdown.total_tokens)),
+                    Span::from(" API-equivalent tokens"),
+                ];
+                push_optional_cost(
+                    &mut spans,
+                    breakdown.cost.as_ref().map(|cost| cost.total_usd),
+                );
+                spans
+            })
+            .collect()
+    }
 }
 
 fn push_optional_cost(spans: &mut Vec<Span<'static>>, cost: Option<f64>) {
@@ -152,14 +347,7 @@ fn format_usd(value: f64) -> String {
 }
 
 fn format_token_count(tokens: i64) -> String {
-    let tokens = tokens.max(0);
-    if tokens >= 1_000_000 {
-        format!("{:.1}M", tokens as f64 / 1_000_000.0)
-    } else if tokens >= 1_000 {
-        format!("{:.1}K", tokens as f64 / 1_000.0)
-    } else {
-        tokens.to_string()
-    }
+    super::helpers::format_tokens_compact(tokens)
 }
 
 fn cost_for_tokens(tokens: i64, usd_per_1m: f64) -> f64 {
@@ -705,6 +893,7 @@ mod tests {
     fn cost_uses_built_in_model_rates() {
         let config = TuiStatusTokenUsage {
             enabled: true,
+            daily_spend_retention_days: 30,
             model_rates: BTreeMap::new(),
         };
         let usage = TokenUsage {
@@ -727,11 +916,11 @@ mod tests {
 
         assert_eq!(
             span_text(data.summary_spans()),
-            "184.2K API-equivalent tokens  ~$0.53"
+            "184K API-equivalent tokens  ~$0.53"
         );
         assert_eq!(
             span_text(data.input_spans()),
-            "151.8K total, 119.4K cached, 32.4K billable  ~$0.08"
+            "152K total, 119K cached, 32.4K billable  ~$0.08"
         );
         assert_eq!(
             span_text(data.output_spans()),
@@ -740,9 +929,121 @@ mod tests {
     }
 
     #[test]
+    fn token_counts_roll_up_to_billions_and_trillions() {
+        assert_eq!(format_token_count(1_000_000_000), "1B");
+        assert_eq!(format_token_count(1_234_000_000), "1.23B");
+        assert_eq!(format_token_count(1_000_000_000_000), "1T");
+    }
+
+    #[test]
+    fn cost_keeps_multiple_models_separate() {
+        let config = TuiStatusTokenUsage {
+            enabled: true,
+            daily_spend_retention_days: 30,
+            model_rates: BTreeMap::from([
+                ("model-a".to_string(), model_rate(2.0, 1.0, 4.0)),
+                ("model-b".to_string(), model_rate(10.0, 5.0, 20.0)),
+            ]),
+        };
+        let model_a_usage = TokenUsage {
+            input_tokens: 1_000_000,
+            total_tokens: 1_000_000,
+            ..TokenUsage::default()
+        };
+        let model_b_usage = TokenUsage {
+            input_tokens: 2_000_000,
+            total_tokens: 2_000_000,
+            ..TokenUsage::default()
+        };
+        let usage = TokenUsage {
+            input_tokens: 3_000_000,
+            total_tokens: 3_000_000,
+            ..TokenUsage::default()
+        };
+        let data = compose_status_token_usage_cost_with_models(
+            &config,
+            "custom",
+            "model-a",
+            &usage,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::from([
+                ("model-a".to_string(), model_a_usage),
+                ("model-b".to_string(), model_b_usage),
+            ]),
+            &BTreeMap::new(),
+        )
+        .expect("usage should render");
+
+        assert!(data.has_multiple_models());
+        assert_eq!(
+            data.model_spans()
+                .into_iter()
+                .map(span_text)
+                .collect::<Vec<_>>(),
+            vec![
+                "model-a: 1M API-equivalent tokens  ~$2.00",
+                "model-b: 2M API-equivalent tokens  ~$20.00",
+            ]
+        );
+        assert_eq!(
+            span_text(data.summary_spans()),
+            "3M API-equivalent tokens  ~$22.00"
+        );
+    }
+
+    #[test]
+    fn cost_keeps_legacy_usage_visible_when_new_model_buckets_appear() {
+        let config = TuiStatusTokenUsage {
+            enabled: true,
+            daily_spend_retention_days: 30,
+            model_rates: BTreeMap::from([("model-a".to_string(), model_rate(2.0, 1.0, 4.0))]),
+        };
+        let usage = TokenUsage {
+            input_tokens: 3_000_000,
+            total_tokens: 3_000_000,
+            ..TokenUsage::default()
+        };
+        let data = compose_status_token_usage_cost_with_models(
+            &config,
+            "custom",
+            "model-a",
+            &usage,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::from([(
+                "model-a".to_string(),
+                TokenUsage {
+                    input_tokens: 1_000_000,
+                    total_tokens: 1_000_000,
+                    ..TokenUsage::default()
+                },
+            )]),
+            &BTreeMap::new(),
+        )
+        .expect("usage should render");
+
+        assert_eq!(
+            data.model_spans()
+                .into_iter()
+                .map(span_text)
+                .collect::<Vec<_>>(),
+            vec![
+                "model-a: 1M API-equivalent tokens  ~$2.00",
+                "unattributed: 2M API-equivalent tokens  cost unavailable",
+            ]
+        );
+        assert_eq!(
+            span_text(data.summary_spans()),
+            "3M API-equivalent tokens  cost unavailable"
+        );
+    }
+
+    #[test]
     fn cost_uses_configured_model_rate_overrides() {
         let config = TuiStatusTokenUsage {
             enabled: true,
+            daily_spend_retention_days: 30,
             model_rates: BTreeMap::from([(
                 "custom-model".to_string(),
                 model_rate(
@@ -778,6 +1079,7 @@ mod tests {
     fn cost_uses_priority_bucket_rates_when_present() {
         let config = TuiStatusTokenUsage {
             enabled: true,
+            daily_spend_retention_days: 30,
             model_rates: BTreeMap::new(),
         };
         let usage = TokenUsage {
@@ -801,15 +1103,15 @@ mod tests {
 
         assert_eq!(
             span_text(data.summary_spans()),
-            "110.0K API-equivalent tokens  ~$1.77"
+            "110K API-equivalent tokens  ~$1.77"
         );
         assert_eq!(
             span_text(data.input_spans()),
-            "100.0K total, 20.0K cached, 80.0K billable  ~$1.02"
+            "100K total, 20K cached, 80K billable  ~$1.02"
         );
         assert_eq!(
             span_text(data.output_spans()),
-            "10.0K total, 5.0K reasoning  ~$0.75"
+            "10K total, 5K reasoning  ~$0.75"
         );
     }
 
@@ -817,6 +1119,7 @@ mod tests {
     fn cost_uses_gpt_5_6_cache_write_rates() {
         let config = TuiStatusTokenUsage {
             enabled: true,
+            daily_spend_retention_days: 30,
             model_rates: BTreeMap::new(),
         };
         let usage = TokenUsage {
@@ -844,11 +1147,11 @@ mod tests {
         );
         assert_eq!(
             span_text(data.input_spans()),
-            "1.0M total, 200.0K cached, 100.0K cache writes, 700.0K billable  ~$0.84"
+            "1M total, 200K cached, 100K cache writes, 700K billable  ~$0.84"
         );
         assert_eq!(
             span_text(data.output_spans()),
-            "500.0K total, 100.0K reasoning  ~$3.00"
+            "500K total, 100K reasoning  ~$3.00"
         );
     }
 
@@ -856,6 +1159,7 @@ mod tests {
     fn cost_uses_long_context_rates_from_per_response_usage_buckets() {
         let config = TuiStatusTokenUsage {
             enabled: true,
+            daily_spend_retention_days: 30,
             model_rates: BTreeMap::new(),
         };
         let usage = TokenUsage {
@@ -889,11 +1193,11 @@ mod tests {
         );
         assert_eq!(
             span_text(data.input_spans()),
-            "1.0M total, 200.0K cached, 100.0K cache writes, 700.0K billable  ~$3.38"
+            "1M total, 200K cached, 100K cache writes, 700K billable  ~$3.38"
         );
         assert_eq!(
             span_text(data.output_spans()),
-            "500.0K total, 100.0K reasoning  ~$9.00"
+            "500K total, 100K reasoning  ~$9.00"
         );
     }
 
@@ -901,6 +1205,7 @@ mod tests {
     fn cost_does_not_double_count_tier_aggregate_after_context_bucketing() {
         let config = TuiStatusTokenUsage {
             enabled: true,
+            daily_spend_retention_days: 30,
             model_rates: BTreeMap::new(),
         };
         let long_usage = TokenUsage {
@@ -943,7 +1248,7 @@ mod tests {
 
         assert_eq!(
             span_text(data.summary_spans()),
-            "1.6M API-equivalent tokens  ~$9.25"
+            "1.65M API-equivalent tokens  ~$9.25"
         );
     }
 
@@ -951,6 +1256,7 @@ mod tests {
     fn models_without_long_context_surcharge_reuse_short_rates() {
         let config = TuiStatusTokenUsage {
             enabled: true,
+            daily_spend_retention_days: 30,
             model_rates: BTreeMap::new(),
         };
         let usage = TokenUsage {
@@ -1005,6 +1311,7 @@ mod tests {
         );
         let config = TuiStatusTokenUsage {
             enabled: true,
+            daily_spend_retention_days: 30,
             model_rates: BTreeMap::from([("custom-model".to_string(), custom_rate)]),
         };
         let usage = TokenUsage {
@@ -1036,6 +1343,7 @@ mod tests {
     fn unknown_model_still_renders_tokens_without_cost() {
         let config = TuiStatusTokenUsage {
             enabled: true,
+            daily_spend_retention_days: 30,
             model_rates: BTreeMap::new(),
         };
         let usage = TokenUsage {
@@ -1066,6 +1374,7 @@ mod tests {
     fn non_openai_provider_does_not_use_openai_built_in_rates() {
         let config = TuiStatusTokenUsage {
             enabled: true,
+            daily_spend_retention_days: 30,
             model_rates: BTreeMap::new(),
         };
         let usage = TokenUsage {

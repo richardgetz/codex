@@ -318,6 +318,7 @@ mod tests {
                 SlashCommand::Diff,
                 SlashCommand::Mention,
                 SlashCommand::Status,
+                SlashCommand::Spend,
                 SlashCommand::Pwd,
                 SlashCommand::Usage,
             ]

@@ -123,36 +123,45 @@ pub(crate) fn format_tokens_compact(value: i64) -> String {
         return value.to_string();
     }
 
-    let value_f64 = value as f64;
-    let (scaled, suffix) = if value >= 1_000_000_000_000 {
-        (value_f64 / 1_000_000_000_000.0, "T")
-    } else if value >= 1_000_000_000 {
-        (value_f64 / 1_000_000_000.0, "B")
-    } else if value >= 1_000_000 {
-        (value_f64 / 1_000_000.0, "M")
-    } else {
-        (value_f64 / 1_000.0, "K")
-    };
+    let units = [
+        (1_000_000_000_000.0, "T"),
+        (1_000_000_000.0, "B"),
+        (1_000_000.0, "M"),
+        (1_000.0, "K"),
+    ];
+    let mut unit_index = units
+        .iter()
+        .position(|(divisor, _)| value as f64 >= *divisor)
+        .unwrap_or(units.len() - 1);
 
-    let decimals = if scaled < 10.0 {
-        2
-    } else if scaled < 100.0 {
-        1
-    } else {
-        0
-    };
+    loop {
+        let (divisor, suffix) = units[unit_index];
+        let scaled = value as f64 / divisor;
+        let decimals: usize = if scaled < 10.0 {
+            2
+        } else if scaled < 100.0 {
+            1
+        } else {
+            0
+        };
+        let rounding_factor = 10_f64.powi(decimals as i32);
+        let rounded_scaled = (scaled * rounding_factor).round() / rounding_factor;
+        if rounded_scaled >= 1_000.0 && unit_index > 0 {
+            unit_index -= 1;
+            continue;
+        }
 
-    let mut formatted = format!("{scaled:.decimals$}");
-    if formatted.contains('.') {
-        while formatted.ends_with('0') {
-            formatted.pop();
+        let mut formatted = format!("{scaled:.decimals$}");
+        if formatted.contains('.') {
+            while formatted.ends_with('0') {
+                formatted.pop();
+            }
+            if formatted.ends_with('.') {
+                formatted.pop();
+            }
         }
-        if formatted.ends_with('.') {
-            formatted.pop();
-        }
+        return format!("{formatted}{suffix}");
     }
-
-    format!("{formatted}{suffix}")
 }
 
 pub(crate) fn format_directory_display(directory: &Path, max_width: Option<usize>) -> String {
@@ -253,6 +262,16 @@ mod tests {
         let formatted = format_directory_display(&directory, Some(max_width));
 
         insta::assert_snapshot!(formatted.replace('\\', "/"), @"workspace/…/project");
+    }
+
+    #[test]
+    fn format_tokens_compact_promotes_rounded_unit_boundaries() {
+        assert_eq!(format_tokens_compact(999), "999");
+        assert_eq!(format_tokens_compact(1_000), "1K");
+        assert_eq!(format_tokens_compact(999_499), "999K");
+        assert_eq!(format_tokens_compact(999_500), "1M");
+        assert_eq!(format_tokens_compact(999_999_999), "1B");
+        assert_eq!(format_tokens_compact(999_999_999_999), "1T");
     }
 
     #[tokio::test]

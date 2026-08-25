@@ -368,6 +368,7 @@ impl ContextManager {
         usage: &TokenUsage,
         service_tier: Option<&str>,
         model_context_window: Option<i64>,
+        model: Option<&str>,
     ) {
         self.token_info = TokenUsageInfo::new_or_append(
             &self.token_info,
@@ -378,6 +379,11 @@ impl ContextManager {
             && let Some(info) = self.token_info.as_mut()
         {
             info.add_service_tier_usage(usage, service_tier);
+        }
+        if let Some(model) = model
+            && let Some(info) = self.token_info.as_mut()
+        {
+            info.add_model_usage(usage, model, service_tier);
         }
     }
 

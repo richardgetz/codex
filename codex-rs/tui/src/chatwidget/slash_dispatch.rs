@@ -44,6 +44,7 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const CONTINUOUS_USAGE: &str = "Usage: /continuous [on|off|status]";
 const OUTCOMES_USAGE: &str = "Usage: /outcomes [on|off|status|report]";
+const SPEND_USAGE: &str = "Usage: /spend [days|YYYY-MM|YYYY-MM-DD..YYYY-MM-DD]";
 const SCRATCHPAD_ABSORB_USAGE: &str = "Usage: /scratchpad-absorb <scratchpad_id> [--exclude-pending] [--exclude-blocked] [--exclude-notes] [--exclude-outcomes] [--exclude-delegations] [--exclude-artifacts] [--exclude-worktrees] [--exclude-completed] [--exclude-next-steps] [--exclude-git-refs]";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
 const MIC_USAGE: &str = "Usage: /mic [help|on|off|status|hot|push|hotkey|change|devices|aliases|alias <name> [device]|device <name>|speakers|speaker change|speaker aliases|speaker alias <name> [device]|speaker <name>]";
@@ -382,6 +383,13 @@ impl ChatWidget {
             return;
         };
         self.on_scratchpad_update_verbose(update);
+    }
+
+    fn add_spend_output(&mut self, args: &str) {
+        match self.daily_spend.render_report(args) {
+            Ok(lines) => self.add_plain_history_lines(lines),
+            Err(err) => self.add_error_message(format!("{SPEND_USAGE}\n{err}")),
+        }
     }
 
     fn dispatch_scratchpad_absorb_command(&mut self, args: &str) {
@@ -1072,6 +1080,9 @@ impl ChatWidget {
                     );
                 }
             }
+            SlashCommand::Spend => {
+                self.add_spend_output("");
+            }
             SlashCommand::Mic => {
                 self.app_event_tx
                     .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::Toggle));
@@ -1387,6 +1398,9 @@ impl ChatWidget {
                         ),
                     }
                 }
+            }
+            SlashCommand::Spend => {
+                self.add_spend_output(trimmed);
             }
             SlashCommand::Ide => {
                 self.handle_ide_command_args(trimmed);
@@ -2067,6 +2081,7 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Ide
             | SlashCommand::Status
+            | SlashCommand::Spend
             | SlashCommand::Mic
             | SlashCommand::Voice
             | SlashCommand::Pwd

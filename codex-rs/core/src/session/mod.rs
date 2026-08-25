@@ -4750,6 +4750,7 @@ impl Session {
                     token_usage,
                     Some(service_tier),
                     turn_context.model_context_window(),
+                    Some(turn_context.model_info.slug.as_str()),
                 );
                 if matches!(
                     turn_context.config.model_auto_compact_token_limit_scope,
@@ -4792,6 +4793,8 @@ impl Session {
                 last_token_usage: TokenUsage::default(),
                 usage_by_service_tier: Default::default(),
                 usage_by_service_tier_and_context_length: Default::default(),
+                usage_by_model: Default::default(),
+                usage_by_model_and_service_tier_and_context_length: Default::default(),
                 model_context_window: None,
             });
 
