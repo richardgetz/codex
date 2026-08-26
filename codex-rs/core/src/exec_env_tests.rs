@@ -2,6 +2,7 @@ use super::*;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use maplit::hashmap;
 use pretty_assertions::assert_eq;
+use std::path::Path;
 
 fn make_vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
     pairs
@@ -26,6 +27,28 @@ fn inject_permission_profile_env_overrides_policy_value() {
         env.get(CODEX_PERMISSION_PROFILE_ENV_VAR)
             .map(String::as_str),
         Some("current-profile")
+    );
+}
+
+#[test]
+fn inject_session_tmp_env_replaces_all_platform_temp_names() {
+    let mut env = HashMap::from([
+        ("TMPDIR".to_string(), "/old/tmpdir".to_string()),
+        ("tmp".to_string(), "/old/tmp".to_string()),
+        ("Temp".to_string(), "/old/temp".to_string()),
+        ("PATH".to_string(), "/usr/bin".to_string()),
+    ]);
+
+    inject_session_tmp_env(&mut env, Path::new("/managed/session/agent"));
+
+    assert_eq!(
+        env,
+        HashMap::from([
+            ("TMPDIR".to_string(), "/managed/session/agent".to_string()),
+            ("TMP".to_string(), "/managed/session/agent".to_string()),
+            ("TEMP".to_string(), "/managed/session/agent".to_string()),
+            ("PATH".to_string(), "/usr/bin".to_string()),
+        ])
     );
 }
 

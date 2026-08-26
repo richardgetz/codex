@@ -3,6 +3,8 @@ pub(crate) mod apply_patch_spec;
 pub(crate) mod builtin_schedule;
 pub(crate) mod builtin_scratchpad;
 pub(crate) mod builtin_scratchpad_spec;
+pub(crate) mod builtin_session_tmp;
+pub(crate) mod builtin_session_tmp_spec;
 mod current_time;
 mod dynamic;
 pub(crate) mod extension_tools;

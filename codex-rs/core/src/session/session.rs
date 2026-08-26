@@ -33,6 +33,8 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::security_risk::SecurityRiskScore;
 use codex_skills::SkillError;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use std::path::Path;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
 use std::time::Instant;
@@ -78,6 +80,8 @@ pub(crate) struct Session {
     pub(crate) input_queue: InputQueue,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
+    /// Owns this thread's managed temporary directory and root-session cleanup.
+    pub(crate) session_tmp: Option<codex_session_tmp::SessionTmpManager>,
     pub(super) git_enrichment_policy: GitEnrichmentPolicy,
     pub(super) fork_persistence: ForkPersistence,
     pub(super) next_internal_sub_id: AtomicU64,
@@ -117,6 +121,9 @@ pub(crate) struct SessionConfiguration {
     pub(super) legacy_fallback_cwd: AbsolutePathBuf,
     /// Directory containing all Codex state for this session.
     pub(super) codex_home: AbsolutePathBuf,
+    /// Session-owned temporary root exposed to this thread's sandbox and
+    /// child-process environment, when the opt-in feature is enabled.
+    pub(super) session_tmp_agent_root: Option<AbsolutePathBuf>,
     /// Optional user-facing name for the thread, updated during the session.
     pub(super) thread_name: Option<String>,
     pub(super) memory_policy: MemoryAccessPolicy,
@@ -158,6 +165,9 @@ impl SessionConfiguration {
     pub(super) fn inferred_environment_config(&self) -> EnvironmentConfig {
         EnvironmentConfig {
             allow_login_shell: self.allow_login_shell,
+            // The environment attachment boundary adds the session temporary root only to
+            // local environments. Keeping this inherited config rootless prevents a remote
+            // executor from receiving a host-local writable path.
             permission_profile: self.permission_profile_state.snapshot(),
             shell_environment_policy: self.shell_environment_policy.clone(),
             exec_policy: None,
@@ -176,8 +186,49 @@ impl SessionConfiguration {
         environments: &[TurnEnvironmentSelection],
     ) -> PermissionProfile {
         let workspace_roots = ThreadEnvironments::primary_workspace_roots_for(environments);
-        self.permission_profile()
-            .materialize_project_roots_with_workspace_roots(&workspace_roots)
+        self.with_session_tmp_root(
+            self.permission_profile()
+                .materialize_project_roots_with_workspace_roots(&workspace_roots),
+        )
+    }
+
+    fn with_session_tmp_root(&self, permission_profile: PermissionProfile) -> PermissionProfile {
+        let Some(session_tmp_agent_root) = self.session_tmp_agent_root.as_ref() else {
+            return permission_profile;
+        };
+        let file_system_sandbox_policy = permission_profile
+            .file_system_sandbox_policy()
+            .with_additional_writable_roots(
+                self.cwd(),
+                std::slice::from_ref(session_tmp_agent_root),
+            );
+        PermissionProfile::from_runtime_permissions_with_enforcement(
+            permission_profile.enforcement(),
+            &file_system_sandbox_policy,
+            permission_profile.network_sandbox_policy(),
+        )
+    }
+
+    fn permission_profile_snapshot(
+        &self,
+        environments: &[TurnEnvironmentSelection],
+    ) -> PermissionProfileSnapshot {
+        let snapshot = self.permission_profile_state.snapshot();
+        let permission_profile = if environments.is_empty() {
+            self.with_session_tmp_root(snapshot.permission_profile().clone())
+        } else {
+            self.materialized_permission_profile(environments)
+        };
+        match snapshot.active_permission_profile() {
+            Some(active_permission_profile) => {
+                PermissionProfileSnapshot::active_with_profile_workspace_roots(
+                    permission_profile,
+                    active_permission_profile,
+                    snapshot.profile_workspace_roots().to_vec(),
+                )
+            }
+            None => PermissionProfileSnapshot::legacy(permission_profile),
+        }
     }
 
     pub(super) fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
@@ -233,7 +284,7 @@ impl SessionConfiguration {
             ThreadEnvironments::primary_workspace_roots_for(&environment_selections);
         let permission_profile = ThreadEnvironments::primary_config_for(&environment_selections)
             .map(|config| config.permission_profile.clone())
-            .unwrap_or_else(|| self.permission_profile_state.snapshot());
+            .unwrap_or_else(|| self.permission_profile_snapshot(&environment_selections));
         ThreadConfigSnapshot {
             model: self.collaboration_mode.model().to_string(),
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
@@ -773,6 +824,12 @@ impl Session {
         self.services.agent_control.session_id()
     }
 
+    pub(crate) fn session_tmp_agent_root(&self) -> Option<&Path> {
+        self.session_tmp
+            .as_ref()
+            .map(codex_session_tmp::SessionTmpManager::agent_root)
+    }
+
     pub(crate) async fn preview_settings(
         &self,
         updates: &SessionSettingsUpdate,
@@ -939,6 +996,31 @@ impl Session {
                 .effective_agent_max_threads(MultiAgentVersion::V2)
                 .unwrap_or(usize::MAX),
         );
+        let session_tmp_config = codex_session_tmp::SessionTmpConfig {
+            enabled: config.session_tmp.enabled,
+            root: config
+                .session_tmp
+                .root
+                .as_ref()
+                .map(AbsolutePathBuf::to_path_buf),
+            stale_after: config.session_tmp.stale_after,
+        };
+        let is_root_session = session_id == SessionId::from(thread_id);
+        let session_tmp = codex_session_tmp::SessionTmpManager::open(
+            &session_tmp_config,
+            config.codex_home.as_path(),
+            &session_id.to_string(),
+            &thread_id.to_string(),
+            if is_root_session {
+                codex_session_tmp::SessionTmpOwner::RootSession
+            } else {
+                codex_session_tmp::SessionTmpOwner::Agent
+            },
+        )?;
+        session_configuration.session_tmp_agent_root = session_tmp
+            .as_ref()
+            .map(|manager| AbsolutePathBuf::from_absolute_path(manager.agent_root()))
+            .transpose()?;
         let time_provider = crate::current_time::resolve_time_provider(
             config.current_time_reminder.as_ref(),
             external_time_provider,
@@ -1327,6 +1409,9 @@ impl Session {
                 environment_selections,
                 &session_configuration.inferred_environment_config(),
             );
+            if let Some(root) = session_configuration.session_tmp_agent_root.as_ref() {
+                turn_environments.add_local_writable_root(root);
+            }
             let resolved_environments = turn_environments.snapshot().await;
             let agents_md_manager = Arc::new(AgentsMdManager::new(user_instructions));
             let plugin_skill_warmup = warm_plugins_and_skills_for_session_init(
@@ -1623,6 +1708,7 @@ impl Session {
                 input_queue: InputQueue::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
+                session_tmp,
                 git_enrichment_policy,
                 fork_persistence,
                 next_internal_sub_id: AtomicU64::new(0),

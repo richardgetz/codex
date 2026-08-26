@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -15,11 +16,13 @@ use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EnvironmentConnectionEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::FileSystemPath;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -397,6 +400,65 @@ impl ThreadEnvironments {
             .map(|environment| {
                 let mut environment = environment.clone();
                 environment.refresh_thread_config(config);
+                environment
+            })
+            .collect();
+        self.environments.store(Arc::new(environments));
+    }
+
+    /// Adds a local session-owned writable root to local environment profiles.
+    /// Remote environments deliberately keep their owner policy and do not receive a local path.
+    pub(crate) fn add_local_writable_root(&self, root: &AbsolutePathBuf) {
+        let session_agents_root = root
+            .as_path()
+            .parent()
+            .and_then(Path::parent)
+            .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok());
+        let environments = self
+            .environments
+            .load()
+            .iter()
+            .map(|environment| {
+                if environment.environment.is_remote() {
+                    return environment.clone();
+                }
+                let mut environment = environment.clone();
+                if let EnvironmentConfigState::Ready(config) = &mut environment.selection.config
+                    && let Ok(cwd) = environment.selection.cwd.to_abs_path()
+                {
+                    let snapshot = &config.permission_profile;
+                    let permission_profile = snapshot.permission_profile().clone();
+                    let mut file_system_sandbox_policy =
+                        permission_profile.file_system_sandbox_policy();
+                    if let Some(session_agents_root) = &session_agents_root {
+                        file_system_sandbox_policy.entries.retain(|entry| {
+                            let FileSystemPath::Path { path } = &entry.path else {
+                                return true;
+                            };
+                            path.to_abs_path()
+                                .map(|path| !path.starts_with(session_agents_root))
+                                .unwrap_or(true)
+                        });
+                    }
+                    let file_system_sandbox_policy = file_system_sandbox_policy
+                        .with_additional_writable_roots(&cwd, std::slice::from_ref(root));
+                    let permission_profile =
+                        PermissionProfile::from_runtime_permissions_with_enforcement(
+                            permission_profile.enforcement(),
+                            &file_system_sandbox_policy,
+                            permission_profile.network_sandbox_policy(),
+                        );
+                    config.permission_profile = match snapshot.active_permission_profile() {
+                        Some(active_permission_profile) => {
+                            PermissionProfileSnapshot::active_with_profile_workspace_roots(
+                                permission_profile,
+                                active_permission_profile,
+                                snapshot.profile_workspace_roots().to_vec(),
+                            )
+                        }
+                        None => PermissionProfileSnapshot::legacy(permission_profile),
+                    };
+                }
                 environment
             })
             .collect();
@@ -812,6 +874,7 @@ mod tests {
     use codex_http_client::OutboundProxyPolicy;
     use codex_protocol::models::ActivePermissionProfile;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::protocol::TurnEnvironmentSelection;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_path_uri::PathUri;
@@ -1695,6 +1758,69 @@ url = "ws://127.0.0.1:8765"
         let changed_snapshot = parent.snapshot().await;
         let changed_environment = changed_snapshot.primary().expect("changed environment");
         assert_eq!(changed_environment.config(), &new_thread_config);
+    }
+
+    #[tokio::test]
+    async fn session_tmp_root_is_added_to_local_but_not_remote_environments() {
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let root = AbsolutePathBuf::from_absolute_path(cwd.join("session-tmp-agent"))
+            .expect("managed agent root");
+        let local = resolve_turn_environments(
+            Arc::new(EnvironmentManager::default_for_tests()),
+            &[TurnEnvironmentSelection {
+                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                cwd: PathUri::from_abs_path(&cwd),
+                workspace_roots: Vec::new(),
+                config: EnvironmentConfigState::FromThread,
+            }],
+        )
+        .await;
+
+        local.add_local_writable_root(&root);
+        let local_snapshot = local.snapshot().await;
+        let local_environment = local_snapshot.primary().expect("local environment");
+        assert_eq!(
+            local_environment
+                .permission_profile()
+                .file_system_sandbox_policy()
+                .resolve_access_with_cwd(root.as_path(), cwd.as_path()),
+            FileSystemAccessMode::Write
+        );
+
+        let remote_selection = TurnEnvironmentSelection {
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            cwd: PathUri::from_abs_path(&cwd),
+            workspace_roots: Vec::new(),
+            config: EnvironmentConfigState::Ready(test_environment_config()),
+        };
+        let remote = ThreadEnvironments::new(
+            Arc::new(EnvironmentManager::default_for_tests()),
+            crate::shell::default_user_shell(),
+            test_environment_config(),
+            ShellSnapshot::disabled(),
+            TurnEnvironmentSnapshot {
+                environments: vec![TurnEnvironmentState::Ready(TurnEnvironment::new(
+                    remote_selection,
+                    EnvironmentConfigOrigin::Thread,
+                    Arc::new(
+                        Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                            .expect("remote environment"),
+                    ),
+                    None,
+                ))],
+            },
+            /*non_blocking_snapshots*/ false,
+        );
+        remote.add_local_writable_root(&root);
+        let remote_snapshot = remote.snapshot().await;
+        let remote_environment = remote_snapshot.primary().expect("remote environment");
+        assert_eq!(
+            remote_environment
+                .permission_profile()
+                .file_system_sandbox_policy()
+                .resolve_access_with_cwd(root.as_path(), cwd.as_path()),
+            FileSystemAccessMode::None
+        );
     }
 
     #[tokio::test]

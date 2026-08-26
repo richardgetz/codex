@@ -778,6 +778,35 @@ fn auto_auth_storage_save_falls_back_when_keyring_errors() -> anyhow::Result<()>
 }
 
 #[test]
+fn auto_auth_storage_file_fallback_overrides_stale_keyring_after_restart() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let failing_keyring = MockKeyringStore::default();
+    let storage = AutoAuthStorage::new(
+        codex_home.path().to_path_buf(),
+        Arc::new(failing_keyring.clone()),
+        AuthKeyringBackendKind::Secrets,
+    );
+    let key = compute_keyring_account(codex_home.path());
+    let stale = auth_with_prefix("stale");
+    seed_secrets_backend_with_auth(&failing_keyring, codex_home.path(), &stale)?;
+    failing_keyring.set_error(&key, KeyringError::Invalid("error".into(), "save".into()));
+
+    let expected = auth_with_prefix("file-fallback");
+    storage.save(&expected)?;
+
+    let reopened_keyring = MockKeyringStore::default();
+    seed_secrets_backend_with_auth(&reopened_keyring, codex_home.path(), &stale)?;
+    let reopened = AutoAuthStorage::new(
+        codex_home.path().to_path_buf(),
+        Arc::new(reopened_keyring),
+        AuthKeyringBackendKind::Secrets,
+    );
+
+    assert_eq!(reopened.load()?, Some(expected));
+    Ok(())
+}
+
+#[test]
 fn auto_auth_storage_delete_removes_keyring_and_file() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let mock_keyring = MockKeyringStore::default();

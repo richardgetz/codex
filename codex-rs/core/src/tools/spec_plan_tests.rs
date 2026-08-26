@@ -55,6 +55,7 @@ use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::WaitForEnvironmentHandler;
 use crate::tools::handlers::builtin_scratchpad_spec::TOOL_OPEN;
 use crate::tools::handlers::builtin_scratchpad_spec::scratchpad_namespace_spec;
+use crate::tools::handlers::builtin_session_tmp_spec::session_tmp_namespace_spec;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::RegisteredTool;
@@ -710,6 +711,39 @@ async fn built_in_scratchpad_and_schedule_follow_mode_config() {
             .iter()
             .any(|name| name == "create_scheduled_trigger")
     );
+}
+
+#[tokio::test]
+async fn built_in_session_tmp_tools_are_opt_in_and_lineage_tools_are_hidden() {
+    let disabled = probe(|_| {}).await;
+    disabled.assert_visible_lacks(&["session_tmp"]);
+    disabled.assert_registered_lacks(&["session_tmp.create"]);
+
+    let enabled = probe(|turn| {
+        update_config(turn, |config| {
+            config.session_tmp.enabled = true;
+        });
+    })
+    .await;
+    enabled.assert_visible_contains(&["session_tmp"]);
+    let ToolSpec::Namespace(namespace) = session_tmp_namespace_spec() else {
+        panic!("session_tmp should publish a namespace spec");
+    };
+    for tool in namespace.tools {
+        let tool_name = match tool {
+            ResponsesApiNamespaceTool::Function(tool) => tool.name,
+            ResponsesApiNamespaceTool::Custom(tool) => tool.name,
+        };
+        let registered_name = ToolName::namespaced(namespace.name.clone(), tool_name).to_string();
+        enabled.assert_registered_contains(&[registered_name.as_str()]);
+        enabled.assert_resolved_contains(&[registered_name.as_str()]);
+        let expected_exposure = if registered_name == "session_tmp.create" {
+            ToolExposure::Direct
+        } else {
+            ToolExposure::Hidden
+        };
+        assert_eq!(enabled.exposure(&registered_name), expected_exposure);
+    }
 }
 
 #[tokio::test]

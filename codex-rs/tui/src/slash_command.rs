@@ -72,6 +72,8 @@ pub enum SlashCommand {
     OrchestratorMemoryConsolidate,
     #[strum(serialize = "user-preferences-memory-migrate")]
     UserPreferencesMemoryMigrate,
+    #[strum(serialize = "tmp")]
+    SessionTmp,
     Scratchpad,
     #[strum(serialize = "scratchpad-absorb")]
     ScratchpadAbsorb,
@@ -178,6 +180,9 @@ impl SlashCommand {
             SlashCommand::UserPreferencesMemoryMigrate => {
                 "copy orchestrator memory into user preferences memory"
             }
+            SlashCommand::SessionTmp => {
+                "inspect or safely clean opt-in session-owned temporary files"
+            }
             SlashCommand::Scratchpad => "show the built-in scratchpad for this session",
             SlashCommand::ScratchpadAbsorb => {
                 "copy another scratchpad into this session as contextual history"
@@ -234,6 +239,7 @@ impl SlashCommand {
                 | SlashCommand::SandboxReadRoot
                 | SlashCommand::OrchestratorMemoryForget
                 | SlashCommand::UserPreferencesMemoryMigrate
+                | SlashCommand::SessionTmp
                 | SlashCommand::Account
         )
     }
@@ -279,6 +285,7 @@ impl SlashCommand {
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::Account
+            | SlashCommand::SessionTmp
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff

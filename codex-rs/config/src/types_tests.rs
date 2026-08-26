@@ -206,6 +206,36 @@ fn scratchpad_fanout_defaults_off_and_clamps_max_agents() {
 }
 
 #[test]
+fn session_tmp_defaults_off_without_changing_existing_temp_behavior() {
+    assert_eq!(
+        SessionTmpConfig::from(None),
+        SessionTmpConfig {
+            enabled: false,
+            root: None,
+            stale_after: Duration::from_secs(DEFAULT_SESSION_TMP_STALE_AFTER_DAYS * 24 * 60 * 60),
+        }
+    );
+}
+
+#[test]
+fn session_tmp_config_accepts_explicit_root_and_stale_age() {
+    let root = AbsolutePathBuf::from_absolute_path("/tmp/codex-session-tmp")
+        .expect("test root should be absolute");
+    assert_eq!(
+        SessionTmpConfig::from(Some(SessionTmpToml {
+            enabled: Some(true),
+            root: Some(root.clone()),
+            stale_after_days: Some(3),
+        })),
+        SessionTmpConfig {
+            enabled: true,
+            root: Some(root),
+            stale_after: Duration::from_secs(3 * 24 * 60 * 60),
+        }
+    );
+}
+
+#[test]
 fn scratchpad_rollback_defaults_allows_disable_and_clamps_retention() {
     assert_eq!(
         ScratchpadRollbackConfig::from(None),

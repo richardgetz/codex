@@ -9,6 +9,7 @@ use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::shell_environment;
 use std::collections::HashMap;
+use std::path::Path;
 
 pub use codex_protocol::shell_environment::CODEX_SESSION_ID_ENV_VAR;
 pub use codex_protocol::shell_environment::CODEX_THREAD_ID_ENV_VAR;
@@ -38,6 +39,20 @@ pub fn create_env(
 /// Exposes the shared root-session identity to model-reachable shell commands.
 pub(crate) fn inject_session_id_env(env: &mut HashMap<String, String>, session_id: SessionId) {
     env.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), session_id.to_string());
+}
+
+/// Routes process temporary-file environment variables into the current
+/// agent's managed session directory when the opt-in feature is enabled.
+pub(crate) fn inject_session_tmp_env(env: &mut HashMap<String, String>, root: &Path) {
+    env.retain(|key, _| {
+        !key.eq_ignore_ascii_case("TMPDIR")
+            && !key.eq_ignore_ascii_case("TMP")
+            && !key.eq_ignore_ascii_case("TEMP")
+    });
+    let root = root.to_string_lossy().into_owned();
+    env.insert("TMPDIR".to_string(), root.clone());
+    env.insert("TMP".to_string(), root.clone());
+    env.insert("TEMP".to_string(), root);
 }
 
 /// Injects the selected named permission profile into a shell tool's environment.

@@ -28,6 +28,7 @@ use std::task::Poll;
 use crossterm::event::Event;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
@@ -158,6 +159,8 @@ pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSourc
     draw_stream: BroadcastStream<()>,
     mac_keyboard_stream: Option<BroadcastStream<KeyEvent>>,
     mac_keyboard_focused: Option<Arc<AtomicBool>>,
+    mac_keyboard_cmux_focus: Option<super::mac_keyboard::CmuxFocusProbe>,
+    last_cmux_focused: Option<bool>,
     mac_keyboard_paused: Option<Arc<AtomicBool>>,
     mac_keyboard_release_pending: Option<Arc<AtomicBool>>,
     resume_stream: WatchStream<()>,
@@ -175,6 +178,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         draw_rx: broadcast::Receiver<()>,
         mac_keyboard_rx: Option<broadcast::Receiver<KeyEvent>>,
         mac_keyboard_focused: Option<Arc<AtomicBool>>,
+        mac_keyboard_cmux_focus: Option<super::mac_keyboard::CmuxFocusProbe>,
         mac_keyboard_paused: Option<Arc<AtomicBool>>,
         mac_keyboard_release_pending: Option<Arc<AtomicBool>>,
         terminal_focused: Arc<AtomicBool>,
@@ -187,6 +191,8 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             draw_stream: BroadcastStream::new(draw_rx),
             mac_keyboard_stream: mac_keyboard_rx.map(BroadcastStream::new),
             mac_keyboard_focused,
+            mac_keyboard_cmux_focus,
+            last_cmux_focused: None,
             mac_keyboard_paused,
             mac_keyboard_release_pending,
             resume_stream,
@@ -285,13 +291,30 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             return Poll::Pending;
         }
 
-        let Some(stream) = self.mac_keyboard_stream.as_mut() else {
-            return Poll::Pending;
-        };
-
         loop {
-            match Pin::new(&mut *stream).poll_next(cx) {
+            let poll_result = {
+                let Some(stream) = self.mac_keyboard_stream.as_mut() else {
+                    return Poll::Pending;
+                };
+                Pin::new(&mut *stream).poll_next(cx)
+            };
+            match poll_result {
                 Poll::Ready(Some(Ok(key_event))) => {
+                    if let Some(probe) = &self.mac_keyboard_cmux_focus {
+                        let focused = probe.is_focused();
+                        let previous_focus = self.last_cmux_focused.replace(focused);
+                        match cmux_key_event_decision(focused, previous_focus, key_event.kind) {
+                            CmuxKeyEventDecision::Deliver => {}
+                            CmuxKeyEventDecision::Drop => {
+                                continue;
+                            }
+                            CmuxKeyEventDecision::Release => {
+                                return Poll::Ready(Some(TuiEvent::Key(
+                                    super::mac_keyboard::MacRightOptionMonitor::release_event(),
+                                )));
+                            }
+                        }
+                    }
                     return Poll::Ready(Some(TuiEvent::Key(key_event)));
                 }
                 Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(_)))) => continue,
@@ -398,6 +421,27 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             }
             _ => None,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CmuxKeyEventDecision {
+    Deliver,
+    Drop,
+    Release,
+}
+
+fn cmux_key_event_decision(
+    focused: bool,
+    previous_focus: Option<bool>,
+    kind: KeyEventKind,
+) -> CmuxKeyEventDecision {
+    if focused {
+        CmuxKeyEventDecision::Deliver
+    } else if kind == KeyEventKind::Release && previous_focus == Some(true) {
+        CmuxKeyEventDecision::Release
+    } else {
+        CmuxKeyEventDecision::Drop
     }
 }
 
@@ -522,6 +566,7 @@ mod tests {
             draw_rx,
             /*mac_keyboard_rx*/ None,
             /*mac_keyboard_focused*/ None,
+            /*mac_keyboard_cmux_focus*/ None,
             /*mac_keyboard_paused*/ None,
             /*mac_keyboard_release_pending*/ None,
             terminal_focused,
@@ -641,6 +686,7 @@ mod tests {
             draw_rx,
             Some(mac_keyboard_rx),
             Some(mac_keyboard_focused),
+            /*mac_keyboard_cmux_focus*/ None,
             /*mac_keyboard_paused*/ None,
             /*mac_keyboard_release_pending*/ None,
             terminal_focused,
@@ -666,6 +712,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn cmux_push_to_talk_routes_to_only_the_focused_surface() {
+        assert_eq!(
+            cmux_key_event_decision(true, None, KeyEventKind::Press),
+            CmuxKeyEventDecision::Deliver
+        );
+        assert_eq!(
+            cmux_key_event_decision(false, None, KeyEventKind::Press),
+            CmuxKeyEventDecision::Drop
+        );
+        assert_eq!(
+            cmux_key_event_decision(false, Some(true), KeyEventKind::Release),
+            CmuxKeyEventDecision::Release
+        );
+        assert_eq!(
+            cmux_key_event_decision(false, Some(false), KeyEventKind::Release),
+            CmuxKeyEventDecision::Drop
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn pending_mac_keyboard_release_is_forwarded_before_input() {
         let (broker, _handle, _draw_tx, draw_rx, terminal_focused) = setup();
@@ -678,6 +744,7 @@ mod tests {
             draw_rx,
             Some(mac_keyboard_rx),
             Some(mac_keyboard_focused),
+            /*mac_keyboard_cmux_focus*/ None,
             Some(mac_keyboard_paused),
             Some(mac_keyboard_release_pending.clone()),
             terminal_focused,
@@ -716,6 +783,7 @@ mod tests {
             draw_rx,
             Some(mac_keyboard_rx),
             Some(mac_keyboard_focused),
+            /*mac_keyboard_cmux_focus*/ None,
             Some(mac_keyboard_paused),
             Some(mac_keyboard_release_pending),
             terminal_focused,
@@ -769,6 +837,7 @@ mod tests {
             draw_rx,
             Some(mac_keyboard_rx),
             Some(mac_keyboard_focused),
+            /*mac_keyboard_cmux_focus*/ None,
             Some(mac_keyboard_paused),
             Some(mac_keyboard_release_pending),
             terminal_focused.clone(),
@@ -806,6 +875,7 @@ mod tests {
             draw_rx,
             Some(mac_keyboard_rx),
             Some(mac_keyboard_focused.clone()),
+            /*mac_keyboard_cmux_focus*/ None,
             /*mac_keyboard_paused*/ None,
             /*mac_keyboard_release_pending*/ None,
             terminal_focused,

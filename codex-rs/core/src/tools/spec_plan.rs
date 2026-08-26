@@ -38,6 +38,9 @@ use crate::tools::handlers::builtin_schedule::BuiltinScheduleHandler;
 use crate::tools::handlers::builtin_scratchpad::BuiltinScratchpadHandler;
 use crate::tools::handlers::builtin_scratchpad_spec::SCRATCHPAD_TOOL_DESCRIPTIONS;
 use crate::tools::handlers::builtin_scratchpad_spec::TOOL_OPEN;
+use crate::tools::handlers::builtin_session_tmp::BuiltinSessionTmpHandler;
+use crate::tools::handlers::builtin_session_tmp_spec::SESSION_TMP_TOOL_DESCRIPTIONS;
+use crate::tools::handlers::builtin_session_tmp_spec::TOOL_CREATE;
 use crate::tools::handlers::extension_tools::ExtensionToolAdapter;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
@@ -1142,6 +1145,17 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         for &(tool_name, _) in SCRATCHPAD_TOOL_DESCRIPTIONS {
             let handler = BuiltinScratchpadHandler::new(tool_name);
             if tool_name == TOOL_OPEN {
+                registry.add(handler);
+            } else {
+                registry.add_with_exposure(handler, ToolExposure::Hidden);
+            }
+        }
+    }
+
+    if turn_context.config.session_tmp.enabled {
+        for &(tool_name, _) in SESSION_TMP_TOOL_DESCRIPTIONS {
+            let handler = BuiltinSessionTmpHandler::new(tool_name);
+            if tool_name == TOOL_CREATE {
                 registry.add(handler);
             } else {
                 registry.add_with_exposure(handler, ToolExposure::Hidden);

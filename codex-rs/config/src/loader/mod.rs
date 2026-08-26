@@ -1724,6 +1724,30 @@ foo = "xyzzy"
     }
 
     #[test]
+    fn session_tmp_home_relative_root_is_resolved() -> anyhow::Result<()> {
+        let tmp = tempdir()?;
+        let user_config: TomlValue = toml::from_str(
+            r#"
+[session_tmp]
+enabled = true
+root = "~/.codex/session-tmp"
+"#,
+        )?;
+
+        let normalized = resolve_relative_paths_in_config_toml(user_config, tmp.path())?;
+        let root = normalized
+            .get("session_tmp")
+            .and_then(TomlValue::as_table)
+            .and_then(|session_tmp| session_tmp.get("root"))
+            .and_then(TomlValue::as_str)
+            .expect("session temporary root should be present");
+        let expected =
+            AbsolutePathBuf::resolve_path_against_base("~/.codex/session-tmp", tmp.path());
+        assert_eq!(root, expected.as_path().to_string_lossy());
+        Ok(())
+    }
+
+    #[test]
     fn legacy_managed_config_backfill_includes_read_only_sandbox_mode() -> io::Result<()> {
         let legacy = LegacyManagedConfigToml {
             approval_policy: None,

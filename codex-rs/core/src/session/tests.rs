@@ -4724,6 +4724,7 @@ async fn set_rate_limits_retains_previous_credits() {
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
+        session_tmp_agent_root: None,
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -4841,6 +4842,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
+        session_tmp_agent_root: None,
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -5454,6 +5456,26 @@ async fn session_settings_memory_policy_update_restricts_memory_roots() {
 }
 
 #[tokio::test]
+async fn session_tmp_agent_root_is_added_only_when_materialized() {
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    let managed_root = tempfile::tempdir().expect("create managed temporary root");
+    let agent_root = managed_root.path().join("session").join("agent").abs();
+    let baseline = session_configuration.file_system_sandbox_policy(&[]);
+
+    session_configuration.session_tmp_agent_root = Some(agent_root.clone());
+    let enabled = session_configuration.file_system_sandbox_policy(&[]);
+
+    assert_eq!(
+        baseline.resolve_access_with_cwd(agent_root.as_path(), session_configuration.cwd()),
+        FileSystemAccessMode::None
+    );
+    assert_eq!(
+        enabled.resolve_access_with_cwd(agent_root.as_path(), session_configuration.cwd()),
+        FileSystemAccessMode::Write
+    );
+}
+
+#[tokio::test]
 async fn submit_memory_policy_update_applies_before_returning() {
     let (session, _turn_context) = make_session_and_context().await;
     let thread = test_codex_thread(session);
@@ -5663,6 +5685,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
+        session_tmp_agent_root: None,
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -6578,6 +6601,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
+        session_tmp_agent_root: None,
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -6732,6 +6756,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
+        session_tmp_agent_root: None,
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -6920,6 +6945,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
+        session_tmp: None,
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
         fork_persistence: ForkPersistence::Copied,
         next_internal_sub_id: AtomicU64::new(0),
@@ -7035,6 +7061,7 @@ async fn make_session_with_config_and_rx(
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
+        session_tmp_agent_root: None,
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -7162,6 +7189,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
+        session_tmp_agent_root: None,
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -9045,6 +9073,7 @@ where
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
+        session_tmp_agent_root: None,
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -9232,6 +9261,7 @@ where
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
+        session_tmp: None,
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
         fork_persistence: ForkPersistence::Copied,
         next_internal_sub_id: AtomicU64::new(0),

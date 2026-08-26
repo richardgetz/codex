@@ -46,6 +46,7 @@ expression: commands
 /orchestrator-memory-forget - remove matching entries from orchestrator memory and reconsolidate
 /orchestrator-memory-consolidate - run orchestrator memory cleanup and consolidation now
 /user-preferences-memory-migrate - copy orchestrator memory into user preferences memory
+/tmp - inspect or safely clean opt-in session-owned temporary files
 /scratchpad - show the built-in scratchpad for this session
 /scratchpad-absorb - copy another scratchpad into this session as contextual history
 /scratchpad-unarchive - clear the archived marker on this session scratchpad

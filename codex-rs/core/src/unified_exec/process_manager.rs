@@ -19,6 +19,7 @@ use crate::exec_env::create_env;
 use crate::exec_env::inject_apply_patch_env;
 use crate::exec_env::inject_permission_profile_env;
 use crate::exec_env::inject_session_id_env;
+use crate::exec_env::inject_session_tmp_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::plugins::metrics::finish_and_track_measurements;
 use crate::sandboxing::ExecOptions;
@@ -1227,7 +1228,12 @@ impl UnifiedExecProcessManager {
     ) -> Result<(UnifiedExecAttempt, Option<DeferredNetworkApproval>), UnifiedExecError> {
         let turn = &context.step_context.turn;
         let shell_environment_policy = request.turn_environment.shell_environment_policy();
-        let local_policy_env = create_env(shell_environment_policy, /*thread_id*/ None);
+        let mut local_policy_env = create_env(shell_environment_policy, /*thread_id*/ None);
+        if !request.turn_environment.environment.is_remote()
+            && let Some(root) = context.session.session_tmp_agent_root()
+        {
+            inject_session_tmp_env(&mut local_policy_env, root);
+        }
         let mut env = local_policy_env.clone();
         env.insert(
             CODEX_THREAD_ID_ENV_VAR.to_string(),

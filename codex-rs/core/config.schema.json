@@ -3920,6 +3920,31 @@
       ],
       "type": "string"
     },
+    "SessionTmpToml": {
+      "additionalProperties": false,
+      "description": "Persistent session-owned temporary storage settings loaded from config.toml.",
+      "properties": {
+        "enabled": {
+          "description": "Enables managed session temporary storage and its cleanup behavior. Defaults to false so existing temporary-file behavior is unchanged.",
+          "type": "boolean"
+        },
+        "root": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute parent directory for managed storage. Defaults to `<codex_home>/session-tmp`."
+        },
+        "stale_after_days": {
+          "description": "Age of inactive sessions eligible for forced stale cleanup. Set to 0 to disable automatic stale-session cleanup.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "ShellEnvironmentPolicyFilter": {
       "description": "Assigns a shell environment variable pattern to the include-only or exclude set. Includes do not re-add variables removed by another exclude pattern.",
       "enum": [
@@ -5546,7 +5571,7 @@
       "properties": {
         "daily_spend_retention_days": {
           "default": 30,
-          "description": "Number of daily spend rollups to retain. Values above the built-in ten-year cap are trimmed to that cap so forgotten configuration cannot grow the local history forever.",
+          "description": "Number of daily spend rollups to retain for `/spend`. The command accepts a day count, `YYYY-MM`, or an inclusive `YYYY-MM-DD..YYYY-MM-DD` range. Values above the built-in ten-year cap are trimmed to that cap so forgotten configuration cannot grow local history forever.",
           "format": "uint32",
           "maximum": 3650.0,
           "minimum": 1.0,
@@ -7291,6 +7316,14 @@
     "service_tier": {
       "description": "Optional explicit service tier request id for new turns (for example `default`, `priority`, or `flex`; legacy `fast` also works).",
       "type": "string"
+    },
+    "session_tmp": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/SessionTmpToml"
+        }
+      ],
+      "description": "Opt-in persistent session-owned temporary storage."
     },
     "shell_environment_policy": {
       "allOf": [

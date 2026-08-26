@@ -59,6 +59,7 @@ use codex_config::types::ScheduleConfig;
 use codex_config::types::ScratchpadConfig;
 use codex_config::types::ScratchpadToml;
 use codex_config::types::SessionPickerViewMode;
+use codex_config::types::SessionTmpConfig;
 use codex_config::types::SituationalRequirementsConfig;
 use codex_config::types::SkillsConfig;
 use codex_config::types::ThreadControlConfig;
@@ -1138,6 +1139,9 @@ pub struct Config {
 
     /// Built-in scratchpad subsystem settings.
     pub scratchpad: ScratchpadConfig,
+
+    /// Opt-in persistent session-owned temporary storage settings.
+    pub session_tmp: SessionTmpConfig,
 
     /// Opt-in situational trigger/action requirements.
     pub situational_requirements: SituationalRequirementsConfig,
@@ -4674,6 +4678,7 @@ impl Config {
             orchestrator_memory.enabled = false;
         }
         let scratchpad = resolve_scratchpad_config(cfg.scratchpad);
+        let session_tmp = cfg.session_tmp.into();
         if let Err(err) = run_scratchpad_lifecycle_cleanup(
             codex_home.as_path(),
             scratchpad.auto_archive_after_days,
@@ -4818,6 +4823,7 @@ impl Config {
             orchestrator_memory,
             user_preferences_memory,
             scratchpad,
+            session_tmp,
             situational_requirements: cfg
                 .situational_requirements
                 .unwrap_or_default()

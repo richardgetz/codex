@@ -827,6 +827,10 @@ impl Tui {
             .mac_right_option_monitor
             .as_ref()
             .map(MacRightOptionMonitor::focus_handle);
+        let mac_right_option_cmux_focus = self
+            .mac_right_option_monitor
+            .as_ref()
+            .and_then(MacRightOptionMonitor::cmux_focus_probe);
         let mac_right_option_paused = self
             .mac_right_option_monitor
             .as_ref()
@@ -841,6 +845,7 @@ impl Tui {
             self.draw_tx.subscribe(),
             mac_right_option_events,
             mac_right_option_focus,
+            mac_right_option_cmux_focus,
             mac_right_option_paused,
             mac_right_option_release_pending,
             self.terminal_focused.clone(),
@@ -853,6 +858,7 @@ impl Tui {
             self.draw_tx.subscribe(),
             mac_right_option_events,
             mac_right_option_focus,
+            mac_right_option_cmux_focus,
             mac_right_option_paused,
             mac_right_option_release_pending,
             self.terminal_focused.clone(),

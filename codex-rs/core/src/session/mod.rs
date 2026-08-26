@@ -35,6 +35,7 @@ use crate::context::RealtimeDelegationSource;
 use crate::context::RecommendedPluginsInstructions;
 use crate::context::ScheduleInstructions;
 use crate::context::ScratchpadInstructions;
+use crate::context::SessionTmpInstructions;
 use crate::context::SituationalRequirementsInstructions;
 use crate::context::world_state::EnvironmentsState;
 use crate::context::world_state::WorldState;
@@ -72,6 +73,7 @@ use codex_analytics::TurnCodexErrorFact;
 use codex_async_utils::OrCancelExt;
 use codex_config::types::MemoriesScope;
 use codex_config::types::ScratchpadToml;
+use codex_config::types::SessionTmpToml;
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_connectors::connector_runtime_context_key;
 use codex_exec_server::Environment;
@@ -843,6 +845,7 @@ impl Session {
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             legacy_fallback_cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
+            session_tmp_agent_root: None,
             thread_name: None,
             memory_policy: MemoryAccessPolicy::new(
                 config.memories.use_memories,
@@ -2090,6 +2093,11 @@ impl Session {
                     .turn_environments
                     .update_thread_config(&environment_config);
             }
+            if let Some(root) = updated.session_tmp_agent_root.as_ref() {
+                self.services
+                    .turn_environments
+                    .add_local_writable_root(root);
+            }
             (
                 previous_config,
                 previous_permission_profile,
@@ -2213,6 +2221,13 @@ impl Session {
             config.config_layer_stack = config
                 .config_layer_stack
                 .with_user_layer_from(&next_config.config_layer_stack);
+            // Session temporary storage owns a live lease, environment root, and cleanup
+            // boundary. Keep that effective value fixed for this session; a changed config
+            // takes effect when the next session is created rather than partially rewiring a
+            // running session's sandbox.
+            if config.session_tmp != next_config.session_tmp {
+                debug!("session_tmp config changed; applying it to new sessions only");
+            }
             config.tool_suggest =
                 resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);
             config.scratchpad.loopback = next_config.scratchpad.loopback;
@@ -2384,6 +2399,23 @@ impl Session {
                 None => None,
             };
             config.scratchpad = scratchpad_toml.unwrap_or_default().into();
+            let session_tmp_toml: Option<SessionTmpToml> = match config
+                .config_layer_stack
+                .effective_config()
+                .get("session_tmp")
+            {
+                Some(value) => match value.clone().try_into() {
+                    Ok(session_tmp) => Some(session_tmp),
+                    Err(err) => {
+                        warn!(
+                            "failed to deserialize session_tmp config while reloading layer: {err}"
+                        );
+                        return;
+                    }
+                },
+                None => None,
+            };
+            config.session_tmp = session_tmp_toml.into();
             config
         };
         self.services.skills_service.clear_cache();
@@ -4180,6 +4212,9 @@ impl Session {
             {
                 developer_sections.push(active_scratchpad.render());
             }
+        }
+        if !separate_guardian_developer_message && turn_context.config.session_tmp.enabled {
+            developer_sections.push(SessionTmpInstructions.render());
         }
         if !separate_guardian_developer_message
             && turn_context
