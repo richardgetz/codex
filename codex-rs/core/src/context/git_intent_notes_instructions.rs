@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 const GIT_INTENT_NOTES_INSTRUCTIONS_OPEN_TAG: &str = "<git_intent_notes>";
 const GIT_INTENT_NOTES_INSTRUCTIONS_CLOSE_TAG: &str = "</git_intent_notes>";
@@ -13,6 +14,10 @@ impl GitIntentNotesInstructions {
 }
 
 impl ContextualUserFragment for GitIntentNotesInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("git.intent_notes".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

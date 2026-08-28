@@ -24,6 +24,7 @@ use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolTelemetryTags;
 use codex_mcp::ToolInfo;
 use codex_mcp::tool_is_model_visible;
+use codex_protocol::mcp::is_node_repl_backed_server;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -271,6 +272,7 @@ impl McpHandler {
         let ToolInvocation {
             session,
             step_context,
+            cancellation_token,
             call_id,
             tool_name,
             source,
@@ -302,6 +304,7 @@ impl McpHandler {
         let result = handle_mcp_tool_call(
             Arc::clone(&session),
             &step_context,
+            &cancellation_token,
             call_id.clone(),
             &self.tool_info,
             self.hook_tool_name(),
@@ -387,7 +390,7 @@ impl CoreToolRuntime for McpHandler {
             .thread_extension_data
             .get::<NodeReplReviewEvidence>()
             .is_some_and(|evidence| evidence.image_capture_enabled());
-        if self.tool_info.server_name != "node_repl"
+        if !is_node_repl_backed_server(&self.tool_info.server_name)
             || !result.success_for_logging()
             || evidence_mode == NodeReplReviewEvidenceMode::Disabled && !image_capture_enabled
         {
@@ -478,7 +481,10 @@ impl CoreToolRuntime for McpHandler {
             .thread_extension_data
             .get_or_init(NodeReplReviewEvidence::default)
             .record(
-                self.tool_info.tool.name.as_ref(),
+                &format!(
+                    "{}.{}",
+                    self.tool_info.server_name, self.tool_info.tool.name
+                ),
                 cell_id,
                 &invocation.call_id,
                 items,

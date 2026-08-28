@@ -54,7 +54,8 @@ pub enum BedrockSetupParams {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Environment {
-        credential_type: AwsCredentialType,
+        #[ts(optional = nullable)]
+        credential_type: Option<AwsCredentialType>,
         region: String,
     },
     #[serde(rename_all = "camelCase")]

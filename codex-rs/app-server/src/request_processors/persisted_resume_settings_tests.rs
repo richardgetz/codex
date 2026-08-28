@@ -48,6 +48,8 @@ fn settings_item(
                         developer_instructions: None,
                     },
                 },
+                memory_policy: Default::default(),
+                user_preferences_memory_policy: Default::default(),
             },
         },
     ))
@@ -61,6 +63,7 @@ fn turn_context_item(
 ) -> RolloutItem {
     RolloutItem::TurnContext(TurnContextItem {
         turn_id: Some(turn_id.to_string()),
+        trace_id: None,
         cwd: cwd(),
         workspace_roots: Some(vec![cwd()]),
         current_date: None,
@@ -81,6 +84,10 @@ fn turn_context_item(
         realtime_active: None,
         effort: None,
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
+        user_instructions: None,
+        developer_instructions: None,
+        final_output_json_schema: None,
+        truncation_policy: None,
     })
 }
 

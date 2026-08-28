@@ -222,14 +222,13 @@ declare const tools: { editor__apply_patch(input: string): Promise<unknown>; };
 #[test]
 fn tool_spec_to_code_mode_tool_definition_skips_unsupported_variants() {
     assert_eq!(
-        tool_spec_to_code_mode_tool_definition(&ToolSpec::ToolSearch {
-            execution: "sync".to_string(),
-            description: "Search".to_string(),
-            parameters: JsonSchema::object(
-                BTreeMap::new(),
-                /*required*/ None,
-                /*additional_properties*/ None
-            ),
+        tool_spec_to_code_mode_tool_definition(&ToolSpec::WebSearch {
+            external_web_access: None,
+            indexed_web_access: None,
+            filters: None,
+            user_location: None,
+            search_context_size: None,
+            search_content_types: None,
         }),
         None
     );

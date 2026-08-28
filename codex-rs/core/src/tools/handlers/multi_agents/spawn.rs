@@ -246,7 +246,7 @@ pub(crate) struct SpawnAgentResult {
 }
 
 impl ToolOutput for SpawnAgentResult {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         tool_output_json_text(self, "spawn_agent")
     }
 

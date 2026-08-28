@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 const CONVENTIONAL_COMMITS_INSTRUCTIONS_OPEN_TAG: &str = "<conventional_commits>";
 const CONVENTIONAL_COMMITS_INSTRUCTIONS_CLOSE_TAG: &str = "</conventional_commits>";
@@ -13,6 +14,10 @@ impl ConventionalCommitsInstructions {
 }
 
 impl ContextualUserFragment for ConventionalCommitsInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("git.conventional_commits".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

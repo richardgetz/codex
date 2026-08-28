@@ -38,6 +38,7 @@ mod permission_profile_snapshot;
 pub mod permissions;
 pub mod plan_tool;
 pub mod protocol;
+pub mod realtime;
 pub mod realtime_handoff;
 pub mod request_permissions;
 pub mod request_user_input;

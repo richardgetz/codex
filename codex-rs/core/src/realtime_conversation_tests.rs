@@ -37,6 +37,22 @@ use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+#[tokio::test]
+async fn shutdown_cancels_realtime_start_before_state_installation() {
+    let manager = RealtimeConversationManager::new();
+    let stop_token = CancellationToken::new();
+    *manager
+        .starting_stop_token
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(stop_token.clone());
+
+    assert_eq!(
+        manager.shutdown().await.expect("shutdown should succeed"),
+        None
+    );
+    assert!(stop_token.is_cancelled());
+}
+
 #[test]
 fn deduplicates_repeated_realtime_handoff_ids() {
     let mut deduper = RealtimeHandoffDeduper::default();
@@ -94,6 +110,7 @@ async fn shutdown_returns_original_submission_id_for_requested_close() {
             realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             stop_token: CancellationToken::new(),
         })),
+        starting_stop_token: std::sync::Mutex::new(None),
         mode_instructions: Mutex::new(None),
     };
 
@@ -324,7 +341,22 @@ fn classifies_outbound_api_failures_as_transport_loss() {
         else {
             panic!("outbound API failure should preserve pending output for reconnect");
         };
-        assert_eq!(*actual_pending_outbound, pending_outbound);
+        match (actual_pending_outbound.as_ref(), &pending_outbound) {
+            (RealtimePendingOutbound::Text(actual), RealtimePendingOutbound::Text(expected)) => {
+                assert_eq!(actual, expected)
+            }
+            (
+                RealtimePendingOutbound::Handoff(RealtimeOutbound::StandaloneHandoff {
+                    text: actual_text,
+                    phase: actual_phase,
+                }),
+                RealtimePendingOutbound::Handoff(RealtimeOutbound::StandaloneHandoff {
+                    text: expected_text,
+                    phase: expected_phase,
+                }),
+            ) => assert_eq!((actual_text, actual_phase), (expected_text, expected_phase)),
+            _ => panic!("reconnect preserved a different pending outbound variant"),
+        }
     }
 
     assert!(matches!(
@@ -430,6 +462,7 @@ async fn handoff_complete_preserves_pending_streamed_final_output() {
             realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             stop_token: CancellationToken::new(),
         })),
+        starting_stop_token: std::sync::Mutex::new(None),
         mode_instructions: Mutex::new(None),
     };
     let output_task = tokio::spawn(async move {
@@ -438,7 +471,9 @@ async fn handoff_complete_preserves_pending_streamed_final_output() {
             match output {
                 RealtimeOutbound::HandoffAppend { text, .. } => append_texts.push(text),
                 RealtimeOutbound::Flush { completion } => {
-                    let _ = completion.send(());
+                    if let Some(completion) = completion.lock().await.take() {
+                        let _ = completion.send(());
+                    }
                     break;
                 }
                 output => panic!("unexpected realtime output: {output:?}"),
@@ -489,6 +524,7 @@ async fn disabled_preambles_suppress_commentary_and_defer_unphased_output_until_
             realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             stop_token: CancellationToken::new(),
         })),
+        starting_stop_token: std::sync::Mutex::new(None),
         mode_instructions: Mutex::new(None),
     };
     let handoff = manager
@@ -541,7 +577,9 @@ async fn disabled_preambles_suppress_commentary_and_defer_unphased_output_until_
             match output {
                 RealtimeOutbound::HandoffAppend { text, .. } => append_texts.push(text),
                 RealtimeOutbound::Flush { completion } => {
-                    let _ = completion.send(());
+                    if let Some(completion) = completion.lock().await.take() {
+                        let _ = completion.send(());
+                    }
                     break;
                 }
                 output => panic!("unexpected realtime output: {output:?}"),
@@ -592,6 +630,7 @@ async fn disabled_preambles_drop_phase_less_bridge_before_preserving_final_outpu
             realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             stop_token: CancellationToken::new(),
         })),
+        starting_stop_token: std::sync::Mutex::new(None),
         mode_instructions: Mutex::new(None),
     };
     let handoff = manager
@@ -626,7 +665,9 @@ async fn disabled_preambles_drop_phase_less_bridge_before_preserving_final_outpu
             match output {
                 RealtimeOutbound::HandoffAppend { text, .. } => append_texts.push(text),
                 RealtimeOutbound::Flush { completion } => {
-                    let _ = completion.send(());
+                    if let Some(completion) = completion.lock().await.take() {
+                        let _ = completion.send(());
+                    }
                     break;
                 }
                 output => panic!("unexpected realtime output: {output:?}"),

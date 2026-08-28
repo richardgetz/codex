@@ -579,7 +579,6 @@ impl ChatWidget {
             developer_instructions: Some(settings.developer_instructions),
         });
         self.update_collaboration_mode_indicator();
-        self.refresh_plan_mode_nudge();
         self.refresh_model_dependent_surfaces();
     }
 
@@ -697,13 +696,8 @@ impl ChatWidget {
         {
             mask.reasoning_effort = Some(Some(effort));
         }
-        if mask.mode == Some(ModeKind::Plan) {
-            self.dismissed_plan_mode_nudge_scopes
-                .insert(self.plan_mode_nudge_scope());
-        }
         self.active_collaboration_mask = Some(mask);
         self.update_collaboration_mode_indicator();
-        self.refresh_plan_mode_nudge();
         self.refresh_model_dependent_surfaces();
         let next_mode = self.active_mode_kind();
         let next_model = self.current_model();

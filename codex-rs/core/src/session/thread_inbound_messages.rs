@@ -116,6 +116,7 @@ mod tests {
                 section: None,
                 section_position: None,
                 section_entered_at: None,
+                project_id: None,
                 sandbox_policy: "read-only".to_string(),
                 approval_mode: "on-request".to_string(),
                 tokens_used: 0,

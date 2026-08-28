@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 
@@ -23,6 +24,10 @@ impl ActiveScratchpadContext {
 }
 
 impl ContextualUserFragment for ActiveScratchpadContext {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("scratchpad.active_context".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

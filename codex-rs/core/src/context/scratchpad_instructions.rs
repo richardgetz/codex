@@ -1,5 +1,6 @@
 use super::ContextualUserFragment;
 use codex_config::types::ScratchpadFanoutConfig;
+use codex_protocol::models::ContentItemKind;
 
 const SCRATCHPAD_INSTRUCTIONS_OPEN_TAG: &str = "<scratchpad_instructions>";
 const SCRATCHPAD_INSTRUCTIONS_CLOSE_TAG: &str = "</scratchpad_instructions>";
@@ -16,6 +17,10 @@ impl ScratchpadInstructions {
 }
 
 impl ContextualUserFragment for ScratchpadInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("scratchpad.instructions".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

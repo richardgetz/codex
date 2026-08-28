@@ -1,12 +1,26 @@
 use super::*;
 
 use crate::history_cell::HistoryCell;
+use crate::realtime_voice::RealtimeMicCommand;
 use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 
 fn render_lines(cell: &dyn HistoryCell) -> String {
     lines_to_single_string(&cell.display_lines(/*width*/ 80))
+}
+
+#[tokio::test]
+async fn configured_voice_mute_binding_dispatches_as_mic_control() {
+    let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    chat.chat_keymap.toggle_voice_mute = vec![crate::key_hint::plain(KeyCode::F(12))];
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RealtimeMicControl(RealtimeMicCommand::ToggleMute))
+    );
 }
 
 #[tokio::test]

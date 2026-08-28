@@ -193,17 +193,33 @@ async fn thread_revert_replaces_paginated_history_before_turn() -> Result<()> {
         })
         .await?;
     let requests = server.received_requests().await.expect("response requests");
-    let model_input = requests
+    let request = requests
         .iter()
         .rev()
         .find(|request| request.url.path().ends_with("/responses"))
-        .expect("third turn response request")
-        .body_json::<serde_json::Value>()?["input"]
-        .clone();
-    let model_input = serde_json::to_string(&model_input)?;
-    assert!(model_input.contains("first"));
-    assert!(!model_input.contains("second"));
-    assert!(model_input.contains("third"));
+        .expect("third turn response request");
+    let request_body = request.body_json::<serde_json::Value>()?;
+    let user_messages = request_body["input"]
+        .as_array()
+        .expect("model input")
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(serde_json::Value::as_str) == Some("message")
+                && item.get("role").and_then(serde_json::Value::as_str) == Some("user")
+        })
+        .flat_map(|item| {
+            item.get("content")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter(|span| span.get("type").and_then(serde_json::Value::as_str) == Some("input_text"))
+        .filter_map(|span| span.get("text").and_then(serde_json::Value::as_str))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    assert!(user_messages.iter().any(|message| message == "first"));
+    assert!(!user_messages.iter().any(|message| message == "second"));
+    assert!(user_messages.iter().any(|message| message == "third"));
     assert_eq!(
         turn_ids_from_cursor(
             &mut mcp,

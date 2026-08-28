@@ -1,4 +1,5 @@
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_protocol::models::ContentItemKind;
 
 use super::ContextualUserFragment;
 
@@ -36,6 +37,10 @@ impl AvailableMcpInstructions {
 }
 
 impl ContextualUserFragment for AvailableMcpInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("mcp.catalog".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

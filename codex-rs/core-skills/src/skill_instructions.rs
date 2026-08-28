@@ -1,4 +1,5 @@
 use codex_context_fragments::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 use crate::injection::SkillInjection;
 
@@ -20,6 +21,10 @@ impl From<&SkillInjection> for SkillInstructions {
 }
 
 impl ContextualUserFragment for SkillInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("skills.selected_skill_instructions".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "user"
     }

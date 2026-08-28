@@ -37,7 +37,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 pub(crate) mod apply_patch;
-pub(crate) mod shell;
 pub(crate) mod unified_exec;
 
 /// Resolve a plain Playwright CLI script to a direct executable command.
@@ -224,12 +223,15 @@ pub(crate) fn build_sandbox_command(
         additional_permissions,
     })
 }
+pub(crate) mod zsh_fork;
 
 pub(crate) fn exec_env_for_sandbox_permissions(
     env: &HashMap<String, String>,
     sandbox_permissions: SandboxPermissions,
 ) -> HashMap<String, String> {
     let mut env = env.clone();
+    // Escalated commands intentionally use the original, unbrokered environment. This branch is
+    // defensive cleanup for a caller that passes an environment already prepared by Codex.
     if sandbox_permissions.requires_escalated_permissions()
         && env.contains_key(PROXY_ACTIVE_ENV_KEY)
     {
@@ -319,17 +321,6 @@ pub(crate) fn apply_package_path_prepend(
     };
 
     runtime_path_prepends.prepend(env, path_dir.as_path());
-}
-
-#[cfg(unix)]
-pub(crate) fn prepend_zsh_fork_bin_to_path(
-    env: &mut HashMap<String, String>,
-    shell_zsh_path: &Path,
-) -> Option<String> {
-    let zsh_bin_dir = shell_zsh_path
-        .parent()
-        .map(|path| path.to_string_lossy().to_string())?;
-    prepend_path_entry(env, &zsh_bin_dir)
 }
 
 #[cfg(unix)]
@@ -458,7 +449,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
             PLUGIN_METRICS_OUTPUT_ENV_VAR,
         ],
     );
-    let (proxy_captures, proxy_exports) = build_proxy_env_exports();
+    let (proxy_captures, proxy_exports) = build_proxy_env_exports(env);
     let runtime_path_prepend_exports =
         runtime_path_prepends.shell_exports_after_snapshot(explicit_env_overrides);
     let override_captures = join_shell_blocks([override_captures, proxy_captures]);
@@ -497,10 +488,11 @@ fn build_override_exports(
     build_override_exports_for_keys("__CODEX_SNAPSHOT_OVERRIDE", &keys)
 }
 
-fn build_proxy_env_exports() -> (String, String) {
+fn build_proxy_env_exports(env: &HashMap<String, String>) -> (String, String) {
     let mut keys = PROXY_ENV_KEYS
         .iter()
         .copied()
+        .chain(codex_network_proxy::brokered_credential_env_keys(env))
         .chain(CUSTOM_CA_ENV_KEYS)
         .filter(|key| is_valid_shell_variable_name(key))
         .collect::<Vec<_>>();

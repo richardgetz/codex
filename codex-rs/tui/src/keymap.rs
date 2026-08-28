@@ -103,12 +103,18 @@ pub(crate) struct AppKeymap {
 /// handler code, not here.
 #[derive(Clone, Debug)]
 pub(crate) struct ChatKeymap {
+    /// Toggle microphone capture in an active GPT-Live voice session.
+    pub(crate) toggle_voice_mute: Vec<KeyBinding>,
     /// Interrupt the active turn.
     pub(crate) interrupt_turn: Vec<KeyBinding>,
     /// Decrease the active reasoning effort.
     pub(crate) decrease_reasoning_effort: Vec<KeyBinding>,
     /// Increase the active reasoning effort.
     pub(crate) increase_reasoning_effort: Vec<KeyBinding>,
+    /// Switch to the previous available permission mode.
+    pub(crate) previous_permission_mode: Vec<KeyBinding>,
+    /// Switch to the next available permission mode.
+    pub(crate) next_permission_mode: Vec<KeyBinding>,
     /// Edit the most recently queued message.
     pub(crate) edit_queued_message: Vec<KeyBinding>,
 }
@@ -184,6 +190,7 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) move_line_end: Vec<KeyBinding>,
     pub(crate) delete_char: Vec<KeyBinding>,
     pub(crate) replace_char: Vec<KeyBinding>,
+    pub(crate) repeat_last_change: Vec<KeyBinding>,
     pub(crate) substitute_char: Vec<KeyBinding>,
     pub(crate) delete_to_line_end: Vec<KeyBinding>,
     pub(crate) change_to_line_end: Vec<KeyBinding>,
@@ -633,6 +640,11 @@ impl RuntimeKeymap {
         };
 
         let mut chat = ChatKeymap {
+            toggle_voice_mute: resolve_bindings(
+                keymap.chat.toggle_voice_mute.as_ref(),
+                &defaults.chat.toggle_voice_mute,
+                "tui.keymap.chat.toggle_voice_mute",
+            )?,
             interrupt_turn: resolve_bindings(
                 keymap.chat.interrupt_turn.as_ref(),
                 &defaults.chat.interrupt_turn,
@@ -648,6 +660,13 @@ impl RuntimeKeymap {
                 &defaults.chat.increase_reasoning_effort,
                 "tui.keymap.chat.increase_reasoning_effort",
             )?,
+            previous_permission_mode: resolve_local!(
+                keymap,
+                defaults,
+                chat,
+                previous_permission_mode
+            ),
+            next_permission_mode: resolve_local!(keymap, defaults, chat, next_permission_mode),
             edit_queued_message: resolve_bindings(
                 keymap.chat.edit_queued_message.as_ref(),
                 &defaults.chat.edit_queued_message,
@@ -706,6 +725,7 @@ impl RuntimeKeymap {
             move_line_end: resolve_local!(keymap, defaults, vim_normal, move_line_end),
             delete_char: resolve_local!(keymap, defaults, vim_normal, delete_char),
             replace_char: resolve_local!(keymap, defaults, vim_normal, replace_char),
+            repeat_last_change: resolve_local!(keymap, defaults, vim_normal, repeat_last_change),
             substitute_char: resolve_local!(keymap, defaults, vim_normal, substitute_char),
             delete_to_line_end: resolve_local!(keymap, defaults, vim_normal, delete_to_line_end),
             change_to_line_end: resolve_local!(keymap, defaults, vim_normal, change_to_line_end),
@@ -801,6 +821,10 @@ impl RuntimeKeymap {
                 vim_normal.substitute_char.as_slice(),
             ),
             (
+                keymap.vim_normal.repeat_last_change.as_ref(),
+                vim_normal.repeat_last_change.as_slice(),
+            ),
+            (
                 keymap.vim_normal.change_to_line_end.as_ref(),
                 vim_normal.change_to_line_end.as_slice(),
             ),
@@ -846,6 +870,15 @@ impl RuntimeKeymap {
         }
         if keymap.vim_normal.replace_char.is_none() {
             vim_normal.replace_char.retain(|binding| {
+                !configured_vim_normal_bindings_to_preserve.contains(binding)
+                    && !chords.bindings.iter().any(|chord| {
+                        chord.action.context == KeymapContext::VimNormal
+                            && chord.chord.prefix.parts() == binding.parts()
+                    })
+            });
+        }
+        if keymap.vim_normal.repeat_last_change.is_none() {
+            vim_normal.repeat_last_change.retain(|binding| {
                 !configured_vim_normal_bindings_to_preserve.contains(binding)
                     && !chords.bindings.iter().any(|chord| {
                         chord.action.context == KeymapContext::VimNormal
@@ -1202,6 +1235,7 @@ impl RuntimeKeymap {
             },
             chords: Arc::default(),
             chat: ChatKeymap {
+                toggle_voice_mute: default_bindings![],
                 interrupt_turn: default_bindings![plain(KeyCode::Esc)],
                 decrease_reasoning_effort: default_bindings![
                     alt(KeyCode::Char(',')),
@@ -1211,6 +1245,8 @@ impl RuntimeKeymap {
                     alt(KeyCode::Char('.')),
                     shift(KeyCode::Up)
                 ],
+                previous_permission_mode: default_bindings![],
+                next_permission_mode: default_bindings![],
                 edit_queued_message: default_bindings![alt(KeyCode::Up), shift(KeyCode::Left)],
             },
             composer: ComposerKeymap {
@@ -1314,6 +1350,7 @@ impl RuntimeKeymap {
                 ],
                 delete_char: default_bindings![plain(KeyCode::Char('x'))],
                 replace_char: default_bindings![plain(KeyCode::Char('r'))],
+                repeat_last_change: default_bindings![plain(KeyCode::Char('.'))],
                 substitute_char: default_bindings![plain(KeyCode::Char('s'))],
                 delete_to_line_end: default_bindings![
                     shift(KeyCode::Char('d')),
@@ -1458,6 +1495,23 @@ impl RuntimeKeymap {
     /// 2. Contexts with hard-coded sequence behavior, such as edit-previous
     ///    backtracking, intentionally stay outside this configurable keymap.
     fn validate_conflicts(&self) -> Result<(), String> {
+        for (action, bindings) in [
+            (
+                "previous_permission_mode",
+                &self.chat.previous_permission_mode,
+            ),
+            ("next_permission_mode", &self.chat.next_permission_mode),
+        ] {
+            if bindings.iter().any(|binding| {
+                let (code, modifiers) = binding.parts();
+                crate::key_hint::is_plain_text_key_event(KeyEvent::new(code, modifiers))
+                    || matches!(code, KeyCode::Char(_)) && crate::key_hint::is_altgr(modifiers)
+            }) {
+                return Err(format!(
+                    "tui.keymap.chat.{action}: printable keys are reserved for text input"
+                ));
+            }
+        }
         #[cfg(unix)]
         if self
             .app
@@ -1501,6 +1555,10 @@ impl RuntimeKeymap {
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
                 ("toggle_side_conversation", side_toggle_bindings.as_slice()),
+                (
+                    "chat.toggle_voice_mute",
+                    self.chat.toggle_voice_mute.as_slice(),
+                ),
                 ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",
@@ -1509,6 +1567,14 @@ impl RuntimeKeymap {
                 (
                     "chat.increase_reasoning_effort",
                     self.chat.increase_reasoning_effort.as_slice(),
+                ),
+                (
+                    "chat.previous_permission_mode",
+                    self.chat.previous_permission_mode.as_slice(),
+                ),
+                (
+                    "chat.next_permission_mode",
+                    self.chat.next_permission_mode.as_slice(),
                 ),
                 (
                     "chat.edit_queued_message",
@@ -1546,6 +1612,10 @@ impl RuntimeKeymap {
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
                 ("toggle_side_conversation", side_toggle_bindings.as_slice()),
+                (
+                    "chat.toggle_voice_mute",
+                    self.chat.toggle_voice_mute.as_slice(),
+                ),
                 ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",
@@ -1554,6 +1624,14 @@ impl RuntimeKeymap {
                 (
                     "chat.increase_reasoning_effort",
                     self.chat.increase_reasoning_effort.as_slice(),
+                ),
+                (
+                    "chat.previous_permission_mode",
+                    self.chat.previous_permission_mode.as_slice(),
+                ),
+                (
+                    "chat.next_permission_mode",
+                    self.chat.next_permission_mode.as_slice(),
                 ),
                 (
                     "chat.edit_queued_message",
@@ -1659,6 +1737,10 @@ impl RuntimeKeymap {
                 ),
                 ("copy", self.app.copy.as_slice()),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
+                (
+                    "chat.toggle_voice_mute",
+                    self.chat.toggle_voice_mute.as_slice(),
+                ),
                 ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",
@@ -1667,6 +1749,14 @@ impl RuntimeKeymap {
                 (
                     "chat.increase_reasoning_effort",
                     self.chat.increase_reasoning_effort.as_slice(),
+                ),
+                (
+                    "chat.previous_permission_mode",
+                    self.chat.previous_permission_mode.as_slice(),
+                ),
+                (
+                    "chat.next_permission_mode",
+                    self.chat.next_permission_mode.as_slice(),
                 ),
                 ("composer.submit", self.composer.submit.as_slice()),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
@@ -1807,6 +1897,10 @@ impl RuntimeKeymap {
                 ("move_line_end", self.vim_normal.move_line_end.as_slice()),
                 ("delete_char", self.vim_normal.delete_char.as_slice()),
                 ("replace_char", self.vim_normal.replace_char.as_slice()),
+                (
+                    "repeat_last_change",
+                    self.vim_normal.repeat_last_change.as_slice(),
+                ),
                 (
                     "substitute_char",
                     self.vim_normal.substitute_char.as_slice(),
@@ -2046,6 +2140,25 @@ See the Codex keymap documentation for supported actions and examples."
             }
         }
 
+        Ok(())
+    }
+
+    pub(crate) fn validate_realtime_hotkey(
+        &self,
+        realtime_hotkey: Option<&str>,
+    ) -> Result<(), String> {
+        let expected = realtime_hotkey
+            .unwrap_or(crate::realtime_voice::DEFAULT_REALTIME_HOTKEY)
+            .trim();
+        if self.chat.toggle_voice_mute.iter().any(|binding| {
+            let (code, modifiers) = binding.parts();
+            crate::realtime_voice::realtime_hotkey_spec_from_event(KeyEvent::new(code, modifiers))
+                .is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
+        }) {
+            return Err(format!(
+                "tui.keymap.chat.toggle_voice_mute conflicts with realtime.hotkey `{expected}`"
+            ));
+        }
         Ok(())
     }
 }
@@ -2562,6 +2675,32 @@ mod tests {
     }
 
     #[test]
+    fn permission_shortcuts_reserve_plain_text() {
+        for binding in ["a", "shift-a", "2", "space"] {
+            let mut keymap = TuiKeymap::default();
+            keymap.chat.previous_permission_mode = Some(one(binding));
+            assert!(
+                RuntimeKeymap::from_config(&keymap)
+                    .expect_err("permission shortcuts must not intercept typing")
+                    .contains("printable keys")
+            );
+            keymap.chat.previous_permission_mode = None;
+            keymap.chat.next_permission_mode = Some(one(binding));
+            assert!(RuntimeKeymap::from_config(&keymap).is_err());
+        }
+        #[cfg(windows)]
+        {
+            let mut keymap = TuiKeymap::default();
+            keymap.chat.next_permission_mode = Some(one("ctrl-alt-q"));
+            assert!(RuntimeKeymap::from_config(&keymap).is_err());
+        }
+        let mut keymap = TuiKeymap::default();
+        keymap.chat.previous_permission_mode = Some(one("f7"));
+        keymap.chat.next_permission_mode = Some(one("ctrl-x enter"));
+        assert!(RuntimeKeymap::from_config(&keymap).is_ok());
+    }
+
+    #[test]
     fn defaults_include_reassignable_main_surface_actions() {
         let runtime = RuntimeKeymap::defaults();
 
@@ -2876,6 +3015,30 @@ mod tests {
         keymap.vim_normal.replace_char = Some(one("r"));
 
         expect_conflict(&keymap, "move_left", "replace_char");
+    }
+
+    #[test]
+    fn configured_legacy_vim_normal_bindings_prune_new_repeat_default() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("."));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(runtime.vim_normal.repeat_last_change, Vec::new());
+    }
+
+    #[test]
+    fn configured_vim_normal_chord_prefix_prunes_new_repeat_default() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_line_start = Some(one(". g"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert!(runtime.vim_normal.repeat_last_change.is_empty());
+        assert!(runtime.chords.bindings.iter().any(|binding| {
+            binding.action.context == KeymapContext::VimNormal
+                && binding.chord.prefix == key_hint::plain(KeyCode::Char('.'))
+        }));
     }
 
     #[test]
@@ -3326,6 +3489,32 @@ mod tests {
         keymap.chat.interrupt_turn = Some(KeybindingsSpec::Many(vec![]));
         let runtime = RuntimeKeymap::from_config(&keymap).expect("unbound keymap should parse");
         assert!(runtime.chat.interrupt_turn.is_empty());
+    }
+
+    #[test]
+    fn toggle_voice_mute_can_be_configured_and_rejects_fixed_shortcuts() {
+        let mut keymap = TuiKeymap::default();
+        keymap.chat.toggle_voice_mute = Some(one("f12"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("remapped keymap should parse");
+        assert_eq!(
+            runtime.chat.toggle_voice_mute,
+            vec![key_hint::plain(KeyCode::F(12))]
+        );
+
+        keymap.chat.toggle_voice_mute = Some(one("ctrl-v"));
+        expect_conflict(&keymap, "chat.toggle_voice_mute", "fixed.paste_image");
+    }
+
+    #[test]
+    fn toggle_voice_mute_rejects_realtime_hotkey_collision() {
+        let mut keymap = TuiKeymap::default();
+        keymap.chat.toggle_voice_mute = Some(one("f12"));
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("remapped keymap should parse");
+
+        assert!(runtime.validate_realtime_hotkey(Some("f12")).is_err());
+        assert!(runtime.validate_realtime_hotkey(Some("f11")).is_ok());
+        assert!(runtime.validate_realtime_hotkey(None).is_ok());
     }
 
     #[test]

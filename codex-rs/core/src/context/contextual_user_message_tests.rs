@@ -5,6 +5,7 @@ use crate::context::InternalModelContextFragment;
 use crate::context::SubagentNotification;
 use codex_protocol::items::HookPromptFragment;
 use codex_protocol::items::build_hook_prompt_message;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
 
@@ -84,12 +85,16 @@ fn subagent_notification_marks_parent_handling_required() {
 
 #[test]
 fn detects_internal_model_context_fragment() {
-    let text = InternalModelContextFragment::new(
+    let fragment = InternalModelContextFragment::new(
         InternalContextSource::from_static("extension"),
         "Internal steering.",
-    )
-    .render();
+    );
+    let text = fragment.render();
 
+    assert_eq!(
+        fragment.content_kind(),
+        ContentItemKind("extension.internal_context".to_string())
+    );
     assert_eq!(
         text,
         "<codex_internal_context source=\"extension\">\nInternal steering.\n</codex_internal_context>"

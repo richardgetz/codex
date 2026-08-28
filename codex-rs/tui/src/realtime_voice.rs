@@ -106,6 +106,7 @@ impl RealtimeMicMode {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RealtimeMicCommand {
+    ToggleMute,
     Toggle,
     On,
     Off,
@@ -532,6 +533,10 @@ impl RealtimeVoiceSession {
 
     pub(crate) fn set_input_muted(&self, muted: bool) {
         self.input_muted.store(muted, Ordering::Relaxed);
+    }
+
+    pub(crate) fn toggle_input_muted(&self) -> bool {
+        !self.input_muted.fetch_xor(true, Ordering::Relaxed)
     }
 
     pub(crate) fn is_connected(&self) -> bool {

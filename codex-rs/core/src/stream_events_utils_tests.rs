@@ -77,7 +77,14 @@ fn external_context_pollution_items_include_web_search_and_tool_search() {
             arguments: "{}".to_string(),
             call_id: "web-run-1".to_string(),
             encrypted_function_args: None,
-
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: None,
+            name: Some("notifications".to_string()),
+            namespace: Some("slack".to_string()),
+            output: FunctionCallOutputPayload::from_text("new message".to_string()),
             internal_chat_message_metadata_passthrough: None,
         },
     ];
@@ -116,7 +123,9 @@ fn external_context_pollution_items_exclude_local_tool_calls() {
         },
         ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "call-1".to_string(),
+            call_id: Some("call-1".to_string()),
+            name: None,
+            namespace: None,
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
             internal_chat_message_metadata_passthrough: None,
         },

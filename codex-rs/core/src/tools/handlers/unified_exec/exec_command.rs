@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ExecCommandToolOutput;
@@ -115,6 +116,7 @@ impl ExecCommandHandler {
             session,
             turn,
             step_context,
+            cancellation_token,
             tracker,
             call_id,
             payload,
@@ -131,8 +133,12 @@ impl ExecCommandHandler {
         };
 
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
-        let context =
-            UnifiedExecContext::new(session.clone(), step_context.clone(), call_id.clone());
+        let context = UnifiedExecContext::new(
+            session.clone(),
+            step_context.clone(),
+            cancellation_token,
+            call_id.clone(),
+        );
         let environment_args: ExecCommandEnvironmentArgs = parse_arguments(&arguments)?;
         let Some(turn_environment) = resolve_tool_environment(
             &step_context.environments,
@@ -158,6 +164,8 @@ impl ExecCommandHandler {
 
         // Remote executors enforce URI-native sandbox policy themselves. Only a host-local
         // sandbox needs a native cwd for resolving paths nested in the permissions config.
+        // TODO(anp): Reconcile this backend choice with TurnEnvironment::sandbox_context
+        // so the native-cwd requirement follows the selected environment's sandbox.
         let requires_host_native_cwd = !environment.is_remote()
             && SandboxManager::new().select_initial(
                 turn_environment.permission_profile(),
@@ -308,10 +316,11 @@ impl ExecCommandHandler {
             .sandbox_permissions
             .requests_sandbox_override()
             && !effective_additional_permissions.permissions_preapproved
-            && !matches!(
+            && prompt_is_rejected_by_policy(
                 context.step_context.turn.approval_policy(),
-                codex_protocol::protocol::AskForApproval::OnRequest
+                /*prompt_is_rule*/ false,
             )
+            .is_some()
         {
             let approval_policy = context.step_context.turn.approval_policy();
             manager.release_process_id(process_id).await;
@@ -352,6 +361,7 @@ impl ExecCommandHandler {
             turn_environment.clone(),
             context.session.clone(),
             Arc::clone(&context.step_context),
+            context.cancellation_token.clone(),
             Some(&tracker),
             &context.call_id,
             "exec_command",
