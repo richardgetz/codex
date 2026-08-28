@@ -63,6 +63,7 @@ pub(crate) struct TurnEnvironment {
     pub(crate) environment: Arc<Environment>,
     pub(crate) shell: Option<shell::Shell>,
     pub(crate) shell_snapshot: ShellSnapshotTask,
+    pub(crate) shell_snapshot_v2_supported: bool,
 }
 
 impl TurnEnvironment {
@@ -79,6 +80,7 @@ impl TurnEnvironment {
             environment,
             shell,
             shell_snapshot: futures::future::ready(None).boxed().shared(),
+            shell_snapshot_v2_supported: false,
         }
     }
 
@@ -121,6 +123,32 @@ impl TurnEnvironment {
 
     pub(crate) fn permission_profile(&self) -> &PermissionProfile {
         self.config().permission_profile.permission_profile()
+    }
+
+    /// Sandbox context for this environment, including any additional permission grants.
+    pub(crate) fn sandbox_context(
+        &self,
+        additional_permissions: Option<AdditionalPermissionProfile>,
+    ) -> FileSystemSandboxContext {
+        let config = self.config();
+        // Grant-adjusted permissions take precedence over the environment's baseline;
+        // paths and sandbox backend settings remain environment-owned.
+        let permissions = effective_permission_profile(
+            self.permission_profile(),
+            additional_permissions.as_ref(),
+        );
+        FileSystemSandboxContext {
+            permissions: permissions.into(),
+            cwd: Some(self.cwd().clone()),
+            workspace_roots: self.workspace_roots().to_vec(),
+            windows_sandbox_level: executor_windows_sandbox_level(
+                config.windows_sandbox_level,
+                self.cwd(),
+            ),
+            windows_sandbox_private_desktop: config.windows_sandbox_private_desktop,
+            windows_sandbox_proxy_settings_mode: None,
+            use_legacy_landlock: config.use_legacy_landlock,
+        }
     }
 
     pub(crate) fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
@@ -200,6 +228,8 @@ pub struct TurnContext {
     pub(crate) approval_policy: Constrained<AskForApproval>,
     pub(crate) permission_profile: PermissionProfile,
     pub(crate) network: Option<NetworkProxy>,
+    // TODO(anp): Reconcile this parallel turn snapshot with TurnEnvironment::sandbox_context
+    // so owner-provided environment settings govern the remaining sandbox decisions.
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
@@ -535,32 +565,6 @@ impl TurnContext {
         }
     }
 
-    pub(crate) fn file_system_sandbox_context(
-        &self,
-        additional_permissions: Option<AdditionalPermissionProfile>,
-        environment: &TurnEnvironment,
-    ) -> FileSystemSandboxContext {
-        let permissions = effective_permission_profile(
-            environment.permission_profile(),
-            additional_permissions.as_ref(),
-        );
-        FileSystemSandboxContext {
-            permissions: permissions.into(),
-            cwd: Some(environment.cwd().clone()),
-            workspace_roots: environment.workspace_roots().to_vec(),
-            windows_sandbox_level: executor_windows_sandbox_level(
-                self.windows_sandbox_level,
-                environment.cwd(),
-            ),
-            windows_sandbox_private_desktop: self
-                .config
-                .permissions
-                .windows_sandbox_private_desktop,
-            windows_sandbox_proxy_settings_mode: None,
-            use_legacy_landlock: self.config.features.use_legacy_landlock(),
-        }
-    }
-
     fn non_legacy_file_system_sandbox_policy(&self) -> Option<RawFileSystemSandboxPolicy> {
         // Omit the derived split filesystem policy when it is equivalent to
         // the legacy sandbox policy. This keeps turn-context payloads stable
@@ -738,6 +742,7 @@ impl Session {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[instrument(name = "turn_context.make", level = "trace", skip_all)]
     pub(crate) fn make_turn_context(
         thread_id: ThreadId,
         session_id: SessionId,
@@ -778,7 +783,7 @@ impl Session {
         let goal_tools_supported =
             !per_turn_config.ephemeral && per_turn_config.features.enabled(Feature::Goals);
         let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
-            codex_tools::unified_exec_feature_mode_for_features(per_turn_config.features.get()),
+            per_turn_config.features.get(),
             crate::tools::tool_user_shell_type(user_shell),
             shell_zsh_path,
             main_execve_wrapper_exe,

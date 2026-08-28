@@ -269,12 +269,7 @@ impl ToolCallRuntime {
     }
 
     fn abort_message(call: &ToolCall, secs: f32) -> String {
-        if call.tool_name.is_default_namespace()
-            && matches!(
-                call.tool_name.name.as_str(),
-                "shell_command" | "unified_exec"
-            )
-        {
+        if call.tool_name.is_default_namespace() && call.tool_name.name == "exec_command" {
             format!("Wall time: {secs:.1} seconds\naborted by user")
         } else {
             format!("aborted by user after {secs:.1}s")
@@ -769,7 +764,6 @@ mod tests {
 
         Ok(())
     }
-
     #[tokio::test]
     async fn cancellation_waiting_for_runtime_cleanup_emits_only_aborted_lifecycle()
     -> anyhow::Result<()> {

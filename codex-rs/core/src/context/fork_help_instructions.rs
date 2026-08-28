@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 const FORK_DELTA_INVENTORY: &str = include_str!("../../templates/fork/delta_inventory.md");
 const FORK_HELP_OPEN_TAG: &str = "<fork_help>";
@@ -14,6 +15,10 @@ impl ForkHelpInstructions {
 }
 
 impl ContextualUserFragment for ForkHelpInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("fork.help".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

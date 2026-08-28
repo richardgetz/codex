@@ -318,7 +318,7 @@ async fn thread_fork_preserves_persisted_permission_profile_and_honors_overrides
                 .send_thread_start_request_with_auto_env(ThreadStartParams {
                     history_mode: Some(history_mode),
                     approval_policy: Some(AskForApproval::OnRequest),
-                    permissions: Some("dev".to_string()),
+                    permissions: Some("dev".to_string().into()),
                     ..Default::default()
                 })
                 .await?;
@@ -387,7 +387,7 @@ async fn thread_fork_preserves_persisted_permission_profile_and_honors_overrides
         let fork_id = mcp
             .send_thread_fork_request(ThreadForkParams {
                 thread_id: source_thread_id,
-                permissions: Some(":workspace".to_string()),
+                permissions: Some(":workspace".to_string().into()),
                 ..Default::default()
             })
             .await?;
@@ -422,7 +422,7 @@ async fn assert_thread_fork_preserves_persisted_approvals_reviewer(
         let start_id = mcp
             .send_thread_start_request_with_auto_env(ThreadStartParams {
                 history_mode: Some(history_mode),
-                permissions: Some(":workspace".to_string()),
+                permissions: Some(":workspace".to_string().into()),
                 ..Default::default()
             })
             .await?;

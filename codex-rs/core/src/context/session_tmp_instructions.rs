@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 const SESSION_TMP_INSTRUCTIONS_OPEN_TAG: &str = "<session_tmp_instructions>";
 const SESSION_TMP_INSTRUCTIONS_CLOSE_TAG: &str = "</session_tmp_instructions>";
@@ -7,6 +8,10 @@ const SESSION_TMP_INSTRUCTIONS_CLOSE_TAG: &str = "</session_tmp_instructions>";
 pub(crate) struct SessionTmpInstructions;
 
 impl ContextualUserFragment for SessionTmpInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("session_tmp.instructions".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

@@ -167,7 +167,9 @@ impl ChatWidget {
             if matches!(tool, CollabAgentTool::Wait) {
                 match status {
                     CollabAgentToolCallStatus::InProgress => self.begin_collab_waiting(id),
-                    CollabAgentToolCallStatus::Completed | CollabAgentToolCallStatus::Failed => {
+                    CollabAgentToolCallStatus::Completed
+                    | CollabAgentToolCallStatus::Failed
+                    | CollabAgentToolCallStatus::Interrupted => {
                         self.end_collab_waiting(id);
                     }
                 }
@@ -228,6 +230,7 @@ impl ChatWidget {
             id,
             server,
             tool,
+            status,
             arguments,
             result,
             error,
@@ -250,7 +253,7 @@ impl ChatWidget {
                 Ok(codex_protocol::mcp::CallToolResult {
                     content: result.content,
                     structured_content: result.structured_content,
-                    is_error: Some(false),
+                    is_error: Some(status == codex_app_server_protocol::McpToolCallStatus::Failed),
                     meta: None,
                 })
             }

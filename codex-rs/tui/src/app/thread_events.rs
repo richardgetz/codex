@@ -151,11 +151,17 @@ impl ThreadEventStore {
                 | ServerNotification::FileChangePatchUpdated(_)
                 | ServerNotification::ServerRequestResolved(_)
                 | ServerNotification::McpToolCallProgress(_)
+                | ServerNotification::ThreadRealtimeStarted(_)
                 | ServerNotification::ThreadRealtimeItemAdded(_)
+                | ServerNotification::ThreadRealtimeItemStarted(_)
+                | ServerNotification::ThreadRealtimeItemTranscriptDelta(_)
+                | ServerNotification::ThreadRealtimeItemCompleted(_)
                 | ServerNotification::ThreadRealtimeOutputAudioDelta(_)
                 | ServerNotification::ThreadRealtimeSdp(_)
                 | ServerNotification::ThreadRealtimeTranscriptDelta(_)
                 | ServerNotification::ThreadRealtimeTranscriptDone(_)
+                | ServerNotification::ThreadRealtimeError(_)
+                | ServerNotification::ThreadRealtimeClosed(_)
                 | ServerNotification::CommandExecOutputDelta(_)
                 | ServerNotification::ProcessOutputDelta(_)
                 | ServerNotification::ProcessExited(_)
@@ -377,6 +383,11 @@ mod tests {
     use codex_app_server_protocol::McpToolCallProgressNotification;
     use codex_app_server_protocol::RequestId as AppServerRequestId;
     use codex_app_server_protocol::ThreadRealtimeAudioChunk;
+    use codex_app_server_protocol::ThreadRealtimeItem;
+    use codex_app_server_protocol::ThreadRealtimeItemCompletedNotification;
+    use codex_app_server_protocol::ThreadRealtimeItemContent;
+    use codex_app_server_protocol::ThreadRealtimeItemStartedNotification;
+    use codex_app_server_protocol::ThreadRealtimeItemTranscriptDeltaNotification;
     use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
     use codex_app_server_protocol::TurnCompletedNotification;
     use codex_app_server_protocol::TurnStartedNotification;
@@ -512,6 +523,7 @@ mod tests {
         ServerRequest::CommandExecutionRequestApproval {
             request_id: AppServerRequestId::Integer(1),
             params: CommandExecutionRequestApprovalParams {
+                kind: Default::default(),
                 thread_id: thread_id.to_string(),
                 turn_id: turn_id.to_string(),
                 item_id: item_id.to_string(),
@@ -617,6 +629,30 @@ mod tests {
                         samples_per_channel: None,
                         item_id: None,
                     },
+                },
+            ));
+            let realtime_item = ThreadRealtimeItem {
+                id: "realtime-item-1".to_string(),
+                realtime_session_id: "realtime-session-1".to_string(),
+                content: ThreadRealtimeItemContent::RealtimeSessionStarted,
+            };
+            store.push_notification_ref(&ServerNotification::ThreadRealtimeItemStarted(
+                ThreadRealtimeItemStartedNotification {
+                    thread_id: thread_id.to_string(),
+                    item: realtime_item.clone(),
+                },
+            ));
+            store.push_notification_ref(&ServerNotification::ThreadRealtimeItemTranscriptDelta(
+                ThreadRealtimeItemTranscriptDeltaNotification {
+                    thread_id: thread_id.to_string(),
+                    item_id: realtime_item.id.clone(),
+                    delta: large_payload.clone(),
+                },
+            ));
+            store.push_notification_ref(&ServerNotification::ThreadRealtimeItemCompleted(
+                ThreadRealtimeItemCompletedNotification {
+                    thread_id: thread_id.to_string(),
+                    item: realtime_item,
                 },
             ));
         }

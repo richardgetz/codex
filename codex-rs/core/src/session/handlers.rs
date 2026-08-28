@@ -24,6 +24,8 @@ use crate::tools::handlers::builtin_scratchpad::set_thread_continuous_policy;
 use crate::user_message_admission::UserMessageAdmission;
 
 use crate::config::Config;
+use crate::context::ContextualUserFragment;
+use crate::context::GuardianApprovedAction;
 use crate::context::NodeReplReviewEvidence;
 use crate::review_prompts::resolve_review_request;
 use crate::session::spawn_review_thread;
@@ -35,9 +37,6 @@ use codex_history::ResponseItemEnvelope;
 use codex_history::RolloutItem;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
@@ -322,7 +321,6 @@ async fn user_input_or_turn_inner_with_reasoning_effort(
             };
             let mut task_input = additional_context_input
                 .into_iter()
-                .map(ResponseItem::from)
                 .map(ResponseItemEnvelope::new)
                 .map(TurnInput::ResponseItem)
                 .collect::<Vec<_>>();
@@ -1224,7 +1222,7 @@ async fn clear_memory_root_contents(memory_root: &std::path::Path) -> std::io::R
     Ok(())
 }
 
-async fn shutdown_session_runtime(sess: &Arc<Session>) {
+pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Some(startup_prewarm) = sess.take_session_startup_prewarm().await {
         startup_prewarm.abort().await;
     }
@@ -1251,7 +1249,7 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     crate::hook_runtime::run_session_end_hooks(sess).await;
 }
 
-async fn emit_thread_stop_lifecycle(sess: &Session) {
+pub(super) async fn emit_thread_stop_lifecycle(sess: &Session) {
     for contributor in sess.services.extensions.thread_lifecycle_contributors() {
         contributor
             .on_thread_stop(codex_extension_api::ThreadStopInput {
@@ -1430,6 +1428,19 @@ pub(super) async fn submission_loop(
                     let _ = reply.send(result);
                     false
                 }
+                Op::SuspendTurnAndShutdown { reply } => {
+                    let result =
+                        super::turn_suspension::suspend_turn_and_shutdown(&sess, sub.id.clone())
+                            .await;
+                    // Exit only after history is durable and its writer has closed; an error
+                    // must leave responsibility for the thread with the current worker.
+                    let should_exit = matches!(
+                        &result,
+                        Ok(codex_protocol::turn_input::SuspendTurnOutcome::Suspended { .. })
+                    );
+                    let _ = reply.send(result);
+                    should_exit
+                }
                 Op::InterAgentCommunication { communication } => {
                     inter_agent_communication(
                         &sess,
@@ -1593,21 +1604,9 @@ async fn approve_guardian_denied_action(sess: &Arc<Session>, event: GuardianAsse
             return;
         }
     };
-    let approval_prefix = crate::guardian::AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX;
-    let text = format!(
-        r#"{approval_prefix}
-
-Treat this as approval to perform that exact action in the same context in which it was originally requested.
-Do not assume this also authorizes similar operations with different payloads.
-
-Approved action:
-{approved_action_json}"#,
-    );
-    let items = vec![ResponseItem::from(ResponseInputItem::Message {
-        role: "developer".to_string(),
-        content: vec![ContentItem::InputText { text }],
-        phase: None,
-    })];
+    let items = vec![ContextualUserFragment::into(GuardianApprovedAction::new(
+        approved_action_json,
+    ))];
 
     sess.inject_no_new_turn(items, /*current_turn_context*/ None)
         .await;

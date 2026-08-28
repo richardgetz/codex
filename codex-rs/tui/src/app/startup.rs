@@ -29,12 +29,14 @@ fn spawn_startup_thread_start(
     let request_handle = app_server.request_handle();
     let thread_params_mode = app_server.thread_params_mode();
     let remote_cwd_override = app_server.remote_cwd_override().map(Path::to_path_buf);
+    let thread_tool_transport = app_server.thread_tool_transport();
     tokio::spawn(async move {
         let result = crate::app_server_session::start_thread_with_request_handle(
             request_handle,
             config,
             thread_params_mode,
             remote_cwd_override,
+            thread_tool_transport,
         )
         .await
         .map_err(|err| format!("{err:#}"));
@@ -50,6 +52,16 @@ impl App {
                 .active_thread_rx
                 .as_ref()
                 .is_some_and(|receiver| !receiver.is_empty())
+                && self
+                    .active_thread_id
+                    .and_then(|thread_id| self.thread_event_channels.get(&thread_id))
+                    .is_none_or(|channel| {
+                        // A bounded drain can leave ordinary notifications queued. Only protect
+                        // input for pending requests, or when their state cannot be inspected.
+                        channel.store.try_lock().map_or(/*default*/ true, |store| {
+                            store.side_parent_pending_status().is_some()
+                        })
+                    })
                 || self
                     .pending_primary_events
                     .iter()
@@ -167,6 +179,22 @@ impl App {
         }
         if let Some(updated_model) = config.model.clone() {
             model = updated_model;
+        }
+        let dynamic_tool_status_updates = tokio::sync::broadcast::channel(/*capacity*/ 64).0;
+        if matches!(&app_server_target, AppServerTarget::LocalDaemon { .. })
+            && !crate::uses_remote_workspace_or_environment(
+                &app_server_target,
+                environment_manager.as_ref(),
+            )
+            && let Err(error) = app_server
+                .start_dynamic_tool_mcp(
+                    config.clone(),
+                    app_event_tx.clone(),
+                    dynamic_tool_status_updates.clone(),
+                )
+                .await
+        {
+            tracing::warn!(%error, "TUI task delegation is unavailable without its MCP server");
         }
         let model_catalog = Arc::new(ModelCatalog::new(available_models.clone()));
         let feedback_audience = bootstrap.feedback_audience;
@@ -458,6 +486,9 @@ Fix the config and retry.\n\
 See the Codex keymap documentation for supported actions and examples."
             )
         })?;
+        runtime_keymap
+            .validate_realtime_hotkey(config.realtime.hotkey.as_deref())
+            .map_err(|err| color_eyre::eyre::eyre!("Invalid keymap configuration: {err}"))?;
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
         let realtime_mic_mode = RealtimeMicMode::from_config_enabled(config.realtime.enabled);
@@ -526,6 +557,7 @@ See the Codex keymap documentation for supported actions and examples."
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
+            temporary_structured_requests: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
             agents_overview: Default::default(),
@@ -538,6 +570,8 @@ See the Codex keymap documentation for supported actions and examples."
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            dynamic_tool_status_updates,
+            dynamic_tool_tasks: HashMap::new(),
             pending_startup_thread_start,
             startup_protected_input_boundary: true,
             startup_pending_protected_request: false,
@@ -555,6 +589,8 @@ See the Codex keymap documentation for supported actions and examples."
         let initial_session_started_at = Instant::now();
         if let Some(started) = initial_started_thread {
             let thread_id = started.session.thread_id;
+            app.chat_widget
+                .set_task_mentions_enabled(started.task_tools_available);
             if started.blocks_direct_input {
                 app.mark_primary_thread_parent_owned(thread_id);
             }
@@ -698,12 +734,15 @@ See the Codex keymap documentation for supported actions and examples."
             Ok(exit_reason)
         } else {
             loop {
+                // Replay queues history and operations. A buffered closure must not switch
+                // widgets before those app events have been applied.
+                let has_pending_app_events = !app_event_rx.is_empty();
                 let initial_session_header_pending = waiting_for_initial_session_header
                     && app.primary_session_configured.is_some()
-                    && !app_event_rx.is_empty();
+                    && has_pending_app_events;
                 let block_terminal_input_for_pending_startup_events = initial_session_header_pending
                     || (pending_startup_draft.is_some() || app.startup_protected_input_boundary)
-                        && !app_event_rx.is_empty()
+                        && has_pending_app_events
                     || (!waiting_for_initial_session_configured
                         && app.has_queued_startup_protected_request());
                 let control = select! {
@@ -740,7 +779,7 @@ See the Codex keymap documentation for supported actions and examples."
                     }, if App::should_handle_active_thread_events(
                         waiting_for_initial_session_configured,
                         app.active_thread_rx.is_some()
-                    ) => {
+                    ) && !has_pending_app_events => {
                         if let Some(event) = active {
                             if let Err(err) = app.handle_active_thread_event(tui, &mut app_server, event).await {
                                 break Err(err);

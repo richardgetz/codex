@@ -5,7 +5,6 @@ use crate::skills_load_input_from_config;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_login::test_support::auth_manager_from_optional_auth;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_skills_extension::HostSkillsService;

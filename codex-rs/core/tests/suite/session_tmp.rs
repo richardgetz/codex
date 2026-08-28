@@ -49,7 +49,7 @@ async fn session_tmp_tool_records_current_session_and_thread_lineage() -> anyhow
     test.submit_text_turn("create a temporary artifact").await?;
 
     let request = completion.single_request();
-    let output_item = request.function_call_output(call_id).to_owned();
+    let output_item = request.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -104,7 +104,7 @@ async fn session_tmp_schema_describes_disposable_lineage_and_cleanup() -> anyhow
     test.submit_text_turn("describe temporary storage").await?;
 
     let request = completion.single_request();
-    let output_item = request.function_call_output(call_id).to_owned();
+    let output_item = request.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)

@@ -1487,10 +1487,10 @@ fn mark_wait_checked(
                 let mut wait = serde_json::Map::new();
                 wait.insert("summary".to_string(), Value::String(summary.clone()));
                 if let Some(wait_id) = wait_id {
-                    wait.insert("wait_id".to_string(), Value::String(wait_id.to_string()));
+                    wait.insert("wait_id".to_string(), Value::String(wait_id));
                 }
                 if let Some(target) = target {
-                    wait.insert("target".to_string(), Value::String(target.to_string()));
+                    wait.insert("target".to_string(), Value::String(target));
                 }
                 wait
             }

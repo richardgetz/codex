@@ -121,6 +121,8 @@ mod daily_spend;
 mod debug_config;
 mod diff_model;
 mod diff_render;
+mod dynamic_tools;
+mod dynamic_tools_mcp;
 mod exec_cell;
 mod exec_command;
 mod external_agent_config_migration;
@@ -194,6 +196,8 @@ mod status;
 mod status_indicator_widget;
 mod streaming;
 mod style;
+mod task_mentions;
+mod temporary_structured_request;
 mod terminal_hyperlinks;
 mod terminal_palette;
 mod terminal_probe;
@@ -3025,6 +3029,15 @@ mod tests {
         )?;
 
         assert_eq!(config_cwd, None);
+        let local_daemon = AppServerTarget::LocalDaemon {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
+        };
+        assert!(uses_remote_workspace_or_environment(
+            &local_daemon,
+            &environment_manager
+        ));
         Ok(())
     }
 

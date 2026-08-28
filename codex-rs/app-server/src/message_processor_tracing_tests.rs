@@ -685,7 +685,7 @@ fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
                 Some(remote_trace),
             )
             .await;
-        let expected_op = "user_input";
+        let expected_op = "turn_input";
         let spans = wait_for_exported_spans(harness.tracing, |spans| {
             spans.iter().any(|span| {
                 span.span_kind == SpanKind::Server

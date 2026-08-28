@@ -258,6 +258,9 @@ async fn catalog_collaboration_messages_refresh_without_mode_or_model_change(
             ModeKind::Plan => {
                 model_with_collaboration_messages(MODEL, Some(INACTIVE), Some(instructions))
             }
+            ModeKind::PairProgramming | ModeKind::Execute => {
+                unreachable!("legacy collaboration modes are not used by this test")
+            }
         }],
     };
     let server = MockServer::start().await;

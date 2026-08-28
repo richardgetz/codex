@@ -2,6 +2,7 @@ use super::ContextualUserFragment;
 use codex_config::types::SituationalRequirementActionConfig;
 use codex_config::types::SituationalRequirementRuleConfig;
 use codex_config::types::SituationalRequirementsConfig;
+use codex_protocol::models::ContentItemKind;
 
 const SITUATIONAL_REQUIREMENTS_OPEN_TAG: &str = "<situational_requirements>";
 const SITUATIONAL_REQUIREMENTS_CLOSE_TAG: &str = "</situational_requirements>";
@@ -20,6 +21,10 @@ impl SituationalRequirementsInstructions {
 }
 
 impl ContextualUserFragment for SituationalRequirementsInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("situational_requirements.instructions".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

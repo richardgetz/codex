@@ -598,6 +598,11 @@ impl App {
                 );
                 return true;
             };
+            if let Err(err) = self.keymap.validate_realtime_hotkey(Some(&hotkey)) {
+                self.chat_widget
+                    .add_error_message(format!("Cannot set push-to-talk key: {err}"));
+                return true;
+            }
             match crate::config_update::write_config_batch(
                 app_server.request_handle(),
                 vec![crate::config_update::build_realtime_hotkey_edit(&hotkey)],
@@ -826,6 +831,25 @@ impl App {
         command: RealtimeMicCommand,
     ) {
         match &command {
+            RealtimeMicCommand::ToggleMute => {
+                let Some(session) = self.realtime_voice_session.as_ref() else {
+                    self.chat_widget.add_error_message(
+                        "Microphone is not active. Start GPT-Live voice before toggling mute."
+                            .to_string(),
+                    );
+                    tui.frame_requester().schedule_frame();
+                    return;
+                };
+                let status = if session.toggle_input_muted() {
+                    "muted"
+                } else {
+                    "unmuted"
+                };
+                self.chat_widget
+                    .add_info_message(format!("Microphone is now {status}."), None);
+                tui.frame_requester().schedule_frame();
+                return;
+            }
             RealtimeMicCommand::CaptureHotkey => {
                 if !self.config.realtime.enabled {
                     self.chat_widget.add_error_message(
@@ -1317,6 +1341,7 @@ impl App {
             RealtimeMicCommand::On => RealtimeMicMode::PushToTalk,
             RealtimeMicCommand::Off => RealtimeMicMode::Disabled,
             RealtimeMicCommand::Status
+            | RealtimeMicCommand::ToggleMute
             | RealtimeMicCommand::CaptureHotkey
             | RealtimeMicCommand::ChangeMicrophone
             | RealtimeMicCommand::ListDevices

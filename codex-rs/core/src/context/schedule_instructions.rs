@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ScheduleInstructions;
@@ -10,6 +11,10 @@ impl ScheduleInstructions {
 }
 
 impl ContextualUserFragment for ScheduleInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("schedule.instructions".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

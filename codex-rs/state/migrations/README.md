@@ -57,3 +57,11 @@ numeric versions, so they are appended at the next unused versions:
 0051_upstream_projects.sql
 0052_upstream_threads_section_empty_preview_indexes.sql
 ```
+
+The `rust-v0.150.1` refresh keeps those already-shipped migrations unchanged.
+Its incoming thread-artifacts migration collides with the existing `0051`
+through `0052` sequence, so it is appended as:
+
+```text
+0053_upstream_thread_artifacts.sql
+```

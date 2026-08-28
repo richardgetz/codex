@@ -20,7 +20,6 @@ use crate::tasks::RegularTask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::ThreadSettingsOverrides;
@@ -543,7 +542,6 @@ async fn merge_additional_context_input(
     };
     additional_context_input
         .into_iter()
-        .map(ResponseItem::from)
         .map(|item| session.annotate_client_response_item(item))
         .map(TurnInput::ResponseItem)
         .collect()

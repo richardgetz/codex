@@ -3,6 +3,7 @@ use codex_protocol::protocol::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 
 const MULTI_AGENT_ROLE_INSTRUCTIONS_MAX_TOKENS: usize = 8_000;
+use codex_protocol::models::ContentItemKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MultiAgentRoleInstructions {
@@ -34,6 +35,10 @@ fn bounded_text(text: String) -> String {
 }
 
 impl ContextualUserFragment for MultiAgentRoleInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("multi_agent.role_instructions".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }
