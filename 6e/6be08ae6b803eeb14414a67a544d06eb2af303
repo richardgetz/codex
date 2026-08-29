@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-08-28/decision-provenance-crossroads#6e6be08ae6b8"
+  change_type: "feat"
+  scope: "decision-provenance"
+  summary: "Make scoped decision rationale, preference-boundary changes, and crossroads traversable inside Codex."
+  decision: "Add a local append-only versioned SQLite provenance layer with an atomic read-only projection, connecting existing memory, scratchpad, session, and Git references without duplicating their canonical state."
+  constraints:
+    - "Preserve session history and rollout files as the transcript source of truth."
+    - "Keep scratchpad as the operational continuity source and store only references to its items."
+    - "Keep user-preferences memory as the canonical reusable preference system with one stable linked boundary record."
+    - "Keep Git intent notes as commit-level intent and do not place private rationale in public Git artifacts."
+    - "Keep Inbound read-only with privacy-aware, bounded, atomically published projections."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/state/src/decision_provenance"
+    - "codex-rs/state/src/runtime/decision_provenance.rs"
+    - "codex-rs/core/src/session/turn_provenance.rs"
+    - "codex-rs/core/src/orchestrator_memory/provenance.rs"
+    - "codex-rs/tui/src/chatwidget/decision_provenance_commands.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5"
