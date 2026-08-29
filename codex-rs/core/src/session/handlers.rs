@@ -565,6 +565,11 @@ pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: St
         if let Err(err) = state_db.clear_memory_data().await {
             errors.push(format!("failed clearing memory rows from state db: {err}"));
         }
+        if let Err(err) = crate::orchestrator_memory::sync_memory_clear(sess).await {
+            errors.push(format!(
+                "failed withdrawing memory preference boundaries: {err}"
+            ));
+        }
     } else {
         errors.push("state db unavailable; memory rows were not cleared".to_string());
     }
@@ -697,6 +702,11 @@ pub fn forget_orchestrator_memory(
         .await
         {
             Ok(result) => {
+                if let Err(err) =
+                    crate::orchestrator_memory::sync_memory_forget(&sess, &needle).await
+                {
+                    warn!("failed synchronizing forgotten preference boundaries: {err:#}");
+                }
                 sess.send_event_raw(Event {
                     id: sub_id,
                     msg: EventMsg::Warning(WarningEvent {

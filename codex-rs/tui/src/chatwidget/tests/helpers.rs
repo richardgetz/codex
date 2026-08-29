@@ -188,6 +188,8 @@ pub(super) async fn make_chatwidget_manual_with_auth(
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         frame_requester,
         app_event_tx,
+        state_db: None,
+        provenance_commands_enabled: true,
         workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: false,

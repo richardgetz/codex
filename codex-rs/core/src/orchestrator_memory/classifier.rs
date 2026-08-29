@@ -64,6 +64,7 @@ pub(super) async fn classify_with_model(
     config: &Arc<Config>,
     current_turn_user_texts: &[String],
     last_agent_message: Option<&str>,
+    forced_signal: Option<MemorySignal>,
 ) -> anyhow::Result<Vec<CandidateMemoryItem>> {
     let codex_home = &config.codex_home;
     ensure_layout(codex_home).await?;
@@ -117,6 +118,7 @@ pub(super) async fn classify_with_model(
             Ok(classification_payload_to_candidates(
                 payload,
                 current_turn_user_texts,
+                forced_signal,
             ))
         }
         other => anyhow::bail!("orchestrator memory classifier did not complete: {other:?}"),
@@ -126,6 +128,7 @@ pub(super) async fn classify_with_model(
 fn classification_payload_to_candidates(
     payload: ClassificationPayload,
     current_turn_user_texts: &[String],
+    forced_signal: Option<MemorySignal>,
 ) -> Vec<CandidateMemoryItem> {
     let turn_source_excerpt = current_turn_user_texts.join("\n\n");
     payload
@@ -153,7 +156,7 @@ fn classification_payload_to_candidates(
                 bucket: action.bucket,
                 scope,
                 operation: action.operation,
-                signal: MemorySignal::ModelClassified,
+                signal: forced_signal.unwrap_or(MemorySignal::ModelClassified),
                 key: super::heuristics::normalized_key(text),
                 candidate: text.to_string(),
                 source_excerpt: source_excerpt.to_string(),
@@ -382,7 +385,7 @@ mod tests {
             rationale: None,
         };
 
-        let candidates = classification_payload_to_candidates(payload, &[]);
+        let candidates = classification_payload_to_candidates(payload, &[], None);
 
         assert!(candidates.is_empty());
     }
@@ -409,6 +412,7 @@ mod tests {
         let candidates = classification_payload_to_candidates(
             payload,
             &["When working in the Mobius repo, keep it CLI-first".to_string()],
+            None,
         );
 
         assert_eq!(

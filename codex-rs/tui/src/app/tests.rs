@@ -892,6 +892,8 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
         environment_manager: app.environment_manager.clone(),
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
+        state_db: None,
+        provenance_commands_enabled: true,
         workspace_command_runner: None,
         initial_user_message: create_initial_user_message(
             Some(initial_prompt.clone()),
@@ -8198,6 +8200,8 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         environment_manager: app.environment_manager.clone(),
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
+        state_db: None,
+        provenance_commands_enabled: true,
         workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: app.enhanced_keys_supported,

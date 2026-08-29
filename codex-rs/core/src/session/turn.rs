@@ -44,6 +44,7 @@ use crate::session::capacity_retry::wait_for_model_capacity_retry;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_provenance;
 use crate::skills::emit_explicit_skill_invocations;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
@@ -172,6 +173,22 @@ pub(crate) async fn run_turn(
     // Record results from hooks that finished after the previous turn before this turn's user prompt.
     drain_async_hook_results(&sess, &turn_context, /*before_user_prompt*/ true).await;
 
+    let user_input = turn_user_input(&input);
+    if matches!(
+        turn_provenance::record_turn_provenance_preflight(
+            &sess,
+            turn_context.as_ref(),
+            &user_input,
+        )
+        .await,
+        turn_provenance::ProvenancePreflightOutcome::Blocked
+    ) {
+        let _ =
+            run_hooks_and_record_inputs(&sess, &turn_context, &input, PersistContext::TurnStart)
+                .await;
+        return Ok(None);
+    }
+
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
@@ -201,7 +218,6 @@ pub(crate) async fn run_turn(
         return Ok(None);
     }
 
-    let user_input = turn_user_input(&input);
     let (required_servers, _mentioned_plugins) =
         match required_mcp_servers_for_input(&sess, turn_context.as_ref(), &user_input)
             .or_cancel(&cancellation_token)

@@ -826,6 +826,25 @@ impl ChatWidget {
             || (cmd == SlashCommand::Export && self.input_queue.suppress_queue_autosend)
     }
 
+    fn dispatch_decision_provenance_command(
+        &self,
+        family: decision_provenance_commands::CommandFamily,
+        args: &str,
+    ) {
+        decision_provenance_commands::spawn_command(
+            if self.provenance_commands_enabled {
+                decision_provenance_commands::ProvenanceCommandAccess::Local
+            } else {
+                decision_provenance_commands::ProvenanceCommandAccess::RemoteUnavailable
+            },
+            self.state_db.clone(),
+            family,
+            args,
+            self.thread_id(),
+            self.app_event_tx.clone(),
+        );
+    }
+
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
         self.flush_completed_command_activity();
         if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
@@ -1263,6 +1282,18 @@ impl ChatWidget {
             SlashCommand::Continuous => {
                 self.dispatch_continuous_command(/*args*/ None);
             }
+            SlashCommand::Decisions => {
+                self.dispatch_decision_provenance_command(
+                    decision_provenance_commands::CommandFamily::Decisions,
+                    "",
+                );
+            }
+            SlashCommand::PreferenceBoundaries => {
+                self.dispatch_decision_provenance_command(
+                    decision_provenance_commands::CommandFamily::PreferenceBoundaries,
+                    "",
+                );
+            }
             SlashCommand::Apps => {
                 self.add_connectors_output();
             }
@@ -1498,6 +1529,18 @@ impl ChatWidget {
             },
             SlashCommand::Continuous => {
                 self.dispatch_continuous_command(Some(trimmed));
+            }
+            SlashCommand::Decisions => {
+                self.dispatch_decision_provenance_command(
+                    decision_provenance_commands::CommandFamily::Decisions,
+                    trimmed,
+                );
+            }
+            SlashCommand::PreferenceBoundaries => {
+                self.dispatch_decision_provenance_command(
+                    decision_provenance_commands::CommandFamily::PreferenceBoundaries,
+                    trimmed,
+                );
             }
             SlashCommand::Outcomes => {
                 self.dispatch_outcomes_command(Some(trimmed));
@@ -2191,6 +2234,8 @@ impl ChatWidget {
             | SlashCommand::ScratchpadUnarchive
             | SlashCommand::Outcomes
             | SlashCommand::Continuous
+            | SlashCommand::Decisions
+            | SlashCommand::PreferenceBoundaries
             | SlashCommand::Account
             | SlashCommand::AgentsPrune
             | SlashCommand::Apps

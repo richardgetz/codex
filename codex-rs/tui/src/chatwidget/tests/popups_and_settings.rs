@@ -39,6 +39,8 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
+        state_db: None,
+        provenance_commands_enabled: true,
         workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: false,

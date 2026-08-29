@@ -579,6 +579,11 @@ impl App {
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell);
             }
+            AppEvent::InsertHistoryCellForThread { thread_id, cell } => {
+                if self.chat_widget.thread_id() == Some(thread_id) {
+                    self.insert_history_cell(tui, cell);
+                }
+            }
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.scrollback_has_older_history = self
                     .chat_widget

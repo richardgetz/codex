@@ -497,6 +497,8 @@ async fn configured_pet_load_is_deferred_until_after_construction() {
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: tx,
+        state_db: None,
+        provenance_commands_enabled: true,
         workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: false,

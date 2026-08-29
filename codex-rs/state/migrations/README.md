@@ -65,3 +65,8 @@ through `0052` sequence, so it is appended as:
 ```text
 0053_upstream_thread_artifacts.sql
 ```
+
+The decision-provenance layer is appended as `0054_rick_decision_provenance.sql`.
+Its event table is canonical and append-only; the other provenance tables are
+materialized query indexes. The versioned Inbound projection format is
+documented in `state/src/decision_provenance/PROJECTION.md`.

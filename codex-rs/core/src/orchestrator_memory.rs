@@ -33,6 +33,8 @@ mod live;
 mod migration;
 #[path = "orchestrator_memory/model.rs"]
 mod model;
+#[path = "orchestrator_memory/provenance.rs"]
+mod provenance;
 #[path = "orchestrator_memory/types.rs"]
 mod types;
 
@@ -211,6 +213,14 @@ pub(crate) fn maybe_learn_from_completed_turn(
     }
 
     live::schedule_learning(session, turn_context, last_agent_message);
+}
+
+pub(crate) async fn sync_memory_forget(session: &Arc<Session>, needle: &str) -> anyhow::Result<()> {
+    provenance::withdraw_memory_boundaries(session, Some(needle)).await
+}
+
+pub(crate) async fn sync_memory_clear(session: &Arc<Session>) -> anyhow::Result<()> {
+    provenance::withdraw_memory_boundaries(session, None).await
 }
 
 pub(crate) fn start_scheduled_cleanup_task(

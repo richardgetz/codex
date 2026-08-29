@@ -52,6 +52,8 @@ expression: commands
 /scratchpad-unarchive - clear the archived marker on this session scratchpad
 /outcomes - export measured outcomes for this session scratchpad
 /continuous - toggle scratchpad-backed continuous run policy
+/decisions - traverse decision provenance and unresolved crossroads
+/preference-boundaries - inspect and manage confirmed or candidate preference boundaries
 /account - show or switch the session account alias
 /logout - log out of Codex
 /exit - exit Codex

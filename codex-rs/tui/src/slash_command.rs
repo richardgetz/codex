@@ -81,6 +81,9 @@ pub enum SlashCommand {
     ScratchpadUnarchive,
     Outcomes,
     Continuous,
+    Decisions,
+    #[strum(serialize = "preference-boundaries")]
+    PreferenceBoundaries,
     Apps,
     Plugins,
     Account,
@@ -192,6 +195,10 @@ impl SlashCommand {
             }
             SlashCommand::Outcomes => "export measured outcomes for this session scratchpad",
             SlashCommand::Continuous => "toggle scratchpad-backed continuous run policy",
+            SlashCommand::Decisions => "traverse decision provenance and unresolved crossroads",
+            SlashCommand::PreferenceBoundaries => {
+                "inspect and manage confirmed or candidate preference boundaries"
+            }
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
             SlashCommand::Account => "show or switch the session account alias",
@@ -227,6 +234,8 @@ impl SlashCommand {
                 | SlashCommand::Continuous
                 | SlashCommand::Outcomes
                 | SlashCommand::ScratchpadAbsorb
+                | SlashCommand::Decisions
+                | SlashCommand::PreferenceBoundaries
                 | SlashCommand::Export
                 | SlashCommand::Raw
                 | SlashCommand::Cd
@@ -319,6 +328,8 @@ impl SlashCommand {
             | SlashCommand::ScratchpadUnarchive
             | SlashCommand::Outcomes
             | SlashCommand::Continuous
+            | SlashCommand::Decisions
+            | SlashCommand::PreferenceBoundaries
             | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Title

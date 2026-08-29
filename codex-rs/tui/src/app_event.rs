@@ -959,6 +959,12 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
+    /// Insert an asynchronous result only while its originating thread remains displayed.
+    InsertHistoryCellForThread {
+        thread_id: ThreadId,
+        cell: Box<dyn HistoryCell>,
+    },
+
     /// Finish buffering initial resume replay after all replay events have been queued.
     EndInitialHistoryReplayBuffer,
 

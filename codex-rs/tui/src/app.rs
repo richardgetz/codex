@@ -767,6 +767,8 @@ impl App {
             environment_manager: self.environment_manager.clone(),
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
+            state_db: self.state_db.clone(),
+            provenance_commands_enabled: self.chat_widget.provenance_commands_enabled(),
             workspace_command_runner: self.workspace_command_runner.clone(),
             initial_user_message,
             enhanced_keys_supported: self.enhanced_keys_supported,

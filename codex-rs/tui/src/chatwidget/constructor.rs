@@ -15,6 +15,8 @@ impl ChatWidget {
             config,
             frame_requester,
             app_event_tx,
+            state_db,
+            provenance_commands_enabled,
             workspace_command_runner,
             initial_user_message,
             enhanced_keys_supported,
@@ -103,6 +105,8 @@ impl ChatWidget {
         );
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
+            state_db,
+            provenance_commands_enabled,
             frame_requester: frame_requester.clone(),
             codex_op_target,
             bottom_pane: BottomPane::new(BottomPaneParams {
