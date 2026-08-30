@@ -1,0 +1,25 @@
+intent:
+  id: "intent/2026-08-30/decision-provenance-opt-in#960e5d73cf"
+  change_type: "fix"
+  scope: "decision-provenance"
+  summary: "Keep decision provenance disabled until explicitly enabled for testing."
+  decision: "Add [decision_provenance].enabled with an effective default of false and gate automatic recording, provenance adapters, and local traversal commands on the resolved setting."
+  constraints:
+    - "Preserve existing user-preferences memory behavior when provenance is disabled."
+    - "Keep explicit memory deletion cleanup independent of automatic provenance recording."
+    - "Do not change session history, scratchpad, user-preferences memory, or Git intent-note ownership."
+    - "Keep legacy config-lock replay compatible when the new setting is absent."
+    - "Allow a future default flip through configuration without changing the domain model."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/config/src/types.rs"
+    - "codex-rs/config/src/config_toml.rs"
+    - "codex-rs/core/src/session/turn_provenance.rs"
+    - "codex-rs/core/src/orchestrator_memory.rs"
+    - "codex-rs/core/src/session/config_lock.rs"
+    - "codex-rs/tui/src/app.rs"
+    - "codex-rs/tui/src/bottom_pane/slash_commands.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5"
