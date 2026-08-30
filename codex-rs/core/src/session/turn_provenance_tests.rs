@@ -7,6 +7,7 @@ use crate::session::session::Session;
 use crate::session::tests::make_session_and_context_with_auth_config_home_and_rx;
 use crate::session::turn_context::TurnContext;
 use codex_login::CodexAuth;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use codex_state::StateRuntime;
 use codex_state::decision_provenance::Actor;
@@ -21,19 +22,29 @@ use codex_state::decision_provenance::ScopeRef;
 use codex_state::decision_provenance::SourceReference;
 use codex_state::decision_provenance::Timestamps;
 use codex_state::decision_provenance::now;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::sse;
+use core_test_support::responses::start_mock_server;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 async fn provenance_fixture(
     enabled: bool,
+    model_provider_base_url: Option<String>,
 ) -> (Arc<Session>, Arc<TurnContext>, Arc<StateRuntime>, TempDir) {
     let codex_home = tempfile::tempdir().expect("create provenance test home");
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_config_home_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         codex_home.path(),
-        move |config| config.decision_provenance.enabled = enabled,
+        move |config| {
+            config.decision_provenance.enabled = enabled;
+            config.model_provider.base_url = model_provider_base_url;
+        },
     )
     .await;
     let state_db = StateRuntime::init(
@@ -110,7 +121,7 @@ fn an_explicit_override_is_not_treated_as_honoring_a_boundary() {
 
 #[tokio::test]
 async fn disabled_preflight_does_not_record_a_crossroad_or_notification() {
-    let (session, turn_context, state_db, _codex_home) = provenance_fixture(false).await;
+    let (session, turn_context, state_db, _codex_home) = provenance_fixture(false, None).await;
     record_test_boundary(&state_db).await;
 
     let outcome = record_turn_provenance_preflight(
@@ -141,8 +152,69 @@ async fn disabled_preflight_does_not_record_a_crossroad_or_notification() {
 }
 
 #[tokio::test]
+async fn disabled_run_turn_preserves_model_flow_without_provenance() {
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-disabled"),
+            ev_assistant_message("msg-disabled", "normal response"),
+            ev_completed("resp-disabled"),
+        ]),
+    )
+    .await;
+    let (session, turn_context, state_db, _codex_home) =
+        provenance_fixture(false, Some(format!("{}/v1", server.uri()))).await;
+    record_test_boundary(&state_db).await;
+
+    let result = crate::session::turn::run_turn(
+        session.clone(),
+        turn_context,
+        vec![TurnInput::UserInput {
+            content: vec![UserInput::Text {
+                text: "please change generated files".to_string(),
+                text_elements: Vec::new(),
+            }],
+            client_id: None,
+        }],
+        /*prewarmed_client_session*/ None,
+        CancellationToken::new(),
+    )
+    .await
+    .expect("disabled turn should complete through the normal model path");
+
+    assert_eq!(result, Some("normal response".to_string()));
+    let _ = response_mock.single_request();
+    let history = session.clone_history().await;
+    assert!(
+        history
+            .raw_items()
+            .any(|item| { matches!(item, ResponseItem::Message { role, .. } if role == "user") })
+    );
+    assert!(
+        history.raw_items().any(|item| {
+            matches!(item, ResponseItem::Message { role, .. } if role == "assistant")
+        })
+    );
+    assert!(
+        state_db
+            .list_open_crossroads(20)
+            .await
+            .expect("list crossroads")
+            .is_empty()
+    );
+    assert!(
+        state_db
+            .list_provenance_notifications(20)
+            .await
+            .expect("list notifications")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn enabled_run_turn_records_a_crossroad_and_notification_before_model_work() {
-    let (session, turn_context, state_db, _codex_home) = provenance_fixture(true).await;
+    let (session, turn_context, state_db, _codex_home) = provenance_fixture(true, None).await;
     record_test_boundary(&state_db).await;
 
     let result = crate::session::turn::run_turn(
