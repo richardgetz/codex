@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-08-30/decision-provenance-opt-in-compat#242cccef15"
+  change_type: "fix"
+  scope: "decision-provenance"
+  summary: "Preserve opt-in provenance compatibility across lock replay and lifecycle paths."
+  decision: "Normalize legacy false provenance lock entries to the disabled representation and add coverage for production request preflight, TUI configuration derivation, and enabled command rendering."
+  constraints:
+    - "Treat omitted and explicit false settings as the same disabled behavior."
+    - "Keep automatic provenance recording and TUI traversal opt-in."
+    - "Preserve existing user-preferences memory, session history, scratchpad, and Git intent-note ownership."
+    - "Do not allow remote TUI clients to expose local provenance traversal."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/config_lock.rs"
+    - "codex-rs/core/src/session/config_lock.rs"
+    - "codex-rs/core/src/session/turn_provenance_tests.rs"
+    - "codex-rs/tui/src/app/tests.rs"
+    - "codex-rs/tui/src/bottom_pane/command_popup.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5"
