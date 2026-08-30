@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-08-30/decision-provenance-lifecycle-gating#1b33357722"
+  change_type: "fix"
+  scope: "decision-provenance"
+  summary: "Centralize opt-in provenance lifecycle gating and exercise the disabled production path."
+  decision: "Use one target-aware helper for all TUI startup modes and verify that disabled provenance still completes a normal model turn without creating provenance records."
+  constraints:
+    - "Keep provenance recording and local traversal commands disabled unless explicitly enabled."
+    - "Keep remote TUI clients from exposing local provenance traversal."
+    - "Preserve session history, scratchpad, user-preferences memory, and Git intent-note ownership."
+    - "Keep historical provenance records append-only and unchanged."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/session/turn_provenance_tests.rs"
+    - "codex-rs/tui/src/app.rs"
+    - "codex-rs/tui/src/app/startup.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5"
