@@ -45,6 +45,9 @@ pub(super) async fn record_turn_provenance_preflight(
     turn_context: &TurnContext,
     user_input: &[UserInput],
 ) -> ProvenancePreflightOutcome {
+    if !turn_context.config.decision_provenance.enabled {
+        return ProvenancePreflightOutcome::Continue;
+    }
     let Some(state_db) = sess.state_db() else {
         return ProvenancePreflightOutcome::Continue;
     };

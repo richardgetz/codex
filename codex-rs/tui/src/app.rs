@@ -762,13 +762,18 @@ impl App {
         cfg: crate::legacy_core::config::Config,
         initial_user_message: Option<crate::chatwidget::UserMessage>,
     ) -> crate::chatwidget::ChatWidgetInit {
+        let provenance_commands_enabled = cfg.decision_provenance.enabled
+            && !matches!(
+                &self.app_server_target,
+                crate::AppServerTarget::Remote { .. }
+            );
         crate::chatwidget::ChatWidgetInit {
             config: cfg,
             environment_manager: self.environment_manager.clone(),
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
             state_db: self.state_db.clone(),
-            provenance_commands_enabled: self.chat_widget.provenance_commands_enabled(),
+            provenance_commands_enabled,
             workspace_command_runner: self.workspace_command_runner.clone(),
             initial_user_message,
             enhanced_keys_supported: self.enhanced_keys_supported,

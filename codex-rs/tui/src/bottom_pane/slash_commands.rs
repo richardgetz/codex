@@ -62,6 +62,7 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) service_tier_commands_enabled: bool,
     pub(crate) goal_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
+    pub(crate) provenance_commands_enabled: bool,
     pub(crate) allow_elevate_sandbox: bool,
     pub(crate) side_conversation_active: bool,
 }
@@ -77,6 +78,13 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.token_activity_command_enabled || *cmd != SlashCommand::Usage)
         .filter(|(_, cmd)| flags.goal_command_enabled || *cmd != SlashCommand::Goal)
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
+        .filter(|(_, cmd)| {
+            flags.provenance_commands_enabled
+                || !matches!(
+                    *cmd,
+                    SlashCommand::Decisions | SlashCommand::PreferenceBoundaries
+                )
+        })
         .filter(|(_, cmd)| !flags.side_conversation_active || cmd.available_in_side_conversation())
         .collect()
 }
@@ -171,6 +179,7 @@ mod tests {
             service_tier_commands_enabled: true,
             goal_command_enabled: true,
             personality_command_enabled: true,
+            provenance_commands_enabled: true,
             allow_elevate_sandbox: true,
             side_conversation_active: false,
         }
@@ -187,6 +196,38 @@ mod tests {
         assert_eq!(
             find_builtin_command("clear", all_enabled_flags()),
             Some(SlashCommand::Clear)
+        );
+    }
+
+    #[test]
+    fn provenance_commands_require_explicit_enablement() {
+        assert_eq!(
+            find_builtin_command("decisions", BuiltinCommandFlags::default()),
+            None
+        );
+        assert_eq!(
+            find_builtin_command(
+                "decisions",
+                BuiltinCommandFlags {
+                    provenance_commands_enabled: true,
+                    ..BuiltinCommandFlags::default()
+                },
+            ),
+            Some(SlashCommand::Decisions)
+        );
+        assert_eq!(
+            find_builtin_command("preference-boundaries", BuiltinCommandFlags::default()),
+            None
+        );
+        assert_eq!(
+            find_builtin_command(
+                "preference-boundaries",
+                BuiltinCommandFlags {
+                    provenance_commands_enabled: true,
+                    ..BuiltinCommandFlags::default()
+                },
+            ),
+            Some(SlashCommand::PreferenceBoundaries)
         );
     }
 

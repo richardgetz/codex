@@ -45,6 +45,7 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::ConventionalCommitsConfig;
+use codex_config::types::DecisionProvenanceConfig;
 use codex_config::types::GitIntentNotesConfig;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
@@ -1164,6 +1165,9 @@ pub struct Config {
 
     /// Memories subsystem settings.
     pub memories: MemoriesConfig,
+
+    /// Decision provenance and crossroads settings.
+    pub decision_provenance: DecisionProvenanceConfig,
 
     /// Orchestrator-memory subsystem settings.
     pub orchestrator_memory: OrchestratorMemoryConfig,
@@ -4907,6 +4911,7 @@ impl Config {
                 })
                 .transpose()?,
             memories,
+            decision_provenance: cfg.decision_provenance.unwrap_or_default().into(),
             orchestrator_memory,
             user_preferences_memory,
             scratchpad,

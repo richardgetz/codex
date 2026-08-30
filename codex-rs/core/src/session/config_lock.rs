@@ -3,6 +3,7 @@ use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::OrchestratorFeatureToml;
 use codex_config::config_toml::OrchestratorToml;
+use codex_config::types::DecisionProvenanceToml;
 use codex_config::types::MemoriesToml;
 use codex_features::CurrentTimeReminderConfigToml;
 use codex_features::Feature;
@@ -190,6 +191,13 @@ fn save_config_resolved_fields(
         &config.memories,
         "memories",
     )?);
+    lock_config.decision_provenance =
+        config
+            .decision_provenance
+            .enabled
+            .then_some(DecisionProvenanceToml {
+                enabled: Some(true),
+            });
 
     let agents = lock_config.agents.get_or_insert_with(Default::default);
     agents.enabled = Some(config.agents_enabled);
@@ -564,6 +572,19 @@ sandbox_private_desktop = false
             "{message}"
         );
         assert!(message.contains("model = "), "{message}");
+    }
+
+    #[tokio::test]
+    async fn lock_validation_accepts_missing_opt_in_provenance_setting() {
+        let sc = crate::session::tests::make_session_configuration_for_tests().await;
+        let actual = sc.to_config_lockfile_toml().expect("lock should serialize");
+        assert_eq!(actual.config.decision_provenance, None);
+
+        let mut expected = actual.clone();
+        expected.config.decision_provenance = None;
+
+        validate_config_lock_replay(&expected, &actual, ConfigLockReplayOptions::default())
+            .expect("old lock without decision provenance should replay as disabled");
     }
 
     #[tokio::test]

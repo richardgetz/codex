@@ -24,6 +24,7 @@ use codex_core_api::Config;
 use codex_core_api::ConfigLayerStack;
 use codex_core_api::Constrained;
 use codex_core_api::ConventionalCommitsConfig;
+use codex_core_api::DecisionProvenanceConfig;
 use codex_core_api::EnablementConfig;
 use codex_core_api::EnvironmentManager;
 use codex_core_api::EventMsg;
@@ -40,7 +41,6 @@ use codex_core_api::NewThread;
 use codex_core_api::Notice;
 use codex_core_api::OAuthCredentialsStoreMode;
 use codex_core_api::OPENAI_PROVIDER_ID;
-use codex_core_api::Op;
 use codex_core_api::OrchestratorMemoryConfig;
 use codex_core_api::OtelConfig;
 use codex_core_api::PermissionProfile;
@@ -279,9 +279,11 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         agent_max_depth: 1,
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
+        decision_provenance: DecisionProvenanceConfig::default(),
         orchestrator_memory: OrchestratorMemoryConfig::default(),
         user_preferences_memory: UserPreferencesMemoryConfig::default(),
         scratchpad: ScratchpadConfig::default(),
+        session_tmp: Default::default(),
         situational_requirements: SituationalRequirementsConfig::default(),
         schedule: ScheduleConfig::default(),
         resume: ResumeConfig::default(),

@@ -15,6 +15,7 @@ pub use codex_config::types::AccountsConfig;
 pub use codex_config::types::AuthCredentialsStoreMode;
 pub use codex_config::types::AuthKeyringBackendKind;
 pub use codex_config::types::ConventionalCommitsConfig;
+pub use codex_config::types::DecisionProvenanceConfig;
 pub use codex_config::types::EnablementConfig;
 pub use codex_config::types::GitIntentNotesConfig;
 pub use codex_config::types::History;

@@ -2194,6 +2194,7 @@ impl ChatWidget {
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
             service_tier_commands_enabled: self.fast_mode_enabled(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
+            provenance_commands_enabled: self.provenance_commands_enabled,
             allow_elevate_sandbox,
             side_conversation_active: self.active_side_conversation,
         }

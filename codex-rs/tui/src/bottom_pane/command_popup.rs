@@ -48,6 +48,7 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) service_tier_commands_enabled: bool,
     pub(crate) goal_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
+    pub(crate) provenance_commands_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
     pub(crate) side_conversation_active: bool,
 }
@@ -62,6 +63,7 @@ impl From<CommandPopupFlags> for BuiltinCommandFlags {
             service_tier_commands_enabled: value.service_tier_commands_enabled,
             goal_command_enabled: value.goal_command_enabled,
             personality_command_enabled: value.personality_command_enabled,
+            provenance_commands_enabled: value.provenance_commands_enabled,
             allow_elevate_sandbox: value.windows_degraded_sandbox_active,
             side_conversation_active: value.side_conversation_active,
         }
@@ -536,6 +538,7 @@ mod tests {
                 service_tier_commands_enabled: false,
                 goal_command_enabled: false,
                 personality_command_enabled: true,
+                provenance_commands_enabled: false,
                 windows_degraded_sandbox_active: false,
                 side_conversation_active: false,
             },
@@ -553,6 +556,23 @@ mod tests {
     }
 
     #[test]
+    fn provenance_command_visible_when_enabled() {
+        let mut popup = CommandPopup::new(
+            CommandPopupFlags {
+                provenance_commands_enabled: true,
+                ..CommandPopupFlags::default()
+            },
+            Vec::new(),
+        );
+        popup.on_composer_text_change("/decisions".to_string());
+
+        assert_eq!(
+            popup.selected_item(),
+            Some(CommandItem::Builtin(SlashCommand::Decisions))
+        );
+    }
+
+    #[test]
     fn personality_command_hidden_when_disabled() {
         let mut popup = CommandPopup::new(
             CommandPopupFlags {
@@ -563,6 +583,7 @@ mod tests {
                 service_tier_commands_enabled: false,
                 goal_command_enabled: false,
                 personality_command_enabled: false,
+                provenance_commands_enabled: false,
                 windows_degraded_sandbox_active: false,
                 side_conversation_active: false,
             },
@@ -595,6 +616,7 @@ mod tests {
                 service_tier_commands_enabled: false,
                 goal_command_enabled: false,
                 personality_command_enabled: true,
+                provenance_commands_enabled: false,
                 windows_degraded_sandbox_active: false,
                 side_conversation_active: false,
             },

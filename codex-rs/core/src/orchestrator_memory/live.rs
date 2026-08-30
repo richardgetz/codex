@@ -275,7 +275,9 @@ async fn process_completed_turn(
         &candidates,
     )
     .await?;
-    if let Err(err) = super::provenance::record_candidate_boundaries(session, &candidates).await {
+    if turn_context.config.decision_provenance.enabled
+        && let Err(err) = super::provenance::record_candidate_boundaries(session, &candidates).await
+    {
         warn!("failed indexing user-preference candidates in decision provenance: {err:#}");
     }
     append_diagnostic_event(

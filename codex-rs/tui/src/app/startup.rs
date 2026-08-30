@@ -310,10 +310,8 @@ impl App {
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     state_db: state_db.clone(),
-                    provenance_commands_enabled: !matches!(
-                        &app_server_target,
-                        AppServerTarget::Remote { .. }
-                    ),
+                    provenance_commands_enabled: config.decision_provenance.enabled
+                        && !matches!(&app_server_target, AppServerTarget::Remote { .. }),
                     workspace_command_runner: Some(workspace_command_runner.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
@@ -388,10 +386,8 @@ impl App {
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     state_db: state_db.clone(),
-                    provenance_commands_enabled: !matches!(
-                        &app_server_target,
-                        AppServerTarget::Remote { .. }
-                    ),
+                    provenance_commands_enabled: config.decision_provenance.enabled
+                        && !matches!(&app_server_target, AppServerTarget::Remote { .. }),
                     workspace_command_runner: Some(workspace_command_runner.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
@@ -456,10 +452,8 @@ impl App {
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     state_db: state_db.clone(),
-                    provenance_commands_enabled: !matches!(
-                        &app_server_target,
-                        AppServerTarget::Remote { .. }
-                    ),
+                    provenance_commands_enabled: config.decision_provenance.enabled
+                        && !matches!(&app_server_target, AppServerTarget::Remote { .. }),
                     workspace_command_runner: Some(workspace_command_runner.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),

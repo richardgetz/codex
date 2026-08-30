@@ -1080,10 +1080,6 @@ fn token_usage_info_from_app_server(token_usage: ThreadTokenUsage) -> TokenUsage
 }
 
 impl ChatWidget {
-    pub(crate) fn provenance_commands_enabled(&self) -> bool {
-        self.provenance_commands_enabled
-    }
-
     /// Stores or overwrites the cached nickname and role for a collab agent thread.
     ///
     /// Called by `App::upsert_agent_picker_thread` and `App::replace_chat_widget` to keep the

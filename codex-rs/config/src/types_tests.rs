@@ -62,6 +62,20 @@ fn memories_config_clamps_count_limits_to_nonzero_values() {
 }
 
 #[test]
+fn decision_provenance_config_is_opt_in() {
+    assert_eq!(
+        DecisionProvenanceConfig::from(DecisionProvenanceToml::default()),
+        DecisionProvenanceConfig { enabled: false }
+    );
+    assert_eq!(
+        DecisionProvenanceConfig::from(DecisionProvenanceToml {
+            enabled: Some(true),
+        }),
+        DecisionProvenanceConfig { enabled: true }
+    );
+}
+
+#[test]
 fn orchestrator_memory_config_defaults_to_enabled_orchestrator_scope() {
     assert_eq!(
         OrchestratorMemoryConfig::default(),
