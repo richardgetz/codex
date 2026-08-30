@@ -2,6 +2,7 @@ use super::ProvenancePreflightOutcome;
 use super::record_turn_provenance_preflight;
 use super::request_has_explicit_override;
 use super::request_honors_boundary;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::tests::make_session_and_context_with_auth_config_home_and_rx;
 use crate::session::turn_context::TurnContext;
@@ -22,6 +23,7 @@ use codex_state::decision_provenance::Timestamps;
 use codex_state::decision_provenance::now;
 use std::sync::Arc;
 use tempfile::TempDir;
+use tokio_util::sync::CancellationToken;
 
 async fn provenance_fixture(
     enabled: bool,
@@ -139,21 +141,27 @@ async fn disabled_preflight_does_not_record_a_crossroad_or_notification() {
 }
 
 #[tokio::test]
-async fn enabled_preflight_records_a_crossroad_and_notification() {
+async fn enabled_run_turn_records_a_crossroad_and_notification_before_model_work() {
     let (session, turn_context, state_db, _codex_home) = provenance_fixture(true).await;
     record_test_boundary(&state_db).await;
 
-    let outcome = record_turn_provenance_preflight(
-        &session,
-        &turn_context,
-        &[UserInput::Text {
-            text: "please change generated files".to_string(),
-            text_elements: Vec::new(),
+    let result = crate::session::turn::run_turn(
+        session,
+        turn_context,
+        vec![TurnInput::UserInput {
+            content: vec![UserInput::Text {
+                text: "please change generated files".to_string(),
+                text_elements: Vec::new(),
+            }],
+            client_id: None,
         }],
+        /*prewarmed_client_session*/ None,
+        CancellationToken::new(),
     )
-    .await;
+    .await
+    .expect("blocked turn should complete without model work");
 
-    assert!(matches!(outcome, ProvenancePreflightOutcome::Blocked));
+    assert_eq!(result, None);
     assert_eq!(
         state_db
             .list_open_crossroads(20)

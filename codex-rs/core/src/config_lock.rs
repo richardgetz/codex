@@ -128,6 +128,14 @@ fn config_lock_for_comparison(
     if let Some(features) = lockfile.config.features.as_mut() {
         features.clear_removed_compatibility_entries();
     }
+    if lockfile
+        .config
+        .decision_provenance
+        .as_ref()
+        .is_some_and(|provenance| provenance.enabled != Some(true))
+    {
+        lockfile.config.decision_provenance = None;
+    }
     if options.allow_codex_version_mismatch {
         lockfile.codex_version.clear();
     }

@@ -8184,6 +8184,45 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
 }
 
 #[tokio::test]
+async fn forked_or_resumed_chatwidget_init_gates_provenance_commands() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("test tui");
+
+    let mut enabled_config = app.config.clone();
+    enabled_config.decision_provenance.enabled = true;
+    let init = app.chatwidget_init_for_forked_or_resumed_thread(
+        &mut tui,
+        enabled_config,
+        /*initial_user_message*/ None,
+    );
+    assert!(init.provenance_commands_enabled);
+
+    let mut disabled_config = app.config.clone();
+    disabled_config.decision_provenance.enabled = false;
+    let init = app.chatwidget_init_for_forked_or_resumed_thread(
+        &mut tui,
+        disabled_config,
+        /*initial_user_message*/ None,
+    );
+    assert!(!init.provenance_commands_enabled);
+
+    app.app_server_target = crate::AppServerTarget::Remote {
+        endpoint: crate::RemoteAppServerEndpoint::WebSocket {
+            websocket_url: "ws://127.0.0.1:4500".to_string(),
+            auth_token: None,
+        },
+    };
+    let mut remote_config = app.config.clone();
+    remote_config.decision_provenance.enabled = true;
+    let init = app.chatwidget_init_for_forked_or_resumed_thread(
+        &mut tui,
+        remote_config,
+        /*initial_user_message*/ None,
+    );
+    assert!(!init.provenance_commands_enabled);
+}
+
+#[tokio::test]
 async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let receiver_thread_id =

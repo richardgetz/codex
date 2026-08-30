@@ -574,17 +574,32 @@ sandbox_private_desktop = false
         assert!(message.contains("model = "), "{message}");
     }
 
-    #[tokio::test]
-    async fn lock_validation_accepts_missing_opt_in_provenance_setting() {
-        let sc = crate::session::tests::make_session_configuration_for_tests().await;
-        let actual = sc.to_config_lockfile_toml().expect("lock should serialize");
-        assert_eq!(actual.config.decision_provenance, None);
+    #[test]
+    fn lock_validation_accepts_legacy_false_opt_in_provenance_setting() {
+        let expected: ConfigLockfileToml = toml::from_str(&format!(
+            r#"
+version = 1
+codex_version = "{}"
 
-        let mut expected = actual.clone();
-        expected.config.decision_provenance = None;
+[config.decision_provenance]
+enabled = false
+"#,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .expect("legacy lock with explicit false should deserialize");
+        let actual: ConfigLockfileToml = toml::from_str(&format!(
+            r#"
+version = 1
+codex_version = "{}"
+
+[config]
+"#,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .expect("lock without the opt-in setting should deserialize");
 
         validate_config_lock_replay(&expected, &actual, ConfigLockReplayOptions::default())
-            .expect("old lock without decision provenance should replay as disabled");
+            .expect("explicit false and missing provenance settings should be equivalent");
     }
 
     #[tokio::test]
