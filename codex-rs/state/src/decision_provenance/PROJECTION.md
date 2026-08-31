@@ -82,6 +82,14 @@ subsequent memory observations can create an explicit replacement, but an
 inferred observation cannot rewrite a confirmed user boundary. Inbound must
 treat these boundary entries as read-only.
 
+When the opt-in Git intent bridge is enabled, a request-start crossroad may
+contain a `git_intent_note` source reference and a `constrained_by` relationship
+to the referenced `commit`. An explicit user pivot can add a `conflicts_with`
+relationship from its decision to that commit. The commit SHA and note ref are
+cross-references only: Git's `refs/notes/intention` remains the authoritative
+commit-level intent, and the projection does not copy the note body or publish
+private rationale.
+
 The event schema has its own `schema_version` and the SQLite migration is
 append-only. Future projection versions should use a new filename or explicit
 reader negotiation rather than changing the meaning of `projection-v1.json`.

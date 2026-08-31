@@ -65,13 +65,30 @@ fn memories_config_clamps_count_limits_to_nonzero_values() {
 fn decision_provenance_config_is_opt_in() {
     assert_eq!(
         DecisionProvenanceConfig::from(DecisionProvenanceToml::default()),
-        DecisionProvenanceConfig { enabled: false }
+        DecisionProvenanceConfig {
+            enabled: false,
+            git_intent_bridge: false,
+        }
     );
     assert_eq!(
         DecisionProvenanceConfig::from(DecisionProvenanceToml {
             enabled: Some(true),
+            git_intent_bridge: Some(true),
         }),
-        DecisionProvenanceConfig { enabled: true }
+        DecisionProvenanceConfig {
+            enabled: true,
+            git_intent_bridge: true,
+        }
+    );
+    assert_eq!(
+        DecisionProvenanceConfig::from(DecisionProvenanceToml {
+            enabled: Some(false),
+            git_intent_bridge: Some(true),
+        }),
+        DecisionProvenanceConfig {
+            enabled: false,
+            git_intent_bridge: false,
+        }
     );
 }
 

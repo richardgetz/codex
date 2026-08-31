@@ -1,5 +1,8 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -714,17 +717,39 @@ fn atomic_write_json(path: &Path, text: &str) -> Result<(), FunctionCallError> {
             .unwrap_or("scratchpad"),
         uuid::Uuid::new_v4().simple()
     ));
-    fs::write(&tmp_path, text).map_err(io_error)?;
-    if cfg!(windows) && path.exists() {
-        fs::remove_file(path).map_err(|err| {
-            let _ = fs::remove_file(&tmp_path);
-            io_error(err)
-        })?;
-    }
-    fs::rename(&tmp_path, path).map_err(|err| {
+    let result = (|| {
+        let mut tmp_file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp_path)
+            .map_err(io_error)?;
+        tmp_file.write_all(text.as_bytes()).map_err(io_error)?;
+        tmp_file.sync_all().map_err(io_error)?;
+        drop(tmp_file);
+
+        if cfg!(windows) && path.exists() {
+            fs::remove_file(path).map_err(io_error)?;
+        }
+        fs::rename(&tmp_path, path).map_err(io_error)?;
+        sync_parent_directory(parent)
+    })();
+    if result.is_err() {
         let _ = fs::remove_file(&tmp_path);
-        io_error(err)
-    })
+    }
+    result
+}
+
+fn sync_parent_directory(parent: &Path) -> Result<(), FunctionCallError> {
+    #[cfg(unix)]
+    {
+        File::open(parent)
+            .map_err(io_error)?
+            .sync_all()
+            .map_err(io_error)?;
+    }
+    #[cfg(not(unix))]
+    let _ = parent;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -777,7 +802,7 @@ pub(crate) fn run_lifecycle_cleanup(
         return Ok(());
     }
 
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(codex_home)?;
     let store = ScratchpadStore::new(/*state_home*/ None, codex_home)?;
     let now = Utc::now();
     for mut scratchpad in store.list()? {
@@ -827,7 +852,7 @@ pub(crate) fn record_thread_scratchpad_checkpoint(
         return Ok(());
     }
 
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(codex_home)?;
     let store = ScratchpadStore::new(/*state_home*/ None, codex_home)?;
     let snapshot = store.read_raw(scratchpad_id)?;
     let mut journal = store.read_rollback_journal(scratchpad_id)?;
@@ -836,6 +861,7 @@ pub(crate) fn record_thread_scratchpad_checkpoint(
     journal
         .checkpoints
         .retain(|checkpoint| checkpoint.turn_index < turn_index);
+    prune_rollback_checkpoints(&mut journal, max_user_turn_checkpoints);
 
     if journal
         .checkpoints
@@ -865,7 +891,7 @@ pub(crate) fn restore_thread_scratchpad_checkpoint(
         return Ok(ScratchpadCheckpointRestore::MissingCheckpoint);
     }
 
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(codex_home)?;
     let store = ScratchpadStore::new(/*state_home*/ None, codex_home)?;
     let mut journal = store.read_rollback_journal(scratchpad_id)?;
     journal
@@ -880,6 +906,10 @@ pub(crate) fn restore_thread_scratchpad_checkpoint(
         .find(|checkpoint| checkpoint.turn_index <= target_turn_index)
         .cloned();
 
+    // Persist the pruned journal first. If the process is interrupted before
+    // the scratchpad file is updated, the durable journal still points to the
+    // checkpoint that the next restore can apply.
+    store.write_rollback_journal(&journal)?;
     let restored = match checkpoint {
         Some(checkpoint) => {
             if let Some(scratchpad) = checkpoint.scratchpad {
@@ -892,7 +922,6 @@ pub(crate) fn restore_thread_scratchpad_checkpoint(
         }
         None => ScratchpadCheckpointRestore::MissingCheckpoint,
     };
-    store.write_rollback_journal(&journal)?;
     Ok(restored)
 }
 
@@ -900,13 +929,18 @@ fn prune_rollback_checkpoints(
     journal: &mut ScratchpadRollbackJournal,
     max_user_turn_checkpoints: usize,
 ) {
-    let excess = journal
-        .checkpoints
-        .len()
-        .saturating_sub(max_user_turn_checkpoints);
-    if excess > 0 {
-        journal.checkpoints.drain(..excess);
+    while !journal.checkpoints.is_empty()
+        && (journal.checkpoints.len() > max_user_turn_checkpoints
+            || rollback_journal_exceeds_token_limit(journal))
+    {
+        journal.checkpoints.drain(..1);
     }
+}
+
+fn rollback_journal_exceeds_token_limit(journal: &ScratchpadRollbackJournal) -> bool {
+    serde_json::to_string_pretty(journal)
+        .map(|text| approx_token_count(&text) > MAX_SCRATCHPAD_JOURNAL_TOKENS)
+        .unwrap_or(true)
 }
 
 pub(crate) fn set_thread_continuous_policy(
@@ -914,7 +948,7 @@ pub(crate) fn set_thread_continuous_policy(
     scratchpad_id: &str,
     enabled: bool,
 ) -> Result<Value, FunctionCallError> {
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(codex_home)?;
     let store = ScratchpadStore::new(/*state_home*/ None, codex_home)?;
     let mut scratchpad = match store.read(scratchpad_id) {
         Ok(scratchpad) => scratchpad,
@@ -991,7 +1025,7 @@ fn absorb_scratchpad_context(
     source_scratchpad_id: &str,
     options: ScratchpadAbsorbOptions,
 ) -> Result<ScratchpadAbsorbResult, FunctionCallError> {
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(codex_home)?;
     let store = ScratchpadStore::new(/*state_home*/ None, codex_home)?;
     let source = store.read(source_scratchpad_id)?;
     let mut target = match read_existing_scratchpad(&store, current_thread_id)? {
@@ -1045,7 +1079,7 @@ fn unarchive_current_thread_scratchpad(
     codex_home: &Path,
     current_thread_id: &str,
 ) -> Result<(), FunctionCallError> {
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(codex_home)?;
     let store = ScratchpadStore::new(/*state_home*/ None, codex_home)?;
     let mut scratchpad = store.read(current_thread_id)?;
     prepare_scratchpad_for_write(&mut scratchpad, current_thread_id)?;
@@ -1082,7 +1116,7 @@ fn open_scratchpad_with_default_continuous(
     default_scratchpad_id: &str,
     default_continuous: bool,
 ) -> Result<Value, FunctionCallError> {
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(&store.root)?;
     let objective = string_arg(args, "objective")?;
     let session_key = optional_string_arg(args, "session_key");
     let refresh_session_key = bool_arg(args, "refresh_session_key");
@@ -1390,7 +1424,7 @@ fn append_scratchpad_note(
     args: &Value,
     default_scratchpad_id: &str,
 ) -> Result<Value, FunctionCallError> {
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(&store.root)?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
@@ -1412,7 +1446,7 @@ fn set_next_steps(
     args: &Value,
     default_scratchpad_id: &str,
 ) -> Result<Value, FunctionCallError> {
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(&store.root)?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
@@ -1431,7 +1465,7 @@ fn set_pending_waits(
     args: &Value,
     default_scratchpad_id: &str,
 ) -> Result<Value, FunctionCallError> {
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(&store.root)?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
@@ -1450,7 +1484,7 @@ fn set_action_policy(
     args: &Value,
     default_scratchpad_id: &str,
 ) -> Result<Value, FunctionCallError> {
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(&store.root)?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
@@ -1466,7 +1500,7 @@ fn mark_wait_checked(
     args: &Value,
     default_scratchpad_id: &str,
 ) -> Result<Value, FunctionCallError> {
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(&store.root)?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
@@ -1521,7 +1555,7 @@ fn update_scratchpad(
     args: &Value,
     default_scratchpad_id: &str,
 ) -> Result<Value, FunctionCallError> {
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(&store.root)?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
@@ -1565,7 +1599,7 @@ fn record_outcome(
     args: &Value,
     default_scratchpad_id: &str,
 ) -> Result<Value, FunctionCallError> {
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(&store.root)?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
@@ -1653,7 +1687,7 @@ fn record_delegation(
     args: &Value,
     default_scratchpad_id: &str,
 ) -> Result<Value, FunctionCallError> {
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(&store.root)?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
@@ -1713,7 +1747,7 @@ fn archive_scratchpad(
     args: &Value,
     default_scratchpad_id: &str,
 ) -> Result<Value, FunctionCallError> {
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(&store.root)?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
@@ -1741,7 +1775,7 @@ fn unarchive_scratchpad(
     args: &Value,
     default_scratchpad_id: &str,
 ) -> Result<Value, FunctionCallError> {
-    let _guard = scratchpad_write_guard()?;
+    let _guard = scratchpad_write_guard(&store.root)?;
     let scratchpad_id = string_arg(args, "scratchpad_id")?;
     ensure_current_thread_scratchpad_id(&scratchpad_id, default_scratchpad_id)?;
     let mut scratchpad = store.read(&scratchpad_id)?;
@@ -2492,13 +2526,37 @@ fn json_text(value: &Value) -> Result<String, FunctionCallError> {
     Ok(bounded)
 }
 
-fn scratchpad_write_guard() -> Result<MutexGuard<'static, ()>, FunctionCallError> {
-    SCRATCHPAD_WRITE_LOCK
+struct ScratchpadWriteGuard {
+    _thread_guard: MutexGuard<'static, ()>,
+    lock_file: File,
+}
+
+impl Drop for ScratchpadWriteGuard {
+    fn drop(&mut self) {
+        let _ = self.lock_file.unlock();
+    }
+}
+
+fn scratchpad_write_guard(root: &Path) -> Result<ScratchpadWriteGuard, FunctionCallError> {
+    let thread_guard = SCRATCHPAD_WRITE_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
         .map_err(|_| {
             FunctionCallError::RespondToModel("scratchpad write lock is poisoned".to_string())
-        })
+        })?;
+    fs::create_dir_all(root).map_err(io_error)?;
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .truncate(false)
+        .write(true)
+        .open(root.join(".write.lock"))
+        .map_err(io_error)?;
+    lock_file.lock().map_err(io_error)?;
+    Ok(ScratchpadWriteGuard {
+        _thread_guard: thread_guard,
+        lock_file,
+    })
 }
 
 #[cfg(test)]
@@ -2706,6 +2764,26 @@ mod tests {
     }
 
     #[test]
+    fn scratchpad_write_lock_coordinates_across_file_handles() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let guard = scratchpad_write_guard(tmp.path()).expect("acquire scratchpad lock");
+        let peer_lock = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .truncate(false)
+            .write(true)
+            .open(tmp.path().join(".write.lock"))
+            .expect("open peer scratchpad lock");
+
+        assert!(peer_lock.try_lock().is_err());
+        drop(guard);
+        peer_lock
+            .try_lock()
+            .expect("released scratchpad lock should be available");
+        peer_lock.unlock().expect("release peer scratchpad lock");
+    }
+
+    #[test]
     fn rollback_checkpoints_restore_full_raw_scratchpad_and_prune_by_user_turns() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let codex_home = tmp.path();
@@ -2799,6 +2877,58 @@ mod tests {
         assert_eq!(
             store.read_raw(scratchpad_id).unwrap().unwrap()["future_unknown_field"],
             serde_json::json!({ "preserved": true })
+        );
+    }
+
+    #[test]
+    fn rollback_checkpoints_prune_oldest_snapshots_to_fit_journal_budget() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let codex_home = tmp.path();
+        let store = ScratchpadStore::new(/*state_home*/ None, codex_home).unwrap();
+        let scratchpad_id = "thread-sized-rollback";
+        open_scratchpad(
+            &store,
+            &serde_json::json!({
+                "objective": "sized rollback objective",
+                "next_steps": ["initial"]
+            }),
+            scratchpad_id,
+        )
+        .unwrap();
+
+        for turn_index in 0..10 {
+            let mut snapshot = store.read_raw(scratchpad_id).unwrap().unwrap();
+            snapshot["payload"] = serde_json::json!(format!(
+                "turn {turn_index}: {}",
+                "checkpoint ".repeat(1_600)
+            ));
+            store.write_raw(scratchpad_id, &snapshot).unwrap();
+            record_thread_scratchpad_checkpoint(
+                codex_home,
+                scratchpad_id,
+                turn_index,
+                /*max_user_turn_checkpoints*/ 10,
+            )
+            .unwrap();
+
+            let journal = store.read_rollback_journal(scratchpad_id).unwrap();
+            assert!(!rollback_journal_exceeds_token_limit(&journal));
+        }
+
+        let journal = store.read_rollback_journal(scratchpad_id).unwrap();
+        assert!(journal.checkpoints.len() < 10);
+        assert!(
+            journal
+                .checkpoints
+                .first()
+                .is_some_and(|checkpoint| checkpoint.turn_index > 0)
+        );
+        assert_eq!(
+            journal
+                .checkpoints
+                .last()
+                .map(|checkpoint| checkpoint.turn_index),
+            Some(9)
         );
     }
 

@@ -197,6 +197,7 @@ fn save_config_resolved_fields(
             .enabled
             .then_some(DecisionProvenanceToml {
                 enabled: Some(true),
+                git_intent_bridge: config.decision_provenance.git_intent_bridge.then_some(true),
             });
 
     let agents = lock_config.agents.get_or_insert_with(Default::default);
@@ -583,6 +584,7 @@ codex_version = "{}"
 
 [config.decision_provenance]
 enabled = false
+git_intent_bridge = true
 "#,
             env!("CARGO_PKG_VERSION")
         ))

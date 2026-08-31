@@ -1260,6 +1260,7 @@ mod tests {
             r#"
 [decision_provenance]
 enabled = true
+git_intent_bridge = true
 "#,
         )
         .expect("decision provenance config should deserialize");
@@ -1268,6 +1269,7 @@ enabled = true
             config.decision_provenance,
             Some(DecisionProvenanceToml {
                 enabled: Some(true),
+                git_intent_bridge: Some(true),
             })
         );
     }

@@ -16,6 +16,20 @@ stable/mainline is pulled in.
     `refs/notes/intention`, note reflogs, and git object storage when the git
     metadata resolves inside the trusted project, without making `.git/config`
     or hooks writable.
+- Decision provenance and crossroads:
+  - Config: `[decision_provenance]`; both `enabled` and `git_intent_bridge`
+    default to `false`.
+  - When both are true, request-start preflight reads bounded local
+    `refs/notes/intention` metadata for likely code/API/behavior/invariant or
+    generated-file changes. Relevant `intent_priority: must` notes create an
+    approval crossroad linked to the commit; only an explicit user override
+    naming that Git intent records a user decision while preserving the
+    earlier intent note as history.
+  - The bridge is read-only with respect to Git notes and stores source
+    references rather than duplicating note bodies. The canonical event log
+    and materialized records remain in state SQLite; Inbound reads the
+    versioned projection at
+    `<state_home>/decision-provenance/projection-v1.json`.
 - Account alias switching:
   - CLI: `codex --account <alias>`
   - In-session: `/account <alias>` and `/account default`
@@ -232,6 +246,12 @@ stable/mainline is pulled in.
   - Lifecycle cleanup runs during config load. Defaults: archive non-archived
     pads after 30 days without updates; delete archived pads after 90 days in
     archive. Set either day value to `0` to disable that phase.
+  - Rollback journals are bounded by both the configured checkpoint count and
+    a 32,000-token serialized-size budget. When snapshots are large, the
+    oldest checkpoints are evicted first so recent recovery state is retained.
+  - Scratchpad writes coordinate through a per-state-home cross-process file
+    lock and durable atomic replacement; interrupted writes leave a recoverable
+    journal rather than a partially written JSON file.
 - Situational requirements:
   - Config: `[situational_requirements]`, default `enabled = false`.
   - Rules map triggers such as `code_change`, `test_change`, `iac_change`,
