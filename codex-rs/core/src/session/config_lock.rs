@@ -3,6 +3,7 @@ use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::OrchestratorFeatureToml;
 use codex_config::config_toml::OrchestratorToml;
+use codex_config::types::DecisionProvenanceToml;
 use codex_config::types::MemoriesToml;
 use codex_features::CurrentTimeReminderConfigToml;
 use codex_features::Feature;
@@ -190,6 +191,13 @@ fn save_config_resolved_fields(
         &config.memories,
         "memories",
     )?);
+    lock_config.decision_provenance =
+        config
+            .decision_provenance
+            .enabled
+            .then_some(DecisionProvenanceToml {
+                enabled: Some(true),
+            });
 
     let agents = lock_config.agents.get_or_insert_with(Default::default);
     agents.enabled = Some(config.agents_enabled);
@@ -564,6 +572,34 @@ sandbox_private_desktop = false
             "{message}"
         );
         assert!(message.contains("model = "), "{message}");
+    }
+
+    #[test]
+    fn lock_validation_accepts_legacy_false_opt_in_provenance_setting() {
+        let expected: ConfigLockfileToml = toml::from_str(&format!(
+            r#"
+version = 1
+codex_version = "{}"
+
+[config.decision_provenance]
+enabled = false
+"#,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .expect("legacy lock with explicit false should deserialize");
+        let actual: ConfigLockfileToml = toml::from_str(&format!(
+            r#"
+version = 1
+codex_version = "{}"
+
+[config]
+"#,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .expect("lock without the opt-in setting should deserialize");
+
+        validate_config_lock_replay(&expected, &actual, ConfigLockReplayOptions::default())
+            .expect("explicit false and missing provenance settings should be equivalent");
     }
 
     #[tokio::test]

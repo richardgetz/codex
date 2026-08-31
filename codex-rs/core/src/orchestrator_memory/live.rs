@@ -12,6 +12,7 @@ use super::types::AggregatedMemorySnapshot;
 use super::types::CandidateMemoryItem;
 use super::types::MemoryBucket;
 use super::types::MemoryEvent;
+use super::types::MemorySignal;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use chrono::Utc;
@@ -198,6 +199,10 @@ async fn process_completed_turn(
             &turn_context.config,
             &current_turn_user_texts,
             last_agent_message,
+            forced_trigger.map(|trigger| match trigger {
+                heuristics::ForcedMemoryTrigger::Remember
+                | heuristics::ForcedMemoryTrigger::Forget => MemorySignal::Explicit,
+            }),
         )
         .await
         {
@@ -270,6 +275,11 @@ async fn process_completed_turn(
         &candidates,
     )
     .await?;
+    if turn_context.config.decision_provenance.enabled
+        && let Err(err) = super::provenance::record_candidate_boundaries(session, &candidates).await
+    {
+        warn!("failed indexing user-preference candidates in decision provenance: {err:#}");
+    }
     append_diagnostic_event(
         &turn_context.config.codex_home,
         "wrote_events",

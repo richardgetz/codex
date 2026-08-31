@@ -755,6 +755,15 @@ fn active_turn_interrupt_race(error: &TypedRequestError) -> Option<String> {
     )
 }
 
+/// Returns whether local provenance commands may be exposed for this target.
+pub(crate) fn provenance_commands_enabled_for_target(
+    config: &Config,
+    app_server_target: &crate::AppServerTarget,
+) -> bool {
+    config.decision_provenance.enabled
+        && !matches!(app_server_target, crate::AppServerTarget::Remote { .. })
+}
+
 impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
@@ -762,11 +771,15 @@ impl App {
         cfg: crate::legacy_core::config::Config,
         initial_user_message: Option<crate::chatwidget::UserMessage>,
     ) -> crate::chatwidget::ChatWidgetInit {
+        let provenance_commands_enabled =
+            provenance_commands_enabled_for_target(&cfg, &self.app_server_target);
         crate::chatwidget::ChatWidgetInit {
             config: cfg,
             environment_manager: self.environment_manager.clone(),
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
+            state_db: self.state_db.clone(),
+            provenance_commands_enabled,
             workspace_command_runner: self.workspace_command_runner.clone(),
             initial_user_message,
             enhanced_keys_supported: self.enhanced_keys_supported,

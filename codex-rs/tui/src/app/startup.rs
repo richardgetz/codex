@@ -309,6 +309,11 @@ impl App {
                     environment_manager: environment_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
+                    state_db: state_db.clone(),
+                    provenance_commands_enabled: super::provenance_commands_enabled_for_target(
+                        &config,
+                        &app_server_target,
+                    ),
                     workspace_command_runner: Some(workspace_command_runner.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
@@ -382,6 +387,11 @@ impl App {
                     environment_manager: environment_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
+                    state_db: state_db.clone(),
+                    provenance_commands_enabled: super::provenance_commands_enabled_for_target(
+                        &config,
+                        &app_server_target,
+                    ),
                     workspace_command_runner: Some(workspace_command_runner.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
@@ -445,6 +455,11 @@ impl App {
                     environment_manager: environment_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
+                    state_db: state_db.clone(),
+                    provenance_commands_enabled: super::provenance_commands_enabled_for_target(
+                        &config,
+                        &app_server_target,
+                    ),
                     workspace_command_runner: Some(workspace_command_runner.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),

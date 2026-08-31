@@ -158,6 +158,7 @@ use codex_protocol::protocol::ScratchpadUpdateEvent;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
+use codex_rollout::StateDbHandle;
 use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
@@ -349,6 +350,7 @@ mod command_lifecycle;
 mod connector_mentions;
 mod connectors;
 mod constructor;
+mod decision_provenance_commands;
 pub(crate) use self::connectors::ConnectorScopeGeneration;
 use self::connectors::ConnectorsState;
 mod exec_state;
@@ -519,6 +521,8 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) frame_requester: FrameRequester,
     pub(crate) app_event_tx: AppEventSender,
+    pub(crate) state_db: Option<StateDbHandle>,
+    pub(crate) provenance_commands_enabled: bool,
     /// App-server-backed runner used by status surfaces for workspace metadata probes.
     ///
     /// Tests that do not exercise git status-line refreshes may leave this unset. Production TUI
@@ -566,6 +570,8 @@ pub(crate) enum ExternalEditorState {
 /// active work, arming the double-press quit shortcut, and requesting shutdown-first exit.
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
+    state_db: Option<StateDbHandle>,
+    provenance_commands_enabled: bool,
     codex_op_target: CodexOpTarget,
     bottom_pane: BottomPane,
     transcript: TranscriptState,

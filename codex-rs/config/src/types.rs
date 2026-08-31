@@ -481,6 +481,28 @@ pub struct MemoriesToml {
     pub consolidation_reasoning_effort: Option<ReasoningEffort>,
 }
 
+/// Decision provenance settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct DecisionProvenanceToml {
+    /// When true, enable automatic decision provenance recording and local TUI traversal.
+    pub enabled: Option<bool>,
+}
+
+/// Effective decision provenance settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+pub struct DecisionProvenanceConfig {
+    pub enabled: bool,
+}
+
+impl From<DecisionProvenanceToml> for DecisionProvenanceConfig {
+    fn from(toml: DecisionProvenanceToml) -> Self {
+        Self {
+            enabled: toml.enabled.unwrap_or(false),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoriesScope {

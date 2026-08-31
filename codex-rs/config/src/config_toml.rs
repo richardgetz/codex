@@ -17,6 +17,7 @@ use crate::types::ApprovalsReviewer;
 use crate::types::AppsConfigToml;
 use crate::types::AuthCredentialsStoreMode;
 use crate::types::ConventionalCommitsToml;
+use crate::types::DecisionProvenanceToml;
 use crate::types::EnablementConfig;
 use crate::types::FeedbackConfigToml;
 use crate::types::GitIntentNotesToml;
@@ -505,6 +506,9 @@ pub struct ConfigToml {
 
     /// Memories subsystem settings.
     pub memories: Option<MemoriesToml>,
+
+    /// Decision provenance and crossroads settings.
+    pub decision_provenance: Option<DecisionProvenanceToml>,
 
     /// Orchestrator-memory subsystem settings.
     pub orchestrator_memory: Option<OrchestratorMemoryToml>,
@@ -1249,6 +1253,24 @@ mod tests {
 
     const WORKSPACE_ID_A: &str = "123e4567-e89b-42d3-a456-426614174000";
     const WORKSPACE_ID_B: &str = "123e4567-e89b-42d3-a456-426614174001";
+
+    #[test]
+    fn decision_provenance_can_be_enabled_from_config_toml() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+[decision_provenance]
+enabled = true
+"#,
+        )
+        .expect("decision provenance config should deserialize");
+
+        assert_eq!(
+            config.decision_provenance,
+            Some(DecisionProvenanceToml {
+                enabled: Some(true),
+            })
+        );
+    }
 
     #[test]
     fn forced_chatgpt_workspace_id_accepts_single_string() {
