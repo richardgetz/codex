@@ -1,5 +1,7 @@
 //! Request-start decision provenance preflight.
 
+use super::git_intent_preflight::find_git_intent_conflicts;
+use super::git_intent_preflight::request_has_explicit_git_intent_override;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use codex_git_utils::get_git_repo_root;
@@ -56,14 +58,18 @@ pub(super) async fn record_turn_provenance_preflight(
     let task_scope = ScopeRef::new(Scope::Task, task_id.clone());
     let mut scopes = vec![ScopeRef::global(), task_scope.clone()];
     let mut repository = None;
+    let mut repository_path = None;
     let mut project_ref = None;
     if let Some(cwd) = turn_context.environments.local_environment_cwd() {
-        let repository_path = get_git_repo_root(cwd.as_path());
-        let project_path = repository_path
+        let git_repository_path = get_git_repo_root(cwd.as_path());
+        let project_path = git_repository_path
             .clone()
             .unwrap_or_else(|| cwd.as_path().to_path_buf());
         let project_id = project_path.display().to_string();
-        repository = repository_path.map(|path| path.display().to_string());
+        repository = git_repository_path
+            .clone()
+            .map(|path| path.display().to_string());
+        repository_path = git_repository_path;
         project_ref = Some(project_id.clone());
         for scope in [
             repository
@@ -104,7 +110,16 @@ pub(super) async fn record_turn_provenance_preflight(
         .iter()
         .filter(|boundary| boundary_intersects_request(boundary, &request_tokens, &request_text))
         .collect::<Vec<_>>();
-    if conflicts.is_empty() {
+    let git_intent_conflicts = if turn_context.config.decision_provenance.git_intent_bridge {
+        if let Some(repository_path) = repository_path.as_deref() {
+            find_git_intent_conflicts(repository_path, &request_text, &request_tokens).await
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+    if conflicts.is_empty() && git_intent_conflicts.is_empty() {
         return ProvenancePreflightOutcome::Continue;
     }
 
@@ -113,10 +128,21 @@ pub(super) async fn record_turn_provenance_preflight(
         .map(|boundary| boundary.id.clone())
         .collect::<Vec<_>>();
     boundary_ids.sort();
-    let boundary_key = boundary_ids.join(",");
+    let mut git_intent_commit_ids = git_intent_conflicts
+        .iter()
+        .map(|conflict| conflict.commit.clone())
+        .collect::<Vec<_>>();
+    git_intent_commit_ids.sort();
+    let mut conflict_key_parts = boundary_ids.clone();
+    conflict_key_parts.extend(
+        git_intent_commit_ids
+            .iter()
+            .map(|commit| format!("git:{commit}")),
+    );
+    let conflict_key = conflict_key_parts.join(",");
     let crossroad_id = stable_provenance_id(
         "crossroad",
-        &format!("preflight:{task_id}:{}:{boundary_key}", turn_context.sub_id),
+        &format!("preflight:{task_id}:{}:{conflict_key}", turn_context.sub_id),
     );
     let request_ref = format!("turn:{}", turn_context.sub_id);
     let linked_scratchpad_wait_id =
@@ -133,10 +159,15 @@ pub(super) async fn record_turn_provenance_preflight(
                         })
                     })
             });
-    let source_refs = vec![
+    let mut source_refs = vec![
         SourceReference::new("session", session_id.clone()),
         SourceReference::new("turn", turn_context.sub_id.clone()),
     ];
+    source_refs.extend(
+        git_intent_conflicts
+            .iter()
+            .map(|conflict| conflict.source_ref.clone()),
+    );
     let existing_crossroad = match state_db.get_crossroad(&crossroad_id).await {
         Ok(crossroad) => crossroad,
         Err(err) => {
@@ -155,39 +186,99 @@ pub(super) async fn record_turn_provenance_preflight(
     let highest_authority = conflicts
         .iter()
         .map(|boundary| boundary.authority)
+        .chain((!git_intent_conflicts.is_empty()).then_some(Authority::Repository))
         .max_by_key(|authority| authority.precedence())
         .unwrap_or(Authority::User);
     let explicit_override = request_has_explicit_override(&request_text);
-    let can_override = conflicts
+    let preferences_can_be_overridden = conflicts
         .iter()
         .all(|boundary| boundary.authority.precedence() <= Authority::User.precedence());
-    let category = if !can_override {
+    // A must-level Git intent note is not silently overridden. The current
+    // user instruction is the approval only when it explicitly requests an
+    // override; ordinary conflicting requests remain paused for review.
+    let git_intent_override_approved =
+        git_intent_conflicts.is_empty() || request_has_explicit_git_intent_override(&request_text);
+    let can_override = preferences_can_be_overridden && git_intent_override_approved;
+    let category = if !preferences_can_be_overridden {
         NotificationCategory::Blocked
-    } else if explicit_override {
+    } else if !git_intent_override_approved {
+        NotificationCategory::ApprovalRequired
+    } else if explicit_override && !conflicts.is_empty() {
         NotificationCategory::PreferenceBoundaryCrossed
+    } else if explicit_override {
+        NotificationCategory::ConflictDetected
     } else {
         NotificationCategory::ApprovalRequired
     };
+    let prior_guidance = match (conflicts.is_empty(), git_intent_conflicts.is_empty()) {
+        (false, true) => "the prior boundary",
+        (true, false) => "the prior must-level Git intent",
+        (false, false) => "the prior boundary and Git intent",
+        (true, true) => unreachable!("provenance crossroad requires a conflict"),
+    };
+    let question = format!(
+        "Does this request honor {prior_guidance}, or is an explicit scoped override intended?"
+    );
+    let honor_label = format!("Honor {prior_guidance} and pause");
+    let honor_summary = format!("Keep {prior_guidance} active for this request.");
+    let honor_tradeoff = match (conflicts.is_empty(), git_intent_conflicts.is_empty()) {
+        (false, true) => "May require clarification before proceeding.",
+        (true, false) => "May require reviewing the commit-level intent before proceeding.",
+        (false, false) => {
+            "May require clarification and commit-level intent review before proceeding."
+        }
+        (true, true) => unreachable!("provenance crossroad requires a conflict"),
+    }
+    .to_string();
+    let proceed_tradeoff = match (conflicts.is_empty(), git_intent_conflicts.is_empty()) {
+        (false, true) => "The prior boundary remains active for later requests.",
+        (true, false) => "The prior Git intent remains discoverable for later review.",
+        (false, false) => "The prior boundary and Git intent remain discoverable for later review.",
+        (true, true) => unreachable!("provenance crossroad requires a conflict"),
+    };
+    let proceed_tradeoff = proceed_tradeoff.to_string();
+    let mut expected_tradeoffs = vec![
+        match (conflicts.is_empty(), git_intent_conflicts.is_empty()) {
+            (false, true) => {
+                "Honoring the prior boundary preserves the earlier user-defined pause point."
+            }
+            (true, false) => "Honoring the prior Git intent preserves the commit-level contract.",
+            (false, false) => {
+                "Honoring the prior boundary and Git intent preserves both recorded constraints."
+            }
+            (true, true) => unreachable!("provenance crossroad requires a conflict"),
+        }
+        .to_string(),
+        "An override permits the current request without rewriting historical guidance."
+            .to_string(),
+    ];
+    if !git_intent_conflicts.is_empty() {
+        expected_tradeoffs.push(
+            "The must-level Git intent remains authoritative for its commit and is only being reviewed here."
+                .to_string(),
+        );
+    }
     let crossroad = existing_crossroad.clone().unwrap_or_else(|| Crossroad {
         id: crossroad_id.clone(),
         request_ref: Some(request_ref.clone()),
         task_ref: Some(task_id.clone()),
         project_ref: project_ref.clone(),
         session_id: Some(session_id.clone()),
-        question: "Does this request honor the prior boundary, or is an explicit scoped override intended?"
-            .to_string(),
+        question,
         options: vec![
             CrossroadOption {
                 id: "honor".to_string(),
-                label: "Honor the prior boundary and pause".to_string(),
-                summary: Some("Keep the earlier boundary active for this request.".to_string()),
-                tradeoffs: vec!["May require clarification before proceeding.".to_string()],
+                label: honor_label,
+                summary: Some(honor_summary),
+                tradeoffs: vec![honor_tradeoff],
             },
             CrossroadOption {
                 id: "proceed".to_string(),
                 label: "Proceed with an explicit current-user override".to_string(),
-                summary: Some("Apply a new decision only within the current request scope.".to_string()),
-                tradeoffs: vec!["The prior boundary remains active for later requests.".to_string()],
+                summary: Some(
+                    "Apply a new decision only within the current request scope.".to_string(),
+                ),
+                tradeoffs: vec![proceed_tradeoff],
             },
         ],
         recommended_option: Some("honor".to_string()),
@@ -197,10 +288,7 @@ pub(super) async fn record_turn_provenance_preflight(
             .filter(|boundary| boundary.kind == PreferenceKind::HardConstraint)
             .map(|boundary| boundary.id.clone())
             .collect(),
-        expected_tradeoffs: vec![
-            "Honoring the boundary preserves the earlier user-defined pause point.".to_string(),
-            "An override permits the current request without rewriting historical guidance.".to_string(),
-        ],
+        expected_tradeoffs,
         authority_required: Some(highest_authority),
         status: CrossroadStatus::Open,
         actor: Actor::System,
@@ -216,7 +304,7 @@ pub(super) async fn record_turn_provenance_preflight(
                 crossroad,
                 ProvenanceWriteOptions {
                     idempotency_key: Some(format!(
-                        "preflight-crossroad:{task_id}:{}:{boundary_key}",
+                        "preflight-crossroad:{task_id}:{}:{conflict_key}",
                         turn_context.sub_id
                     )),
                     actor: Actor::System,
@@ -230,7 +318,7 @@ pub(super) async fn record_turn_provenance_preflight(
             turn_context,
             EventMsg::Warning(WarningEvent {
                 message: format!(
-                    "This request intersects preference boundary {boundary_key}, but its crossroad could not be persisted. The turn is paused until the conflict can be reviewed."
+                    "This request intersects prior provenance {conflict_key}, but its crossroad could not be persisted. The turn is paused until the conflict can be reviewed."
                 ),
             }),
         )
@@ -238,23 +326,74 @@ pub(super) async fn record_turn_provenance_preflight(
         return ProvenancePreflightOutcome::Blocked;
     }
 
-    let notification_message = if !can_override {
+    for conflict in &git_intent_conflicts {
+        if let Err(err) = state_db
+            .record_relationship(
+                ProvenanceRelationship {
+                    id: stable_provenance_id(
+                        "relationship",
+                        &format!("{crossroad_id}:constrained:git:{}", conflict.commit),
+                    ),
+                    from_type: codex_state::decision_provenance::EntityType::Crossroad,
+                    from_id: crossroad_id.clone(),
+                    relation: RelationshipKind::ConstrainedBy,
+                    to_type: codex_state::decision_provenance::EntityType::Commit,
+                    to_id: conflict.commit.clone(),
+                    evidence: RelationshipEvidence::Inferred,
+                    summary: Some(
+                        "the request matched a must-level Git intent note for this commit"
+                            .to_string(),
+                    ),
+                    source_refs: vec![conflict.source_ref.clone()],
+                    created_at: provenance_at,
+                    privacy,
+                },
+                ProvenanceWriteOptions {
+                    idempotency_key: Some(format!(
+                        "preflight-crossroad-git-intent:{crossroad_id}:{}",
+                        conflict.commit
+                    )),
+                    actor: Actor::System,
+                    occurred_at: provenance_at,
+                },
+            )
+            .await
+        {
+            warn!("failed to link decision provenance Git intent conflict: {err:#}");
+        }
+    }
+
+    let notification_message = if !preferences_can_be_overridden {
         format!(
-            "Current request intersects higher-authority preference boundary {boundary_key}; it cannot be overridden by a user request."
+            "Current request intersects higher-authority preference boundary {conflict_key}; it cannot be overridden by a user request."
+        )
+    } else if !git_intent_override_approved {
+        format!(
+            "Current request intersects must-level Git intent {conflict_key}; an explicit user approval to override that Git intent is required before proceeding. Review crossroad {crossroad_id}."
         )
     } else if explicit_override {
         format!(
-            "Current request explicitly crosses preference boundary {boundary_key}; a scoped user override was recorded and the prior boundary remains historical."
+            "Current request explicitly crosses prior provenance {conflict_key}; a scoped user override was recorded and the prior records remain historical."
+        )
+    } else if !git_intent_conflicts.is_empty() {
+        format!(
+            "Current request intersects must-level Git intent {conflict_key}; review crossroad {crossroad_id} before choosing a conflicting path."
         )
     } else {
         format!(
-            "Current request intersects preference boundary {boundary_key}; review crossroad {crossroad_id} before treating the choice as an override."
+            "Current request intersects preference boundary {conflict_key}; review crossroad {crossroad_id} before treating the choice as an override."
         )
     };
     let notification_id = stable_provenance_id(
         "notification",
-        &format!("preflight:{task_id}:{}:{boundary_key}", turn_context.sub_id),
+        &format!("preflight:{task_id}:{}:{conflict_key}", turn_context.sub_id),
     );
+    let choice = if !git_intent_conflicts.is_empty() && conflicts.is_empty() {
+        "Honor the prior Git intent or explicitly approve overriding it for this request."
+            .to_string()
+    } else {
+        "Honor the prior boundary or explicitly override it for this request.".to_string()
+    };
     if let Err(err) = state_db
         .record_notification(
             ProvenanceNotification {
@@ -265,10 +404,7 @@ pub(super) async fn record_turn_provenance_preflight(
                 crossroad_id: Some(crossroad_id.clone()),
                 decision_id: None,
                 authority_required: Some(highest_authority),
-                choice: Some(
-                    "Honor the prior boundary or explicitly override it for this request."
-                        .to_string(),
-                ),
+                choice: Some(choice),
                 will_record: true,
                 created_at: provenance_at,
                 source_refs: source_refs.clone(),
@@ -276,7 +412,7 @@ pub(super) async fn record_turn_provenance_preflight(
             },
             ProvenanceWriteOptions {
                 idempotency_key: Some(format!(
-                    "preflight-notification:{task_id}:{}:{boundary_key}",
+                    "preflight-notification:{task_id}:{}:{conflict_key}",
                     turn_context.sub_id
                 )),
                 actor: Actor::System,
@@ -292,7 +428,7 @@ pub(super) async fn record_turn_provenance_preflight(
         let decision_id = stable_provenance_id(
             "decision",
             &format!(
-                "preflight-override:{task_id}:{}:{boundary_key}",
+                "preflight-override:{task_id}:{}:{conflict_key}",
                 turn_context.sub_id
             ),
         );
@@ -309,8 +445,9 @@ pub(super) async fn record_turn_provenance_preflight(
             id: warrant_id.clone(),
             decision_id: decision_id.clone(),
             observations: vec![
-                "The current user instruction explicitly requested proceeding across a prior scoped boundary."
-                    .to_string(),
+                format!(
+                    "The current user instruction explicitly requested proceeding across {prior_guidance}."
+                ),
             ],
             assumptions: vec![
                 "The override applies only to the current request scope.".to_string(),
@@ -318,10 +455,13 @@ pub(super) async fn record_turn_provenance_preflight(
             priorities: vec!["Current explicit user instruction within its allowed scope.".to_string()],
             evidence_refs: source_refs.clone(),
             tradeoffs: vec![
-                "The earlier boundary remains active and discoverable for later requests.".to_string(),
+                "The earlier guidance remains active and discoverable for later requests.".to_string(),
             ],
             uncertainty: None,
-            qualifier: Some("This is a scoped override, not a withdrawal of the prior boundary.".to_string()),
+            qualifier: Some(
+                "This is a scoped override of the recorded conflict; it does not rewrite prior guidance."
+                    .to_string(),
+            ),
             timestamps: timestamps.clone(),
             privacy,
         };
@@ -341,7 +481,7 @@ pub(super) async fn record_turn_provenance_preflight(
                 turn_context,
                 EventMsg::Warning(WarningEvent {
                     message: format!(
-                        "This request crosses preference boundary {boundary_key}, but its override warrant could not be recorded. The turn is paused."
+                        "This request crosses prior provenance {conflict_key}, but its override warrant could not be recorded. The turn is paused."
                     ),
                 }),
             )
@@ -359,17 +499,18 @@ pub(super) async fn record_turn_provenance_preflight(
                     actor: Actor::User,
                     approval_state: ApprovalState::Approved,
                     authority_basis: Authority::User,
-                    summary: "The current user instruction overrides the prior boundary for this request scope."
-                        .to_string(),
+                    summary: format!(
+                        "The current user instruction overrides {prior_guidance} for this request scope."
+                    ),
                     rationale: Some(
-                        "The prior boundary is preserved as historical guidance; this decision records the explicit current pivot."
+                        "The prior records are preserved as historical guidance; this decision records the explicit current pivot."
                             .to_string(),
                     ),
                     assumptions: vec![
-                        "The override is limited to the current request and does not rewrite the boundary.".to_string(),
+                        "The override is limited to the current request and does not rewrite prior guidance.".to_string(),
                     ],
                     tradeoffs: vec![
-                        "Proceeding avoids the earlier pause for this request while preserving the future pause point.".to_string(),
+                        "Proceeding avoids the earlier pause for this request while preserving the future review point.".to_string(),
                     ],
                     request_ref: Some(request_ref),
                     task_ref: Some(task_id.clone()),
@@ -400,7 +541,7 @@ pub(super) async fn record_turn_provenance_preflight(
                 turn_context,
                 EventMsg::Warning(WarningEvent {
                     message: format!(
-                        "This request crosses preference boundary {boundary_key}, but its override decision could not be recorded. The turn is paused."
+                        "This request crosses prior provenance {conflict_key}, but its override decision could not be recorded. The turn is paused."
                     ),
                 }),
             )
@@ -443,13 +584,49 @@ pub(super) async fn record_turn_provenance_preflight(
                 warn!("failed to link decision provenance override: {err:#}");
             }
         }
+        for conflict in &git_intent_conflicts {
+            if let Err(err) = state_db
+                .record_relationship(
+                    ProvenanceRelationship {
+                        id: stable_provenance_id(
+                            "relationship",
+                            &format!("{decision_id}:conflicts:git:{commit}", commit = conflict.commit),
+                        ),
+                        from_type: codex_state::decision_provenance::EntityType::Decision,
+                        from_id: decision_id.clone(),
+                        relation: RelationshipKind::ConflictsWith,
+                        to_type: codex_state::decision_provenance::EntityType::Commit,
+                        to_id: conflict.commit.clone(),
+                        evidence: RelationshipEvidence::Explicit,
+                        summary: Some(
+                            "the current user decision explicitly crossed this must-level Git intent"
+                                .to_string(),
+                        ),
+                        source_refs: vec![conflict.source_ref.clone()],
+                        created_at: provenance_at,
+                        privacy,
+                    },
+                    ProvenanceWriteOptions {
+                        idempotency_key: Some(format!(
+                            "preflight-decision-git-conflict:{decision_id}:{}",
+                            conflict.commit
+                        )),
+                        actor: Actor::User,
+                        occurred_at: provenance_at,
+                    },
+                )
+                .await
+            {
+                warn!("failed to link decision provenance Git intent override: {err:#}");
+            }
+        }
         if let Err(err) = state_db
             .transition_crossroad(
                 &crossroad_id,
                 CrossroadStatus::Resolved,
                 ProvenanceWriteOptions {
                     idempotency_key: Some(format!(
-                        "preflight-crossroad-resolved:{task_id}:{}:{boundary_key}",
+                        "preflight-crossroad-resolved:{task_id}:{}:{conflict_key}",
                         turn_context.sub_id
                     )),
                     actor: Actor::User,

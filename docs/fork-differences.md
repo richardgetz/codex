@@ -318,6 +318,38 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   allow_git_metadata_writes = false
   ```
 
+### Decision provenance and Git intent crossroads
+
+- Decision provenance is disabled by default. It records decision-relevant
+  summaries in Codex's local state SQLite database; rollouts, scratchpads,
+  user-preferences memory, and Git intent notes remain authoritative for their
+  existing responsibilities.
+- The optional Git intent bridge is independently disabled by default. Enable
+  both layers when testing it:
+
+  ```toml
+  [decision_provenance]
+  enabled = true
+  git_intent_bridge = true
+  ```
+
+- With both settings enabled, request-start preflight reads a bounded set of
+  local `refs/notes/intention` notes only for requests that look like code,
+  behavior, API, invariant, generated-file, commit, or pull-request changes.
+  A relevant `intent_priority: must` note creates a linked crossroad and an
+  approval-required notification before model work. The bridge records the
+  commit SHA and note reference, not a second copy of the note body, and never
+  writes Git notes.
+- An ordinary conflicting request remains paused. Only an explicit, scoped
+  user instruction that names the prior Git intent as the thing to override
+  records a user-approved decision and preserves the earlier Git intent as
+  historical context. The bridge is fail-open when Git metadata cannot be
+  read; lower-priority notes do not interrupt the turn.
+- The projection for Inbound is read-only at
+  `<state_home>/decision-provenance/projection-v1.json`. Its format and
+  privacy behavior are documented in
+  [`codex-rs/state/src/decision_provenance/PROJECTION.md`](../codex-rs/state/src/decision_provenance/PROJECTION.md).
+
 ### Collaboration modes
 
 - Mainline removed the legacy `/collab` command; use `/plan` for Plan mode.
@@ -632,7 +664,14 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   history, while scratchpad restore keeps the last
   `[scratchpad.rollback].max_user_turn_checkpoints` user-turn checkpoints. The
   default is 10; set it to 0 to disable scratchpad rollback checkpoints or
-  raise it for deeper scratchpad restore history.
+  raise it for deeper scratchpad restore history. The journal also has a
+  serialized 32,000-token budget, so when snapshots are large Codex evicts the
+  oldest checkpoints first until both limits fit. This prevents checkpoint
+  retention from growing without bound and lets recent checkpoints survive
+  best-effort recovery. Checkpoint writes use a per-state-home cross-process
+  file lock and durable temporary-file replacement so concurrent Codex
+  processes do not overwrite each other's journals, and interrupted writes
+  leave a recoverable journal state.
 - After context compaction, actionable built-in scratchpad state is looped back
   through hidden developer context, using the same model-visible hidden-context
   path as other post-compaction recovery state rather than a synthetic user

@@ -487,18 +487,25 @@ pub struct MemoriesToml {
 pub struct DecisionProvenanceToml {
     /// When true, enable automatic decision provenance recording and local TUI traversal.
     pub enabled: Option<bool>,
+    /// When true, inspect local `refs/notes/intention` notes during provenance preflight.
+    ///
+    /// This setting has no effect unless `enabled` is also true.
+    pub git_intent_bridge: Option<bool>,
 }
 
 /// Effective decision provenance settings after defaults are applied.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 pub struct DecisionProvenanceConfig {
     pub enabled: bool,
+    pub git_intent_bridge: bool,
 }
 
 impl From<DecisionProvenanceToml> for DecisionProvenanceConfig {
     fn from(toml: DecisionProvenanceToml) -> Self {
+        let enabled = toml.enabled.unwrap_or(false);
         Self {
-            enabled: toml.enabled.unwrap_or(false),
+            enabled,
+            git_intent_bridge: enabled && toml.git_intent_bridge.unwrap_or(false),
         }
     }
 }

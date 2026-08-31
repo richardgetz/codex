@@ -248,6 +248,7 @@ pub(crate) mod context_window;
 mod continuous_loopback;
 mod environment;
 pub(crate) mod extension_metrics;
+mod git_intent_preflight;
 mod handlers;
 pub(crate) use handlers::thread_settings_applied_event;
 mod inject;

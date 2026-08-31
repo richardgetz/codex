@@ -1200,6 +1200,10 @@
         "enabled": {
           "description": "When true, enable automatic decision provenance recording and local TUI traversal.",
           "type": "boolean"
+        },
+        "git_intent_bridge": {
+          "description": "When true, inspect local `refs/notes/intention` notes during provenance preflight.\n\nThis setting has no effect unless `enabled` is also true.",
+          "type": "boolean"
         }
       },
       "type": "object"
