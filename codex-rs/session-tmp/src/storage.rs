@@ -135,24 +135,60 @@ pub(super) fn reap_stale_sessions(
         {
             continue;
         }
-        let Some(_session_lock) = try_lock_session(&session_dir)? else {
+        let Some(_session_lock) = (match try_lock_session(&session_dir) {
+            Ok(lock) => lock,
+            Err(error) if is_skippable_reap_error(&error) => {
+                tracing::debug!(
+                    error = %error,
+                    session_dir = %session_dir.display(),
+                    "skipping stale session with inaccessible cleanup state"
+                );
+                continue;
+            }
+            Err(error) => return Err(error),
+        }) else {
             continue;
         };
         let Ok(record) = read_session_record(&record_path) else {
             continue;
         };
+        let fresh_lease = match has_fresh_lease(&session_dir.join(LEASES_DIR), LEASE_STALE_AFTER) {
+            Ok(fresh_lease) => fresh_lease,
+            Err(error) if is_skippable_reap_error(&error) => {
+                tracing::debug!(
+                    error = %error,
+                    session_dir = %session_dir.display(),
+                    "skipping stale session with inaccessible lease state"
+                );
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         if record.schema_version != 1
             || record.session_id != directory_session_id
             || now.saturating_sub(record.updated_at) < max_age
-            || has_fresh_lease(&session_dir.join(LEASES_DIR), LEASE_STALE_AFTER)?
+            || fresh_lease
         {
             continue;
         }
-        if remove_path(&session_dir)? {
-            report.removed_sessions += 1;
+        match remove_path(&session_dir) {
+            Ok(true) => report.removed_sessions += 1,
+            Ok(false) => {}
+            Err(error) if is_skippable_reap_error(&error) => {
+                tracing::debug!(
+                    error = %error,
+                    session_dir = %session_dir.display(),
+                    "skipping stale session that could not be removed"
+                );
+            }
+            Err(error) => return Err(error),
         }
     }
     Ok(report)
+}
+
+fn is_skippable_reap_error(error: &SessionTmpError) -> bool {
+    matches!(error, SessionTmpError::Io(_))
 }
 
 pub(super) fn resolve_user_session_id(
