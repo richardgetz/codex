@@ -720,6 +720,113 @@ fn root_open_reaps_stale_sessions_but_zero_disables_reaping() {
     assert!(old_session_root.exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn root_open_skips_stale_session_with_an_inaccessible_lock() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let stale_config = config(&root);
+    let old_session_root;
+    {
+        let manager = SessionTmpManager::open(
+            &stale_config,
+            root.path(),
+            "old-session",
+            "old-thread",
+            SessionTmpOwner::RootSession,
+        )
+        .unwrap()
+        .unwrap();
+        old_session_root = manager.session_root().to_path_buf();
+    }
+    fs::write(
+        old_session_root.join(SESSION_METADATA_FILE),
+        serde_json::to_vec(&SessionRecord {
+            schema_version: 1,
+            session_id: "old-session".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            status: "active".to_string(),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let lock_path = old_session_root
+        .parent()
+        .unwrap()
+        .join(".locks")
+        .join("old-session.lock");
+    let mut permissions = fs::metadata(&lock_path).unwrap().permissions();
+    permissions.set_mode(0o400);
+    fs::set_permissions(&lock_path, permissions).unwrap();
+
+    let manager = SessionTmpManager::open(
+        &stale_config,
+        root.path(),
+        "new-session",
+        "new-thread",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(manager.session_id(), "new-session");
+    assert!(old_session_root.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn root_open_rejects_stale_session_with_an_unsafe_lock() {
+    let root = tempfile::tempdir().unwrap();
+    let stale_config = config(&root);
+    let old_session_root;
+    {
+        let manager = SessionTmpManager::open(
+            &stale_config,
+            root.path(),
+            "old-session",
+            "old-thread",
+            SessionTmpOwner::RootSession,
+        )
+        .unwrap()
+        .unwrap();
+        old_session_root = manager.session_root().to_path_buf();
+    }
+    fs::write(
+        old_session_root.join(SESSION_METADATA_FILE),
+        serde_json::to_vec(&SessionRecord {
+            schema_version: 1,
+            session_id: "old-session".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            status: "active".to_string(),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let lock_path = old_session_root
+        .parent()
+        .unwrap()
+        .join(".locks")
+        .join("old-session.lock");
+    fs::remove_file(&lock_path).unwrap();
+    std::os::unix::fs::symlink(root.path().join("outside"), &lock_path).unwrap();
+
+    let result = SessionTmpManager::open(
+        &stale_config,
+        root.path(),
+        "new-session",
+        "new-thread",
+        SessionTmpOwner::RootSession,
+    );
+
+    assert!(matches!(
+        result,
+        Err(SessionTmpError::UnsafeManagedPath(path)) if path == lock_path
+    ));
+}
+
 #[test]
 fn session_operation_lock_serializes_new_leases_with_cleanup() {
     let root = tempfile::tempdir().unwrap();

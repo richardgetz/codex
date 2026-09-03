@@ -1,3 +1,5 @@
+use codex_session_tmp::SessionTmpConfig;
+use codex_session_tmp::SessionTmpOwner;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -9,6 +11,8 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use serde_json::Value;
 use serde_json::json;
+use std::fs;
+use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_tmp_tool_records_current_session_and_thread_lineage() -> anyhow::Result<()> {
@@ -177,6 +181,66 @@ async fn session_tmp_guidance_is_only_injected_when_enabled() -> anyhow::Result<
         .message_input_texts("developer")
         .join("\n");
     assert!(!disabled_developer_text.contains("<session_tmp_instructions>"));
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inaccessible_stale_session_lock_does_not_block_provenance_startup() -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            let session_tmp_config = SessionTmpConfig {
+                enabled: true,
+                root: Some(home.join("session-tmp")),
+                stale_after: Duration::from_secs(60),
+            };
+            let old_session_root = {
+                let manager = codex_session_tmp::SessionTmpManager::open(
+                    &session_tmp_config,
+                    home,
+                    "old-session",
+                    "old-thread",
+                    SessionTmpOwner::RootSession,
+                )
+                .unwrap()
+                .unwrap();
+                manager.session_root().to_path_buf()
+            };
+            fs::write(
+                old_session_root.join("session.json"),
+                serde_json::json!({
+                    "schema_version": 1,
+                    "session_id": "old-session",
+                    "created_at": 0,
+                    "updated_at": 0,
+                    "status": "active"
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let lock_path = old_session_root
+                .parent()
+                .unwrap()
+                .join(".locks")
+                .join("old-session.lock");
+            let mut permissions = fs::metadata(&lock_path).unwrap().permissions();
+            permissions.set_mode(0o400);
+            fs::set_permissions(&lock_path, permissions).unwrap();
+        })
+        .with_config(|config| {
+            config.session_tmp.enabled = true;
+            config.decision_provenance.enabled = true;
+            config.decision_provenance.git_intent_bridge = true;
+        });
+
+    let test = builder.build(&server).await?;
+    assert!(test.session_configured.rollout_path.is_some());
 
     Ok(())
 }
