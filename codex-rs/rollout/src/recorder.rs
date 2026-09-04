@@ -134,6 +134,7 @@ pub enum RolloutRecorderParams {
         /// thread ID stable while creating a new immutable rollout file.
         rollout_id_override: Option<RolloutId>,
         forked_from_id: Option<ThreadId>,
+        forked_from_ordinal_exclusive: Option<u64>,
         parent_thread_id: Option<ThreadId>,
         source: Box<SessionSource>,
         thread_source: Option<ThreadSource>,
@@ -230,6 +231,7 @@ impl RolloutRecorderParams {
             conversation_id,
             rollout_id_override: None,
             forked_from_id,
+            forked_from_ordinal_exclusive: None,
             parent_thread_id,
             source: Box::new(source),
             thread_source,
@@ -310,6 +312,18 @@ impl RolloutRecorderParams {
         } = &mut self
         {
             *base = history_base;
+        }
+        self
+    }
+
+    /// Set the logical fork boundary independently of the physical history base.
+    pub fn with_forked_from_ordinal_exclusive(mut self, cutoff: Option<u64>) -> Self {
+        if let Self::Create {
+            forked_from_ordinal_exclusive,
+            ..
+        } = &mut self
+        {
+            *forked_from_ordinal_exclusive = cutoff;
         }
         self
     }
@@ -861,6 +875,7 @@ impl RolloutRecorder {
                 conversation_id,
                 rollout_id_override,
                 forked_from_id,
+                forked_from_ordinal_exclusive,
                 parent_thread_id,
                 source,
                 thread_source,
@@ -891,6 +906,8 @@ impl RolloutRecorder {
                     session_id,
                     id: conversation_id,
                     forked_from_id,
+                    forked_from_ordinal_exclusive: forked_from_ordinal_exclusive
+                        .filter(|_| forked_from_id.is_some()),
                     parent_thread_id,
                     timestamp,
                     cwd: cwd.clone(),
@@ -926,12 +943,17 @@ impl RolloutRecorder {
                     rollout_path: path,
                     ordinal_state,
                     last_logged_error: None,
+                    retry_blocked: None,
                 }
             }
             RolloutRecorderParams::Resume { path } => {
-                let (path, file, ordinal_state) = open_rollout_for_append(path.as_path()).await?;
+                let (path, file, ordinal_state, rollout_lock) =
+                    open_rollout_for_append(path.as_path()).await?;
                 RolloutWriterState {
-                    writer: Some(JsonlWriter { file }),
+                    writer: Some(JsonlWriter {
+                        file,
+                        _rollout_lock: rollout_lock,
+                    }),
                     deferred_creation: false,
                     pending_items: Vec::new(),
                     meta: None,
@@ -939,6 +961,7 @@ impl RolloutRecorder {
                     rollout_path: path,
                     ordinal_state,
                     last_logged_error: None,
+                    retry_blocked: None,
                 }
             }
         };
@@ -1018,8 +1041,9 @@ impl RolloutRecorder {
 
     /// Flush all queued writes and wait until they are committed by the writer task.
     ///
-    /// If the first writer attempt fails, the writer drops and reopens the file handle before
-    /// retrying. This returns an error only when that retry also fails or the writer task is gone.
+    /// If the first writer attempt fails, any partial append is rolled back before the writer
+    /// drops and reopens the file handle for one retry. This returns an error only when that retry
+    /// also fails or the writer task is gone.
     pub async fn flush(&self) -> std::io::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.tx
@@ -1518,6 +1542,8 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         agent_nickname,
         agent_role,
         model_provider,
+        model,
+        reasoning_effort,
         cli_version,
         created_at,
         updated_at,
@@ -1532,6 +1558,8 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
     }
     item.section = section;
     item.project_id = project_id;
+    item.model = model;
+    item.reasoning_effort = reasoning_effort;
     if item.cwd.is_none() {
         item.cwd = cwd;
     }
@@ -1865,9 +1893,10 @@ fn precompute_new_rollout_path(
     Ok((path, timestamp))
 }
 
-fn open_log_file(path: &Path) -> std::io::Result<File> {
+fn open_log_file(path: &Path) -> std::io::Result<(File, File)> {
+    let rollout_lock = compression::acquire_rollout_file_lock(path)?;
     let refresh_modified_time = !compression::plain_rollout_path(path).try_exists()?;
-    let path = compression::materialize_rollout_for_append_blocking(path)?;
+    let path = compression::materialize_rollout_for_append_blocking_unlocked(path)?;
     let Some(parent) = path.parent() else {
         return Err(IoError::other(format!(
             "rollout path has no parent: {}",
@@ -1884,14 +1913,14 @@ fn open_log_file(path: &Path) -> std::io::Result<File> {
         file.set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()))?;
     }
     ensure_rollout_is_newline_terminated(&mut file)?;
-    Ok(file)
+    Ok((file, rollout_lock))
 }
 
 /// Mutable state owned by the background rollout writer.
 ///
 /// Items are first appended to `pending_items`; persist/flush/shutdown remove each item from that
-/// queue only after it is written successfully. I/O failures drop the file handle but keep the
-/// unwritten suffix so the next barrier can reopen the file and retry.
+/// queue only after the complete write barrier succeeds. I/O failures roll back the attempted
+/// append, drop the file handle, and keep the queue so the next barrier can retry safely.
 struct RolloutWriterState {
     writer: Option<JsonlWriter>,
     /// True until a newly created rollout is first materialized.
@@ -1902,6 +1931,7 @@ struct RolloutWriterState {
     rollout_path: PathBuf,
     ordinal_state: RolloutOrdinalState,
     last_logged_error: Option<String>,
+    retry_blocked: Option<String>,
 }
 
 impl RolloutWriterState {
@@ -1937,20 +1967,35 @@ impl RolloutWriterState {
     }
 
     async fn write_pending_with_recovery(&mut self, operation: &str) -> std::io::Result<()> {
+        if let Some(error) = self.retry_blocked.as_deref() {
+            return Err(IoError::other(error));
+        }
         match self.write_pending_once().await {
             Ok(()) => {
                 self.last_logged_error = None;
                 Ok(())
             }
-            Err(first_err) => {
+            Err(first_failure) => {
+                let RolloutWriteFailure {
+                    error: first_err,
+                    retry_safe,
+                } = first_failure;
                 self.enter_recovery_mode(&first_err);
+                if !retry_safe {
+                    self.retry_blocked = Some(first_err.to_string());
+                    warn!(
+                        "not retrying rollout writer {operation} because its partial append could not be rolled back: {first_err}"
+                    );
+                    return Err(first_err);
+                }
                 warn!("failed to {operation} rollout writer; reopening and retrying: {first_err}");
                 match self.write_pending_once().await {
                     Ok(()) => {
                         self.last_logged_error = None;
                         Ok(())
                     }
-                    Err(second_err) => {
+                    Err(second_failure) => {
+                        let second_err = second_failure.error;
                         self.enter_recovery_mode(&second_err);
                         warn!(
                             "retrying rollout writer {operation} failed; first error: \
@@ -1987,9 +2032,14 @@ impl RolloutWriterState {
             return Ok(());
         }
 
-        let file = open_log_file(self.rollout_path.as_path())?;
+        let rollout_path = self.rollout_path.clone();
+        let (file, rollout_lock) =
+            tokio::task::spawn_blocking(move || open_log_file(rollout_path.as_path()))
+                .await
+                .map_err(IoError::other)??;
         self.writer = Some(JsonlWriter {
             file: tokio::fs::File::from_std(file),
+            _rollout_lock: rollout_lock,
         });
         self.deferred_creation = false;
         Ok(())
@@ -2010,16 +2060,77 @@ impl RolloutWriterState {
         Ok(())
     }
 
-    async fn write_pending_once(&mut self) -> std::io::Result<()> {
-        self.ensure_writer_open().await?;
-        self.write_session_meta_if_needed().await?;
+    async fn write_pending_once(&mut self) -> Result<(), RolloutWriteFailure> {
+        self.ensure_writer_open()
+            .await
+            .map_err(RolloutWriteFailure::safe)?;
+        let initial_ordinal_state = self.ordinal_state;
+        let initial_meta = self.meta.clone();
+        let pending_count = self.pending_items.len();
+        let initial_file_len = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| RolloutWriteFailure::safe(IoError::other("rollout writer is not open")))?
+            .file
+            .metadata()
+            .await
+            .map_err(RolloutWriteFailure::safe)?
+            .len();
 
-        self.write_pending_items_once().await?;
-
-        if let Some(writer) = self.writer.as_mut() {
-            writer.file.flush().await?;
+        let write_result = async {
+            self.write_session_meta_if_needed().await?;
+            self.write_pending_items_once().await?;
+            self.writer
+                .as_mut()
+                .ok_or_else(|| IoError::other("rollout writer is not open"))?
+                .file
+                .flush()
+                .await?;
+            Ok::<(), IoError>(())
         }
-        Ok(())
+        .await;
+
+        match write_result {
+            Ok(()) => {
+                if pending_count > 0 {
+                    self.pending_items.drain(..pending_count);
+                }
+                Ok(())
+            }
+            Err(error) => {
+                self.ordinal_state = initial_ordinal_state;
+                self.meta = initial_meta;
+                let rollback_result = match self.writer.as_mut() {
+                    Some(writer) => writer.file.set_len(initial_file_len).await,
+                    None => Err(IoError::other("rollout writer disappeared during rollback")),
+                };
+                let (error, retry_safe) = match rollback_result {
+                    Ok(()) => (error, true),
+                    Err(rollback_error) => {
+                        let current_file_len = match self.writer.as_mut() {
+                            Some(writer) => writer
+                                .file
+                                .metadata()
+                                .await
+                                .ok()
+                                .map(|metadata| metadata.len()),
+                            None => None,
+                        };
+                        if current_file_len == Some(initial_file_len) {
+                            (error, true)
+                        } else {
+                            (
+                                IoError::other(format!(
+                                    "rollout write failed: {error}; failed to roll back partial append: {rollback_error}"
+                                )),
+                                false,
+                            )
+                        }
+                    }
+                };
+                Err(RolloutWriteFailure { error, retry_safe })
+            }
+        }
     }
 
     async fn write_pending_items_once(&mut self) -> std::io::Result<()> {
@@ -2027,7 +2138,6 @@ impl RolloutWriterState {
             return Err(IoError::other("rollout writer is not open"));
         };
 
-        let mut written_count = 0usize;
         let mut write_result = Ok(());
         for item in &self.pending_items {
             match self.ordinal_state.current() {
@@ -2043,14 +2153,23 @@ impl RolloutWriterState {
                     break;
                 }
             }
-            written_count += 1;
-        }
-
-        if written_count > 0 {
-            self.pending_items.drain(..written_count);
         }
 
         write_result
+    }
+}
+
+struct RolloutWriteFailure {
+    error: IoError,
+    retry_safe: bool,
+}
+
+impl RolloutWriteFailure {
+    fn safe(error: IoError) -> Self {
+        Self {
+            error,
+            retry_safe: true,
+        }
     }
 }
 
@@ -2124,34 +2243,44 @@ pub async fn append_rollout_item_to_path(
     rollout_path: &Path,
     item: &RolloutItem,
 ) -> std::io::Result<()> {
-    let (_rollout_path, file, ordinal_state) = open_rollout_for_append(rollout_path).await?;
+    let (_rollout_path, file, ordinal_state, rollout_lock) =
+        open_rollout_for_append(rollout_path).await?;
     let ordinal = ordinal_state.current()?;
-    let mut writer = JsonlWriter { file };
+    let mut writer = JsonlWriter {
+        file,
+        _rollout_lock: rollout_lock,
+    };
     writer.write_rollout_item(item, ordinal).await
 }
 
 async fn open_rollout_for_append(
     path: &Path,
-) -> std::io::Result<(PathBuf, tokio::fs::File, RolloutOrdinalState)> {
-    let refresh_modified_time =
-        !tokio::fs::try_exists(compression::plain_rollout_path(path)).await?;
-    let path = compression::materialize_rollout_for_append(path).await?;
-    let path_for_open = path.clone();
-    let (file, ordinal_state) = tokio::task::spawn_blocking(move || {
+) -> std::io::Result<(PathBuf, tokio::fs::File, RolloutOrdinalState, File)> {
+    let path = path.to_path_buf();
+    let (path, file, ordinal_state, rollout_lock) = tokio::task::spawn_blocking(move || {
+        let rollout_lock = compression::acquire_rollout_file_lock(path.as_path())?;
+        let refresh_modified_time =
+            !compression::plain_rollout_path(path.as_path()).try_exists()?;
+        let path = compression::materialize_rollout_for_append_blocking_unlocked(path.as_path())?;
         let mut file = File::options()
             .read(true)
             .append(true)
-            .open(path_for_open.as_path())?;
+            .open(path.as_path())?;
         if refresh_modified_time {
             file.set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()))?;
         }
         ensure_rollout_is_newline_terminated(&mut file)?;
-        let ordinal_state = ordinal_state_for_rollout(&mut file, path_for_open.as_path())?;
-        Ok::<_, std::io::Error>((file, ordinal_state))
+        let ordinal_state = ordinal_state_for_rollout(&mut file, path.as_path())?;
+        Ok::<_, std::io::Error>((path, file, ordinal_state, rollout_lock))
     })
     .await
     .map_err(IoError::other)??;
-    Ok((path, tokio::fs::File::from_std(file), ordinal_state))
+    Ok((
+        path,
+        tokio::fs::File::from_std(file),
+        ordinal_state,
+        rollout_lock,
+    ))
 }
 
 fn ensure_rollout_is_newline_terminated(file: &mut File) -> std::io::Result<()> {
@@ -2171,6 +2300,7 @@ fn ensure_rollout_is_newline_terminated(file: &mut File) -> std::io::Result<()> 
 
 struct JsonlWriter {
     file: tokio::fs::File,
+    _rollout_lock: File,
 }
 
 #[derive(serde::Serialize)]
@@ -2260,6 +2390,8 @@ fn thread_item_from_state_metadata(
         agent_nickname: item.agent_nickname,
         agent_role: item.agent_role,
         model_provider: Some(item.model_provider),
+        model: item.model,
+        reasoning_effort: item.reasoning_effort,
         cli_version: Some(item.cli_version),
         created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
         updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
@@ -2312,6 +2444,7 @@ async fn resume_candidate_matches_cwd(
             | RolloutItem::Compacted(_)
             | RolloutItem::WorldState(_)
             | RolloutItem::RealtimeItem(_)
+            | RolloutItem::TokenUsageRecord(_)
             | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::EventMsg(_) => None,
         })

@@ -91,10 +91,54 @@ WHERE version = ?
     .fetch_optional(pool)
     .await?
     .is_some();
-    if !legacy_recency_needs_repair {
-        return Ok(());
+    if legacy_recency_needs_repair {
+        sqlx::query(
+            r#"
+UPDATE _sqlx_migrations
+SET version = ?, description = ?
+WHERE version = ?
+  AND checksum = ?
+  AND NOT EXISTS (
+      SELECT 1 FROM _sqlx_migrations WHERE version = ?
+  )
+        "#,
+        )
+        .bind(recency_migration.version)
+        .bind(recency_migration.description.as_ref())
+        .bind(38_i64)
+        .bind(recency_migration.checksum.as_ref())
+        .bind(recency_migration.version)
+        .execute(pool)
+        .await?;
     }
 
+    let Some(projects_recency_migration) = migrator
+        .migrations
+        .iter()
+        .find(|migration| migration.version == 55)
+    else {
+        return Ok(());
+    };
+    let upstream_projects_recency_needs_repair = sqlx::query_scalar::<_, i64>(
+        r#"
+SELECT 1
+FROM _sqlx_migrations
+WHERE version = ?
+  AND checksum = ?
+  AND NOT EXISTS (
+      SELECT 1 FROM _sqlx_migrations WHERE version = ?
+  )
+        "#,
+    )
+    .bind(52_i64)
+    .bind(projects_recency_migration.checksum.as_ref())
+    .bind(projects_recency_migration.version)
+    .fetch_optional(pool)
+    .await?
+    .is_some();
+    if !upstream_projects_recency_needs_repair {
+        return Ok(());
+    }
     sqlx::query(
         r#"
 UPDATE _sqlx_migrations
@@ -106,11 +150,11 @@ WHERE version = ?
   )
         "#,
     )
-    .bind(recency_migration.version)
-    .bind(recency_migration.description.as_ref())
-    .bind(38_i64)
-    .bind(recency_migration.checksum.as_ref())
-    .bind(recency_migration.version)
+    .bind(projects_recency_migration.version)
+    .bind(projects_recency_migration.description.as_ref())
+    .bind(52_i64)
+    .bind(projects_recency_migration.checksum.as_ref())
+    .bind(projects_recency_migration.version)
     .execute(pool)
     .await?;
     Ok(())

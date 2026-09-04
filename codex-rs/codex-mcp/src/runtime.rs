@@ -53,6 +53,7 @@ use crate::connection_manager::McpConnectionSet;
 use crate::elicitation::ElicitationLifecycle;
 use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::ElicitationReviewerHandle;
+use crate::event_stream::McpEventStreamOpener;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::resource_origin::ResourceOrigins;
 use crate::server::EffectiveMcpServer;
@@ -84,7 +85,7 @@ pub struct McpRuntimeInput {
     pub codex_apps_tools_cache_key: ConnectorRuntimeContextKey,
     pub client_mcp_extensions: ClientMcpExtensions,
     pub auth: Option<CodexAuth>,
-    pub codex_apps_auth_manager: Option<Arc<AuthManager>>,
+    pub auth_manager: Option<Arc<AuthManager>>,
     pub elicitation_reviewer: Option<ElicitationReviewerHandle>,
     pub elicitation_lifecycle: Option<ElicitationLifecycle>,
 }
@@ -95,10 +96,16 @@ pub struct McpRuntimeInput {
 /// their exact connections and configuration for as long as they are needed.
 pub struct McpRuntime {
     current: ArcSwap<PublishedMcpRuntime>,
-    hosted_event_server_removals: watch::Sender<()>,
+    event_stream_cancellation: Mutex<EventStreamCancellation>,
     reconnect_pending: AtomicBool,
     elicitation_router: ElicitationRequestRouter,
     resource_origins: Mutex<ResourceOrigins>,
+}
+
+struct EventStreamCancellation {
+    event_server_available: bool,
+    cancel_event_streams_on_server_removal: watch::Sender<()>,
+    retained_subscription_cancellation: Option<watch::Sender<()>>,
 }
 
 struct PublishedMcpRuntime {
@@ -108,6 +115,7 @@ struct PublishedMcpRuntime {
     auth_token: Option<String>,
     plugins_available: bool,
     ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
+    selected_environments: HashMap<String, Arc<Environment>>,
     cached_binding: Mutex<Option<CachedMcpBinding>>,
 }
 
@@ -178,9 +186,14 @@ impl McpRuntime {
                 auth_token: None,
                 plugins_available: false,
                 ready_selected_capability_roots: Vec::new(),
+                selected_environments: HashMap::new(),
                 cached_binding: Mutex::new(None),
             }),
-            hosted_event_server_removals: watch::channel(()).0,
+            event_stream_cancellation: Mutex::new(EventStreamCancellation {
+                event_server_available: false,
+                cancel_event_streams_on_server_removal: watch::channel(()).0,
+                retained_subscription_cancellation: None,
+            }),
             reconnect_pending: AtomicBool::new(false),
             elicitation_router: ElicitationRequestRouter::default(),
             resource_origins: Mutex::default(),
@@ -274,6 +287,7 @@ impl McpRuntime {
         let auth_token = auth.as_ref().and_then(|auth| auth.get_token().ok());
         let plugins_available = input.plugins_available;
         let ready_selected_capability_roots = input.ready_selected_capability_roots.clone();
+        let selected_environments = input.runtime_context.selected_environments.clone();
         let connections = Arc::new(
             McpConnectionSet::new(
                 previous,
@@ -292,6 +306,10 @@ impl McpRuntime {
                         .source()
                         .is_host_owned_apps(CODEX_APPS_MCP_SERVER_NAME, registration.config())
                 });
+        let mut cancellation = self
+            .event_stream_cancellation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.current.store(Arc::new(PublishedMcpRuntime {
             connections,
             config: Some(config),
@@ -299,11 +317,18 @@ impl McpRuntime {
             auth_token,
             plugins_available,
             ready_selected_capability_roots,
+            selected_environments,
             cached_binding: Mutex::new(None),
         }));
         let _ = publish.send(true);
+        cancellation.event_server_available = hosted_event_server_retained;
         if !hosted_event_server_retained {
-            self.hosted_event_server_removals.send_replace(());
+            cancellation
+                .cancel_event_streams_on_server_removal
+                .send_replace(());
+            if let Some(retained) = &cancellation.retained_subscription_cancellation {
+                retained.send_replace(());
+            }
         }
     }
 
@@ -434,6 +459,22 @@ impl McpRuntime {
 
     pub fn current_ready_selected_capability_roots(&self) -> Vec<SelectedCapabilityRoot> {
         self.current.load().ready_selected_capability_roots.clone()
+    }
+
+    /// Whether this publication uses the currently ready environment handles.
+    pub fn current_environments_match(
+        &self,
+        environments: &HashMap<String, Arc<Environment>>,
+    ) -> bool {
+        let current = self.current.load();
+        current.config.is_some()
+            && current.selected_environments.len() == environments.len()
+            && environments.iter().all(|(id, environment)| {
+                current
+                    .selected_environments
+                    .get(id)
+                    .is_some_and(|published| Arc::ptr_eq(published, environment))
+            })
     }
 
     pub fn elicitations_auto_deny(&self) -> bool {
@@ -595,7 +636,13 @@ impl McpRuntime {
         &self,
         server: &str,
     ) -> anyhow::Result<(Arc<McpConnectionSet>, watch::Receiver<()>)> {
-        let hosted_event_server_removals = self.hosted_event_server_removals.subscribe();
+        let cancellation = self
+            .event_stream_cancellation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cancel_event_streams_on_server_removal = cancellation
+            .cancel_event_streams_on_server_removal
+            .subscribe();
         let current = self.current.load();
         if server == CODEX_APPS_MCP_SERVER_NAME
             && !current
@@ -612,8 +659,43 @@ impl McpRuntime {
         }
         Ok((
             Arc::clone(&current.connections),
-            hosted_event_server_removals,
+            cancel_event_streams_on_server_removal,
         ))
+    }
+
+    pub(crate) fn event_stream_opener(&self) -> anyhow::Result<McpEventStreamOpener> {
+        let cancellation = self
+            .event_stream_cancellation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let connection = self
+            .current
+            .load()
+            .connections
+            .event_stream_connection
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Event subscriptions are unavailable for this task"))?;
+        let cancel_event_streams_on_server_removal = cancellation
+            .retained_subscription_cancellation
+            .as_ref()
+            .unwrap_or(&cancellation.cancel_event_streams_on_server_removal)
+            .clone();
+        Ok(McpEventStreamOpener {
+            connection,
+            cancellation_receiver: cancel_event_streams_on_server_removal.subscribe(),
+            cancel_event_streams_on_server_removal,
+        })
+    }
+
+    pub(crate) fn forward_event_server_removals_to(&self, retained: watch::Sender<()>) {
+        let mut cancellation = self
+            .event_stream_cancellation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !cancellation.event_server_available {
+            retained.send_replace(());
+        }
+        cancellation.retained_subscription_cancellation = Some(retained);
     }
 
     pub async fn shutdown(&self) {
@@ -701,7 +783,7 @@ impl McpRuntimeContext {
         self.local_process_cwd.clone()
     }
 
-    fn local_http_client(&self) -> Arc<dyn HttpClient> {
+    pub(crate) fn local_http_client(&self) -> Arc<dyn HttpClient> {
         Arc::clone(&self.local_http_client)
     }
 
@@ -842,6 +924,7 @@ mod tests {
             auth_token: None,
             plugins_available: false,
             ready_selected_capability_roots: Vec::new(),
+            selected_environments: HashMap::new(),
             cached_binding: Mutex::new(None),
         });
         let first = McpRuntime::binding_from_published_runtime(

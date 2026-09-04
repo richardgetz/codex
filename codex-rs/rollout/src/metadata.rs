@@ -12,6 +12,7 @@ use chrono::Utc;
 use codex_protocol::RolloutId;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -26,6 +27,7 @@ use codex_state::ThreadMetadataBuilder;
 use codex_state::apply_rollout_item;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 use tracing::info;
 use tracing::warn;
 
@@ -76,6 +78,7 @@ pub fn builder_from_items(
         | RolloutItem::TurnContext(_)
         | RolloutItem::WorldState(_)
         | RolloutItem::RealtimeItem(_)
+        | RolloutItem::TokenUsageRecord(_)
         | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::EventMsg(_) => None,
     }) && let Some(builder) = builder_from_session_meta(session_meta, rollout_path)
@@ -107,6 +110,26 @@ pub fn builder_from_items(
 pub fn rollout_id_from_path(rollout_path: &Path) -> Option<RolloutId> {
     let file_name = rollout_path.file_name()?.to_str()?;
     Some(RolloutFileName::parse(file_name)?.rollout_id())
+}
+
+/// Reads the logical fork cutoff without mistaking a revert's history base for its parent.
+///
+/// Older rollouts lack the explicit cutoff. Their history base is safe to use only when it
+/// names the logical parent directly or the current file is the thread's original rollout.
+/// An ambiguous legacy revert omits the cutoff rather than reporting another thread's boundary.
+pub fn forked_from_ordinal_exclusive(
+    meta: &SessionMeta,
+    rollout_path: Option<&Path>,
+) -> Option<u64> {
+    let parent_id = meta.forked_from_id?;
+    meta.forked_from_ordinal_exclusive.or_else(|| {
+        meta.history_base
+            .filter(|base| {
+                base.thread_id == parent_id
+                    || rollout_path.and_then(rollout_id_from_path) == Some(meta.id)
+            })
+            .map(|base| base.end_ordinal_exclusive)
+    })
 }
 
 pub async fn extract_metadata_from_rollout(
@@ -146,6 +169,7 @@ pub async fn extract_metadata_from_rollout(
             | RolloutItem::TurnContext(_)
             | RolloutItem::WorldState(_)
             | RolloutItem::RealtimeItem(_)
+            | RolloutItem::TokenUsageRecord(_)
             | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::EventMsg(_) => None,
         }),
@@ -231,6 +255,24 @@ pub(crate) async fn backfill_sessions_with_lease(
         }
     }
 
+    // Keep the rollout snapshot and its SQLite projection consistent with local lifecycle
+    // operations. Deletion, archiving, and replacement all take the exclusive counterpart of
+    // this lock before changing rollout files, so they cannot invalidate a path between scan and
+    // upsert or recreate a deleted thread after the backfill observes it.
+    let _maintenance_read_guard = loop {
+        match crate::try_acquire_rollout_maintenance_read_lock(codex_home) {
+            Ok(Some(guard)) => break guard,
+            Ok(None) => tokio::time::sleep(Duration::from_millis(10)).await,
+            Err(err) => {
+                warn!(
+                    "failed to acquire rollout maintenance read lock at {}: {err}",
+                    codex_home.display()
+                );
+                return;
+            }
+        }
+    };
+
     let sessions_root = codex_home.join(SESSIONS_SUBDIR);
     let archived_root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
     let mut rollout_paths: Vec<BackfillRolloutPath> = Vec::new();
@@ -268,6 +310,33 @@ pub(crate) async fn backfill_sessions_with_lease(
     for batch in rollout_paths.chunks(BACKFILL_BATCH_SIZE) {
         for rollout in batch {
             stats.scanned = stats.scanned.saturating_add(1);
+            // Hold the per-rollout writer lock across both extraction and projection. The
+            // maintenance read lock fences file replacement, while this lock also fences a live
+            // writer so a stale snapshot cannot overwrite newer projected metadata.
+            let rollout_path = rollout.path.clone();
+            let _rollout_lock = match tokio::task::spawn_blocking(move || {
+                compression::acquire_rollout_file_lock(rollout_path.as_path())
+            })
+            .await
+            {
+                Ok(Ok(lock)) => lock,
+                Ok(Err(err)) => {
+                    stats.failed = stats.failed.saturating_add(1);
+                    warn!(
+                        "failed to lock rollout {} for backfill: {err}",
+                        rollout.path.display()
+                    );
+                    continue;
+                }
+                Err(err) => {
+                    stats.failed = stats.failed.saturating_add(1);
+                    warn!(
+                        "rollout lock task failed for {} during backfill: {err}",
+                        rollout.path.display()
+                    );
+                    continue;
+                }
+            };
             match extract_metadata_from_rollout(&rollout.path, default_provider).await {
                 Ok(outcome) => {
                     if outcome.parse_errors > 0

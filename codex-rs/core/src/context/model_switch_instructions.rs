@@ -8,8 +8,9 @@ pub(crate) struct ModelSwitchInstructions {
 
 impl ModelSwitchInstructions {
     pub(crate) fn new(model_instructions: impl Into<String>) -> Self {
+        let model_instructions = model_instructions.into();
         Self {
-            model_instructions: model_instructions.into(),
+            model_instructions: crate::context::truncate_model_catalog_context(&model_instructions),
         }
     }
 }

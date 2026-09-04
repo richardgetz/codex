@@ -2,9 +2,9 @@ use super::*;
 use crate::config::ConfigBuilder;
 use crate::plugins::plugins_manager_for_config;
 use crate::skills_load_input_from_config;
-use codex_config::CONFIG_TOML_FILE;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_login::test_support::auth_manager_from_optional_auth;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_skills_extension::HostSkillsService;
@@ -290,39 +290,14 @@ async fn apply_role_regenerates_model_instructions_when_personality_changes() {
 }
 
 #[tokio::test]
-async fn apply_role_preserves_active_exec_policy_rulesets() {
-    let home = TempDir::new().expect("create temp dir");
-    tokio::fs::write(
-        home.path().join(CONFIG_TOML_FILE),
-        r#"
-[exec_policy.rulesets.implementation-agent]
-mode = "exclusive"
-files = ["./implementation-agent.rules"]
-"#,
-    )
-    .await
-    .expect("write config.toml");
-    tokio::fs::write(
-        home.path().join("implementation-agent.rules"),
-        r#"prefix_rule(pattern=["cargo", "test"], decision="allow")"#,
-    )
-    .await
-    .expect("write rules file");
-    let mut config = ConfigBuilder::default()
-        .codex_home(home.path().to_path_buf())
-        .harness_overrides(ConfigOverrides {
-            exec_policy_rulesets: Some(vec!["implementation-agent".to_string()]),
-            ..Default::default()
-        })
-        .fallback_cwd(Some(home.path().to_path_buf()))
-        .build()
-        .await
-        .expect("load config");
-    let before_exec_policy = config.exec_policy.clone();
+async fn apply_role_reports_explicit_service_tier() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
     let role_path = write_role_config(
         &home,
-        "developer-instructions-only.toml",
-        "developer_instructions = \"Stay focused\"",
+        "tiered-role.toml",
+        r#"developer_instructions = "Stay focused"
+service_tier = "priority"
+"#,
     )
     .await;
     config.agent_roles.insert(
@@ -338,7 +313,40 @@ files = ["./implementation-agent.rules"]
         .await
         .expect("custom role should apply");
 
-    assert_eq!(config.exec_policy, before_exec_policy);
+    assert_eq!(
+        config.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
+}
+
+#[tokio::test]
+async fn apply_role_preserves_existing_service_tier_without_override() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+    let role_path = write_role_config(
+        &home,
+        "default-tier-role.toml",
+        r#"developer_instructions = "Stay focused"
+"#,
+    )
+    .await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    apply_role_to_config(&mut config, Some("custom"))
+        .await
+        .expect("custom role should apply");
+
+    assert_eq!(
+        config.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
 }
 
 #[tokio::test]
@@ -700,6 +708,29 @@ fn spawn_tool_spec_marks_role_locked_reasoning_effort_only() {
     assert!(spec.contains(
             "Review carefully.\n- This role's reasoning effort is set to `medium` and cannot be changed."
         ));
+}
+
+#[test]
+fn spawn_tool_spec_omits_role_service_tier() {
+    let tempdir = TempDir::new().expect("create temp dir");
+    let role_path = tempdir.path().join("tiered.toml");
+    fs::write(
+        &role_path,
+        "developer_instructions = \"Stay fast\"\nservice_tier = \"priority\"\n",
+    )
+    .expect("write role config");
+    let user_defined_roles = BTreeMap::from([(
+        "tiered".to_string(),
+        AgentRoleConfig {
+            description: Some("Stay fast.".to_string()),
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    )]);
+
+    let spec = spawn_tool_spec::build(&user_defined_roles);
+
+    assert!(spec.contains("tiered: {\nStay fast.\n}"));
 }
 
 #[test]

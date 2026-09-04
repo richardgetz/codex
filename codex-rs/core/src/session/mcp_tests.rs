@@ -47,7 +47,7 @@ fn guardian_elicitation_review_request_builds_mcp_tool_call() {
     }))));
 
     let GuardianElicitationReview::ApprovalRequest(guardian_request) =
-        guardian_elicitation_review_request(&request)
+        guardian_elicitation_review_request(&request, /*originating_call_id*/ None)
     else {
         panic!("expected Guardian MCP tool call request");
     };
@@ -110,7 +110,7 @@ fn guardian_elicitation_review_request_defaults_missing_tool_params() {
     let request = form_request(guardian_meta(/*tool_params*/ None));
 
     let GuardianElicitationReview::ApprovalRequest(guardian_request) =
-        guardian_elicitation_review_request(&request)
+        guardian_elicitation_review_request(&request, /*originating_call_id*/ None)
     else {
         panic!("expected Guardian MCP tool call request");
     };
@@ -187,7 +187,7 @@ fn guardian_elicitation_review_request_requires_opt_in() {
     })));
 
     assert_eq!(
-        guardian_elicitation_review_request(&request),
+        guardian_elicitation_review_request(&request, /*originating_call_id*/ None),
         GuardianElicitationReview::NotRequested
     );
 }
@@ -205,7 +205,7 @@ fn guardian_elicitation_review_request_declines_unsupported_opt_in_shapes() {
         }),
     };
     assert!(matches!(
-        guardian_elicitation_review_request(&url_request),
+        guardian_elicitation_review_request(&url_request, /*originating_call_id*/ None),
         GuardianElicitationReview::Decline(_)
     ));
 
@@ -225,7 +225,10 @@ fn guardian_elicitation_review_request_declines_unsupported_opt_in_shapes() {
         }),
     };
     assert!(matches!(
-        guardian_elicitation_review_request(&non_empty_schema_request),
+        guardian_elicitation_review_request(
+            &non_empty_schema_request,
+            /*originating_call_id*/ None
+        ),
         GuardianElicitationReview::Decline(_)
     ));
 
@@ -234,7 +237,10 @@ fn guardian_elicitation_review_request_declines_unsupported_opt_in_shapes() {
         "codex_request_type": "approval_request",
     })));
     assert!(matches!(
-        guardian_elicitation_review_request(&missing_tool_name_request),
+        guardian_elicitation_review_request(
+            &missing_tool_name_request,
+            /*originating_call_id*/ None
+        ),
         GuardianElicitationReview::Decline(_)
     ));
 }

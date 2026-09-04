@@ -261,7 +261,9 @@ jobs:
           path: dist/${{ matrix.target }}/unsigned-build/*
 
   sign-macos:
-    needs: build
+    needs:
+      - build
+      - compute-release
     if: ${{ github.ref == 'refs/heads/stable' }}
     name: Sign - ${{ matrix.target }}
     runs-on: macos-15
@@ -294,6 +296,7 @@ jobs:
           APPLE_TEAM_ID: W9HW8JL7CP
           MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
           MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+          RELEASE_VERSION: ${{ needs.compute-release.outputs.version }}
           TARGET_TRIPLE: ${{ matrix.target }}
         run: |
           set -euo pipefail
@@ -397,7 +400,8 @@ jobs:
             --target "${TARGET_TRIPLE}" \
             --bundle primary \
             --entrypoint-dir "${release_dir}" \
-            --archive-dir "${dest}"
+            --archive-dir "${dest}" \
+            --package-version "${RELEASE_VERSION}"
 
           package_dir="${RUNNER_TEMP}/codex-package-${TARGET_TRIPLE}"
           for binary in codex codex-code-mode-host; do

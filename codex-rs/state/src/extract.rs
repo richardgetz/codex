@@ -28,6 +28,7 @@ pub fn apply_rollout_item(
         RolloutItem::WorldState(_) => {}
         RolloutItem::SecurityRiskScore(_) => {}
         RolloutItem::RealtimeItem(_) => {}
+        RolloutItem::TokenUsageRecord(_) => {}
     }
     if metadata.model_provider.is_empty() {
         metadata.model_provider = default_provider.to_string();
@@ -56,6 +57,7 @@ pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
         | RolloutItem::Compacted(_)
         | RolloutItem::RealtimeItem(_)
         | RolloutItem::SecurityRiskScore(_)
+        | RolloutItem::TokenUsageRecord(_)
         | RolloutItem::WorldState(_) => false,
     }
 }
@@ -394,6 +396,7 @@ mod tests {
                     forked_from_id: Some(
                         ThreadId::from_string(&Uuid::now_v7().to_string()).expect("thread id"),
                     ),
+                    forked_from_ordinal_exclusive: None,
                     parent_thread_id: None,
                     timestamp: "2026-02-26T00:00:00.000Z".to_string(),
                     cwd: PathBuf::from("/child/worktree"),
@@ -424,6 +427,7 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 trace_id: None,
+                root_turn_id: None,
                 cwd: serde_json::from_value(serde_json::json!(
                     std::env::current_dir()
                         .expect("current directory")
@@ -447,6 +451,7 @@ mod tests {
                 multi_agent_version: None,
                 multi_agent_mode: None,
                 realtime_active: None,
+                cyber_access_program: None,
                 effort: None,
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
                 user_instructions: None,
@@ -476,6 +481,7 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 trace_id: None,
+                root_turn_id: None,
                 cwd: serde_json::from_value(serde_json::json!(
                     std::env::current_dir()
                         .expect("current directory")
@@ -499,6 +505,7 @@ mod tests {
                 multi_agent_version: None,
                 multi_agent_mode: None,
                 realtime_active: None,
+                cyber_access_program: None,
                 effort: None,
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
                 user_instructions: None,
@@ -528,6 +535,7 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 trace_id: None,
+                root_turn_id: None,
                 cwd: serde_json::from_value(serde_json::json!(&fallback_cwd))
                     .expect("absolute fallback cwd"),
                 workspace_roots: None,
@@ -547,6 +555,7 @@ mod tests {
                 multi_agent_version: None,
                 multi_agent_mode: None,
                 realtime_active: None,
+                cyber_access_program: None,
                 effort: Some(ReasoningEffort::High),
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
                 user_instructions: None,
@@ -569,6 +578,7 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 trace_id: None,
+                root_turn_id: None,
                 cwd: serde_json::from_value(serde_json::json!(
                     std::env::current_dir()
                         .expect("current directory")
@@ -592,6 +602,7 @@ mod tests {
                 multi_agent_version: None,
                 multi_agent_mode: None,
                 realtime_active: None,
+                cyber_access_program: None,
                 effort: Some(ReasoningEffort::High),
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
                 user_instructions: None,
@@ -615,6 +626,7 @@ mod tests {
             .join("updated/workspace");
         let item = RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(
             ThreadSettingsAppliedEvent {
+                thread_id: None,
                 thread_settings: ThreadSettingsSnapshot {
                     model: "gpt-5.2-codex".to_string(),
                     model_provider_id: "updated-provider".to_string(),
@@ -669,6 +681,7 @@ mod tests {
                     session_id: thread_id.into(),
                     id: thread_id,
                     forked_from_id: None,
+                    forked_from_ordinal_exclusive: None,
                     parent_thread_id: None,
                     timestamp: "2026-02-26T00:00:00.000Z".to_string(),
                     cwd: PathBuf::from("/workspace"),

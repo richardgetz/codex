@@ -6,8 +6,10 @@ use codex_app_server_protocol::ThreadHistoryChangeSet;
 use codex_app_server_protocol::project_rollout_line;
 use codex_protocol::ThreadId;
 use codex_rollout::RolloutItem;
+use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncSeekExt;
+use tokio::io::BufReader;
 use tracing::warn;
 
 use super::LocalThreadStore;
@@ -15,6 +17,10 @@ use super::thread_history::ProjectedRolloutLine;
 use super::thread_history::RolloutProjectionStep;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
+
+const PROJECTION_BATCH_BYTES: u64 = 256 * 1024;
+const MAX_ROLLOUT_LINE_BYTES: usize = 16 * 1024 * 1024;
+const ROLLOUT_RECORD_DISCARD_CHUNK_BYTES: u64 = 8 * 1024;
 
 pub(super) async fn materialize_to_sqlite(
     store: &LocalThreadStore,
@@ -29,9 +35,9 @@ pub(super) async fn materialize_to_sqlite(
         .as_ref()
         .map_or(0, |state| state.next_byte_offset);
     if projection_state.is_none()
-        && !tokio::fs::try_exists(rollout_path)
+        && codex_rollout::existing_rollout_path(rollout_path)
             .await
-            .map_err(thread_store_io_error)?
+            .is_none()
     {
         return Ok(());
     }
@@ -46,85 +52,174 @@ pub(super) async fn materialize_to_sqlite(
     let expected_ordinal = projection_state
         .as_ref()
         .map_or(initial_ordinal, |state| state.next_ordinal);
-    let (projections, next_offset) = read_projection_steps(
-        rollout_path,
-        start_offset,
-        expected_ordinal,
-        thread_id,
-        subagent_history_start_ordinal,
-    )
-    .await?;
-    // Empty valid records can still consume bytes through blank complete lines.
-    if projections.is_empty() && start_offset == next_offset {
-        return Ok(());
-    }
-    super::thread_history::apply_projection(
-        store,
-        thread_id,
-        start_offset,
-        next_offset,
-        initial_ordinal,
-        projections,
-    )
-    .await
-}
-
-async fn read_projection_steps(
-    rollout_path: &Path,
-    start_offset: u64,
-    expected_ordinal: u64,
-    thread_id: ThreadId,
-    subagent_history_start_ordinal: Option<u64>,
-) -> ThreadStoreResult<(Vec<RolloutProjectionStep>, u64)> {
-    let file_end_offset = match tokio::fs::metadata(rollout_path).await {
-        Ok(metadata) => metadata.len(),
+    let path = rollout_path.to_path_buf();
+    let file =
+        tokio::task::spawn_blocking(move || codex_rollout::open_rollout_seekable_reader(&path))
+            .await
+            .map_err(|err| ThreadStoreError::Internal {
+                message: format!("failed to join rollout projection read: {err}"),
+            })?;
+    let file = match file {
+        Ok(file) => tokio::fs::File::from_std(file),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound && start_offset == 0 => {
-            return Ok((Vec::new(), 0));
+            return Ok(());
         }
         Err(err) => return Err(thread_store_io_error(err)),
     };
-    let byte_count =
-        file_end_offset
-            .checked_sub(start_offset)
-            .ok_or_else(|| ThreadStoreError::Internal {
-                message: "durable rollout shrank before projection".to_string(),
-            })?;
-    let byte_count = usize::try_from(byte_count).map_err(|_| ThreadStoreError::Internal {
-        message: "durable rollout append exceeds addressable memory".to_string(),
-    })?;
-    let mut bytes = vec![0; byte_count];
-    let mut file = tokio::fs::File::open(rollout_path)
-        .await
-        .map_err(thread_store_io_error)?;
+    let file_end_offset = file.metadata().await.map_err(thread_store_io_error)?.len();
+    if file_end_offset < start_offset {
+        return Err(ThreadStoreError::Internal {
+            message: "durable rollout shrank before projection".to_string(),
+        });
+    }
+    let mut file = BufReader::with_capacity(PROJECTION_BATCH_BYTES as usize, file);
     file.seek(SeekFrom::Start(start_offset))
         .await
         .map_err(thread_store_io_error)?;
-    file.read_exact(bytes.as_mut_slice())
-        .await
-        .map_err(thread_store_io_error)?;
-    // Only project the newline-terminated prefix; leave a trailing partial record for the next
-    // pass.
-    let complete_byte_count = bytes
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .map_or(0, |index| index + 1);
+    let mut line_bytes =
+        Vec::with_capacity(MAX_ROLLOUT_LINE_BYTES.min(PROJECTION_BATCH_BYTES as usize));
+    let projection_context = ProjectionReadContext {
+        file_end_offset,
+        rollout_path,
+        thread_id,
+        subagent_history_start_ordinal,
+    };
+    let mut start_offset = start_offset;
+    let mut expected_ordinal = expected_ordinal;
+    loop {
+        let Some((projections, next_offset, next_ordinal)) = read_projection_steps(
+            &mut file,
+            &mut line_bytes,
+            &projection_context,
+            start_offset,
+            expected_ordinal,
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+        // Empty valid records can still consume bytes through blank complete lines.
+        if projections.is_empty() && start_offset == next_offset {
+            return Ok(());
+        }
+        super::thread_history::apply_projection(
+            store,
+            thread_id,
+            start_offset,
+            next_offset,
+            initial_ordinal,
+            projections,
+        )
+        .await?;
+        start_offset = next_offset;
+        expected_ordinal = next_ordinal;
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ProjectionReadContext<'a> {
+    file_end_offset: u64,
+    rollout_path: &'a Path,
+    thread_id: ThreadId,
+    subagent_history_start_ordinal: Option<u64>,
+}
+
+async fn read_projection_steps(
+    reader: &mut BufReader<tokio::fs::File>,
+    line_bytes: &mut Vec<u8>,
+    context: &ProjectionReadContext<'_>,
+    start_offset: u64,
+    expected_ordinal: u64,
+) -> ThreadStoreResult<Option<(Vec<RolloutProjectionStep>, u64, u64)>> {
+    let ProjectionReadContext {
+        file_end_offset,
+        rollout_path,
+        thread_id,
+        subagent_history_start_ordinal,
+    } = *context;
     let mut projections = Vec::new();
     let mut next_ordinal = expected_ordinal;
     let mut next_offset = start_offset;
-    let mut pending_rejected_line_count = 0;
+    let mut pending_rejected_line_count = 0_u64;
     let mut line_start_offset = start_offset;
     // Keep rejected lines pending until a later valid ordinal proves whether they consumed history.
     // This lets a same-ordinal retry replace a failed write without advancing only one checkpoint.
-    for line_bytes in bytes[..complete_byte_count].split_inclusive(|byte| *byte == b'\n') {
-        let line_end_offset = line_start_offset
-            .checked_add(u64::try_from(line_bytes.len()).map_err(|_| {
-                ThreadStoreError::Internal {
-                    message: "durable rollout byte offset overflow".to_string(),
-                }
-            })?)
+    loop {
+        if next_offset > start_offset
+            && line_start_offset.saturating_sub(start_offset) >= PROJECTION_BATCH_BYTES
+        {
+            rewind_projection_reader(reader, next_offset).await?;
+            return Ok(Some((projections, next_offset, next_ordinal)));
+        }
+        let available_bytes = file_end_offset
+            .checked_sub(line_start_offset)
             .ok_or_else(|| ThreadStoreError::Internal {
                 message: "durable rollout byte offset overflow".to_string(),
             })?;
+        let Some(record) = read_rollout_record(reader, line_bytes, available_bytes)
+            .await
+            .map_err(thread_store_io_error)?
+        else {
+            let current_end_offset = reader
+                .get_ref()
+                .metadata()
+                .await
+                .map_err(thread_store_io_error)?
+                .len();
+            if current_end_offset < file_end_offset {
+                return Err(ThreadStoreError::Internal {
+                    message: "durable rollout shrank during projection".to_string(),
+                });
+            }
+            if next_offset != line_start_offset {
+                rewind_projection_reader(reader, next_offset).await?;
+            }
+            return if next_offset == start_offset {
+                Ok(None)
+            } else {
+                Ok(Some((projections, next_offset, next_ordinal)))
+            };
+        };
+        let line_end_offset = line_start_offset
+            .checked_add(record.byte_count)
+            .ok_or_else(|| ThreadStoreError::Internal {
+                message: "durable rollout byte offset overflow".to_string(),
+            })?;
+        if !record.complete {
+            let current_end_offset = reader
+                .get_ref()
+                .metadata()
+                .await
+                .map_err(thread_store_io_error)?
+                .len();
+            if current_end_offset < file_end_offset {
+                return Err(ThreadStoreError::Internal {
+                    message: "durable rollout shrank during projection".to_string(),
+                });
+            }
+            if next_offset != line_start_offset {
+                rewind_projection_reader(reader, next_offset).await?;
+            }
+            return if next_offset == start_offset {
+                Ok(None)
+            } else {
+                Ok(Some((projections, next_offset, next_ordinal)))
+            };
+        }
+        if record.oversized {
+            warn!(
+                thread_id = %thread_id,
+                rollout_path = %rollout_path.display(),
+                line_start_byte_offset = line_start_offset,
+                line_end_byte_offset = line_end_offset,
+                expected_ordinal = next_ordinal,
+                max_line_bytes = MAX_ROLLOUT_LINE_BYTES,
+                "deferring oversized rollout line until a later ordinal resolves it"
+            );
+            pending_rejected_line_count = pending_rejected_line_count.saturating_add(1);
+            line_start_offset = line_end_offset;
+            continue;
+        }
         if line_bytes.iter().all(u8::is_ascii_whitespace) {
             if pending_rejected_line_count == 0 {
                 next_offset = line_end_offset;
@@ -144,7 +239,7 @@ async fn read_projection_steps(
                     error = %err,
                     "deferring rejected rollout line until a later ordinal resolves it"
                 );
-                pending_rejected_line_count += 1;
+                pending_rejected_line_count = pending_rejected_line_count.saturating_add(1);
                 line_start_offset = line_end_offset;
                 continue;
             }
@@ -173,7 +268,7 @@ async fn read_projection_steps(
         {
             Some(ordinal) => ordinal,
             None if line.is_none() => {
-                pending_rejected_line_count += 1;
+                pending_rejected_line_count = pending_rejected_line_count.saturating_add(1);
                 line_start_offset = line_end_offset;
                 continue;
             }
@@ -193,7 +288,7 @@ async fn read_projection_steps(
             });
         }
         let Some(line) = line else {
-            pending_rejected_line_count += 1;
+            pending_rejected_line_count = pending_rejected_line_count.saturating_add(1);
             line_start_offset = line_end_offset;
             continue;
         };
@@ -232,7 +327,7 @@ async fn read_projection_steps(
                         error = %err,
                         "deferring rollout line with invalid timestamp until a later ordinal resolves it"
                     );
-                    pending_rejected_line_count += 1;
+                    pending_rejected_line_count = pending_rejected_line_count.saturating_add(1);
                     line_start_offset = line_end_offset;
                     continue;
                 }
@@ -281,7 +376,96 @@ async fn read_projection_steps(
         next_offset = line_end_offset;
         line_start_offset = line_end_offset;
     }
-    Ok((projections, next_offset))
+}
+
+async fn rewind_projection_reader(
+    reader: &mut BufReader<tokio::fs::File>,
+    offset: u64,
+) -> ThreadStoreResult<()> {
+    reader
+        .seek(SeekFrom::Start(offset))
+        .await
+        .map_err(thread_store_io_error)
+        .map(|_| ())
+}
+
+struct ProjectionRecord {
+    byte_count: u64,
+    complete: bool,
+    oversized: bool,
+}
+
+async fn read_rollout_record(
+    reader: &mut BufReader<tokio::fs::File>,
+    line_bytes: &mut Vec<u8>,
+    available_bytes: u64,
+) -> std::io::Result<Option<ProjectionRecord>> {
+    const MAX_READ_BYTES: u64 = (MAX_ROLLOUT_LINE_BYTES + 1) as u64;
+
+    line_bytes.clear();
+    let mut discarded_bytes = Vec::with_capacity(ROLLOUT_RECORD_DISCARD_CHUNK_BYTES as usize);
+    let mut available_bytes = available_bytes;
+    let mut byte_count = 0_u64;
+    let mut oversized = false;
+    loop {
+        if available_bytes == 0 {
+            break;
+        }
+        let (read, ended_with_newline) = if oversized {
+            discarded_bytes.clear();
+            let read_limit = ROLLOUT_RECORD_DISCARD_CHUNK_BYTES.min(available_bytes);
+            let read = reader
+                .take(read_limit)
+                .read_until(b'\n', &mut discarded_bytes)
+                .await?;
+            (read, discarded_bytes.last() == Some(&b'\n'))
+        } else {
+            let remaining_line_capacity = MAX_READ_BYTES.saturating_sub(line_bytes.len() as u64);
+            if remaining_line_capacity == 0 {
+                oversized = true;
+                line_bytes.clear();
+                continue;
+            }
+            let read_limit = remaining_line_capacity.min(available_bytes);
+            let read = reader
+                .take(read_limit)
+                .read_until(b'\n', line_bytes)
+                .await?;
+            (read, line_bytes.last() == Some(&b'\n'))
+        };
+        if read == 0 {
+            break;
+        }
+        let read = u64::try_from(read).map_err(std::io::Error::other)?;
+        byte_count = byte_count
+            .checked_add(read)
+            .ok_or_else(|| std::io::Error::other("rollout record byte count overflow"))?;
+        available_bytes -= read;
+        if ended_with_newline {
+            let oversized = oversized || line_bytes.len() > MAX_ROLLOUT_LINE_BYTES;
+            if oversized {
+                line_bytes.clear();
+            }
+            return Ok(Some(ProjectionRecord {
+                byte_count,
+                complete: true,
+                oversized,
+            }));
+        }
+        if !oversized && line_bytes.len() > MAX_ROLLOUT_LINE_BYTES {
+            oversized = true;
+            line_bytes.clear();
+        }
+    }
+    if byte_count == 0 {
+        Ok(None)
+    } else {
+        Ok(Some(ProjectionRecord {
+            byte_count,
+            complete: false,
+            oversized,
+        }))
+    }
 }
 
 fn thread_store_io_error(err: std::io::Error) -> ThreadStoreError {

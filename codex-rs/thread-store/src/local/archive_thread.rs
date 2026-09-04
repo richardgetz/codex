@@ -21,6 +21,7 @@ pub(super) async fn archive_threads(
         return Ok(Vec::new());
     }
 
+    let _maintenance_guard = store.acquire_rollout_maintenance_lock().await?;
     let mut lock_thread_ids = params.writer_lock_thread_ids;
     lock_thread_ids.extend(thread_ids.iter().copied());
     lock_thread_ids.sort_unstable_by_key(ToString::to_string);
@@ -39,7 +40,8 @@ pub(super) async fn archive_threads(
         }
     }
     let _writer_guards = store.acquire_writer_locks(&lock_thread_ids).await?;
-    let reference_index = RolloutReferenceIndex::scan(store.config.codex_home.as_path())
+    // Already-archived rollouts need no move. Avoid reading the entire archive on every request.
+    let reference_index = RolloutReferenceIndex::scan_unarchived(store.config.codex_home.as_path())
         .await
         .map_err(|err| ThreadStoreError::Internal {
             message: format!("failed to scan thread rollout files: {err}"),
@@ -141,6 +143,14 @@ async fn archive_thread_with_paths(
         return Err(ThreadStoreError::Internal {
             message: format!("failed to update archived thread metadata: {err}"),
         });
+    }
+    for (source, _) in &rollout_moves {
+        if let Err(err) = codex_rollout::remove_rollout_file_lock(source.as_path()) {
+            warn!(
+                "failed to remove archived rollout writer sidecar {}: {err}",
+                source.display()
+            );
+        }
     }
     Ok(())
 }
@@ -265,6 +275,8 @@ mod tests {
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let active_path =
             write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let lock_path = active_path.with_extension("jsonl.lock");
+        std::fs::write(&lock_path, []).expect("writer sidecar");
 
         store
             .archive_thread(ArchiveThreadParams { thread_id })
@@ -272,6 +284,7 @@ mod tests {
             .expect("archive thread");
 
         assert!(!active_path.exists());
+        assert!(!lock_path.exists());
         let archived_path = home
             .path()
             .join(ARCHIVED_SESSIONS_SUBDIR)

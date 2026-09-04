@@ -21,7 +21,7 @@ impl Config {
         AuthConfig {
             codex_home: self.codex_home.to_path_buf(),
             auth_storage_home: self.auth_storage_home(),
-            auth_credentials_store_mode: self.cli_auth_credentials_store_mode,
+            auth_credentials_store_mode: self.effective_cli_auth_credentials_store_mode(),
             keyring_backend_kind: self.auth_keyring_backend_kind(),
             forced_login_method: self.forced_login_method,
             chatgpt_base_url: Some(self.chatgpt_base_url.clone()),

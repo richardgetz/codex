@@ -20,6 +20,7 @@ pub(super) async fn prepare(
         thread_id,
         boundary,
     } = params;
+    let maintenance_read_guard = store.acquire_rollout_maintenance_read_lock().await?;
     let source_reservation = store.live_writer_locks.reserve_lifecycle(thread_id).await;
     // Keep the source reserved until persistence and lineage materialization finish, even if the
     // caller cancels fork preparation.
@@ -81,7 +82,7 @@ pub(super) async fn prepare(
         thread_id,
         history_base,
         model_context,
-        source_reservation,
+        (source_reservation, maintenance_read_guard),
     ))
 }
 

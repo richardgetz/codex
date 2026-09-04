@@ -2,10 +2,20 @@
 
 #[path = "tests/advanced_reasoning_tests.rs"]
 mod advanced_reasoning_tests;
+#[path = "tests/agents_navigation_tests.rs"]
+mod agents_navigation_tests;
+#[path = "tests/backend_banner_fallback_tests.rs"]
+mod backend_banner_fallback_tests;
+#[path = "tests/backend_banner_recovery_tests.rs"]
+mod backend_banner_recovery_tests;
+#[path = "tests/backend_banner_startup_tests.rs"]
+mod backend_banner_startup_tests;
 #[path = "tests/background_exit_tests.rs"]
 mod background_exit_tests;
 #[path = "tests/connector_policy.rs"]
 mod connector_policy;
+#[path = "tests/disconnect_tests.rs"]
+mod disconnect;
 #[path = "tests/key_chords.rs"]
 mod key_chords;
 #[path = "tests/mcp_startup.rs"]
@@ -17,17 +27,22 @@ mod patch_approval_tests;
 mod permission_shortcuts_tests;
 mod plugin_catalog;
 mod rate_limits;
+#[path = "tests/recap_generation_tests.rs"]
+mod recap_generation;
 mod safety_buffering;
 #[path = "tests/session_lifecycle_requests.rs"]
 mod session_lifecycle_requests;
 mod session_summary;
 mod startup;
+#[path = "tests/stream_animation_tests.rs"]
+mod stream_animation_tests;
 #[path = "tests/thread_usage.rs"]
 mod thread_usage;
 #[path = "tests/turn_submission.rs"]
 mod turn_submission;
 
 use super::*;
+use crate::AppServerTarget;
 use crate::app_backtrack::BacktrackSelection;
 use crate::app_backtrack::BacktrackState;
 use crate::app_backtrack::user_count;
@@ -447,6 +462,7 @@ async fn realtime_output_debug_renders_returned_ids_and_metadata() {
                     phase: Some(codex_protocol::models::MessagePhase::Commentary),
                     memory_citation: None,
                     delivery: None,
+                    questions: None,
                 },
                 started_at_ms: 1,
             }),
@@ -475,6 +491,7 @@ async fn realtime_output_debug_renders_returned_ids_and_metadata() {
                     phase: Some(codex_protocol::models::MessagePhase::Commentary),
                     memory_citation: None,
                     delivery: None,
+                    questions: None,
                 },
                 completed_at_ms: 2,
             }),
@@ -2751,7 +2768,7 @@ fn selected_and_resumed_threads_use_server_capability_for_v1_and_v2_children() -
 #[test]
 fn attach_live_thread_for_selection_rejects_empty_non_ephemeral_fallback_threads() -> Result<()> {
     const WORKER_THREADS: usize = 1;
-    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+    const TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(WORKER_THREADS)
@@ -2761,15 +2778,15 @@ fn attach_live_thread_for_selection_rejects_empty_non_ephemeral_fallback_threads
 
     runtime.block_on(async {
         let config = {
-            let app = make_test_app().await;
+            let app = Box::pin(make_test_app()).await;
             app.chat_widget.config_ref().clone()
         };
-        let mut app_server = crate::start_embedded_app_server_for_picker(&config)
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&config))
             .await
             .expect("embedded app server");
-        let started = app_server.start_thread(&config).await?;
+        let started = Box::pin(app_server.start_thread(&config)).await?;
         let thread_id = started.session.thread_id;
-        let mut app = make_test_app().await;
+        let mut app = Box::pin(make_test_app()).await;
         app.agent_navigation.upsert(
             thread_id,
             Some("Scout".to_string()),
@@ -2777,8 +2794,7 @@ fn attach_live_thread_for_selection_rejects_empty_non_ephemeral_fallback_threads
             /*is_closed*/ false,
         );
 
-        let err = app
-            .attach_live_thread_for_selection(&mut app_server, thread_id)
+        let err = Box::pin(app.attach_live_thread_for_selection(&mut app_server, thread_id))
             .await
             .expect_err("empty fallback should not attach as a blank replay-only thread");
 
@@ -2794,7 +2810,7 @@ fn attach_live_thread_for_selection_rejects_empty_non_ephemeral_fallback_threads
 #[test]
 fn attach_live_thread_for_selection_rejects_unmaterialized_fallback_threads() -> Result<()> {
     const WORKER_THREADS: usize = 1;
-    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+    const TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(WORKER_THREADS)
@@ -2803,12 +2819,14 @@ fn attach_live_thread_for_selection_rejects_unmaterialized_fallback_threads() ->
         .build()?;
 
     runtime.block_on(async {
-        let mut app = make_test_app().await;
-        let mut app_server =
-            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let mut app = Box::pin(make_test_app()).await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await?;
         let mut ephemeral_config = app.chat_widget.config_ref().clone();
         ephemeral_config.ephemeral = true;
-        let started = app_server.start_thread(&ephemeral_config).await?;
+        let started = Box::pin(app_server.start_thread(&ephemeral_config)).await?;
         let thread_id = started.session.thread_id;
         app.agent_navigation.upsert(
             thread_id,
@@ -2817,8 +2835,7 @@ fn attach_live_thread_for_selection_rejects_unmaterialized_fallback_threads() ->
             /*is_closed*/ false,
         );
 
-        let err = app
-            .attach_live_thread_for_selection(&mut app_server, thread_id)
+        let err = Box::pin(app.attach_live_thread_for_selection(&mut app_server, thread_id))
             .await
             .expect_err("ephemeral fallback should not attach as a blank live thread");
 
@@ -3057,7 +3074,7 @@ async fn update_memory_settings_persists_and_updates_widget_config() -> Result<(
 #[test]
 fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
     const WORKER_THREADS: usize = 1;
-    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+    const TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(WORKER_THREADS)
@@ -3075,7 +3092,7 @@ fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
 
         let mut app_server =
             Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
-        let started = app_server.start_thread(&app.config).await?;
+        let started = Box::pin(app_server.start_thread(&app.config)).await?;
         let thread_id = started.session.thread_id;
         app.active_thread_id = Some(thread_id);
 
@@ -4096,6 +4113,7 @@ async fn active_thread_file_change_approval_recovers_buffered_changes() {
                 phase: None,
                 memory_citation: None,
                 delivery: None,
+                questions: None,
             },
         }),
         /*replay_kind*/ None,
@@ -4403,6 +4421,8 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
                 project_id: None,
                 history_mode: Default::default(),
                 model_provider: "agent-provider".to_string(),
+                model: None,
+                reasoning_effort: None,
                 created_at: 1,
                 updated_at: 2,
                 recency_at: Some(2),
@@ -4502,6 +4522,8 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
                 project_id: None,
                 history_mode: Default::default(),
                 model_provider: "agent-provider".to_string(),
+                model: None,
+                reasoning_effort: None,
                 created_at: 1,
                 updated_at: 2,
                 recency_at: Some(2),
@@ -4568,6 +4590,8 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         project_id: None,
         history_mode: Default::default(),
         model_provider: "read-provider".to_string(),
+        model: None,
+        reasoning_effort: None,
         created_at: 1,
         updated_at: 2,
         recency_at: Some(2),
@@ -6017,7 +6041,7 @@ async fn make_test_app() -> App {
         enhanced_keys_supported: false,
         keymap: crate::keymap::RuntimeKeymap::defaults(),
         key_chord_matcher: crate::keymap::KeyChordMatcher::default(),
-        commit_anim_running: Arc::new(AtomicBool::new(false)),
+        commit_animation: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         skill_load_warnings: SkillLoadWarningState::default(),
@@ -6028,6 +6052,7 @@ async fn make_test_app() -> App {
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         app_server_target: crate::AppServerTarget::Embedded,
         pending_startup_thread_start: false,
+        reconnect: Default::default(),
         pending_update_action: None,
         pending_shutdown_exit_thread_id: None,
         windows_sandbox: WindowsSandboxState::default(),
@@ -6050,8 +6075,10 @@ async fn make_test_app() -> App {
         startup_protected_input_boundary: false,
         startup_pending_protected_request: false,
         rate_limit_hard_stop_generation: 0,
+        rate_limit_refresh_state: Default::default(),
         pending_plugin_enabled_writes: HashMap::new(),
         pending_hook_enabled_writes: HashMap::new(),
+        recap: recap::RecapState::default(),
     }
 }
 
@@ -6118,7 +6145,7 @@ async fn make_test_app_with_channels() -> (
             enhanced_keys_supported: false,
             keymap: crate::keymap::RuntimeKeymap::defaults(),
             key_chord_matcher: crate::keymap::KeyChordMatcher::default(),
-            commit_anim_running: Arc::new(AtomicBool::new(false)),
+            commit_animation: None,
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             skill_load_warnings: SkillLoadWarningState::default(),
@@ -6129,6 +6156,7 @@ async fn make_test_app_with_channels() -> (
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
             app_server_target: crate::AppServerTarget::Embedded,
             pending_startup_thread_start: false,
+            reconnect: Default::default(),
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
@@ -6151,8 +6179,10 @@ async fn make_test_app_with_channels() -> (
             startup_protected_input_boundary: false,
             startup_pending_protected_request: false,
             rate_limit_hard_stop_generation: 0,
+            rate_limit_refresh_state: Default::default(),
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
+            recap: recap::RecapState::default(),
         },
         rx,
         op_rx,
@@ -7112,6 +7142,7 @@ fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
 #[test]
 fn active_turn_not_steerable_turn_error_extracts_structured_server_error() {
     let turn_error = AppServerTurnError {
+        misalignment: None,
         message: "cannot steer a review turn".to_string(),
         codex_error_info: Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable {
             turn_kind: AppServerNonSteerableTurnKind::Review,
@@ -8146,6 +8177,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
                             phase: None,
                             memory_citation: None,
                             delivery: None,
+                            questions: None,
                         },
                     ],
                     status: TurnStatus::Completed,
@@ -8373,6 +8405,13 @@ async fn refreshed_snapshot_session_persists_resumed_turns() {
     let store_snapshot = store.snapshot();
     assert_eq!(store_snapshot.session, Some(resumed_session));
     assert_eq!(store_snapshot.turns, snapshot.turns);
+    assert_eq!(
+        store.recap_progress(),
+        recap::RecapProgress {
+            completed_turns: 1,
+            last_recapped_turn_count: None,
+        }
+    );
 }
 
 #[tokio::test]
@@ -9326,3 +9365,10 @@ async fn side_backtrack_rejection_reports_unavailable_message_snapshot() {
 async fn start_config_write_test_app_server(app: &App) -> Result<AppServerSession> {
     Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await
 }
+
+#[path = "tests/active_reconnect_tests.rs"]
+mod active_reconnect;
+
+#[cfg(unix)]
+#[path = "tests/navigation_reconnect_tests.rs"]
+mod navigation_reconnect;

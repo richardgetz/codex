@@ -39,6 +39,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 use tokio::sync::OwnedMutexGuard;
@@ -244,6 +245,38 @@ impl LocalThreadStore {
             writer_lock_coordinator,
             state_db,
             thread_history_db: Arc::new(OnceCell::new()),
+        }
+    }
+
+    pub(super) async fn acquire_rollout_maintenance_lock(
+        &self,
+    ) -> ThreadStoreResult<codex_rollout::RolloutMaintenanceGuard> {
+        loop {
+            match codex_rollout::try_acquire_rollout_maintenance_lock(
+                self.config.codex_home.as_path(),
+            )
+            .map_err(|err| ThreadStoreError::Internal {
+                message: format!("failed to acquire rollout maintenance lock: {err}"),
+            })? {
+                Some(guard) => return Ok(guard),
+                None => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+    }
+
+    pub(super) async fn acquire_rollout_maintenance_read_lock(
+        &self,
+    ) -> ThreadStoreResult<codex_rollout::RolloutMaintenanceReadGuard> {
+        loop {
+            match codex_rollout::try_acquire_rollout_maintenance_read_lock(
+                self.config.codex_home.as_path(),
+            )
+            .map_err(|err| ThreadStoreError::Internal {
+                message: format!("failed to acquire rollout maintenance read lock: {err}"),
+            })? {
+                Some(guard) => return Ok(guard),
+                None => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
         }
     }
 
@@ -934,6 +967,7 @@ mod tests {
             RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 trace_id: None,
+                root_turn_id: None,
                 cwd: serde_json::from_value(serde_json::json!(cwd)).expect("absolute cwd"),
                 workspace_roots: None,
                 current_date: None,
@@ -952,6 +986,7 @@ mod tests {
                 multi_agent_version: None,
                 multi_agent_mode: None,
                 realtime_active: None,
+                cyber_access_program: None,
                 effort: None,
                 summary: ReasoningSummary::Auto,
                 user_instructions: None,
@@ -1046,6 +1081,7 @@ mod tests {
                     phase: Some(MessagePhase::Commentary),
                     memory_citation: None,
                     delivery: None,
+                    questions: None,
                 })),
                 RolloutItem::ResponseItem(
                     ResponseItem::FunctionCallOutput {

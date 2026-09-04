@@ -1,0 +1,3 @@
+ALTER TABLE threads ADD COLUMN git_sha_cleared INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE threads ADD COLUMN git_branch_cleared INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE threads ADD COLUMN git_origin_url_cleared INTEGER NOT NULL DEFAULT 0;

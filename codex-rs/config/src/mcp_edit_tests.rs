@@ -47,12 +47,14 @@ async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow:
                     "search".to_string(),
                     McpServerToolConfig {
                         approval_mode: Some(AppToolApproval::Approve),
+                        output_token_limit: None,
                     },
                 ),
                 (
                     "read".to_string(),
                     McpServerToolConfig {
                         approval_mode: Some(AppToolApproval::Prompt),
+                        output_token_limit: None,
                     },
                 ),
             ]),
@@ -127,6 +129,7 @@ async fn replace_mcp_servers_serializes_oauth_client_id() -> anyhow::Result<()> 
             scopes: None,
             oauth: Some(McpServerOAuthConfig {
                 client_id: Some("eci-prd-pub-codex-123".to_string()),
+                callback_url: None,
                 callback_port: None,
             }),
             oauth_resource: None,

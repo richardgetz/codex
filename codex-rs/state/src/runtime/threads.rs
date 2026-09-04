@@ -1,8 +1,15 @@
 use super::*;
 use crate::SortDirection;
+use codex_protocol::SanitizedGitUrl;
 use codex_protocol::protocol::SessionSource;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
+
+#[derive(Clone, Copy)]
+enum ArchiveStateUpdate {
+    PreserveExisting,
+    Replace,
+}
 
 impl StateRuntime {
     pub async fn get_thread(&self, id: ThreadId) -> anyhow::Result<Option<crate::ThreadMetadata>> {
@@ -847,24 +854,33 @@ impl StateRuntime {
         thread_id: ThreadId,
         git_sha: Option<Option<&str>>,
         git_branch: Option<Option<&str>>,
-        git_origin_url: Option<Option<&str>>,
+        git_origin_url: Option<Option<&SanitizedGitUrl>>,
     ) -> anyhow::Result<bool> {
         let result = sqlx::query(
             r#"
 UPDATE threads
 SET
     git_sha = CASE WHEN ? THEN ? ELSE git_sha END,
+    git_sha_cleared = CASE WHEN ? THEN ? ELSE git_sha_cleared END,
     git_branch = CASE WHEN ? THEN ? ELSE git_branch END,
-    git_origin_url = CASE WHEN ? THEN ? ELSE git_origin_url END
+    git_branch_cleared = CASE WHEN ? THEN ? ELSE git_branch_cleared END,
+    git_origin_url = CASE WHEN ? THEN ? ELSE git_origin_url END,
+    git_origin_url_cleared = CASE WHEN ? THEN ? ELSE git_origin_url_cleared END
 WHERE id = ?
             "#,
         )
         .bind(git_sha.is_some())
         .bind(git_sha.flatten())
+        .bind(git_sha.is_some())
+        .bind(matches!(git_sha, Some(None)))
         .bind(git_branch.is_some())
         .bind(git_branch.flatten())
+        .bind(git_branch.is_some())
+        .bind(matches!(git_branch, Some(None)))
         .bind(git_origin_url.is_some())
-        .bind(git_origin_url.flatten())
+        .bind(git_origin_url.flatten().map(SanitizedGitUrl::as_str))
+        .bind(git_origin_url.is_some())
+        .bind(matches!(git_origin_url, Some(None)))
         .bind(thread_id.to_string())
         .execute(self.pool.as_ref())
         .await?;
@@ -875,6 +891,20 @@ WHERE id = ?
         &self,
         metadata: &crate::ThreadMetadata,
         creation_memory_mode: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.upsert_thread_with_creation_memory_mode_and_archive_state(
+            metadata,
+            creation_memory_mode,
+            ArchiveStateUpdate::PreserveExisting,
+        )
+        .await
+    }
+
+    async fn upsert_thread_with_creation_memory_mode_and_archive_state(
+        &self,
+        metadata: &crate::ThreadMetadata,
+        creation_memory_mode: Option<&str>,
+        archive_state_update: ArchiveStateUpdate,
     ) -> anyhow::Result<()> {
         let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
         let insert_recency_at = self.allocate_thread_recency_at(metadata.recency_at)?;
@@ -923,7 +953,10 @@ INSERT INTO threads (
     project_id
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
-    rollout_path = excluded.rollout_path,
+    rollout_path = CASE
+        WHEN ? OR threads.archived = excluded.archived THEN excluded.rollout_path
+        ELSE threads.rollout_path
+    END,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
     recency_at = threads.recency_at,
@@ -951,11 +984,20 @@ ON CONFLICT(id) DO UPDATE SET
     approval_mode = excluded.approval_mode,
     tokens_used = excluded.tokens_used,
     first_user_message = excluded.first_user_message,
-    archived = excluded.archived,
-    archived_at = excluded.archived_at,
-    git_sha = COALESCE(threads.git_sha, excluded.git_sha),
-    git_branch = COALESCE(threads.git_branch, excluded.git_branch),
-    git_origin_url = COALESCE(threads.git_origin_url, excluded.git_origin_url)
+    archived = CASE WHEN ? THEN excluded.archived ELSE threads.archived END,
+    archived_at = CASE WHEN ? THEN excluded.archived_at ELSE threads.archived_at END,
+    git_sha = CASE
+        WHEN threads.git_sha_cleared != 0 THEN threads.git_sha
+        ELSE COALESCE(threads.git_sha, excluded.git_sha)
+    END,
+    git_branch = CASE
+        WHEN threads.git_branch_cleared != 0 THEN threads.git_branch
+        ELSE COALESCE(threads.git_branch, excluded.git_branch)
+    END,
+    git_origin_url = CASE
+        WHEN threads.git_origin_url_cleared != 0 THEN threads.git_origin_url
+        ELSE COALESCE(threads.git_origin_url, excluded.git_origin_url)
+    END
             "#,
         )
         .bind(metadata.id.to_string())
@@ -1004,6 +1046,9 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.git_origin_url.as_deref())
         .bind(creation_memory_mode.unwrap_or("enabled"))
         .bind(metadata.project_id.as_deref())
+        .bind(matches!(archive_state_update, ArchiveStateUpdate::Replace))
+        .bind(matches!(archive_state_update, ArchiveStateUpdate::Replace))
+        .bind(matches!(archive_state_update, ArchiveStateUpdate::Replace))
         .execute(self.pool.as_ref())
         .await?;
         self.insert_thread_spawn_edge_from_source_if_absent(metadata.id, metadata.source.as_str())
@@ -1078,7 +1123,12 @@ ON CONFLICT(id) DO UPDATE SET
                 metadata.id
             );
         }
-        self.upsert_thread(&metadata).await
+        self.upsert_thread_with_creation_memory_mode_and_archive_state(
+            &metadata,
+            /*creation_memory_mode*/ None,
+            ArchiveStateUpdate::Replace,
+        )
+        .await
     }
 
     /// Mark a thread as unarchived using the underlying database.
@@ -1101,7 +1151,12 @@ ON CONFLICT(id) DO UPDATE SET
                 metadata.id
             );
         }
-        self.upsert_thread(&metadata).await
+        self.upsert_thread_with_creation_memory_mode_and_archive_state(
+            &metadata,
+            /*creation_memory_mode*/ None,
+            ArchiveStateUpdate::Replace,
+        )
+        .await
     }
 
     /// Delete a thread and all associated state by id.
@@ -1322,6 +1377,7 @@ pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
         | RolloutItem::WorldState(_)
         | RolloutItem::RealtimeItem(_)
         | RolloutItem::SecurityRiskScore(_)
+        | RolloutItem::TokenUsageRecord(_)
         | RolloutItem::EventMsg(_) => None,
     })
 }
@@ -2567,6 +2623,7 @@ mod tests {
                 session_id: thread_id.into(),
                 id: thread_id,
                 forked_from_id: None,
+                forked_from_ordinal_exclusive: None,
                 parent_thread_id: None,
                 timestamp: metadata.created_at.to_rfc3339(),
                 cwd: PathBuf::new(),
@@ -2637,6 +2694,7 @@ mod tests {
                 session_id: thread_id.into(),
                 id: thread_id,
                 forked_from_id: None,
+                forked_from_ordinal_exclusive: None,
                 parent_thread_id: None,
                 timestamp: created_at,
                 cwd: PathBuf::new(),
@@ -2661,7 +2719,10 @@ mod tests {
             git: Some(GitInfo {
                 commit_hash: Some(codex_git_utils::GitSha::new("rollout-sha")),
                 branch: Some("rollout-branch".to_string()),
-                repository_url: Some("git@example.com:openai/codex.git".to_string()),
+                repository_url: Some(
+                    SanitizedGitUrl::try_from("git@example.com:openai/codex.git")
+                        .expect("valid git remote URL"),
+                ),
             }),
         })];
 
@@ -2700,7 +2761,10 @@ mod tests {
         let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
         metadata.git_sha = Some("sqlite-sha".to_string());
         metadata.git_branch = Some("sqlite-branch".to_string());
-        metadata.git_origin_url = Some("git@example.com:openai/codex.git".to_string());
+        metadata.git_origin_url = Some(
+            SanitizedGitUrl::try_from("git@example.com:openai/codex.git")
+                .expect("valid git remote URL"),
+        );
 
         runtime
             .upsert_thread(&metadata)
@@ -2710,7 +2774,10 @@ mod tests {
         let mut rollout_metadata = metadata.clone();
         rollout_metadata.git_sha = Some("rollout-sha".to_string());
         rollout_metadata.git_branch = Some("rollout-branch".to_string());
-        rollout_metadata.git_origin_url = Some("https://example.com/repo.git".to_string());
+        rollout_metadata.git_origin_url = Some(
+            SanitizedGitUrl::try_from("https://example.com/repo.git")
+                .expect("valid git remote URL"),
+        );
 
         runtime
             .upsert_thread(&rollout_metadata)
@@ -2728,6 +2795,68 @@ mod tests {
             persisted.git_origin_url.as_deref(),
             Some("git@example.com:openai/codex.git")
         );
+    }
+
+    #[tokio::test]
+    async fn stale_upsert_preserves_archived_rollout_path() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000459").expect("valid thread id");
+        let metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        let active_path = metadata.rollout_path.clone();
+        let archived_path = codex_home.join("archived-rollout.jsonl");
+
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("initial upsert should succeed");
+        runtime
+            .mark_archived(thread_id, archived_path.as_path(), Utc::now())
+            .await
+            .expect("archive should succeed");
+
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("stale upsert should succeed");
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(persisted.rollout_path, archived_path);
+        assert!(persisted.archived_at.is_some());
+
+        runtime
+            .mark_unarchived(thread_id, active_path.as_path())
+            .await
+            .expect("unarchive should succeed");
+        let unarchived = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load after unarchive")
+            .expect("thread should exist after unarchive");
+        assert_eq!(unarchived.rollout_path, active_path);
+        assert!(unarchived.archived_at.is_none());
+
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("stale upsert after unarchive should succeed");
+        let still_unarchived = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load after stale unarchive upsert")
+            .expect("thread should exist after stale unarchive upsert");
+        assert_eq!(still_unarchived.rollout_path, active_path);
+        assert!(still_unarchived.archived_at.is_none());
     }
 
     #[tokio::test]
@@ -2849,7 +2978,10 @@ mod tests {
                 thread_id,
                 Some(Some("abc123")),
                 Some(Some("feature/branch")),
-                Some(Some("git@example.com:openai/codex.git")),
+                Some(Some(
+                    &SanitizedGitUrl::try_from("git@example.com:openai/codex.git")
+                        .expect("valid git remote URL"),
+                )),
             )
             .await
             .expect("git info update should succeed");
@@ -2940,7 +3072,10 @@ mod tests {
         let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
         metadata.git_sha = Some("abc123".to_string());
         metadata.git_branch = Some("feature/branch".to_string());
-        metadata.git_origin_url = Some("git@example.com:openai/codex.git".to_string());
+        metadata.git_origin_url = Some(
+            SanitizedGitUrl::try_from("git@example.com:openai/codex.git")
+                .expect("valid git remote URL"),
+        );
 
         runtime
             .upsert_thread(&metadata)
@@ -2958,6 +3093,19 @@ mod tests {
             .await
             .expect("thread should load")
             .expect("thread should exist");
+        assert_eq!(persisted.git_sha, None);
+        assert_eq!(persisted.git_branch, None);
+        assert_eq!(persisted.git_origin_url, None);
+
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("stale rollout upsert should succeed");
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load after stale upsert")
+            .expect("thread should exist after stale upsert");
         assert_eq!(persisted.git_sha, None);
         assert_eq!(persisted.git_branch, None);
         assert_eq!(persisted.git_origin_url, None);

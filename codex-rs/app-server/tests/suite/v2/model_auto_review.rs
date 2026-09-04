@@ -82,7 +82,13 @@ async fn assert_error(server: &mut TestAppServer, request_id: i64, message: &str
     )
     .await??;
     assert_eq!(error.error.code, -32600);
-    assert!(error.error.message.contains(message));
+    assert!(
+        error
+            .error
+            .message
+            .to_ascii_lowercase()
+            .contains(&message.to_ascii_lowercase())
+    );
     Ok(())
 }
 
@@ -241,7 +247,11 @@ async fn thread_and_turn_settings_enforce_protected_model_auto_review() -> Resul
         .send_turn_start_request(params!(
             TurnParams,
             thread_id = thread.id,
-            approvals_reviewer = Some(User)
+            approvals_reviewer = Some(User),
+            input = vec![UserInput::Text {
+                text: "validate protected model settings".to_string(),
+                text_elements: Vec::new(),
+            }]
         ))
         .await?;
     assert_error(&mut server, id, "you need to use auto review").await?;
@@ -252,7 +262,11 @@ async fn thread_and_turn_settings_enforce_protected_model_auto_review() -> Resul
             TurnParams,
             thread_id = turn_thread.id.clone(),
             model = Some(MODEL.to_string()),
-            approvals_reviewer = Some(User)
+            approvals_reviewer = Some(User),
+            input = vec![UserInput::Text {
+                text: "validate protected model settings".to_string(),
+                text_elements: Vec::new(),
+            }]
         ))
         .await?;
     assert_error(&mut server, id, "you need to use auto review").await?;
@@ -260,7 +274,11 @@ async fn thread_and_turn_settings_enforce_protected_model_auto_review() -> Resul
         .send_turn_start_request(params!(
             TurnParams,
             thread_id = turn_thread.id,
-            model = Some(MODEL.to_string())
+            model = Some(MODEL.to_string()),
+            input = vec![UserInput::Text {
+                text: "run protected model".to_string(),
+                text_elements: Vec::new(),
+            }]
         ))
         .await?;
     let _: TurnResponse = timeout(TIMEOUT, server.read_response(id)).await??;
@@ -279,6 +297,10 @@ async fn thread_and_turn_settings_enforce_protected_model_auto_review() -> Resul
                 TurnParams,
                 thread_id = policy_turn_thread.id,
                 model = Some(MODEL.to_string()),
+                input = vec![UserInput::Text {
+                    text: "run protected model".to_string(),
+                    text_elements: Vec::new(),
+                }],
             ))
             .await?;
         let _: TurnResponse = timeout(TIMEOUT, server.read_response(id)).await??;

@@ -26,6 +26,7 @@ use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
 
@@ -76,7 +77,7 @@ impl ToolCallRuntime {
         self,
         call: ToolCall,
         cancellation_token: CancellationToken,
-    ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
+    ) -> impl std::future::Future<Output = Result<ResponseItemEnvelope, CodexErr>> {
         let error_call = call.clone();
         let source = call.direct_source();
         let future = self.handle_tool_call_with_source(call, source, cancellation_token);
@@ -85,7 +86,9 @@ impl ToolCallRuntime {
             match result {
                 Ok(response) => Ok(response.into_response()),
                 Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
-                Err(other) => Ok(Self::failure_response(error_call, other)),
+                Err(other) => Ok(ResponseItemEnvelope::new(
+                    Self::failure_response(error_call, other).into(),
+                )),
             }
         }
         .in_current_span()
@@ -109,12 +112,12 @@ impl ToolCallRuntime {
             executed_tool_calls.record_tool_call(
                 &call,
                 &source,
-                super::effective_tool_mode(&self.step_context.turn),
+                self.step_context.tool_router.tool_mode(),
             );
         }
         let router = &self.tool_router;
         let supports_parallel = router.tool_supports_parallel(&call);
-        let tool_runtime = router.tool_runtime(&call);
+        let tool_runtime = router.tool_runtime(&call.tool_name);
         let wait_for_runtime_cancellation = router.tool_waits_for_runtime_cancellation(&call);
         let router = Arc::clone(router);
         let session = Arc::clone(&self.session);
@@ -366,6 +369,7 @@ impl Drop for ToolCallTimingGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::time::Duration;
 
     use crate::session::step_context::StepContext;
@@ -379,6 +383,7 @@ mod tests {
     use codex_extension_api::ToolCallOutcome;
     use codex_protocol::models::FunctionCallOutputBody;
     use codex_protocol::models::FunctionCallOutputPayload;
+    use codex_protocol::openai_models::ToolMode;
     use pretty_assertions::assert_eq;
     use tokio::sync::Notify;
     use tokio::sync::oneshot;
@@ -442,6 +447,10 @@ mod tests {
         let router = Arc::new(ToolRouter::from_parts(
             ToolRegistry::from_tools([handler]),
             Vec::new(),
+            ToolMode::Direct,
+            BTreeMap::new(),
+            /*tool_namespaces_info*/ None,
+            &[],
         ));
         let step_context = step_context.with_tool_router_for_test(router);
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -559,7 +568,10 @@ mod tests {
             })
         }
 
-        fn handle(&self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        fn handle<'a>(&'a self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+        where
+            ToolInvocation: 'a,
+        {
             Box::pin(async {
                 Ok(
                     Box::new(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
@@ -594,7 +606,10 @@ mod tests {
             })
         }
 
-        fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+        where
+            ToolInvocation: 'a,
+        {
             Box::pin(self.handle_call(invocation))
         }
     }
@@ -713,6 +728,10 @@ mod tests {
         let router = Arc::new(ToolRouter::from_parts(
             ToolRegistry::from_tools([handler]),
             Vec::new(),
+            ToolMode::Direct,
+            BTreeMap::new(),
+            /*tool_namespaces_info*/ None,
+            &[],
         ));
         let step_context = step_context.with_tool_router_for_test(router);
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -753,7 +772,10 @@ mod tests {
                 success: Some(true),
             },
         };
-        assert_eq!(expected_response, response);
+        assert_eq!(
+            ResponseItemEnvelope::new(expected_response.into()),
+            response
+        );
 
         let actual = records
             .lock()
@@ -792,6 +814,10 @@ mod tests {
         let router = Arc::new(ToolRouter::from_parts(
             ToolRegistry::from_tools([handler]),
             Vec::new(),
+            ToolMode::Direct,
+            BTreeMap::new(),
+            /*tool_namespaces_info*/ None,
+            &[],
         ));
         let step_context = step_context.with_tool_router_for_test(router);
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -825,7 +851,8 @@ mod tests {
             .await
             .expect("timed out waiting for tool response")
             .expect("tool response task should join")?;
-        let ResponseInputItem::FunctionCallOutput { output, .. } = response else {
+        let codex_protocol::models::ResponseItem::FunctionCallOutput { output, .. } = response.item
+        else {
             anyhow::bail!("cancelled tool should return function output");
         };
         let FunctionCallOutputBody::Text(text) = output.body else {

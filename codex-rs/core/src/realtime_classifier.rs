@@ -243,6 +243,7 @@ async fn classify_with_model(
             "additionalProperties": false
         })),
         output_schema_strict: true,
+        cyber_access_program: None,
     };
     let mut metadata = CodexResponsesMetadata::new(
         sess.installation_id.clone(),

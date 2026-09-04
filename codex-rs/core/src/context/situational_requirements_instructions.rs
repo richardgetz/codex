@@ -3,9 +3,12 @@ use codex_config::types::SituationalRequirementActionConfig;
 use codex_config::types::SituationalRequirementRuleConfig;
 use codex_config::types::SituationalRequirementsConfig;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::protocol::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
 
 const SITUATIONAL_REQUIREMENTS_OPEN_TAG: &str = "<situational_requirements>";
 const SITUATIONAL_REQUIREMENTS_CLOSE_TAG: &str = "</situational_requirements>";
+const SITUATIONAL_REQUIREMENTS_MAX_TOKENS: usize = 4_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SituationalRequirementsInstructions {
@@ -61,7 +64,10 @@ Rules:\n"
             body.push_str(&actions);
             body.push('\n');
         }
-        body
+        truncate_text(
+            &body,
+            TruncationPolicy::Tokens(SITUATIONAL_REQUIREMENTS_MAX_TOKENS),
+        )
     }
 }
 

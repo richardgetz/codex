@@ -370,6 +370,7 @@ mod ide_context;
 use self::ide_context::IdeContextState;
 mod history_insertion;
 mod input_queue;
+mod reconnect;
 use self::input_queue::InputQueueState;
 mod input_flow;
 mod input_restore;
@@ -401,6 +402,7 @@ use self::plugins::PluginListFetchState;
 use self::plugins::PluginsCacheState;
 mod plan_implementation;
 use self::plan_implementation::PLAN_IMPLEMENTATION_TITLE;
+mod model_popup_state;
 mod model_popups;
 mod notifications;
 use self::notifications::Notification;
@@ -409,6 +411,7 @@ mod permission_shortcuts;
 mod permissions_menu;
 pub(crate) use self::permissions_menu::auto_review_available;
 pub(crate) use self::permissions_menu::cyber_model_approval_reviewer;
+mod backend_banners;
 mod protocol;
 mod protocol_requests;
 mod rate_limits;
@@ -418,6 +421,7 @@ use self::rate_limits::RateLimitWarningState;
 use self::rate_limits::app_server_rate_limit_error_kind;
 pub(crate) use self::rate_limits::fallback_limit_label;
 use self::rate_limits::is_app_server_cyber_policy_error;
+mod recap;
 mod reset_credits;
 pub(crate) use self::rate_limits::limit_label_for_window;
 mod realtime_transcript;
@@ -588,6 +592,8 @@ pub(crate) struct ChatWidget {
     has_chatgpt_account: bool,
     has_codex_backend_auth: bool,
     model_catalog: Arc<ModelCatalog>,
+    model_popup_request_id: Option<uuid::Uuid>,
+    model_popup_model_ids: Vec<String>,
     session_telemetry: SessionTelemetry,
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
@@ -617,10 +623,12 @@ pub(crate) struct ChatWidget {
     codex_spend_control_reached: Option<bool>,
     rate_limit_warnings: RateLimitWarningState,
     exhausted_account_rotation_aliases: HashSet<String>,
+    backend_banner_state: backend_banners::BackendBannerState,
+    backend_banner_notice_model: Option<String>,
     warning_display_state: WarningDisplayState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     previous_custom_permission_selection: Option<RestorablePermissionSelection>,
-    add_credits_nudge_email_in_flight: Option<AddCreditsNudgeCreditType>,
+    add_credits_nudge_email_in_flight: Option<rate_limits::PendingCreditsNudge>,
     adaptive_chunking: AdaptiveChunkingPolicy,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
@@ -774,6 +782,8 @@ pub(crate) struct ChatWidget {
     terminal_title_setup_original_items: Option<Option<Vec<String>>>,
     // Baseline instant used to animate spinner-prefixed title statuses.
     terminal_title_animation_origin: Instant,
+    // The foreground loop refreshes the title at this deadline without drawing a frame.
+    pub(crate) terminal_title_next_refresh: Option<Instant>,
     // Cached project-root display name keyed by cwd for status/title rendering.
     status_line_project_root_name_cache: Option<CachedProjectRootName>,
     // Cached git branch name for the status line (None if unknown).
@@ -919,6 +929,7 @@ fn exec_approval_request_from_params(
         .and_then(|cwd| cwd.to_inferred_abs_path())
         .unwrap_or_else(|| fallback_cwd.clone());
     ExecApprovalRequestEvent {
+        kind: params.kind,
         call_id: params.item_id,
         command: params
             .command
@@ -1353,9 +1364,6 @@ impl ChatWidget {
     pub(crate) fn pre_draw_tick(&mut self) {
         self.update_due_hook_visibility();
         self.schedule_hook_timer_if_needed();
-        if self.bottom_pane.has_active_view() {
-            self.flush_completed_command_activity();
-        }
         self.bottom_pane.pre_draw_tick();
         if let Some(pet) = self.ambient_pet.as_ref() {
             pet.schedule_next_frame();
@@ -2056,7 +2064,7 @@ impl ChatWidget {
     /// Returns a cache key describing the current in-flight cells for the transcript overlay.
     ///
     /// `Ctrl+T` renders committed transcript cells plus a render-only live tail derived from the
-    /// current active, hook, and asynchronous usage cells, and the overlay caches that tail; this
+    /// current active and asynchronous usage cells, and the overlay caches that tail; this
     /// key is what it uses to decide whether it must recompute. When there are no live cells, this
     /// returns `None` so the overlay can drop the tail entirely.
     ///

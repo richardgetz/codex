@@ -204,7 +204,6 @@ fn merge_host_skill_root_snapshots(snapshots: Vec<HostSkillRootSnapshot>) -> Ski
     let mut skill_roots = Vec::new();
     let mut skill_root_by_path = HashMap::new();
     let mut skill_discovery_path_by_path = HashMap::new();
-    let mut agent_plugin_skill_paths = HashSet::new();
     let mut file_systems_by_skill_path =
         HashMap::<AbsolutePathBuf, Arc<dyn ExecutorFileSystem>>::new();
 
@@ -220,9 +219,6 @@ fn merge_host_skill_root_snapshots(snapshots: Vec<HostSkillRootSnapshot>) -> Ski
                     skill_discovery_path_by_path.insert(path.clone(), discovery_path.clone());
                 }
                 file_systems_by_skill_path.insert(path.clone(), Arc::clone(&snapshot.file_system));
-                if snapshot.is_agent_plugin {
-                    agent_plugin_skill_paths.insert(path);
-                }
             }
         }
         skills.extend(snapshot.skills);
@@ -240,7 +236,6 @@ fn merge_host_skill_root_snapshots(snapshots: Vec<HostSkillRootSnapshot>) -> Ski
     let retained_roots = skill_root_by_path.values().collect::<HashSet<_>>();
     skill_roots.retain(|root| retained_roots.contains(root));
     file_systems_by_skill_path.retain(|path, _| retained_paths.contains(path));
-    agent_plugin_skill_paths.retain(|path| retained_paths.contains(path));
     skills.sort_by(|left, right| {
         scope_rank(left.scope)
             .cmp(&scope_rank(right.scope))
@@ -254,7 +249,6 @@ fn merge_host_skill_root_snapshots(snapshots: Vec<HostSkillRootSnapshot>) -> Ski
         skill_roots,
         skill_root_by_path,
         skill_discovery_path_by_path,
-        agent_plugin_skill_paths,
         file_systems_by_skill_path,
     )
 }

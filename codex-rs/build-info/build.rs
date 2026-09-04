@@ -21,10 +21,12 @@ fn main() {
     let is_local_dev_version = cargo_version == versioning::LOCAL_DEV_BUILD_VERSION;
     let is_git_checkout = in_git_worktree();
     let head_release_version = is_git_checkout.then(head_release_semver_base).flatten();
+    let source_version_suffix_override = std::env::var("CODEX_SOURCE_VERSION_SUFFIX").ok();
     let source_build_from_release_branch = is_release_profile
         && !is_local_dev_version
         && is_git_checkout
-        && head_release_version.as_deref() != Some(cargo_version.as_str());
+        && (head_release_version.as_deref() != Some(cargo_version.as_str())
+            || source_version_suffix_override.is_some());
     let official_release_version = (is_release_profile && is_local_dev_version)
         .then(official_release_semver_base)
         .flatten();
@@ -34,7 +36,7 @@ fn main() {
     let installed_release_version = (is_release_profile && is_local_dev_version)
         .then(installed_codex_semver_base)
         .flatten();
-    let source_version_suffix = source_version_suffix();
+    let source_version_suffix = source_version_suffix_override.or_else(source_version_suffix);
     let derived = versioning::derive_version(
         &cargo_version,
         profile.as_deref(),
