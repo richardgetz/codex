@@ -170,10 +170,11 @@ impl StateRuntime {
         .bind(projection.generated_at.to_rfc3339())
         .execute(&mut *tx)
         .await?;
-        tx.commit().await?;
-        // Commit the snapshot before publishing it. A failed transaction must never leave a
-        // projection containing rows that were not committed to the canonical event store.
+        // Keep the SQLite writer lock until the projection is published so concurrent rebuilds
+        // cannot publish an older snapshot after a newer one. The projection only contains rows
+        // visible in this transaction; canonical event rows are committed before rebuild starts.
         write_projection_atomically(&path, &projection).await?;
+        tx.commit().await?;
         Ok(path)
     }
 }

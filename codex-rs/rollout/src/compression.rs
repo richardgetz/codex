@@ -69,8 +69,71 @@ pub(crate) async fn materialize_rollout_for_append(path: &Path) -> io::Result<Pa
         .map_err(io::Error::other)?
 }
 
+/// Acquires the per-rollout lock used to coordinate writers with file replacement.
+pub(crate) fn acquire_rollout_file_lock(path: &Path) -> io::Result<File> {
+    let plain_path = path::plain_rollout_path(path);
+    let Some(parent) = plain_path.parent() else {
+        return Err(io::Error::other(format!(
+            "rollout path has no parent: {}",
+            plain_path.display()
+        )));
+    };
+    std::fs::create_dir_all(parent)?;
+    let lock_path = rollout_file_lock_path(path);
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
+    file.lock()?;
+    Ok(file)
+}
+
+pub(crate) fn rollout_file_lock_path(path: &Path) -> PathBuf {
+    path::plain_rollout_path(path).with_extension("jsonl.lock")
+}
+
+/// Remove the per-rollout writer sidecar after its rollout is deleted or moved.
+pub fn remove_rollout_file_lock(path: &Path) -> io::Result<()> {
+    match std::fs::remove_file(rollout_file_lock_path(path)) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+/// Tries to acquire a sidecar that was created by a coordinated writer.
+///
+/// Rollouts written by older binaries may have no sidecar at all. Compression must leave those
+/// files in place because an older process could still have an append descriptor open that does
+/// not participate in this lock protocol.
+pub(crate) fn try_acquire_existing_rollout_file_lock(path: &Path) -> io::Result<Option<File>> {
+    let lock_path = rollout_file_lock_path(path);
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(lock_path)
+    {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(error)) => Err(error),
+    }
+}
+
 /// Materializes a compressed rollout back to plain `.jsonl` for blocking append paths.
 pub(crate) fn materialize_rollout_for_append_blocking(path: &Path) -> io::Result<PathBuf> {
+    let _rollout_lock = acquire_rollout_file_lock(path)?;
+    materialize_rollout_for_append_blocking_unlocked(path)
+}
+
+/// Materializes a rollout when the caller already owns its per-rollout lock.
+pub(crate) fn materialize_rollout_for_append_blocking_unlocked(path: &Path) -> io::Result<PathBuf> {
     let plain_path = plain_rollout_path(path);
     if plain_path.exists() {
         metrics::materialize("plain_exists");
@@ -244,12 +307,12 @@ mod worker {
     use tokio::task::JoinSet;
 
     use crate::ARCHIVED_SESSIONS_SUBDIR;
-    use crate::RolloutReferenceIndex;
     use crate::SESSIONS_SUBDIR;
 
     use super::RolloutFile;
     use super::metrics;
     use super::path;
+    use super::try_acquire_existing_rollout_file_lock;
 
     const TEMP_SUFFIX: &str = ".tmp";
     const COMPRESSION_LEVEL: i32 = 3;
@@ -374,15 +437,6 @@ mod worker {
         let started_at = Instant::now();
         let result = async {
             cleanup_stale_temps(codex_home.as_path()).await?;
-            let Some(reference_index) = RolloutReferenceIndex::scan_until(
-                codex_home.as_path(),
-                started_at,
-                WORKER_MAX_RUNTIME,
-            )
-            .await?
-            else {
-                return Ok(CompressionStats::default());
-            };
             let mut stats = CompressionStats::default();
             for root in [
                 codex_home.join(ARCHIVED_SESSIONS_SUBDIR),
@@ -391,8 +445,7 @@ mod worker {
                 if started_at.elapsed() >= WORKER_MAX_RUNTIME {
                     break;
                 }
-                compress_rollouts_in_root(root.as_path(), started_at, &reference_index, &mut stats)
-                    .await?;
+                compress_rollouts_in_root(root.as_path(), started_at, &mut stats).await?;
             }
             Ok::<_, io::Error>(stats)
         }
@@ -432,7 +485,6 @@ mod worker {
     async fn compress_rollouts_in_root(
         root: &Path,
         started_at: Instant,
-        reference_index: &RolloutReferenceIndex,
         stats: &mut CompressionStats,
     ) -> io::Result<()> {
         if !tokio::fs::try_exists(root).await.unwrap_or(false) {
@@ -491,24 +543,14 @@ mod worker {
                     continue;
                 }
                 let path = rollout_file.into_path();
-                let Some(rollout_id) = crate::rollout_id_from_path(path.as_path()) else {
+                if crate::rollout_id_from_path(path.as_path()).is_none() {
                     stats.skipped = stats.skipped.saturating_add(1);
                     metrics::file("skipped_unreadable_meta");
-                    continue;
-                };
-                let Ok(meta) = crate::read_session_meta_line(path.as_path()).await else {
-                    stats.skipped = stats.skipped.saturating_add(1);
-                    metrics::file("skipped_unreadable_meta");
-                    continue;
-                };
-                if reference_index.reference_count(rollout_id) > 0 {
-                    stats.skipped = stats.skipped.saturating_add(1);
-                    metrics::file("skipped_referenced");
                     continue;
                 }
-                if meta.meta.history_base.is_some() {
+                if crate::read_session_meta_line(path.as_path()).await.is_err() {
                     stats.skipped = stats.skipped.saturating_add(1);
-                    metrics::file("skipped_fork_pointer");
+                    metrics::file("skipped_unreadable_meta");
                     continue;
                 }
                 stats.scanned = stats.scanned.saturating_add(1);
@@ -536,6 +578,7 @@ mod worker {
         SkippedNotCold,
         SkippedChanged,
         SkippedAlreadyCompressed,
+        SkippedUncoordinated,
     }
 
     impl CompressionOutcome {
@@ -545,6 +588,7 @@ mod worker {
                 CompressionOutcome::SkippedNotCold => "skipped_not_cold",
                 CompressionOutcome::SkippedChanged => "skipped_changed",
                 CompressionOutcome::SkippedAlreadyCompressed => "skipped_already_compressed",
+                CompressionOutcome::SkippedUncoordinated => "skipped_uncoordinated",
             }
         }
     }
@@ -599,7 +643,8 @@ mod worker {
                     }
                     CompressionOutcome::SkippedNotCold
                     | CompressionOutcome::SkippedChanged
-                    | CompressionOutcome::SkippedAlreadyCompressed => {
+                    | CompressionOutcome::SkippedAlreadyCompressed
+                    | CompressionOutcome::SkippedUncoordinated => {
                         stats.skipped = stats.skipped.saturating_add(1);
                     }
                 }
@@ -650,6 +695,14 @@ mod worker {
             ));
         }
 
+        let Some(_rollout_lock) = try_acquire_existing_rollout_file_lock(path)? else {
+            return Ok(CompressionMeasurement::new(
+                CompressionOutcome::SkippedUncoordinated,
+                source_bytes,
+                /*compressed_bytes*/ None,
+            ));
+        };
+
         let temp_dir = compressed_path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -683,6 +736,14 @@ mod worker {
                 ));
             }
             Err(err) => return Err(err.error),
+        }
+        if !same_file_state(path, &before)? {
+            let _ = std::fs::remove_file(compressed_path.as_path());
+            return Ok(CompressionMeasurement::new(
+                CompressionOutcome::SkippedChanged,
+                source_bytes,
+                /*compressed_bytes*/ None,
+            ));
         }
         if !same_file_state(path, &before)? {
             let _ = std::fs::remove_file(compressed_path.as_path());
@@ -745,6 +806,8 @@ mod worker {
     fn encode_zstd_to_writer(source: &Path, output: impl Write) -> io::Result<()> {
         let mut input = File::open(source)?;
         let mut encoder = zstd::stream::write::Encoder::new(output, COMPRESSION_LEVEL)?;
+        // Preserve fast byte-bound checks for paginated history without decoding the whole file.
+        encoder.set_pledged_src_size(Some(input.metadata()?.len()))?;
         io::copy(&mut input, &mut encoder)?;
         encoder.finish()?;
         Ok(())

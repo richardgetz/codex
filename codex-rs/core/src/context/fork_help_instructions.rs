@@ -1,9 +1,12 @@
 use super::ContextualUserFragment;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::protocol::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
 
 const FORK_DELTA_INVENTORY: &str = include_str!("../../templates/fork/delta_inventory.md");
 const FORK_HELP_OPEN_TAG: &str = "<fork_help>";
 const FORK_HELP_CLOSE_TAG: &str = "</fork_help>";
+const FORK_HELP_MAX_TOKENS: usize = 8_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ForkHelpInstructions;
@@ -32,7 +35,7 @@ impl ContextualUserFragment for ForkHelpInstructions {
     }
 
     fn body(&self) -> String {
-        format!(
+        let body = format!(
             "\n## Rick Fork Guidance\n\
 This build includes fork-only behavior beyond upstream/mainline Codex.\n\
 Use the inventory below as the source of truth when the user asks:\n\
@@ -43,7 +46,8 @@ Use the inventory below as the source of truth when the user asks:\n\
 When answering \"what's new\", prioritize the newest release section first and treat older sections as background history unless the user asks for the full timeline.\n\
 Do not invent fork features that are not listed here.\n\n\
 {FORK_DELTA_INVENTORY}\n"
-        )
+        );
+        truncate_text(&body, TruncationPolicy::Tokens(FORK_HELP_MAX_TOKENS))
     }
 }
 
@@ -58,5 +62,6 @@ mod tests {
         assert!(body.contains("what is new in Rick's version"));
         assert!(body.contains("/account <alias>"));
         assert!(body.contains("/orchestrator-memory-forget <needle>"));
+        assert!(body.contains("Verify first-class Conventional Commits"));
     }
 }

@@ -6,6 +6,8 @@ use app_test_support::test_tmp_path_buf;
 use app_test_support::to_response;
 use codex_app_server_protocol::AllowDenyRequirement;
 use codex_app_server_protocol::AppConfig;
+use codex_app_server_protocol::AppLinkConfig;
+use codex_app_server_protocol::AppLinksConfig;
 use codex_app_server_protocol::AppToolApproval;
 use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AppsConfig;
@@ -1066,6 +1068,18 @@ enabled = false
 approvals_reviewer = "user"
 destructive_enabled = false
 default_tools_approval_mode = "prompt"
+
+[apps.app1.links.link_work]
+approvals_reviewer = "auto_review"
+default_tools_approval_mode = "approve"
+
+[apps.app1.links.link_personal]
+default_tools_approval_mode = "writes"
+
+[apps.app_without_links]
+enabled = true
+
+[apps.app_with_empty_links.links]
 "#,
     )?;
     let codex_home_path = codex_home.path().canonicalize()?;
@@ -1083,11 +1097,21 @@ default_tools_approval_mode = "prompt"
             cwd: None,
         })
         .await?;
+    let response: serde_json::Value =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(
+        response["config"]["apps"]["app_without_links"].get("links"),
+        Some(&json!(null)),
+    );
+    assert_eq!(
+        response["config"]["apps"]["app_with_empty_links"].get("links"),
+        Some(&json!({})),
+    );
     let ConfigReadResponse {
         config,
         origins,
         layers,
-    } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    } = serde_json::from_value(response)?;
 
     assert_eq!(
         config.apps,
@@ -1099,18 +1123,66 @@ default_tools_approval_mode = "prompt"
                 open_world_enabled: true,
                 default_tools_approval_mode: Some(AppToolApproval::Writes),
             }),
-            apps: std::collections::HashMap::from([(
-                "app1".to_string(),
-                AppConfig {
-                    enabled: false,
-                    approvals_reviewer: Some(ApprovalsReviewer::User),
-                    destructive_enabled: Some(false),
-                    open_world_enabled: None,
-                    default_tools_approval_mode: Some(AppToolApproval::Prompt),
-                    default_tools_enabled: None,
-                    tools: None,
-                },
-            )]),
+            apps: std::collections::HashMap::from([
+                (
+                    "app1".to_string(),
+                    AppConfig {
+                        enabled: false,
+                        approvals_reviewer: Some(ApprovalsReviewer::User),
+                        destructive_enabled: Some(false),
+                        open_world_enabled: None,
+                        default_tools_approval_mode: Some(AppToolApproval::Prompt),
+                        default_tools_enabled: None,
+                        tools: None,
+                        links: Some(AppLinksConfig {
+                            links: std::collections::HashMap::from([
+                                (
+                                    "link_work".to_string(),
+                                    AppLinkConfig {
+                                        approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                                        default_tools_approval_mode: Some(AppToolApproval::Approve),
+                                    },
+                                ),
+                                (
+                                    "link_personal".to_string(),
+                                    AppLinkConfig {
+                                        approvals_reviewer: None,
+                                        default_tools_approval_mode: Some(AppToolApproval::Writes),
+                                    },
+                                ),
+                            ]),
+                        }),
+                    },
+                ),
+                (
+                    "app_without_links".to_string(),
+                    AppConfig {
+                        enabled: true,
+                        approvals_reviewer: None,
+                        destructive_enabled: None,
+                        open_world_enabled: None,
+                        default_tools_approval_mode: None,
+                        default_tools_enabled: None,
+                        tools: None,
+                        links: None,
+                    },
+                ),
+                (
+                    "app_with_empty_links".to_string(),
+                    AppConfig {
+                        enabled: true,
+                        approvals_reviewer: None,
+                        destructive_enabled: None,
+                        open_world_enabled: None,
+                        default_tools_approval_mode: None,
+                        default_tools_enabled: None,
+                        tools: None,
+                        links: Some(AppLinksConfig {
+                            links: std::collections::HashMap::new(),
+                        }),
+                    },
+                ),
+            ]),
         })
     );
     assert_eq!(

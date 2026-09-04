@@ -11,6 +11,7 @@ use crate::StoredThread;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 use codex_rollout::rollout_date_parts;
+use tracing::warn;
 
 use super::thread_rollout_resolver;
 use super::thread_rollout_resolver::RolloutLocation;
@@ -20,6 +21,7 @@ pub(super) async fn unarchive_thread(
     params: ArchiveThreadParams,
 ) -> ThreadStoreResult<StoredThread> {
     let thread_id = params.thread_id;
+    let _maintenance_guard = store.acquire_rollout_maintenance_lock().await?;
     let _lifecycle_guard = store.live_writer_locks.lock_lifecycle(thread_id).await;
     // Archive, delete, and revert use the same cross-process lock while moving or selecting
     // rollout files. Unarchive must participate before it moves those files back.
@@ -129,6 +131,14 @@ pub(super) async fn unarchive_thread(
         return Err(ThreadStoreError::Internal {
             message: format!("failed to update unarchived thread metadata: {err}"),
         });
+    }
+    for (source, _) in &rollout_moves {
+        if let Err(err) = codex_rollout::remove_rollout_file_lock(source.as_path()) {
+            warn!(
+                "failed to remove unarchived rollout writer sidecar {}: {err}",
+                source.display()
+            );
+        }
     }
 
     super::read_thread::read_thread(

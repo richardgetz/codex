@@ -254,9 +254,9 @@ pub async fn run_login_with_access_token(
     let auth_route_config = config.auth_route_config();
     let effective_chatgpt_workspaces = config.auth_config().effective_chatgpt_workspaces();
     match login_with_access_token(
-        &config.codex_home,
+        &config.auth_storage_home(),
         &access_token,
-        config.cli_auth_credentials_store_mode,
+        config.effective_cli_auth_credentials_store_mode(),
         effective_chatgpt_workspaces.as_deref(),
         Some(&config.chatgpt_base_url),
         config.auth_keyring_backend_kind(),

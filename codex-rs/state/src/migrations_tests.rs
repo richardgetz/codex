@@ -824,6 +824,96 @@ async fn repairs_recency_migration_that_was_applied_as_version_38() {
 }
 
 #[tokio::test]
+async fn repairs_upstream_projects_recency_migration_that_collides_with_fork_version_52() {
+    let sqlite_home = crate::runtime::test_support::unique_temp_dir();
+    tokio::fs::create_dir_all(&sqlite_home)
+        .await
+        .expect("sqlite home should be created");
+    let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
+        let _ = std::fs::remove_dir_all(sqlite_home);
+    });
+    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    let pool = sqlite
+        .open_read_write_pool(&sqlite.state_db_path())
+        .await
+        .expect("sqlite database should open");
+    migrator_through(/*version*/ 51)
+        .run(&pool)
+        .await
+        .expect("pre-collision migrations should apply");
+
+    let projects_recency_migration = STATE_MIGRATOR
+        .migrations
+        .iter()
+        .find(|migration| migration.version == 55)
+        .expect("projects recency migration should exist");
+    let mut upstream_migrations = STATE_MIGRATOR
+        .migrations
+        .iter()
+        .filter(|migration| migration.version <= 51)
+        .cloned()
+        .collect::<Vec<_>>();
+    upstream_migrations.push(Migration::new(
+        52,
+        projects_recency_migration.description.clone(),
+        projects_recency_migration.migration_type,
+        projects_recency_migration.sql.clone(),
+        projects_recency_migration.no_tx,
+    ));
+    Migrator::with_migrations(upstream_migrations)
+        .run(&pool)
+        .await
+        .expect("upstream project recency migration should apply at version 52");
+
+    repair_legacy_recency_migration_version(&pool, &STATE_MIGRATOR)
+        .await
+        .expect("upstream migration history should be repaired");
+    STATE_MIGRATOR
+        .run(&pool)
+        .await
+        .expect("current migrations should apply after repair");
+
+    let applied_checksum = sqlx::query_scalar::<_, Vec<u8>>(
+        "SELECT checksum FROM _sqlx_migrations WHERE version = 55",
+    )
+    .fetch_optional(&pool)
+    .await
+    .expect("repaired migration should load");
+    assert_eq!(
+        applied_checksum,
+        Some(
+            STATE_MIGRATOR
+                .migrations
+                .iter()
+                .find(|migration| migration.version == 55)
+                .expect("projects recency migration should exist")
+                .checksum
+                .to_vec(),
+        )
+    );
+    let colliding_checksum = sqlx::query_scalar::<_, Vec<u8>>(
+        "SELECT checksum FROM _sqlx_migrations WHERE version = 52",
+    )
+    .fetch_optional(&pool)
+    .await
+    .expect("colliding migration should load");
+    assert_eq!(
+        colliding_checksum,
+        Some(
+            STATE_MIGRATOR
+                .migrations
+                .iter()
+                .find(|migration| migration.version == 52)
+                .expect("fork migration should exist")
+                .checksum
+                .to_vec(),
+        )
+    );
+
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn repair_recency_migration_succeeds_while_another_connection_holds_writer_slot() {
     let sqlite_home = crate::runtime::test_support::unique_temp_dir();
     tokio::fs::create_dir_all(&sqlite_home)
@@ -843,7 +933,7 @@ async fn repair_recency_migration_succeeds_while_another_connection_holds_writer
         .await
         .expect("current migrations should apply");
     let read_pool = sqlite
-        .open_read_only_pool(&state_path)
+        .open_read_only_pool(&state_path, /*busy_timeout*/ None)
         .await
         .expect("read-only pool should open");
     let mut write_connection = pool.acquire().await.expect("write connection should open");

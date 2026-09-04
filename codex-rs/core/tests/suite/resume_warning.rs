@@ -35,6 +35,7 @@ fn resume_history(
         developer_instructions: None,
         final_output_json_schema: None,
         truncation_policy: None,
+        root_turn_id: None,
         cwd: config.cwd.clone(),
         workspace_roots: None,
         current_date: None,
@@ -53,6 +54,7 @@ fn resume_history(
         multi_agent_version: None,
         multi_agent_mode: None,
         realtime_active: None,
+        cyber_access_program: None,
         effort: config.model_reasoning_effort.clone(),
         summary: config
             .model_reasoning_summary

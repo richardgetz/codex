@@ -70,3 +70,11 @@ The decision-provenance layer is appended as `0054_rick_decision_provenance.sql`
 Its event table is canonical and append-only; the other provenance tables are
 materialized query indexes. The versioned Inbound projection format is
 documented in `state/src/decision_provenance/PROJECTION.md`.
+
+The `rust-v0.153.0` refresh keeps those shipped migrations unchanged. Its
+incoming project-recency index collides with the existing numeric sequence, so
+it is appended as `0055_upstream_projects_recency.sql`.
+
+The Git metadata clear markers are appended as `0056_rick_git_info_clears.sql`
+so an explicit metadata clear cannot be overwritten by a stale rollout
+upsert.

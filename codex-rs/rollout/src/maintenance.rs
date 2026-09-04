@@ -20,22 +20,45 @@ pub struct RolloutMaintenanceGuard {
     _file: File,
 }
 
+/// Holds shared ownership while a caller reads rollout files that maintenance may replace.
+#[derive(Debug)]
+pub struct RolloutMaintenanceReadGuard {
+    _file: File,
+}
+
 /// Try to exclude rollout compression and migration for one Codex home.
 pub fn try_acquire_rollout_maintenance_lock(
     codex_home: &Path,
 ) -> io::Result<Option<RolloutMaintenanceGuard>> {
-    let directory = codex_home.join(".tmp");
-    fs::create_dir_all(&directory)?;
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(directory.join(ROLLOUT_MAINTENANCE_LOCK))?;
+    let file = open_maintenance_lock_file(codex_home)?;
 
     match file.try_lock() {
         Ok(()) => Ok(Some(RolloutMaintenanceGuard { _file: file })),
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
         Err(std::fs::TryLockError::Error(error)) => Err(error),
     }
+}
+
+/// Try to share rollout maintenance ownership for one Codex home.
+pub fn try_acquire_rollout_maintenance_read_lock(
+    codex_home: &Path,
+) -> io::Result<Option<RolloutMaintenanceReadGuard>> {
+    let file = open_maintenance_lock_file(codex_home)?;
+
+    match file.try_lock_shared() {
+        Ok(()) => Ok(Some(RolloutMaintenanceReadGuard { _file: file })),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(error)) => Err(error),
+    }
+}
+
+fn open_maintenance_lock_file(codex_home: &Path) -> io::Result<File> {
+    let directory = codex_home.join(".tmp");
+    fs::create_dir_all(&directory)?;
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(directory.join(ROLLOUT_MAINTENANCE_LOCK))
 }

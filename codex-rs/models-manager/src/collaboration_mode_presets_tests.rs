@@ -58,6 +58,6 @@ fn default_mode_instructions_use_plain_text_questions_when_feature_disabled() {
 
     assert!(!default_instructions.contains("prefer using the `request_user_input` tool"));
     assert!(
-        default_instructions.contains("ask the user directly with a concise plain-text question")
+        default_instructions.contains("Ask the user directly with one concise plain-text question")
     );
 }

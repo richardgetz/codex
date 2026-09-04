@@ -51,9 +51,23 @@ mod subagent_notification;
 mod token_budget_context;
 mod turn_aborted;
 mod unsupported_media;
+mod update_plan_instructions;
 mod user_instructions;
 mod user_shell_command;
 pub(crate) mod world_state;
+
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
+
+const MODEL_CATALOG_CONTEXT_MAX_TOKENS: usize = 9_000;
+
+/// Bounds model-catalog text before it becomes a developer-context fragment.
+pub(crate) fn truncate_model_catalog_context(text: &str) -> String {
+    truncate_text(
+        text,
+        TruncationPolicy::Tokens(MODEL_CATALOG_CONTEXT_MAX_TOKENS),
+    )
+}
 
 pub(crate) use active_scratchpad::ActiveScratchpadContext;
 pub(crate) use approved_command_prefix_saved::APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX;
@@ -67,6 +81,7 @@ pub(crate) use codex_context_fragments::AdditionalContextUserFragment;
 pub use codex_context_fragments::ContextualUserFragment;
 pub(crate) use compaction_summary::CompactionSummary;
 pub(crate) use contextual_user_message::is_contextual_user_fragment;
+pub(crate) use contextual_user_message::is_user_authorization_message;
 pub(crate) use contextual_user_message::parse_visible_hook_prompt_message;
 pub(crate) use conventional_commits_instructions::ConventionalCommitsInstructions;
 pub(crate) use current_time_reminder::CurrentTimeReminder;
@@ -100,7 +115,7 @@ pub(crate) use multi_agent_role_instructions::MultiAgentRoleInstructions;
 pub(crate) use multi_agent_usage_hint::MultiAgentUsageHint;
 pub(crate) use network_rule_saved::NetworkRuleSaved;
 pub use node_repl_review_evidence::NodeReplReviewEvidence;
-pub(crate) use node_repl_review_evidence::NodeReplReviewEvidenceMode;
+pub use node_repl_review_evidence::NodeReplReviewEvidenceMode;
 pub(crate) use node_repl_review_evidence::node_repl_review_evidence_mode;
 pub use permissions_instructions::ApprovalPromptContext;
 pub use permissions_instructions::PermissionsInstructions;
@@ -127,6 +142,7 @@ pub(crate) use token_budget_context::TokenBudgetRemainingContext;
 pub(crate) use token_budget_context::TokenBudgetReminder;
 pub(crate) use turn_aborted::TurnAborted;
 pub(crate) use unsupported_media::UnsupportedMedia;
+pub use update_plan_instructions::without_update_plan_instructions;
 pub(crate) use user_instructions::UserInstructions;
 pub(crate) use user_shell_command::UserShellCommand;
 pub(crate) use world_state::ManagedDeveloperInstructions;

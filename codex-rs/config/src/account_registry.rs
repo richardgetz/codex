@@ -6,6 +6,7 @@ use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -64,10 +65,9 @@ pub fn registry_path(codex_home: &Path) -> PathBuf {
 }
 
 pub fn account_storage_home(codex_home: &Path, alias: &str) -> PathBuf {
-    if is_default_alias(alias) {
-        codex_home.to_path_buf()
-    } else {
-        accounts_dir(codex_home).join(alias)
+    match normalize_account_alias(alias) {
+        Some(alias) if !is_default_alias(&alias) => accounts_dir(codex_home).join(alias),
+        _ => codex_home.to_path_buf(),
     }
 }
 
@@ -252,7 +252,10 @@ fn write_registry_unlocked(
     let contents = serde_json::to_string_pretty(registry)
         .map_err(|err| io::Error::other(format!("serialize account registry: {err}")))?;
     fs::write(&temp_path, contents)?;
-    fs::rename(temp_path, path)?;
+    if let Err(err) = replace_registry_file(&temp_path, &path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
     Ok(())
 }
 
@@ -362,15 +365,30 @@ fn existing_alias_directories(codex_home: &Path) -> io::Result<Vec<String>> {
     Ok(aliases)
 }
 
-fn normalize_alias(alias: &str) -> Option<String> {
+/// Normalize an account alias and reject values that cannot name one directory entry.
+///
+/// Account aliases are used to select an auth-storage directory, so callers must not pass path
+/// separators, traversal components, or platform-specific path prefixes.
+pub fn normalize_account_alias(alias: &str) -> Option<String> {
     let alias = alias.trim();
-    if alias.is_empty() {
+    let mut components = Path::new(alias).components();
+    if alias.is_empty()
+        || alias.chars().any(char::is_control)
+        || alias.contains('/')
+        || alias.contains('\\')
+        || !matches!(components.next(), Some(Component::Normal(_)))
+        || components.next().is_some()
+    {
         None
     } else if alias.eq_ignore_ascii_case(DEFAULT_ACCOUNT_ALIAS) {
         Some(DEFAULT_ACCOUNT_ALIAS.to_string())
     } else {
         Some(alias.to_string())
     }
+}
+
+fn normalize_alias(alias: &str) -> Option<String> {
+    normalize_account_alias(alias)
 }
 
 fn is_default_alias(alias: &str) -> bool {
@@ -498,6 +516,53 @@ fn quarantine_corrupt_registry(path: &Path) -> io::Result<()> {
     fs::rename(path, quarantined)
 }
 
+#[cfg(not(windows))]
+fn replace_registry_file(temp_path: &Path, path: &Path) -> io::Result<()> {
+    fs::rename(temp_path, path)
+}
+
+#[cfg(windows)]
+fn replace_registry_file(temp_path: &Path, path: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(
+            existing_file_name: *const u16,
+            new_file_name: *const u16,
+            flags: u32,
+        ) -> i32;
+    }
+
+    let temp_path = temp_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: both vectors are NUL-terminated UTF-16 paths that remain alive for the call, and
+    // the flags request an atomic replacement with write-through semantics.
+    let result = unsafe {
+        MoveFileExW(
+            temp_path.as_ptr(),
+            path.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -586,6 +651,37 @@ mod tests {
         );
         assert!(!entry.auth_file_present);
         assert!(entry.last_used_at_unix_secs.is_some());
+    }
+
+    #[test]
+    fn normalize_account_alias_rejects_path_values() {
+        for alias in [
+            "../escape",
+            "/absolute",
+            "nested/name",
+            r"nested\name",
+            ".",
+            "..",
+        ] {
+            assert_eq!(normalize_account_alias(alias), None, "{alias}");
+        }
+        assert_eq!(
+            normalize_account_alias("  default "),
+            Some("default".to_string())
+        );
+        assert_eq!(normalize_account_alias(" work "), Some("work".to_string()));
+    }
+
+    #[test]
+    fn account_storage_home_rejects_path_values() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        for alias in ["../escape", "/absolute", "nested/name", r"nested\name"] {
+            assert_eq!(
+                account_storage_home(codex_home.path(), alias),
+                codex_home.path().to_path_buf(),
+                "unsafe alias should use the default auth store: {alias}"
+            );
+        }
     }
 
     #[test]

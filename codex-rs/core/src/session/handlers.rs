@@ -15,6 +15,7 @@ use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
 use crate::session::thread_settings;
+use crate::session::turn_context::NewTurnContextOptions;
 use crate::session::turn_input;
 use crate::tools::handlers::builtin_scratchpad::ScratchpadCheckpointRestore;
 use crate::tools::handlers::builtin_scratchpad::restore_thread_scratchpad_checkpoint;
@@ -121,9 +122,9 @@ pub async fn update_thread_settings(
     sub_id: String,
     thread_settings: ThreadSettingsOverrides,
 ) {
-    let updates = thread_settings_update(sess, thread_settings).await;
+    let updates = thread_settings_update(thread_settings);
     match sess.update_settings(updates).await {
-        Ok(()) => {
+        Ok(_commit) => {
             sess.send_event_raw_without_materializing_rollout(Event {
                 id: sub_id,
                 msg: thread_settings_applied_event(sess).await,
@@ -134,6 +135,7 @@ pub async fn update_thread_settings(
             sess.send_event_raw(Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
+                    misalignment: None,
                     message: format!("invalid thread settings override: {err}"),
                     codex_error_info: Some(CodexErrorInfo::BadRequest),
                 }),
@@ -143,58 +145,14 @@ pub async fn update_thread_settings(
     }
 }
 
-async fn thread_settings_update(
-    sess: &Session,
-    thread_settings: ThreadSettingsOverrides,
-) -> SessionSettingsUpdate {
-    let ThreadSettingsOverrides {
-        environments,
-        profile_workspace_roots,
-        approval_policy,
-        approvals_reviewer,
-        sandbox_policy,
-        permission_profile,
-        active_permission_profile,
-        windows_sandbox_level,
-        model,
-        effort,
-        summary,
-        service_tier,
-        collaboration_mode,
-        personality,
-    } = thread_settings;
-    let collaboration_mode = match collaboration_mode {
-        Some(collaboration_mode) => collaboration_mode,
-        None => {
-            let state = sess.state.lock().await;
-            // Model and reasoning effort live in CollaborationMode settings today, so
-            // partial thread-settings updates refresh those fields on the active mode.
-            state
-                .session_configuration
-                .collaboration_mode
-                .with_updates(model, effort, /*developer_instructions*/ None)
-        }
-    };
-    SessionSettingsUpdate {
-        environments,
-        profile_workspace_roots,
-        approval_policy,
-        approvals_reviewer,
-        sandbox_policy,
-        permission_profile,
-        active_permission_profile,
-        windows_sandbox_level,
-        collaboration_mode: Some(collaboration_mode),
-        reasoning_summary: summary,
-        service_tier,
-        personality,
-        ..Default::default()
-    }
+fn thread_settings_update(thread_settings: ThreadSettingsOverrides) -> SessionSettingsUpdate {
+    thread_settings::prepare_update(thread_settings)
 }
 
 pub(crate) async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
     let snapshot = sess.thread_config_snapshot().await;
     EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
+        thread_id: Some(sess.thread_id()),
         thread_settings: snapshot.into_thread_settings_snapshot(),
     })
 }
@@ -260,19 +218,25 @@ async fn user_input_or_turn_inner_with_reasoning_effort(
         unreachable!();
     };
     let emit_thread_settings_applied = thread_settings != ThreadSettingsOverrides::default();
-    let mut updates = if emit_thread_settings_applied {
-        thread_settings_update(sess, thread_settings).await
+    let updates = if emit_thread_settings_applied {
+        thread_settings_update(thread_settings)
     } else {
         SessionSettingsUpdate::default()
     };
-    updates.final_output_json_schema = Some(final_output_json_schema);
+    let options = NewTurnContextOptions {
+        final_output_json_schema,
+        ..Default::default()
+    };
 
     let current_context = match reasoning_effort {
-        TurnReasoningEffort::Persistent => sess.new_turn_with_sub_id(sub_id.clone(), updates).await,
+        TurnReasoningEffort::Persistent => sess
+            .new_turn_with_sub_id(sub_id.clone(), updates, options)
+            .await
+            .map(|(turn_context, _snapshot)| turn_context),
         TurnReasoningEffort::Transient(effort) => {
             sess.new_turn_with_transient_reasoning_effort(
                 sub_id.clone(),
-                updates.final_output_json_schema,
+                options.final_output_json_schema,
                 effort,
             )
             .await
@@ -393,16 +357,11 @@ pub async fn inter_agent_communication(
     sess: &Arc<Session>,
     sub_id: String,
     communication: InterAgentCommunication,
-    parent_turn_id: Option<String>,
-    root_turn_id: Option<String>,
+    start_options: codex_protocol::turn_input::TurnStartOptions,
 ) {
     let trigger_turn = communication.trigger_turn;
     sess.input_queue
-        .enqueue_mailbox_communication(
-            communication,
-            parent_turn_id.filter(|_| trigger_turn),
-            root_turn_id.filter(|_| trigger_turn),
-        )
+        .enqueue_mailbox_communication(communication, start_options)
         .await;
     crate::agent_communication::emit_agent_communication_receive(&sub_id);
     if trigger_turn || sess.has_outstanding_durable_sleep() {
@@ -411,7 +370,12 @@ pub async fn inter_agent_communication(
     }
 }
 
-pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command: String) {
+pub async fn run_user_shell_command(
+    sess: &Arc<Session>,
+    sub_id: String,
+    command: String,
+    timeout_ms: Option<u64>,
+) {
     if let Some((turn_context, cancellation_token)) =
         sess.active_turn_context_and_cancellation_token().await
     {
@@ -421,6 +385,7 @@ pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command
                 session,
                 turn_context,
                 command,
+                timeout_ms,
                 cancellation_token,
                 UserShellCommandMode::ActiveTurnAuxiliary,
             )
@@ -429,11 +394,13 @@ pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command
         return;
     }
 
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+    let turn_context = sess
+        .new_turn_with_default_settings(sub_id, Default::default())
+        .await;
     sess.spawn_task(
-        Arc::clone(&turn_context),
+        turn_context,
         Vec::new(),
-        UserShellCommandTask::new(command),
+        UserShellCommandTask::new(command, timeout_ms),
     )
     .await;
 }
@@ -552,10 +519,11 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
 }
 
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-
-    sess.spawn_task(Arc::clone(&turn_context), Vec::new(), CompactTask)
+    let turn_context = sess
+        .new_turn_with_default_settings(sub_id, Default::default())
         .await;
+
+    sess.spawn_task(turn_context, Vec::new(), CompactTask).await;
 }
 
 pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
@@ -605,6 +573,7 @@ pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: St
     sess.send_event_raw(Event {
         id: sub_id,
         msg: EventMsg::Error(ErrorEvent {
+            misalignment: None,
             message: format!("Memory drop completed with errors: {}", errors.join("; ")),
             codex_error_info: Some(CodexErrorInfo::Other),
         }),
@@ -616,6 +585,7 @@ pub async fn update_memories(sess: &Arc<Session>, _config: &Arc<Config>, sub_id:
     sess.send_event_raw(Event {
         id: sub_id,
         msg: EventMsg::Error(ErrorEvent {
+            misalignment: None,
             message: "Manual memory update is unavailable in this core session; memory generation is handled by the app-server memory pipeline after user turns.".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
         }),
@@ -646,6 +616,7 @@ pub fn consolidate_orchestrator_memory(sess: &Arc<Session>, config: &Arc<Config>
                 sess.send_event_raw(Event {
                     id: sub_id,
                     msg: EventMsg::Error(ErrorEvent {
+                        misalignment: None,
                         message: format!("Failed to consolidate orchestrator memory: {err}"),
                         codex_error_info: Some(CodexErrorInfo::Other),
                     }),
@@ -669,6 +640,7 @@ pub fn forget_orchestrator_memory(
             sess.send_event_raw(Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
+                    misalignment: None,
                     message: "Memory writes are disabled for this session; enable memory generation before editing user preferences memory.".to_string(),
                     codex_error_info: Some(CodexErrorInfo::Other),
                 }),
@@ -686,6 +658,7 @@ pub fn forget_orchestrator_memory(
             sess.send_event_raw(Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
+                    misalignment: None,
                     message: "Orchestrator memory forget requires write access to all user-preferences memory buckets; widen this session's userPreferencesMemoryPolicy.writeBuckets before running this global maintenance command.".to_string(),
                     codex_error_info: Some(CodexErrorInfo::Other),
                 }),
@@ -724,6 +697,7 @@ pub fn forget_orchestrator_memory(
                 sess.send_event_raw(Event {
                     id: sub_id,
                     msg: EventMsg::Error(ErrorEvent {
+                        misalignment: None,
                         message: format!("Orchestrator memory forget failed: {err}"),
                         codex_error_info: Some(CodexErrorInfo::Other),
                     }),
@@ -742,6 +716,7 @@ pub fn migrate_user_preferences_memory(sess: &Arc<Session>, config: &Arc<Config>
             sess.send_event_raw(Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
+                    misalignment: None,
                     message: "Memory writes are disabled for this session; enable memory generation before migrating user preferences memory.".to_string(),
                     codex_error_info: Some(CodexErrorInfo::Other),
                 }),
@@ -776,6 +751,7 @@ pub fn migrate_user_preferences_memory(sess: &Arc<Session>, config: &Arc<Config>
                 sess.send_event_raw(Event {
                     id: sub_id,
                     msg: EventMsg::Error(ErrorEvent {
+                        misalignment: None,
                         message: format!("User preferences memory migration failed: {err}"),
                         codex_error_info: Some(CodexErrorInfo::Other),
                     }),
@@ -791,6 +767,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         sess.send_event_raw(Event {
             id: sub_id,
             msg: EventMsg::Error(ErrorEvent {
+                misalignment: None,
                 message: "num_turns must be >= 1".to_string(),
                 codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
             }),
@@ -810,6 +787,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         sess.send_event_raw(Event {
             id: sub_id,
             msg: EventMsg::Error(ErrorEvent {
+                misalignment: None,
                 message: "Cannot rollback while a turn is in progress.".to_string(),
                 codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
             }),
@@ -818,13 +796,16 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         return;
     }
 
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+    let turn_context = sess
+        .new_turn_with_default_settings(sub_id, Default::default())
+        .await;
     let live_thread = match sess.live_thread_for_persistence("rollback thread") {
         Ok(live_thread) => live_thread,
         Err(_) => {
             sess.send_event_raw(Event {
                 id: turn_context.sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
+                    misalignment: None,
                     message: "thread rollback requires persisted thread history".to_string(),
                     codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
                 }),
@@ -837,6 +818,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         sess.send_event_raw(Event {
             id: turn_context.sub_id.clone(),
             msg: EventMsg::Error(ErrorEvent {
+                misalignment: None,
                 message: format!("failed to flush thread persistence for rollback replay: {err}"),
                 codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
             }),
@@ -851,6 +833,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
             sess.send_event_raw(Event {
                 id: turn_context.sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
+                    misalignment: None,
                     message: format!("failed to load thread history for rollback replay: {err}"),
                     codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
                 }),
@@ -869,16 +852,10 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .collect::<Vec<_>>();
     sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
         .await;
-    if sess
-        .services
+    sess.services
         .thread_extension_data
-        .remove::<NodeReplReviewEvidence>()
-        .is_some()
-    {
-        sess.guardian_review_session
-            .invalidate_for_node_repl_evidence()
-            .await;
-    }
+        .remove::<NodeReplReviewEvidence>();
+    sess.guardian_review_session.invalidate().await;
     sess.services
         .agent_control
         .rollout_budget()
@@ -943,6 +920,7 @@ pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) 
         let event = Event {
             id: sub_id,
             msg: EventMsg::Error(ErrorEvent {
+                misalignment: None,
                 message: "Thread name cannot be empty.".to_string(),
                 codex_error_info: Some(CodexErrorInfo::BadRequest),
             }),
@@ -963,6 +941,7 @@ pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) 
             let event = Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
+                    misalignment: None,
                     message: err.to_string(),
                     codex_error_info: Some(CodexErrorInfo::Other),
                 }),
@@ -1061,6 +1040,7 @@ pub async fn set_scratchpad_continuous_policy(sess: &Arc<Session>, sub_id: Strin
             sess.send_event_raw(Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
+                    misalignment: None,
                     message: err.to_string(),
                     codex_error_info: Some(CodexErrorInfo::Other),
                 }),
@@ -1097,6 +1077,7 @@ pub async fn prune_idle_agents(sess: &Arc<Session>, sub_id: String) {
                 sess.send_event_raw(Event {
                     id: sub_id.clone(),
                     msg: EventMsg::Error(ErrorEvent {
+                        misalignment: None,
                         message: format!("Failed to prune some idle agents: {failed}"),
                         codex_error_info: Some(CodexErrorInfo::Other),
                     }),
@@ -1119,6 +1100,7 @@ pub async fn prune_idle_agents(sess: &Arc<Session>, sub_id: String) {
             sess.send_event_raw(Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
+                    misalignment: None,
                     message: format!("Failed to prune idle agents: {err}"),
                     codex_error_info: Some(CodexErrorInfo::Other),
                 }),
@@ -1138,6 +1120,7 @@ pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: T
         let event = Event {
             id: sub_id,
             msg: EventMsg::Error(ErrorEvent {
+                misalignment: None,
                 message: err.to_string(),
                 codex_error_info: Some(CodexErrorInfo::Other),
             }),
@@ -1162,10 +1145,11 @@ pub async fn set_memory_access_policy(
         })
         .await
     {
-        Ok(()) => thread_settings_applied_event(sess).await,
+        Ok(_commit) => thread_settings_applied_event(sess).await,
         Err(err) => {
             warn!("Failed to update memory access policy: {err}");
             EventMsg::Error(ErrorEvent {
+                misalignment: None,
                 message: err.to_string(),
                 codex_error_info: Some(CodexErrorInfo::Other),
             })
@@ -1190,10 +1174,11 @@ pub async fn set_user_preferences_memory_policy(
         })
         .await
     {
-        Ok(()) => thread_settings_applied_event(sess).await,
+        Ok(_commit) => thread_settings_applied_event(sess).await,
         Err(err) => {
             warn!("Failed to update user preferences memory policy: {err}");
             EventMsg::Error(ErrorEvent {
+                misalignment: None,
                 message: err.to_string(),
                 codex_error_info: Some(CodexErrorInfo::Other),
             })
@@ -1238,6 +1223,11 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     }
     let _ = sess.conversation.shutdown().await;
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    let shell_snapshot_prewarm = sess.state.lock().await.shell_snapshot_prewarm.take();
+    if let Some(shell_snapshot_prewarm) = shell_snapshot_prewarm {
+        shell_snapshot_prewarm.abort();
+        let _ = shell_snapshot_prewarm.await;
+    }
     sess.hooks().shutdown().await;
     sess.async_hook_results.close();
     while sess.async_hook_results.try_recv().is_ok() {}
@@ -1295,6 +1285,7 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         let event = Event {
             id: sub_id.clone(),
             msg: EventMsg::Error(ErrorEvent {
+                misalignment: None,
                 message: "Failed to shutdown thread persistence".to_string(),
                 codex_error_info: Some(CodexErrorInfo::Other),
             }),
@@ -1322,7 +1313,9 @@ pub async fn review(
     sub_id: String,
     review_request: ReviewRequest,
 ) {
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+    let turn_context = sess
+        .new_turn_with_default_settings(sub_id.clone(), Default::default())
+        .await;
     sess.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
         .await;
     #[allow(deprecated)]
@@ -1341,6 +1334,7 @@ pub async fn review(
             let event = Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
+                    misalignment: None,
                     message: err.to_string(),
                     codex_error_info: Some(CodexErrorInfo::Other),
                 }),
@@ -1377,6 +1371,7 @@ pub(super) async fn submission_loop(
                         sess.send_event_raw(Event {
                             id: sub.id.clone(),
                             msg: EventMsg::Error(ErrorEvent {
+                                misalignment: None,
                                 message: err.to_string(),
                                 codex_error_info: Some(CodexErrorInfo::Other),
                             }),
@@ -1431,10 +1426,16 @@ pub(super) async fn submission_loop(
                 }
                 Op::RecoverTurn {
                     thread_settings,
+                    start_options,
                     reply,
                 } => {
-                    let result =
-                        turn_input::handle_recovery(&sess, thread_settings, sub.id.clone()).await;
+                    let result = turn_input::handle_recovery(
+                        &sess,
+                        thread_settings,
+                        start_options,
+                        sub.id.clone(),
+                    )
+                    .await;
                     let _ = reply.send(result);
                     false
                 }
@@ -1451,15 +1452,21 @@ pub(super) async fn submission_loop(
                     let _ = reply.send(result);
                     should_exit
                 }
-                Op::InterAgentCommunication { communication } => {
-                    inter_agent_communication(
-                        &sess,
-                        sub.id.clone(),
-                        communication,
-                        sub.parent_turn_id,
-                        sub.root_turn_id,
-                    )
-                    .await;
+                Op::TurnSettings {
+                    turn_id,
+                    update,
+                    reply,
+                } => {
+                    let outcome = sess.apply_turn_settings(&turn_id, update).await;
+                    let _ = reply.send(outcome);
+                    false
+                }
+                Op::InterAgentCommunication {
+                    communication,
+                    start_options,
+                } => {
+                    inter_agent_communication(&sess, sub.id.clone(), communication, start_options)
+                        .await;
                     false
                 }
                 Op::ExecApproval {
@@ -1546,8 +1553,11 @@ pub(super) async fn submission_loop(
                     set_user_preferences_memory_policy(&sess, sub.id.clone(), policy).await;
                     false
                 }
-                Op::RunUserShellCommand { command } => {
-                    run_user_shell_command(&sess, sub.id.clone(), command).await;
+                Op::RunUserShellCommand {
+                    command,
+                    timeout_ms,
+                } => {
+                    run_user_shell_command(&sess, sub.id.clone(), command, timeout_ms).await;
                     false
                 }
                 Op::ResolveElicitation {

@@ -7,6 +7,8 @@ use crate::auth_mode::auth_mode_to_api;
 use crate::external_auth::ExternalAuthBridge;
 use chrono::DateTime;
 use codex_app_server_protocol::DesktopOnboardingEntrypoint;
+use codex_config::account_registry::account_storage_home;
+use codex_config::account_registry::normalize_account_alias;
 use codex_login::LoginOnboardingEntrypoint;
 use codex_login::login_with_bedrock_access_keys;
 use codex_login::oauth_client_id;
@@ -193,11 +195,20 @@ impl AccountRequestProcessor {
             let value = value.trim().to_string();
             (!value.is_empty()).then_some(value)
         });
-        let normalized_alias = alias.filter(|value| !value.eq_ignore_ascii_case("default"));
+        let normalized_alias = alias
+            .map(|alias| {
+                normalize_account_alias(&alias).ok_or_else(|| {
+                    invalid_params(
+                        "account alias must be a single safe path component without separators",
+                    )
+                })
+            })
+            .transpose()?
+            .filter(|alias| !alias.eq_ignore_ascii_case("default"));
 
         let auth_storage_home = match normalized_alias.as_deref() {
-            Some(alias) => self.config.codex_home.join("accounts").join(alias),
-            None => self.config.codex_home.clone(),
+            Some(alias) => account_storage_home(&self.config.codex_home, alias),
+            None => self.config.codex_home.to_path_buf(),
         };
         let auth_credentials_store_mode = self
             .config
@@ -1260,6 +1271,16 @@ impl AccountRequestProcessor {
                 })
         });
 
+        // Match desktop's account readiness check before exposing account-bound CTA content.
+        // Normal rate limits remain available when older backends omit identity or banner data.
+        let rate_limit_upsell = response.rate_limit_upsell.filter(|_| {
+            !auth.is_fedramp_account()
+                && response.account_id.is_some()
+                && response.account_id == auth.get_account_id()
+                && response.user_id.is_some()
+                && response.user_id == auth.get_chatgpt_user_id()
+        });
+
         Ok(GetAccountRateLimitsResponse {
             rate_limits: rate_limits.into(),
             rate_limits_by_limit_id: Some(
@@ -1269,6 +1290,8 @@ impl AccountRequestProcessor {
                     .collect(),
             ),
             rate_limit_reset_credits,
+            account_id: response.account_id,
+            rate_limit_upsell,
         })
     }
 

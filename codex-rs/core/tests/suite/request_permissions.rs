@@ -290,16 +290,6 @@ fn requested_directory_write_permissions(path: &Path) -> RequestPermissionProfil
     }
 }
 
-fn normalized_directory_write_permissions(path: &Path) -> Result<RequestPermissionProfile> {
-    Ok(RequestPermissionProfile {
-        file_system: Some(FileSystemPermissions::from_read_write_roots(
-            Some(vec![]),
-            Some(vec![AbsolutePathBuf::try_from(path.canonicalize()?)?]),
-        )),
-        ..RequestPermissionProfile::default()
-    })
-}
-
 #[tokio::test(flavor = "current_thread")]
 async fn with_additional_permissions_requires_approval_under_on_request() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -511,7 +501,7 @@ async fn request_permissions_auto_review_applies_guardian_decision(outcome: &str
     let requested_dir = test.workspace_path("guardian-requested-permissions");
     fs::create_dir_all(&requested_dir)?;
     let requested_permissions = requested_directory_write_permissions(&requested_dir);
-    let normalized_permissions = normalized_directory_write_permissions(&requested_dir)?;
+    let normalized_permissions = requested_directory_write_permissions(&requested_dir);
     let call_id = "guardian-request-permissions";
     let reason = "Guardian should review access to the requested directory";
     let responses = mount_sse_sequence(
@@ -579,9 +569,7 @@ async fn request_permissions_auto_review_applies_guardian_decision(outcome: &str
         })
         .context("expected Guardian review request")?;
     assert!(guardian_request.body_contains_text(reason));
-    assert!(
-        guardian_request.body_contains_text(&requested_dir.canonicalize()?.display().to_string())
-    );
+    assert!(guardian_request.body_contains_text(&requested_dir.display().to_string()));
 
     let output = requests
         .iter()
@@ -768,7 +756,6 @@ async fn relative_additional_permissions_resolve_against_tool_workdir() -> Resul
 
     let nested_dir = test.workspace_path("nested");
     fs::create_dir_all(&nested_dir)?;
-    let nested_dir_canonical = nested_dir.canonicalize()?;
     let requested_write = nested_dir.join("relative-write.txt");
     let _ = fs::remove_file(&requested_write);
 
@@ -783,7 +770,7 @@ async fn relative_additional_permissions_resolve_against_tool_workdir() -> Resul
     let expected_permissions = PermissionProfile {
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             /*read*/ None,
-            Some(vec![absolute_path(&nested_dir_canonical)]),
+            Some(vec![absolute_path(&nested_dir)]),
         )),
         ..Default::default()
     };
@@ -1099,15 +1086,7 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
         )),
         ..RequestPermissionProfile::default()
     };
-    let normalized_requested_permissions = RequestPermissionProfile {
-        file_system: Some(FileSystemPermissions::from_read_write_roots(
-            Some(vec![]),
-            Some(vec![AbsolutePathBuf::try_from(
-                outside_dir.path().canonicalize()?,
-            )?]),
-        )),
-        ..RequestPermissionProfile::default()
-    };
+    let normalized_requested_permissions = requested_permissions.clone();
     let event =
         exec_command_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
@@ -1205,15 +1184,7 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
         )),
         ..Default::default()
     };
-    let normalized_requested_permissions = PermissionProfile {
-        file_system: Some(FileSystemPermissions::from_read_write_roots(
-            Some(vec![]),
-            Some(vec![AbsolutePathBuf::try_from(
-                outside_dir.path().canonicalize()?,
-            )?]),
-        )),
-        ..Default::default()
-    };
+    let normalized_requested_permissions = requested_permissions.clone();
     let event =
         exec_command_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
@@ -1311,15 +1282,7 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Resul
         )),
         ..Default::default()
     };
-    let normalized_requested_permissions = RequestPermissionProfile {
-        file_system: Some(FileSystemPermissions::from_read_write_roots(
-            Some(vec![]),
-            Some(vec![AbsolutePathBuf::try_from(
-                outside_dir.path().canonicalize()?,
-            )?]),
-        )),
-        ..Default::default()
-    };
+    let normalized_requested_permissions = requested_permissions.clone();
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -1433,7 +1396,7 @@ async fn request_permissions_preapprove_explicit_exec_permissions_outside_on_req
     );
     let requested_permissions = requested_directory_write_permissions(outside_dir.path());
     let normalized_requested_permissions =
-        normalized_directory_write_permissions(outside_dir.path())?;
+        requested_directory_write_permissions(outside_dir.path());
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -1553,7 +1516,7 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls_without_in
     );
     let requested_permissions = requested_directory_write_permissions(outside_dir.path());
     let normalized_requested_permissions =
-        normalized_directory_write_permissions(outside_dir.path())?;
+        requested_directory_write_permissions(outside_dir.path());
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -1691,11 +1654,11 @@ async fn sticky_permissions_do_not_select_the_browser_runtime() -> Result<()> {
             .parent()
             .expect("test Playwright CLI should have a parent directory"),
     );
-    let normalized_requested_permissions = normalized_directory_write_permissions(
+    let normalized_requested_permissions = requested_directory_write_permissions(
         playwright_cli_path
             .parent()
             .expect("test Playwright CLI should have a parent directory"),
-    )?;
+    );
     let command = "playwright-cli open https://example.com";
     let responses = mount_sse_sequence(
         &server,
@@ -1838,28 +1801,10 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
         )),
         ..RequestPermissionProfile::default()
     };
-    let normalized_requested_permissions = RequestPermissionProfile {
-        file_system: Some(FileSystemPermissions::from_read_write_roots(
-            Some(vec![]),
-            Some(vec![
-                AbsolutePathBuf::try_from(first_dir.path().canonicalize()?)?,
-                AbsolutePathBuf::try_from(second_dir.path().canonicalize()?)?,
-            ]),
-        )),
-        ..RequestPermissionProfile::default()
-    };
-    let granted_permissions = normalized_directory_write_permissions(first_dir.path())?;
+    let normalized_requested_permissions = requested_permissions.clone();
+    let granted_permissions = requested_directory_write_permissions(first_dir.path());
     let second_dir_permissions = requested_directory_write_permissions(second_dir.path());
-    let merged_permissions = PermissionProfile {
-        file_system: Some(FileSystemPermissions::from_read_write_roots(
-            Some(vec![]),
-            Some(vec![
-                AbsolutePathBuf::try_from(first_dir.path().canonicalize()?)?,
-                AbsolutePathBuf::try_from(second_dir.path().canonicalize()?)?,
-            ]),
-        )),
-        ..Default::default()
-    };
+    let merged_permissions = requested_permissions.clone();
 
     let responses = mount_sse_sequence(
         &server,
@@ -1996,7 +1941,7 @@ async fn request_permissions_grants_do_not_carry_across_turns() -> Result<()> {
     let outside_dir = tempfile::tempdir()?;
     let requested_permissions = requested_directory_write_permissions(outside_dir.path());
     let normalized_requested_permissions =
-        normalized_directory_write_permissions(outside_dir.path())?;
+        requested_directory_write_permissions(outside_dir.path());
 
     let _first_turn = mount_sse_sequence(
         &server,
@@ -2113,7 +2058,7 @@ async fn request_permissions_session_grants_carry_across_turns() -> Result<()> {
     let outside_write = outside_dir.path().join("session-sticky-write.txt");
     let requested_permissions = requested_directory_write_permissions(outside_dir.path());
     let normalized_requested_permissions =
-        normalized_directory_write_permissions(outside_dir.path())?;
+        requested_directory_write_permissions(outside_dir.path());
     let command = format!(
         "printf {:?} > {:?} && cat {:?}",
         "session-sticky-ok", outside_write, outside_write

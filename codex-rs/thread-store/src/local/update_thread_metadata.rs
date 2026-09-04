@@ -2,12 +2,14 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use chrono::Utc;
+use codex_protocol::SanitizedGitUrl;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::RolloutItem;
+use codex_rollout::RolloutRecorder;
 use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::append_thread_name;
 use codex_rollout::read_session_meta_line;
@@ -36,7 +38,24 @@ pub(super) async fn update_thread_metadata(
     params: UpdateThreadMetadataParams,
 ) -> ThreadStoreResult<StoredThread> {
     let thread_id = params.thread_id;
+    // Keep archive, unarchive, delete, and revert from moving the rollout while compatibility
+    // metadata is being reconciled with the live writer.
+    let _lifecycle_guard = store.live_writer_locks.reserve_lifecycle(thread_id).await;
     let mut pending_metadata = store.pending_thread_metadata.lock(thread_id).await;
+    // Serialize read-modify-append metadata updates with normal live rollout writes. The
+    // lifecycle read guard only fences replacement operations; it does not order two metadata
+    // updates that read the same SessionMeta before appending their compatibility records.
+    let _live_writer_guard = store.live_writer_locks.lock(thread_id).await;
+    // A live local recorder owns this cross-process lock already. Unloaded threads need to take
+    // it here so their compatibility append cannot race an archive, delete, or revert in another
+    // Codex process after the local lifecycle reservation has been acquired.
+    let _writer_lock = match live_writer::rollout_path(store, thread_id).await {
+        Ok(_) => None,
+        Err(ThreadStoreError::ThreadNotFound { .. }) => {
+            Some(store.writer_lock_coordinator.acquire(thread_id)?)
+        }
+        Err(err) => return Err(err),
+    };
     let pending_patch = pending_metadata
         .as_ref()
         .and_then(|metadata| metadata.as_ref().cloned());
@@ -150,7 +169,14 @@ pub(super) async fn update_thread_metadata(
     }
 
     if live_writer::rollout_path(store, thread_id).await.is_ok() {
-        live_writer::persist_thread(store, thread_id).await?;
+        let (recorder, _rollout_id, _history_mode) =
+            live_writer::live_writer_parts(store, thread_id).await?;
+        recorder
+            .persist()
+            .await
+            .map_err(|err| ThreadStoreError::Internal {
+                message: err.to_string(),
+            })?;
     }
     let mut resolved_rollout = if params.include_archived {
         thread_rollout_resolver::resolve_current_including_archived(store, thread_id).await?
@@ -162,8 +188,18 @@ pub(super) async fn update_thread_metadata(
     })?;
     let name = patch.name;
     let git_info = patch.git_info;
+    let live_recorder = live_writer::live_writer_parts(store, thread_id)
+        .await
+        .ok()
+        .map(|(recorder, _rollout_id, _history_mode)| recorder);
     if let Some(memory_mode) = patch.memory_mode {
-        apply_thread_memory_mode(resolved_rollout.path.as_path(), thread_id, memory_mode).await?;
+        apply_thread_memory_mode(
+            resolved_rollout.path.as_path(),
+            thread_id,
+            memory_mode,
+            live_recorder.as_ref(),
+        )
+        .await?;
         refresh_resolved_rollout_path(&mut resolved_rollout).await;
     }
 
@@ -239,6 +275,7 @@ pub(super) async fn update_thread_metadata(
             branch,
             origin_url,
             memory_mode.as_deref(),
+            live_recorder.as_ref(),
         )
         .await?;
         refresh_resolved_rollout_path(&mut resolved_rollout).await;
@@ -708,7 +745,7 @@ async fn apply_thread_git_info_patch(
             git_info
                 .origin_url
                 .as_ref()
-                .map(|origin_url| origin_url.as_deref()),
+                .map(|origin_url| origin_url.as_ref()),
         )
         .await
         .map_err(|err| ThreadStoreError::Internal {
@@ -728,7 +765,7 @@ async fn apply_thread_git_info(
     thread_id: ThreadId,
     sha: &Option<String>,
     branch: &Option<String>,
-    origin_url: &Option<String>,
+    origin_url: &Option<SanitizedGitUrl>,
 ) -> ThreadStoreResult<()> {
     let Some(state_db) = store.state_db().await else {
         return Err(ThreadStoreError::Internal {
@@ -740,7 +777,7 @@ async fn apply_thread_git_info(
             thread_id,
             Some(sha.as_deref()),
             Some(branch.as_deref()),
-            Some(origin_url.as_deref()),
+            Some(origin_url.as_ref()),
         )
         .await
         .map_err(|err| ThreadStoreError::Internal {
@@ -758,7 +795,7 @@ async fn apply_thread_git_info(
 fn resolve_git_info_patch(
     existing: Option<GitInfo>,
     git_info: GitInfoPatch,
-) -> (Option<String>, Option<String>, Option<String>) {
+) -> (Option<String>, Option<String>, Option<SanitizedGitUrl>) {
     let (existing_sha, existing_branch, existing_origin_url) = match existing {
         Some(info) => (
             info.commit_hash.map(|sha| sha.0),
@@ -778,8 +815,9 @@ async fn apply_thread_git_info_to_rollout(
     thread_id: ThreadId,
     sha: &Option<String>,
     branch: &Option<String>,
-    origin_url: &Option<String>,
+    origin_url: &Option<SanitizedGitUrl>,
     memory_mode: Option<&str>,
+    live_recorder: Option<&RolloutRecorder>,
 ) -> ThreadStoreResult<()> {
     let mut session_meta =
         read_session_meta_line(rollout_path)
@@ -802,7 +840,8 @@ async fn apply_thread_git_info_to_rollout(
         repository_url: origin_url.clone(),
     });
     session_meta.meta.memory_mode = memory_mode.map(str::to_string);
-    append_rollout_item_to_path(rollout_path, &RolloutItem::SessionMeta(session_meta))
+    let rollout_item = RolloutItem::SessionMeta(session_meta);
+    append_compatibility_rollout_item(rollout_path, &rollout_item, live_recorder)
         .await
         .map_err(|err| ThreadStoreError::Internal {
             message: format!("failed to set thread git metadata: {err}"),
@@ -813,6 +852,7 @@ async fn apply_thread_memory_mode(
     rollout_path: &Path,
     thread_id: ThreadId,
     memory_mode: ThreadMemoryMode,
+    live_recorder: Option<&RolloutRecorder>,
 ) -> ThreadStoreResult<()> {
     let mut session_meta =
         read_session_meta_line(rollout_path)
@@ -833,11 +873,28 @@ async fn apply_thread_memory_mode(
     // code will preserve the latest prior git marker when this field is absent.
     session_meta.git = None;
     session_meta.meta.memory_mode = Some(memory_mode_as_str(memory_mode).to_string());
-    append_rollout_item_to_path(rollout_path, &RolloutItem::SessionMeta(session_meta))
+    let rollout_item = RolloutItem::SessionMeta(session_meta);
+    append_compatibility_rollout_item(rollout_path, &rollout_item, live_recorder)
         .await
         .map_err(|err| ThreadStoreError::Internal {
             message: format!("failed to set thread memory mode: {err}"),
         })
+}
+
+async fn append_compatibility_rollout_item(
+    rollout_path: &Path,
+    item: &RolloutItem,
+    live_recorder: Option<&RolloutRecorder>,
+) -> std::io::Result<()> {
+    match live_recorder {
+        Some(recorder) => {
+            recorder
+                .record_canonical_items(std::slice::from_ref(item))
+                .await?;
+            recorder.flush().await
+        }
+        None => append_rollout_item_to_path(rollout_path, item).await,
+    }
 }
 
 fn memory_mode_as_str(mode: ThreadMemoryMode) -> &'static str {
@@ -1435,7 +1492,10 @@ mod tests {
                     git_info: Some(GitInfoPatch {
                         sha: Some(Some("abc123".to_string())),
                         branch: Some(Some("main".to_string())),
-                        origin_url: Some(Some("https://github.com/openai/codex".to_string())),
+                        origin_url: Some(Some(
+                            SanitizedGitUrl::try_from("https://github.com/openai/codex")
+                                .expect("valid git remote URL"),
+                        )),
                     }),
                     ..Default::default()
                 },
@@ -1536,7 +1596,10 @@ mod tests {
                     git_info: Some(GitInfoPatch {
                         sha: Some(Some("abc123".to_string())),
                         branch: Some(Some("main".to_string())),
-                        origin_url: Some(Some("https://github.com/openai/codex".to_string())),
+                        origin_url: Some(Some(
+                            SanitizedGitUrl::try_from("https://github.com/openai/codex")
+                                .expect("valid git remote URL"),
+                        )),
                     }),
                     ..Default::default()
                 },
@@ -1596,7 +1659,10 @@ mod tests {
                     git_info: Some(GitInfoPatch {
                         sha: Some(Some("abc123".to_string())),
                         branch: Some(Some("main".to_string())),
-                        origin_url: Some(Some("https://github.com/openai/codex".to_string())),
+                        origin_url: Some(Some(
+                            SanitizedGitUrl::try_from("https://github.com/openai/codex")
+                                .expect("valid git remote URL"),
+                        )),
                     }),
                     ..Default::default()
                 },

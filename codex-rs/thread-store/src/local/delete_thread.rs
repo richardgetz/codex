@@ -16,6 +16,7 @@ use codex_rollout::SESSIONS_SUBDIR;
 use codex_rollout::find_archived_thread_path_by_id_str;
 use codex_rollout::find_thread_path_by_id_str;
 use codex_rollout::remove_thread_name_entries;
+use tracing::warn;
 
 use super::LocalThreadStore;
 use super::helpers::scoped_rollout_path;
@@ -66,6 +67,7 @@ pub(super) async fn delete_thread(
     params: DeleteThreadParams,
 ) -> ThreadStoreResult<()> {
     let thread_id = params.thread_id;
+    let _maintenance_guard = store.acquire_rollout_maintenance_lock().await?;
     let _lifecycle_guard = store.live_writer_locks.lock_lifecycle(thread_id).await;
     let _live_writer_guard = store.live_writer_locks.lock(thread_id).await;
     let reference_index = scan_reference_index(store).await?;
@@ -84,6 +86,7 @@ pub(super) async fn delete_threads(
         return Ok(());
     }
 
+    let _maintenance_guard = store.acquire_rollout_maintenance_lock().await?;
     let mut lock_thread_ids = thread_ids.clone();
     lock_thread_ids.sort_unstable_by_key(ToString::to_string);
     lock_thread_ids.dedup();
@@ -232,6 +235,12 @@ fn delete_rollout_file(store: &LocalThreadStore, rollout_path: &Path) -> ThreadS
     let compressed_path = plain_path.with_extension("jsonl.zst");
     let deleted_plain = delete_rollout_path(store, plain_path.as_path())?;
     let deleted_compressed = delete_rollout_path(store, compressed_path.as_path())?;
+    if let Err(err) = codex_rollout::remove_rollout_file_lock(plain_path.as_path()) {
+        warn!(
+            "failed to remove deleted rollout writer sidecar {}: {err}",
+            plain_path.display()
+        );
+    }
     Ok(deleted_plain || deleted_compressed)
 }
 

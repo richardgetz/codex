@@ -91,7 +91,7 @@ async fn revert_keeps_thread_id_and_hides_suffix_across_repeated_reverts() {
         .expect("read replacement metadata")
         .meta;
     assert_eq!(replacement_meta.id, thread_id);
-    assert_eq!(replacement_meta.memory_mode, None);
+    assert_eq!(replacement_meta.memory_mode.as_deref(), Some("enabled"));
     assert_eq!(turn_ids(&store, thread_id).await, vec!["turn-1"]);
 
     store

@@ -8,8 +8,10 @@ use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
 use chrono::Utc;
+use codex_protocol::SanitizedGitUrl;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
@@ -22,8 +24,89 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 use tempfile::tempdir;
 use uuid::Uuid;
+
+#[test]
+fn fork_cutoff_distinguishes_logical_parent_from_reverted_rollout() {
+    let parent_id = ThreadId::new();
+    let thread_id = ThreadId::new();
+    let physical_id = ThreadId::new();
+    let replacement_id = ThreadId::new();
+    let original_path = PathBuf::from(format!("rollout-2026-01-27T12-34-56-{thread_id}.jsonl"));
+    let reverted_path = PathBuf::from(format!(
+        "rollout-2026-01-27T12-34-56-{thread_id}_{replacement_id}.jsonl"
+    ));
+
+    for (name, parent, cutoff, base_id, path, expected) in [
+        (
+            "persisted revert",
+            Some(parent_id),
+            Some(20),
+            thread_id,
+            Some(reverted_path.as_path()),
+            Some(20),
+        ),
+        (
+            "legacy direct fork",
+            Some(parent_id),
+            None,
+            parent_id,
+            None,
+            Some(40),
+        ),
+        (
+            "legacy fork of reverted parent",
+            Some(parent_id),
+            None,
+            physical_id,
+            Some(original_path.as_path()),
+            Some(40),
+        ),
+        (
+            "legacy child revert",
+            Some(parent_id),
+            None,
+            thread_id,
+            Some(reverted_path.as_path()),
+            None,
+        ),
+        (
+            "legacy repeated revert",
+            Some(parent_id),
+            None,
+            physical_id,
+            Some(reverted_path.as_path()),
+            None,
+        ),
+        (
+            "missing parent",
+            None,
+            Some(20),
+            parent_id,
+            Some(original_path.as_path()),
+            None,
+        ),
+    ] {
+        let meta = SessionMeta {
+            id: thread_id,
+            forked_from_id: parent,
+            forked_from_ordinal_exclusive: cutoff,
+            history_base: Some(HistoryPosition {
+                thread_id: base_id,
+                end_ordinal_exclusive: 40,
+                end_byte_offset: 100,
+            }),
+            ..SessionMeta::default()
+        };
+        assert_eq!(
+            forked_from_ordinal_exclusive(&meta, path),
+            expected,
+            "{name}"
+        );
+    }
+}
 
 #[tokio::test]
 async fn extract_metadata_from_rollout_uses_session_meta() {
@@ -38,6 +121,7 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
         session_id: id.into(),
         id,
         forked_from_id: None,
+        forked_from_ordinal_exclusive: None,
         parent_thread_id: None,
         timestamp: "2026-01-27T12:34:56Z".to_string(),
         cwd: dir.path().to_path_buf(),
@@ -136,6 +220,7 @@ async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
         session_id: id.into(),
         id,
         forked_from_id: None,
+        forked_from_ordinal_exclusive: None,
         parent_thread_id: None,
         timestamp: "2026-01-27T12:34:56Z".to_string(),
         cwd: dir.path().to_path_buf(),
@@ -207,11 +292,14 @@ fn builder_from_items_falls_back_to_filename() {
     let items = vec![RolloutItem::Compacted(CompactedItem {
         message: "noop".to_string(),
         replacement_history: None,
+        guardian_history: None,
         mcp_resource_origins: None,
         window_number: None,
         first_window_id: None,
         previous_window_id: None,
         window_id: None,
+        compaction_response_id: None,
+        latest_token_usage_record: None,
     })];
 
     let builder = builder_from_items(items.as_slice(), path.as_path()).expect("builder");
@@ -315,7 +403,10 @@ async fn backfill_sessions_preserves_existing_git_branch_and_fills_missing_git_f
         Some(GitInfo {
             commit_hash: Some(codex_git_utils::GitSha::new("rollout-sha")),
             branch: Some("rollout-branch".to_string()),
-            repository_url: Some("git@example.com:openai/codex.git".to_string()),
+            repository_url: Some(
+                SanitizedGitUrl::try_from("git@example.com:openai/codex.git")
+                    .expect("valid git remote URL"),
+            ),
         }),
     );
 
@@ -438,6 +529,75 @@ async fn backfill_sessions_normalizes_cwd_before_upsert() {
     assert_eq!(stored.cwd, normalize_cwd_for_state_db(&session_cwd));
 }
 
+#[tokio::test]
+async fn backfill_sessions_waits_for_rollout_maintenance_lock() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let codex_home = dir.path().to_path_buf();
+    let thread_uuid = Uuid::new_v4();
+    write_rollout_in_sessions(
+        codex_home.as_path(),
+        "2026-01-27T12-34-56",
+        "2026-01-27T12:34:56Z",
+        thread_uuid,
+        /*git*/ None,
+    );
+    let runtime = codex_state::StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+        "test-provider".to_string(),
+    )
+    .await?;
+    let maintenance_guard = crate::try_acquire_rollout_maintenance_lock(codex_home.as_path())?
+        .expect("claim rollout maintenance lock");
+    let backfill_runtime = runtime.clone();
+    let backfill_home = codex_home.clone();
+    let task = tokio::spawn(async move {
+        backfill_sessions(&backfill_runtime, backfill_home.as_path(), "test-provider").await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let thread_id = ThreadId::from_string(&thread_uuid.to_string())?;
+    assert_eq!(runtime.get_thread(thread_id).await?, None);
+
+    drop(maintenance_guard);
+    tokio::time::timeout(Duration::from_secs(2), task).await??;
+    assert!(runtime.get_thread(thread_id).await?.is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn backfill_sessions_waits_for_rollout_writer_lock() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let codex_home = dir.path().to_path_buf();
+    let thread_uuid = Uuid::new_v4();
+    let rollout_path = write_rollout_in_sessions(
+        codex_home.as_path(),
+        "2026-01-27T12-34-56",
+        "2026-01-27T12:34:56Z",
+        thread_uuid,
+        /*git*/ None,
+    );
+    let runtime = codex_state::StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+        "test-provider".to_string(),
+    )
+    .await?;
+    let rollout_lock = crate::compression::acquire_rollout_file_lock(rollout_path.as_path())?;
+    let backfill_runtime = runtime.clone();
+    let backfill_home = codex_home.clone();
+    let task = tokio::spawn(async move {
+        backfill_sessions(&backfill_runtime, backfill_home.as_path(), "test-provider").await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let thread_id = ThreadId::from_string(&thread_uuid.to_string())?;
+    assert_eq!(runtime.get_thread(thread_id).await?, None);
+
+    drop(rollout_lock);
+    tokio::time::timeout(Duration::from_secs(2), task).await??;
+    assert!(runtime.get_thread(thread_id).await?.is_some());
+    Ok(())
+}
+
 fn write_rollout_in_sessions(
     codex_home: &Path,
     filename_ts: &str,
@@ -473,6 +633,7 @@ fn write_rollout_in_sessions_with_cwd(
         session_id: id.into(),
         id,
         forked_from_id: None,
+        forked_from_ordinal_exclusive: None,
         parent_thread_id: None,
         timestamp: event_ts.to_string(),
         cwd,
