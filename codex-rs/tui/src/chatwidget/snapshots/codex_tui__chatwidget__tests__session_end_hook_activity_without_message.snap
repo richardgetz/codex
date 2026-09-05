@@ -10,6 +10,7 @@ before reveal:
 "  gpt-5.6-sol default · /tmp/project                                            "
 running:
 "                                                                                "
+"                                                                                "
 "• Running hook                                                                  "
 "                                                                                "
 "                                                                                "
@@ -17,6 +18,7 @@ running:
 "                                                                                "
 "  gpt-5.6-sol default · /tmp/project                                            "
 completed:
+"                                                                                "
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "
