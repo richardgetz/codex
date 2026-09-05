@@ -109,6 +109,65 @@ fn write_options(key: &str, actor: Actor, occurred_at: DateTime<Utc>) -> Provena
     }
 }
 
+fn crossroad_record(id: &str, status: CrossroadStatus, created_at: DateTime<Utc>) -> Crossroad {
+    Crossroad {
+        id: id.to_string(),
+        request_ref: Some(format!("request:{id}")),
+        task_ref: Some(format!("task:{id}")),
+        project_ref: None,
+        session_id: Some(format!("session:{id}")),
+        question: format!("Which direction should be discussed for {id}?"),
+        options: vec![CrossroadOption {
+            id: "discuss".to_string(),
+            label: "Discuss a new direction".to_string(),
+            summary: Some("Keep actor and source explicit.".to_string()),
+            tradeoffs: Vec::new(),
+        }],
+        recommended_option: None,
+        affected_boundary_ids: Vec::new(),
+        constraint_ids: Vec::new(),
+        expected_tradeoffs: vec!["No decision is recorded by this observation.".to_string()],
+        authority_required: None,
+        status,
+        actor: Actor::System,
+        source_refs: vec![SourceReference::new("session", format!("session:{id}"))],
+        linked_scratchpad_wait_id: None,
+        timestamps: timestamps(created_at),
+        privacy: PrivacyClass::Private,
+    }
+}
+
+fn decision_record(id: &str, created_at: DateTime<Utc>) -> Decision {
+    Decision {
+        id: id.to_string(),
+        parent_crossroad_id: None,
+        selected_option: "discuss".to_string(),
+        unselected_options: Vec::new(),
+        actor: Actor::Agent,
+        approval_state: ApprovalState::NotRequired,
+        authority_basis: Authority::System,
+        summary: format!("Recorded direction for {id}."),
+        rationale: None,
+        assumptions: Vec::new(),
+        tradeoffs: Vec::new(),
+        request_ref: None,
+        task_ref: None,
+        project_ref: None,
+        repository: None,
+        source_session_id: None,
+        source_turn_id: None,
+        related_preference_boundary_ids: Vec::new(),
+        related_constraint_ids: Vec::new(),
+        warrant_id: None,
+        change_set_ids: Vec::new(),
+        status: DecisionStatus::Accepted,
+        timestamps: timestamps(created_at),
+        superseded_by: None,
+        reopened_as: None,
+        privacy: PrivacyClass::Private,
+    }
+}
+
 #[tokio::test]
 async fn explicit_boundary_is_active_but_agent_inference_stays_candidate() {
     let (runtime, codex_home) = runtime().await;
@@ -170,6 +229,163 @@ async fn explicit_boundary_is_active_but_agent_inference_stays_candidate() {
             .await
             .expect("list boundaries"),
         vec![candidate, explicit]
+    );
+
+    runtime.close().await;
+    let _ = tokio::fs::remove_dir_all(codex_home).await;
+}
+
+#[tokio::test]
+async fn provenance_id_prefix_queries_are_literal_and_cover_full_store() {
+    let (runtime, codex_home) = runtime().await;
+    for index in 0..=crate::decision_provenance::MAX_QUERY_RESULTS {
+        let id = format!("crossroad-many-{index:02}");
+        runtime
+            .record_crossroad(
+                crossroad_record(&id, CrossroadStatus::Open, at(1_800_000_000 + index as i64)),
+                write_options(
+                    &format!("record-{id}"),
+                    Actor::System,
+                    at(1_800_000_000 + index as i64),
+                ),
+            )
+            .await
+            .expect("record crossroad");
+    }
+    runtime
+        .record_crossroad(
+            crossroad_record("crossroad-MANY", CrossroadStatus::Open, at(1_800_000_100)),
+            write_options("record-crossroad-MANY", Actor::System, at(1_800_000_100)),
+        )
+        .await
+        .expect("record case-sensitive crossroad");
+    runtime
+        .record_decision(
+            decision_record("decision-many", at(1_800_000_101)),
+            write_options("record-decision-many", Actor::Agent, at(1_800_000_101)),
+        )
+        .await
+        .expect("record decision");
+
+    assert_eq!(
+        runtime
+            .crossroads_with_id_prefix("crossroad-many-", 2)
+            .await
+            .expect("query crossroads")
+            .len(),
+        2
+    );
+    assert_eq!(
+        runtime
+            .crossroads_with_id_prefix(
+                "crossroad-many-",
+                crate::decision_provenance::MAX_QUERY_RESULTS + 1,
+            )
+            .await
+            .expect("oversize query should be capped")
+            .len(),
+        crate::decision_provenance::MAX_QUERY_RESULTS
+    );
+    assert_eq!(
+        runtime
+            .crossroads_with_id_prefix("crossroad-MANY", 2)
+            .await
+            .expect("query case-sensitive crossroad")
+            .iter()
+            .map(|crossroad| crossroad.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["crossroad-MANY"]
+    );
+    assert!(
+        runtime
+            .crossroads_with_id_prefix("crossroad-%", 2)
+            .await
+            .expect("query literal wildcard prefix")
+            .is_empty()
+    );
+    assert_eq!(
+        runtime
+            .decisions_with_id_prefix("decision-", 2)
+            .await
+            .expect("query decisions")
+            .iter()
+            .map(|decision| decision.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["decision-many"]
+    );
+    assert!(runtime.crossroads_with_id_prefix("", 2).await.is_err());
+    assert!(
+        runtime
+            .crossroads_with_id_prefix("crossroad-many-", 1)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        super::prefix_query_limit(
+            "crossroad-many-",
+            crate::decision_provenance::MAX_QUERY_RESULTS + 1,
+        )
+        .expect("oversize prefix limit should be capped"),
+        crate::decision_provenance::MAX_QUERY_RESULTS as i64
+    );
+
+    runtime.close().await;
+    let _ = tokio::fs::remove_dir_all(codex_home).await;
+}
+
+#[tokio::test]
+async fn repeated_crossroad_review_cycles_remain_in_append_only_history() {
+    let (runtime, codex_home) = runtime().await;
+    let crossroad = crossroad_record(
+        "crossroad-history",
+        CrossroadStatus::Open,
+        at(1_800_000_200),
+    );
+    runtime
+        .record_crossroad(
+            crossroad,
+            write_options("record-crossroad-history", Actor::System, at(1_800_000_200)),
+        )
+        .await
+        .expect("record crossroad");
+    for (index, status) in [
+        CrossroadStatus::Resolved,
+        CrossroadStatus::Reopened,
+        CrossroadStatus::Resolved,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        runtime
+            .transition_crossroad(
+                "crossroad-history",
+                status,
+                write_options(
+                    &format!("review-cycle-{index}"),
+                    Actor::User,
+                    at(1_800_000_201 + index as i64),
+                ),
+            )
+            .await
+            .expect("append review cycle");
+    }
+
+    let history = runtime
+        .crossroad_history("crossroad-history")
+        .await
+        .expect("read crossroad history");
+    assert_eq!(history.len(), 4);
+    assert_eq!(
+        history
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "crossroad_recorded",
+            "crossroad_status_changed",
+            "crossroad_status_changed",
+            "crossroad_status_changed",
+        ]
     );
 
     runtime.close().await;

@@ -5,6 +5,7 @@ use codex_protocol::models::ResponseItem;
 
 use super::AdditionalContextUserFragment;
 use super::ContextualUserFragment;
+use super::DecisionProvenanceAdvisory;
 use super::InternalModelContextFragment;
 use super::LegacyApplyPatchExecCommandWarning;
 use super::LegacyModelMismatchWarning;
@@ -20,6 +21,7 @@ const CONTEXTUAL_USER_FRAGMENT_MATCHERS: &[fn(&str) -> bool] = &[
     UserInstructions::matches_text,
     EnvironmentsState::matches_text,
     AdditionalContextUserFragment::matches_text,
+    DecisionProvenanceAdvisory::matches_text,
     codex_skills_extension::is_skill_prompt_fragment,
     UserShellCommand::matches_text,
     TurnAborted::matches_text,

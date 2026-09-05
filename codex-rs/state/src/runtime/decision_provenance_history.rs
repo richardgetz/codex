@@ -33,6 +33,11 @@ impl StateRuntime {
             .await
     }
 
+    pub async fn crossroad_history(&self, id: &str) -> anyhow::Result<Vec<EventSummary>> {
+        self.event_history_until(EntityType::Crossroad, id, None)
+            .await
+    }
+
     pub async fn boundary_history(&self, id: &str) -> anyhow::Result<Vec<EventSummary>> {
         self.event_history_until(EntityType::PreferenceBoundary, id, None)
             .await

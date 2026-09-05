@@ -20,6 +20,21 @@ release or merge rules.
 
 ## Unreleased
 
+- Advisory crossroads and decision-history traversal:
+  - Request-start provenance matches no longer block model flow or infer user
+    approval. Matching guidance is bounded informational context; independent
+    permissions and explicit user instructions still apply.
+  - `/decisions crossroads`, `show`, and `history` expose candidate sources,
+    linked records, and review history. `reviewed`, `dismiss`, and `revisit`
+    change bookkeeping only, not execution, approval, or released code.
+  - Repeated requests reuse candidate records; distinct requests remain
+    separate. ID prefixes resolve against the full store with ambiguity checks.
+  - Existing records and opt-in defaults are preserved. Legacy approval
+    crossroads remain separately queryable; retry deduplication applies to new
+    informational candidates without inheriting legacy review states.
+  - Semantic discussion and replacement-decision recording are not part of
+    this foundation.
+
 - Per-thread usage visibility, budgets, and reset-aware auto-resume:
   - App-server v2 exposes a persisted `usagePolicy` on thread start, resume,
     fork, and settings-update surfaces. It is disabled by default per thread.
@@ -57,10 +72,11 @@ release or merge rules.
     default to `false`.
   - When both are true, request-start preflight reads bounded local
     `refs/notes/intention` metadata for likely code/API/behavior/invariant or
-    generated-file changes. Relevant `intent_priority: must` notes create an
-    approval crossroad linked to the commit; only an explicit user override
-    naming that Git intent records a user decision while preserving the
-    earlier intent note as history.
+    generated-file changes. Matching notes create bounded informational
+    retrieval candidates linked to the commit; they never gate model flow or
+    infer approval. `/decisions crossroads` and `/decisions show` provide
+    source, option, relationship, and history traversal; reviewed, dismissed,
+    and revisited states are bookkeeping only.
   - The bridge is read-only with respect to Git notes and stores source
     references rather than duplicating note bodies. The canonical event log
     and materialized records remain in state SQLite; Inbound reads the
@@ -329,6 +345,16 @@ release or merge rules.
 
 ## Merge Checklist
 
+- Verify decision-provenance matches remain advisory retrieval candidates: they
+  never gate normal model flow, infer approval, or turn historical options into
+  current approval choices.
+- Verify `/decisions crossroads`, `/decisions show`, and `/decisions history`
+  traverse candidate sources, linked records, and append-only review history;
+  reviewed, dismissed, and revisited states remain bookkeeping only, including
+  repeated review cycles.
+- Verify short IDs are literal, case-sensitive, full-store unique lookups and
+  mixed decision/crossroad matches require disambiguation rather than silently
+  selecting a crossroad.
 - Verify `/plan` still enters Plan mode and no `/collab` command is exposed.
 - Verify `codex --collab ...` is rejected and legacy serialized `orchestrator`
   collaboration-mode values map to Default.

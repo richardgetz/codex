@@ -47,6 +47,8 @@ use sqlx::QueryBuilder;
 use sqlx::Sqlite;
 use std::path::PathBuf;
 
+const MIN_PREFIX_QUERY_LIMIT: usize = 2;
+
 impl StateRuntime {
     /// Return the versioned, read-only projection path intended for local consumers such as
     /// Inbound. The projection is derived from this runtime's configured state home.
@@ -349,6 +351,23 @@ impl StateRuntime {
         .await
     }
 
+    pub async fn crossroads_with_id_prefix(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<Crossroad>> {
+        let limit = prefix_query_limit(prefix, limit)?;
+        let rows = sqlx::query(
+            "SELECT payload_json FROM crossroads WHERE substr(id, 1, length(?)) = ? COLLATE BINARY ORDER BY updated_at_ms DESC, id DESC LIMIT ?",
+        )
+        .bind(prefix)
+        .bind(prefix)
+        .bind(limit)
+        .fetch_all(self.pool.as_ref())
+        .await?;
+        decode_rows(rows)
+    }
+
     pub async fn get_preference_boundary(
         &self,
         id: &str,
@@ -406,6 +425,23 @@ impl StateRuntime {
             .push(" ORDER BY updated_at_ms DESC, id DESC LIMIT ")
             .push_bind(limit);
         decode_rows(query.build().fetch_all(self.pool.as_ref()).await?)
+    }
+
+    pub async fn decisions_with_id_prefix(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<Decision>> {
+        let limit = prefix_query_limit(prefix, limit)?;
+        let rows = sqlx::query(
+            "SELECT payload_json FROM decision_records WHERE substr(id, 1, length(?)) = ? COLLATE BINARY ORDER BY updated_at_ms DESC, id DESC LIMIT ?",
+        )
+        .bind(prefix)
+        .bind(prefix)
+        .bind(limit)
+        .fetch_all(self.pool.as_ref())
+        .await?;
+        decode_rows(rows)
     }
 
     pub async fn list_crossroads(&self, filter: CrossroadFilter) -> anyhow::Result<Vec<Crossroad>> {
@@ -648,6 +684,17 @@ LIMIT ?
         .await?;
         decode_rows(rows)
     }
+}
+
+fn prefix_query_limit(prefix: &str, limit: usize) -> anyhow::Result<i64> {
+    if prefix.is_empty() {
+        anyhow::bail!("provenance ID prefix cannot be empty");
+    }
+    if limit < MIN_PREFIX_QUERY_LIMIT {
+        anyhow::bail!("provenance ID prefix query limit must be at least {MIN_PREFIX_QUERY_LIMIT}");
+    }
+    i64::try_from(limit.min(crate::decision_provenance::MAX_QUERY_RESULTS))
+        .context("provenance ID prefix query limit is too large")
 }
 
 #[cfg(test)]

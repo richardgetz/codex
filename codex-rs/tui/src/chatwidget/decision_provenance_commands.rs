@@ -6,36 +6,38 @@ use crate::history_cell::PlainHistoryCell;
 use codex_protocol::ThreadId;
 use codex_rollout::StateDbHandle;
 use codex_state::decision_provenance::Actor;
-use codex_state::decision_provenance::Authority;
-use codex_state::decision_provenance::BoundaryTransition;
-use codex_state::decision_provenance::BoundaryTransitionKind;
+use codex_state::decision_provenance::CrossroadFilter;
 use codex_state::decision_provenance::CrossroadStatus;
+use codex_state::decision_provenance::Decision;
 use codex_state::decision_provenance::DecisionFilter;
 use codex_state::decision_provenance::DecisionStatus;
-use codex_state::decision_provenance::LifecycleStatus;
-use codex_state::decision_provenance::PreferenceBoundaryFilter;
-use codex_state::decision_provenance::PreferenceKind;
-use codex_state::decision_provenance::PreferenceStrength;
+use codex_state::decision_provenance::EntityType;
 use codex_state::decision_provenance::ProvenanceWriteOptions;
-use codex_state::decision_provenance::SourceReference;
-use codex_state::decision_provenance::Timestamps;
 use codex_state::decision_provenance::now;
 use ratatui::text::Line;
-use std::fmt::Write;
 use uuid::Uuid;
 
+#[path = "decision_provenance_boundary_commands.rs"]
+mod boundary_commands;
 #[path = "decision_provenance_format.rs"]
 mod format;
+#[path = "decision_provenance_resolver.rs"]
+mod resolver;
+use boundary_commands::run_boundaries_command;
 use format::format_boundaries;
 use format::format_boundary;
 use format::format_change_sets;
+use format::format_crossroad_detail;
 use format::format_crossroads;
-use format::format_decision;
 use format::format_decision_why;
 use format::format_decisions;
 use format::format_id_list;
+use resolver::ShowTarget;
+use resolver::resolve_crossroad;
+use resolver::resolve_decision_id;
+use resolver::resolve_show_target;
 
-const DECISIONS_USAGE: &str = "Usage: /decisions [list|crossroads|show <id>|why <id> [--at <timestamp>]|history <id>|search <text>|influenced-by <boundary-id>|sessions <id>|artifacts <id>|resolve <id>|revisit <id>|reopen <id>|override <id>]";
+const DECISIONS_USAGE: &str = "Usage: /decisions [list|crossroads [all]|show <id>|why <id> [--at <timestamp>]|history <id>|search <text>|influenced-by <boundary-id>|sessions <id>|artifacts <id>|reviewed <crossroad-id>|dismiss <crossroad-id>|resolve <id>|revisit <id>|reopen <id>|override <id> (deprecated alias)]";
 const PREFERENCE_BOUNDARIES_USAGE: &str = "Usage: /preference-boundaries [list|show <id>|search <text>|decisions <id>|confirm <id>|narrow <id> <statement>|broaden <id> <statement>|withdraw <id>]";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,47 +107,82 @@ async fn run_decisions_command(
     let (subcommand, rest) = first_word(args);
     match subcommand {
         "" | "list" => format_decisions(state_db.list_decisions(DecisionFilter::default()).await?),
-        "crossroads" => format_crossroads(state_db.list_open_crossroads(20).await?),
+        "crossroads" => {
+            let crossroads = match rest {
+                "" | "open" => state_db.list_open_crossroads(20).await?,
+                "all" => state_db.list_crossroads(CrossroadFilter::default()).await?,
+                _ => return Err(anyhow::anyhow!(DECISIONS_USAGE)),
+            };
+            format_crossroads(crossroads)
+        }
         "show" => {
-            let id = required_id(rest, DECISIONS_USAGE)?;
-            let decision = state_db
-                .get_decision(id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("decision `{id}` was not found"))?;
-            Ok(format_decision(&decision))
+            let requested_id = required_id(rest, DECISIONS_USAGE)?;
+            match resolve_show_target(state_db, requested_id).await? {
+                ShowTarget::Crossroad(crossroad) => {
+                    let relationships = state_db
+                        .relationships_for(EntityType::Crossroad, &crossroad.id)
+                        .await?;
+                    let mut linked_decisions = Vec::new();
+                    for relationship in &relationships {
+                        let decision_id = if relationship.to_type == EntityType::Decision {
+                            Some(relationship.to_id.as_str())
+                        } else if relationship.from_type == EntityType::Decision {
+                            Some(relationship.from_id.as_str())
+                        } else {
+                            None
+                        };
+                        if let Some(decision_id) = decision_id
+                            && let Some(decision) = state_db.get_decision(decision_id).await?
+                            && !linked_decisions
+                                .iter()
+                                .any(|existing: &Decision| existing.id == decision.id)
+                        {
+                            linked_decisions.push(decision);
+                        }
+                    }
+                    let history = state_db.crossroad_history(&crossroad.id).await?;
+                    Ok(format_crossroad_detail(
+                        &crossroad,
+                        &relationships,
+                        &linked_decisions,
+                        &history,
+                    ))
+                }
+                ShowTarget::Decision(decision) => {
+                    let why = state_db.decision_why(&decision.id).await?.ok_or_else(|| {
+                        anyhow::anyhow!("decision `{}` was not found", decision.id)
+                    })?;
+                    Ok(format_decision_why(&why))
+                }
+            }
         }
         "why" => {
-            let (id, at) = decision_id_and_timestamp(rest)?;
+            let (requested_id, at) = decision_id_and_timestamp(rest)?;
+            let id = resolve_decision_id(state_db, requested_id).await?;
             let why = match at {
                 Some(at) => state_db
-                    .decision_why_at(id, at)
+                    .decision_why_at(&id, at)
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("decision `{id}` was not found"))?,
                 None => state_db
-                    .decision_why(id)
+                    .decision_why(&id)
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("decision `{id}` was not found"))?,
             };
             Ok(format_decision_why(&why))
         }
         "history" => {
-            let id = required_id(rest, DECISIONS_USAGE)?;
-            let history = state_db.decision_history(id).await?;
-            if history.is_empty() {
-                return Err(anyhow::anyhow!("decision `{id}` was not found"));
+            let requested_id = required_id(rest, DECISIONS_USAGE)?;
+            match resolve_show_target(state_db, requested_id).await? {
+                ShowTarget::Crossroad(crossroad) => {
+                    let history = state_db.crossroad_history(&crossroad.id).await?;
+                    Ok(format_event_history("crossroad", &crossroad.id, history))
+                }
+                ShowTarget::Decision(decision) => {
+                    let history = state_db.decision_history(&decision.id).await?;
+                    Ok(format_event_history("decision", &decision.id, history))
+                }
             }
-            let mut output = format!("History for decision `{id}`:\n");
-            for event in history {
-                writeln!(
-                    output,
-                    "- {} {} by {} ({})",
-                    event.occurred_at.to_rfc3339(),
-                    event.event_type,
-                    event.actor.as_str(),
-                    event.event_id
-                )?;
-            }
-            Ok(output)
         }
         "search" => {
             let text = required_text(rest, DECISIONS_USAGE)?;
@@ -163,11 +200,9 @@ async fn run_decisions_command(
             format_decisions(state_db.decisions_influenced_by(id, 20).await?)
         }
         "sessions" => {
-            let id = required_id(rest, DECISIONS_USAGE)?;
-            if state_db.get_decision(id).await?.is_none() {
-                return Err(anyhow::anyhow!("decision `{id}` was not found"));
-            }
-            let sessions = state_db.decision_sessions(id).await?;
+            let requested_id = required_id(rest, DECISIONS_USAGE)?;
+            let id = resolve_decision_id(state_db, requested_id).await?;
+            let sessions = state_db.decision_sessions(&id).await?;
             if sessions.is_empty() {
                 return Ok(format_id_list(
                     &format!("Sessions for decision `{id}`"),
@@ -180,12 +215,21 @@ async fn run_decisions_command(
             ))
         }
         "artifacts" => {
-            let id = required_id(rest, DECISIONS_USAGE)?;
-            let artifacts = state_db.decision_artifacts(id).await?;
+            let requested_id = required_id(rest, DECISIONS_USAGE)?;
+            let id = resolve_decision_id(state_db, requested_id).await?;
+            let artifacts = state_db.decision_artifacts(&id).await?;
             if artifacts.is_empty() {
                 return Err(anyhow::anyhow!("decision `{id}` has no linked artifacts"));
             }
             format_change_sets(artifacts)
+        }
+        "reviewed" => {
+            let id = required_id(rest, DECISIONS_USAGE)?;
+            transition_crossroad(state_db, id, CrossroadStatus::Resolved, "reviewed").await
+        }
+        "dismiss" => {
+            let id = required_id(rest, DECISIONS_USAGE)?;
+            transition_crossroad(state_db, id, CrossroadStatus::Cancelled, "dismissed").await
         }
         "resolve" => {
             transition_decision_or_crossroad(
@@ -193,6 +237,7 @@ async fn run_decisions_command(
                 required_id(rest, DECISIONS_USAGE)?,
                 CrossroadStatus::Resolved,
                 DecisionStatus::Accepted,
+                "reviewed",
             )
             .await
         }
@@ -202,244 +247,141 @@ async fn run_decisions_command(
                 required_id(rest, DECISIONS_USAGE)?,
                 CrossroadStatus::Reopened,
                 DecisionStatus::Reopened,
+                "reopened",
             )
             .await
         }
         "override" => {
             let id = required_id(rest, DECISIONS_USAGE)?;
-            let decision = state_db
-                .get_decision(id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("decision `{id}` was not found"))?;
-            if decision.status == DecisionStatus::Reopened {
-                return Ok(format!(
-                    "Decision `{id}` is already reopened for an explicit user override."
-                ));
+            match resolve_show_target(state_db, id).await? {
+                ShowTarget::Crossroad(_) => Ok(format!(
+                    "`/decisions override {id}` is deprecated; use `/decisions revisit {id}`. Reopening is bookkeeping only and does not grant approval or change execution."
+                )),
+                ShowTarget::Decision(decision) => {
+                    if decision.status == DecisionStatus::Reopened {
+                        return Ok(format!(
+                            "Decision `{}` is already reopened. This legacy alias does not grant approval; record any replacement with an explicit actor and source.",
+                            decision.id
+                        ));
+                    }
+                    state_db
+                        .transition_decision(
+                            &decision.id,
+                            DecisionStatus::Reopened,
+                            user_write_options("override", &decision.id),
+                        )
+                        .await?;
+                    Ok(format!(
+                        "Decision `{}` reopened by the deprecated alias. This is bookkeeping only; it does not grant approval or change execution.",
+                        decision.id
+                    ))
+                }
             }
-            state_db
-                .transition_decision(
-                    id,
-                    DecisionStatus::Reopened,
-                    user_write_options("override", id),
-                )
-                .await?;
-            Ok(format!(
-                "Decision `{}` reopened for an explicit user override. The prior path remains historical; record the replacement decision with its new scope and rationale.",
-                decision.id
-            ))
         }
         _ => Err(anyhow::anyhow!(DECISIONS_USAGE)),
     }
 }
 
-async fn run_boundaries_command(
+async fn transition_decision_or_crossroad(
     state_db: &codex_state::StateRuntime,
-    args: &str,
+    requested_id: &str,
+    crossroad_status: CrossroadStatus,
+    decision_status: DecisionStatus,
+    crossroad_label: &str,
 ) -> anyhow::Result<String> {
-    let (subcommand, rest) = first_word(args);
-    match subcommand {
-        "" | "list" => format_boundaries(
+    match resolve_show_target(state_db, requested_id).await? {
+        ShowTarget::Crossroad(crossroad) => {
+            if crossroad.status == crossroad_status {
+                return Ok(format!(
+                    "Crossroad `{}` is already {}.",
+                    crossroad.id, crossroad_label
+                ));
+            }
             state_db
-                .list_preference_boundaries(PreferenceBoundaryFilter::default())
-                .await?,
-        ),
-        "show" => {
-            let id = required_id(rest, PREFERENCE_BOUNDARIES_USAGE)?;
-            let boundary = state_db
-                .get_preference_boundary(id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("preference boundary `{id}` was not found"))?;
-            Ok(format_boundary(&boundary))
+                .transition_crossroad(
+                    &crossroad.id,
+                    crossroad_status,
+                    user_write_options(crossroad_label, &crossroad.id),
+                )
+                .await?;
+            Ok(format!(
+                "Crossroad `{}` marked {}. This only records review bookkeeping; it does not approve a path or change execution.",
+                crossroad.id, crossroad_label
+            ))
         }
-        "search" => {
-            let text = required_text(rest, PREFERENCE_BOUNDARIES_USAGE)?;
-            format_boundaries(
-                state_db
-                    .list_preference_boundaries(PreferenceBoundaryFilter {
-                        text: Some(text.to_string()),
-                        ..PreferenceBoundaryFilter::default()
-                    })
-                    .await?,
-            )
+        ShowTarget::Decision(decision) => {
+            if decision.status == decision_status {
+                return Ok(format!(
+                    "Decision `{}` is already {}.",
+                    decision.id,
+                    decision_status.as_str()
+                ));
+            }
+            state_db
+                .transition_decision(
+                    &decision.id,
+                    decision_status,
+                    user_write_options(decision_status.as_str(), &decision.id),
+                )
+                .await?;
+            Ok(format!(
+                "Decision `{}` is now {}.",
+                decision.id,
+                decision_status.as_str()
+            ))
         }
-        "decisions" => {
-            let id = required_id(rest, PREFERENCE_BOUNDARIES_USAGE)?;
-            format_decisions(state_db.decisions_influenced_by(id, 20).await?)
-        }
-        "confirm" => transition_boundary(state_db, rest, BoundaryTransitionKind::Confirm).await,
-        "narrow" => transition_boundary(state_db, rest, BoundaryTransitionKind::Narrow).await,
-        "broaden" => transition_boundary(state_db, rest, BoundaryTransitionKind::Broaden).await,
-        "withdraw" => transition_boundary(state_db, rest, BoundaryTransitionKind::Withdraw).await,
-        _ => Err(anyhow::anyhow!(PREFERENCE_BOUNDARIES_USAGE)),
     }
 }
 
-async fn transition_boundary(
+async fn transition_crossroad(
     state_db: &codex_state::StateRuntime,
-    args: &str,
-    transition: BoundaryTransitionKind,
+    requested_id: &str,
+    status: CrossroadStatus,
+    label: &str,
 ) -> anyhow::Result<String> {
-    let (id, statement) = first_word(args);
-    if id.is_empty() {
-        return Err(anyhow::anyhow!(PREFERENCE_BOUNDARIES_USAGE));
-    }
-    let replacement_statement = match transition {
-        BoundaryTransitionKind::Narrow | BoundaryTransitionKind::Broaden => {
-            let statement = statement.trim();
-            if statement.is_empty() {
-                return Err(anyhow::anyhow!(PREFERENCE_BOUNDARIES_USAGE));
-            }
-            Some(statement)
-        }
-        BoundaryTransitionKind::Confirm
-        | BoundaryTransitionKind::Activate
-        | BoundaryTransitionKind::Withdraw
-        | BoundaryTransitionKind::Supersede => {
-            if !statement.is_empty() {
-                return Err(anyhow::anyhow!(PREFERENCE_BOUNDARIES_USAGE));
-            }
-            None
-        }
+    let Some(crossroad) = resolve_crossroad(state_db, requested_id).await? else {
+        return Err(anyhow::anyhow!("crossroad `{requested_id}` was not found"));
     };
-    let boundary = state_db
-        .get_preference_boundary(id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("preference boundary `{id}` was not found"))?;
-    if boundary.lifecycle_status == transition.status()
-        && !matches!(
-            transition,
-            BoundaryTransitionKind::Narrow | BoundaryTransitionKind::Broaden
-        )
-    {
-        return Ok(format!(
-            "Preference boundary `{}` is already {}.",
-            boundary.id,
-            transition.status().as_str()
-        ));
+    if crossroad.status == status {
+        return Ok(format!("Crossroad `{}` is already {label}.", crossroad.id));
     }
-    if matches!(
-        transition,
-        BoundaryTransitionKind::Narrow | BoundaryTransitionKind::Broaden
-    ) && boundary.lifecycle_status == transition.status()
-    {
-        let replacement_statement = replacement_statement
-            .ok_or_else(|| anyhow::anyhow!("preference boundary pivot statement is required"))?;
-        if let Some(replacement_id) = boundary.superseded_by.as_deref()
-            && let Some(replacement) = state_db.get_preference_boundary(replacement_id).await?
-            && replacement.statement == replacement_statement
-        {
-            return Ok(format!(
-                "Preference boundary `{}` already has the requested {} replacement.",
-                boundary.id,
-                transition.as_str()
-            ));
-        }
-        anyhow::bail!(
-            "preference boundary `{}` already has a {} replacement; use the replacement boundary id for another change",
-            boundary.id,
-            transition.as_str()
-        );
-    }
-    let replacement = replacement_statement.map(|statement| {
-        let mut replacement = boundary.clone();
-        replacement.id = deterministic_replacement_id(id, transition, statement);
-        replacement.statement = statement.to_string();
-        replacement.source = SourceReference::new("tui_user_instruction", format!("boundary:{id}"));
-        replacement.kind = PreferenceKind::PreferenceBoundary;
-        replacement.strength = PreferenceStrength::Confirmation;
-        replacement.lifecycle_status = LifecycleStatus::Confirmed;
-        replacement.timestamps = Timestamps::now();
-        replacement.authority = Authority::User;
-        replacement.confidence = None;
-        replacement.superseded_by = None;
-        replacement
-    });
     state_db
-        .transition_preference_boundary(
-            BoundaryTransition {
-                boundary_id: id.to_string(),
-                transition,
-                replacement,
-                actor: Actor::User,
-                source: None,
-            },
-            user_write_options(transition.as_str(), id),
+        .transition_crossroad(
+            &crossroad.id,
+            status,
+            user_write_options(label, &crossroad.id),
         )
         .await?;
     Ok(format!(
-        "Preference boundary `{}` is now {}. Its prior state remains in history.",
-        boundary.id,
-        transition.status().as_str()
+        "Crossroad `{}` marked {label}. This only records bookkeeping; it does not approve a path, block execution, or roll back code.",
+        crossroad.id
     ))
 }
 
-async fn transition_decision_or_crossroad(
-    state_db: &codex_state::StateRuntime,
+fn format_event_history(
+    entity_type: &str,
     id: &str,
-    crossroad_status: CrossroadStatus,
-    decision_status: DecisionStatus,
-) -> anyhow::Result<String> {
-    if let Some(crossroad) = state_db.get_crossroad(id).await? {
-        if crossroad.status == crossroad_status {
-            return Ok(format!(
-                "Crossroad `{id}` is already {}.",
-                crossroad_status.as_str()
-            ));
-        }
-        state_db
-            .transition_crossroad(
-                id,
-                crossroad_status,
-                user_write_options(crossroad_status.as_str(), id),
-            )
-            .await?;
-        return Ok(format!(
-            "Crossroad `{id}` is now {}.",
-            crossroad_status.as_str()
-        ));
-    }
-    if let Some(decision) = state_db.get_decision(id).await? {
-        if decision.status == decision_status {
-            return Ok(format!(
-                "Decision `{id}` is already {}.",
-                decision_status.as_str()
-            ));
-        }
-        state_db
-            .transition_decision(
-                id,
-                decision_status,
-                user_write_options(decision_status.as_str(), id),
-            )
-            .await?;
-        return Ok(format!(
-            "Decision `{id}` is now {}.",
-            decision_status.as_str()
-        ));
-    }
-    Err(anyhow::anyhow!(
-        "decision or crossroad `{id}` was not found"
-    ))
-}
-
-fn deterministic_replacement_id(
-    boundary_id: &str,
-    transition: BoundaryTransitionKind,
-    statement: &str,
+    history: Vec<codex_state::decision_provenance::EventSummary>,
 ) -> String {
-    let key = format!(
-        "boundary-replacement:{boundary_id}:{}:{statement}",
-        transition.as_str()
-    );
-    format!(
-        "boundary_{}",
-        Uuid::new_v5(&Uuid::NAMESPACE_OID, key.as_bytes()).simple()
-    )
+    let mut output = format!("History for {entity_type} `{id}`:\n");
+    if history.is_empty() {
+        output.push_str("(no events recorded)\n");
+    }
+    for event in history {
+        output.push_str(&format!(
+            "- {} {} by {} ({})\n",
+            event.occurred_at.to_rfc3339(),
+            event.event_type,
+            event.actor.as_str(),
+            event.event_id
+        ));
+    }
+    output
 }
 
 fn user_write_options(action: &str, id: &str) -> ProvenanceWriteOptions {
     ProvenanceWriteOptions {
-        idempotency_key: Some(format!("tui:{action}:{id}")),
+        idempotency_key: Some(format!("tui:{action}:{id}:{}", Uuid::new_v4())),
         actor: Actor::User,
         occurred_at: now(),
     }
