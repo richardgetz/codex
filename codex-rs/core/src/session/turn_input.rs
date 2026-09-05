@@ -9,6 +9,7 @@
 //! options only apply on Started.
 
 use super::TurnInput;
+use super::automatic_continuation_allowed;
 use super::session::Session;
 use super::session::SessionConfiguration;
 use super::session::SessionSettingsUpdate;
@@ -350,6 +351,14 @@ async fn start_if_idle(
             reason: NotSubmittedReason::PlanMode,
         });
     }
+    if kind == TurnStartKind::Automatic {
+        let (usage_policy, rate_limits) = session.usage_policy_and_rate_limits().await;
+        if !automatic_continuation_allowed(usage_policy, &rate_limits) {
+            return Ok(TurnInputSubmission::NotSubmitted {
+                reason: NotSubmittedReason::UsageLimitFloor,
+            });
+        }
+    }
 
     let turn_state = {
         let mut active_turn = session.active_turn.lock().await;
@@ -505,10 +514,6 @@ impl Session {
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
-    )]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "steering carries the accepted input plus its turn-scoped metadata"
     )]
     async fn steer_input_turn_input(
         &self,

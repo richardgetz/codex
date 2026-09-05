@@ -1,5 +1,20 @@
 # Rust/codex-rs
 
+## Fork Delta Inventory
+
+When a change adds or modifies fork-only behavior, update
+`codex-rs/core/templates/fork/delta_inventory.md` in the same change. Treat
+fork-only behavior broadly: defaults, commands, configuration, MCP or skill
+behavior, API surfaces, persistence/compatibility behavior, and release or
+merge rules all count.
+
+- Add a concise entry under the inventory's `Unreleased` section, then move it
+  into the appropriate release section when the fork version is cut.
+- Add or update the inventory's `Merge Checklist` when an upstream refresh
+  could remove or regress the behavior.
+- In every pull request, explicitly confirm either that the inventory was
+  updated or that the change is not fork-only and needs no entry.
+
 In the codex-rs folder where the rust code lives:
 
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`

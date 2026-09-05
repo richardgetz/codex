@@ -17,6 +17,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
@@ -129,6 +130,7 @@ async fn guardian_history_survives_restart_and_user_fork(
                 /*parent_trace*/ None,
                 ClientMcpExtensions::default(),
                 /*reserved_thread_id*/ None,
+                /*inherited_usage_policy*/ ThreadUsagePolicy::default(),
             )
             .await?
     } else {
@@ -142,6 +144,7 @@ async fn guardian_history_survives_restart_and_user_fork(
                 /*parent_trace*/ None,
                 ClientMcpExtensions::default(),
                 /*reserved_thread_id*/ None,
+                /*inherited_usage_policy*/ None,
             )
             .await?
     };

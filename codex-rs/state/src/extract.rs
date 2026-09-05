@@ -649,6 +649,7 @@ mod tests {
                     },
                     memory_policy: Default::default(),
                     user_preferences_memory_policy: Default::default(),
+                    usage_policy: Default::default(),
                 },
             },
         ));

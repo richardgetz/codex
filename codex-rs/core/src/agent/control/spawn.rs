@@ -17,6 +17,7 @@ use codex_context_fragments::to_annotated_content;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::intersect_effective_permission_profiles;
 use codex_protocol::protocol::EnvironmentConfigState;
+use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_utils_path_uri::PathUri;
 
 const AGENT_NAMES: &str = include_str!("../../../assets/agent/agent_names.txt");
@@ -860,6 +861,16 @@ impl AgentControl {
 
         let destination_history_mode = matches!(parent_history_mode, ThreadHistoryMode::Paginated)
             .then_some(ThreadHistoryMode::Paginated);
+        let inherited_thread_settings = if destination_history_mode.is_some()
+            || matches!(fork_mode, SpawnAgentForkMode::LastNTurns(_))
+        {
+            Some(ThreadSettingsAppliedEvent {
+                thread_id: Some(parent_thread_id),
+                thread_settings: parent_thread.session.thread_settings_snapshot().await,
+            })
+        } else {
+            None
+        };
         let mut forked_rollout_items =
             load_agent_model_context(state, parent_thread_id, parent_history_mode)
                 .await?
@@ -1027,6 +1038,14 @@ impl AgentControl {
                 RolloutItem::TokenUsageRecord(_) | RolloutItem::SecurityRiskScore(_) => false,
             }
         });
+        if let Some(inherited_thread_settings) = inherited_thread_settings {
+            // Truncated and paginated child prefixes may omit parent metadata. Carry the
+            // effective settings through the in-memory fork so startup can persist a child-owned
+            // snapshot.
+            forked_rollout_items.push(RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(
+                inherited_thread_settings,
+            )));
+        }
         // Full forks reuse the parent's reference context instead of rebuilding it. If that
         // context omitted the parent's developer fragment, append the child's override so its
         // instructions still reach the model exactly once.

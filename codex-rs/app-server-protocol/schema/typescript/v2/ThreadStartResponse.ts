@@ -10,6 +10,7 @@ import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
+import type { ThreadUsagePolicy } from "./ThreadUsagePolicy";
 
 export type ThreadStartResponse = {thread: Thread, model: string, modelProvider: string, serviceTier: string | null, cwd: AbsolutePathBuf, /**
  * Environment-native paths to instruction source files currently loaded for this thread.
@@ -21,4 +22,7 @@ approvalsReviewer: ApprovalsReviewer, /**
  * Legacy sandbox policy retained for compatibility. Experimental clients
  * should prefer `activePermissionProfile` for profile provenance.
  */
-sandbox: SandboxPolicy, reasoningEffort: ReasoningEffort | null, memoryPolicy: MemoryAccessPolicy, userPreferencesMemoryPolicy: UserPreferencesMemoryBucketPolicy};
+sandbox: SandboxPolicy, reasoningEffort: ReasoningEffort | null, memoryPolicy: MemoryAccessPolicy, userPreferencesMemoryPolicy: UserPreferencesMemoryBucketPolicy, /**
+ * Current per-thread usage and automatic-resume policy.
+ */
+usagePolicy: ThreadUsagePolicy};

@@ -5497,6 +5497,30 @@
       ],
       "type": "object"
     },
+    "ThreadUsagePolicyParams": {
+      "description": "Client settings for configuring per-thread usage-limit behavior.",
+      "properties": {
+        "autoResume": {
+          "default": null,
+          "description": "Retry a resettable provider usage limit after its authoritative reset time.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "minimumRemainingPercent": {
+          "description": "Stop harness-driven continuation when a known provider window has less than this much usage remaining. Explicit user turns are not blocked by this floor. Omit the field to preserve its current value; pass `null` to clear the floor.",
+          "format": "uint8",
+          "maximum": 100.0,
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ThreadUserPreferencesMemoryMigrateParams": {
       "properties": {
         "threadId": {

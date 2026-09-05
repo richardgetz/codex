@@ -527,6 +527,37 @@ pub enum TurnSettingsUpdateOutcome {
     },
 }
 
+/// Per-thread controls for automatic work around provider usage limits.
+/// Auto-resume waits only while the rejected turn remains active in the current
+/// process; the policy persists for later turns and future resumes.
+///
+/// `auto_resume` only affects a turn that the provider rejected because a
+/// resettable usage window was exhausted. `minimum_remaining_percent` is an
+/// admission floor for harness-driven continuation, such as scratchpad
+/// continuous runs; it does not reject an explicit user turn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ThreadUsagePolicy {
+    /// Wait for the provider-reported reset and retry a usage-limited turn.
+    #[serde(default)]
+    pub auto_resume: bool,
+    /// Stop automatic continuation when a known usage window has less than
+    /// this percentage remaining. Values must be in the inclusive range 0..=100.
+    #[serde(default)]
+    pub minimum_remaining_percent: Option<u8>,
+}
+
+/// Partial update for a thread's usage-limit policy.
+///
+/// `None` leaves a field unchanged. For `minimum_remaining_percent`, `Some(None)`
+/// explicitly clears the configured floor.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ThreadUsagePolicyUpdate {
+    /// Whether resettable provider usage limits should be retried automatically.
+    pub auto_resume: Option<bool>,
+    /// Optional remaining-usage floor; `Some(None)` clears the floor.
+    pub minimum_remaining_percent: Option<Option<u8>>,
+}
+
 /// Thread-settings overrides that can be applied before user input or on their
 /// own. Standalone updates change the settings inherited by future turns.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -581,6 +612,9 @@ pub struct ThreadSettingsOverrides {
 
     /// Updated personality preference.
     pub personality: Option<Personality>,
+
+    /// Updated per-thread usage and automatic-resume policy.
+    pub usage_policy: Option<ThreadUsagePolicy>,
 }
 
 impl ThreadSettingsOverrides {
@@ -675,6 +709,8 @@ pub enum Op {
     ThreadSettings {
         /// Sparse thread-settings overrides to apply.
         thread_settings: ThreadSettingsOverrides,
+        /// Optional nested usage-policy patch applied atomically with the other settings.
+        usage_policy_update: Option<ThreadUsagePolicyUpdate>,
     },
 
     /// Update only the named running turn, without changing future settings.
@@ -2325,6 +2361,9 @@ pub struct ThreadSettingsSnapshot {
     pub memory_policy: MemoryAccessPolicy,
     #[serde(default)]
     pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
+    /// Per-thread usage and automatic-resume policy.
+    #[serde(default)]
+    pub usage_policy: ThreadUsagePolicy,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]
@@ -2498,6 +2537,10 @@ impl TokenUsageInfo {
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
     pub rate_limits: Option<RateLimitSnapshot>,
+    /// All known provider buckets at the time of this event. Older rollouts only
+    /// contain `rate_limits`, so readers must retain that fallback for compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limit_snapshots: Option<Vec<RateLimitSnapshot>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
@@ -6231,7 +6274,9 @@ mod tests {
             }
         }))?;
 
-        let EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent { thread_settings }) = event
+        let EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
+            thread_settings, ..
+        }) = event
         else {
             panic!("expected thread_settings_applied event");
         };

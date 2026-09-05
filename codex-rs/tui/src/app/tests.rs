@@ -8660,6 +8660,7 @@ async fn override_turn_context_sends_thread_settings_update() {
                 personality: Some(Personality::Pragmatic),
                 memory_policy: MemoryAccessPolicy::default(),
                 user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
+                usage_policy: Default::default(),
             },
         };
         assert_eq!(notification.thread_settings.model, "gpt-5.4");
@@ -9134,6 +9135,7 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
             personality: Some(Personality::Pragmatic),
             memory_policy: MemoryAccessPolicy::default(),
             user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
+            usage_policy: Default::default(),
         },
     };
     let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())

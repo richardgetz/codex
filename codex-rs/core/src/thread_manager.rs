@@ -66,6 +66,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -311,7 +312,9 @@ impl ThreadSpawnRequest {
             parent_thread_id: None,
             forked_from_thread_id: None,
             initial_collaboration_mode: None,
-            fork_persistence: ForkPersistence::Copied,
+            fork_persistence: ForkPersistence::Copied {
+                inherited_usage_policy: None,
+            },
             inherited_environments: None,
             inherited_exec_policy: None,
             user_shell_override: None,
@@ -1312,6 +1315,7 @@ impl ThreadManager {
             parent_trace,
             ClientMcpExtensions::default(),
             /*reserved_thread_id*/ None,
+            /*inherited_usage_policy*/ None,
         )
         .await
     }
@@ -1345,6 +1349,7 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
         reserved_thread_id: Option<ThreadId>,
+        inherited_usage_policy: Option<ThreadUsagePolicy>,
     ) -> CodexResult<NewThread>
     where
         S: Into<ForkSnapshot>,
@@ -1354,7 +1359,9 @@ impl ThreadManager {
             ForkHistory {
                 snapshot: snapshot.into(),
                 initial_history: history,
-                persistence: ForkPersistence::Copied,
+                persistence: ForkPersistence::Copied {
+                    inherited_usage_policy,
+                },
             },
             thread_source,
             parent_trace,
@@ -1365,6 +1372,10 @@ impl ThreadManager {
     }
 
     /// Fork prepared reference-backed history using the same snapshot semantics as copied forks.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "prepared fork inputs mirror the public fork operation contract"
+    )]
     pub async fn fork_prepared_thread(
         &self,
         config: Config,
@@ -1373,6 +1384,7 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
         reserved_thread_id: Option<ThreadId>,
+        inherited_usage_policy: ThreadUsagePolicy,
     ) -> CodexResult<NewThread> {
         let history = InitialHistory::Resumed(ResumedHistory {
             conversation_id: prepared.source_thread_id,
@@ -1382,6 +1394,7 @@ impl ThreadManager {
         let fork_persistence = ForkPersistence::Referenced {
             history_base: prepared.history_base,
             inherited_item_count: prepared.model_context.len(),
+            inherited_usage_policy,
         };
         let result = self
             .fork_thread_with_initial_history(

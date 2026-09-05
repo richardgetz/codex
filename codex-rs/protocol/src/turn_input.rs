@@ -225,6 +225,10 @@ pub enum NotSubmittedReason {
     /// would run in Plan mode.
     PlanMode,
 
+    /// `start_turn_if_idle` received automatic input while a known provider
+    /// usage window was below the configured continuation floor.
+    UsageLimitFloor,
+
     /// `steer_turn` found no active turn.
     NoActiveTurn,
 

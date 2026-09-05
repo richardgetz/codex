@@ -3649,6 +3649,7 @@ async fn cold_paginated_resume_restores_usage_without_loading_turns() -> Result<
                 model_context_window: Some(200_000),
             }),
             rate_limits: None,
+            rate_limit_snapshots: None,
         })),
     )
     .await?;
@@ -3730,6 +3731,7 @@ async fn cold_paginated_resume_omits_usage_when_its_turn_is_ambiguous() -> Resul
                 model_context_window: Some(200_000),
             }),
             rate_limits: None,
+            rate_limit_snapshots: None,
         })),
     )
     .await?;
@@ -4017,6 +4019,7 @@ async fn thread_resume_token_usage_replay_can_belong_to_interrupted_turn() -> Re
                     model_context_window: Some(200_000),
                 }),
                 rate_limits: None,
+                rate_limit_snapshots: None,
             }))?,
         })
         .to_string(),

@@ -6,6 +6,7 @@ use crate::agent::agent_status_from_event;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
+use crate::codex_thread::CodexThreadSettingsOverrides;
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
@@ -58,6 +59,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
+use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnAbortReason;
@@ -1224,6 +1226,17 @@ async fn ephemeral_spawn_does_not_persist_agent_graph_edge() {
 async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_paginated_thread().await;
+    let usage_policy = ThreadUsagePolicy {
+        auto_resume: true,
+        minimum_remaining_percent: Some(25),
+    };
+    parent_thread
+        .restore_thread_settings(CodexThreadSettingsOverrides {
+            usage_policy: Some(usage_policy),
+            ..Default::default()
+        })
+        .await
+        .expect("parent usage policy should persist");
     parent_thread
         .inject_response_items(vec![user_message("paginated parent context")])
         .await
@@ -1278,6 +1291,7 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
                         memory_policy: MemoryAccessPolicy::default(),
                         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(
                         ),
+                        usage_policy: ThreadUsagePolicy::default(),
                         collaboration_mode: CollaborationMode {
                             mode: ModeKind::Default,
                             settings: Settings {
@@ -1307,6 +1321,15 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
         .get_thread(child_thread_id)
         .await
         .expect("child thread should be registered");
+    assert_eq!(
+        child_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .usage_policy,
+        usage_policy,
+        "paginated child should inherit the live parent usage policy"
+    );
     assert!(
         history_contains_text(
             child_thread.session.clone_history().await.raw_items(),
@@ -2625,6 +2648,17 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
 async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let usage_policy = ThreadUsagePolicy {
+        auto_resume: true,
+        minimum_remaining_percent: Some(25),
+    };
+    parent_thread
+        .restore_thread_settings(CodexThreadSettingsOverrides {
+            usage_policy: Some(usage_policy),
+            ..Default::default()
+        })
+        .await
+        .expect("parent usage policy should persist");
 
     parent_thread
         .inject_response_items(vec![user_message("old parent context")])
@@ -2718,6 +2752,16 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .await
         .expect("child thread should be registered");
     let history = child_thread.session.clone_history().await;
+
+    assert_eq!(
+        child_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .usage_policy,
+        usage_policy,
+        "last-N forked child should inherit the live parent usage policy"
+    );
 
     assert!(
         !history_contains_text(history.raw_items(), "old parent context"),

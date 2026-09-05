@@ -195,6 +195,7 @@ pub(crate) fn thread_settings_from_config_snapshot(
         personality: config_snapshot.personality,
         memory_policy: config_snapshot.memory_policy,
         user_preferences_memory_policy: config_snapshot.user_preferences_memory_policy.clone(),
+        usage_policy: config_snapshot.usage_policy.into(),
     }
 }
 
@@ -216,6 +217,7 @@ pub(crate) fn thread_settings_from_core_snapshot(
         collaboration_mode,
         memory_policy,
         user_preferences_memory_policy,
+        usage_policy,
     } = snapshot;
     let sandbox_policy = codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
         &permission_profile,
@@ -240,6 +242,7 @@ pub(crate) fn thread_settings_from_core_snapshot(
         personality,
         memory_policy,
         user_preferences_memory_policy,
+        usage_policy: usage_policy.into(),
     }
 }
 #[cfg(test)]

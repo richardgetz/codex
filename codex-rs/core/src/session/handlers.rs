@@ -1400,8 +1400,17 @@ pub(super) async fn submission_loop(
                     realtime_conversation_list_voices(&sess, sub.id.clone()).await;
                     false
                 }
-                Op::ThreadSettings { thread_settings } => {
-                    thread_settings::update(&sess, sub.id.clone(), thread_settings).await;
+                Op::ThreadSettings {
+                    thread_settings,
+                    usage_policy_update,
+                } => {
+                    thread_settings::update(
+                        &sess,
+                        sub.id.clone(),
+                        thread_settings,
+                        usage_policy_update,
+                    )
+                    .await;
                     false
                 }
                 Op::UserInput { .. } => {

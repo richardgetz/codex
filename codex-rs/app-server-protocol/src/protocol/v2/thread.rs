@@ -36,6 +36,7 @@ pub use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
+use codex_protocol::protocol::ThreadUsagePolicy as CoreThreadUsagePolicy;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -54,6 +55,74 @@ use std::path::PathBuf;
 pub enum ThreadStartSource {
     Startup,
     Clear,
+}
+
+/// Per-thread controls for continuing work near or after provider usage limits.
+/// Auto-resume waits only while the rejected turn remains active in the current
+/// process; the policy itself persists for later turns and future resumes.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ThreadUsagePolicy {
+    /// Retry a resettable provider usage limit after its authoritative reset time.
+    #[serde(default)]
+    pub auto_resume: bool,
+    /// Stop harness-driven continuation when a known provider window has less than this much
+    /// usage remaining. Explicit user turns are not blocked by this floor.
+    #[serde(default)]
+    #[schemars(range(max = 100))]
+    pub minimum_remaining_percent: Option<u8>,
+}
+
+impl From<CoreThreadUsagePolicy> for ThreadUsagePolicy {
+    fn from(value: CoreThreadUsagePolicy) -> Self {
+        Self {
+            auto_resume: value.auto_resume,
+            minimum_remaining_percent: value.minimum_remaining_percent,
+        }
+    }
+}
+
+impl From<ThreadUsagePolicy> for CoreThreadUsagePolicy {
+    fn from(value: ThreadUsagePolicy) -> Self {
+        Self {
+            auto_resume: value.auto_resume,
+            minimum_remaining_percent: value.minimum_remaining_percent,
+        }
+    }
+}
+
+/// Client settings for configuring per-thread usage-limit behavior.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ThreadUsagePolicyParams {
+    /// Retry a resettable provider usage limit after its authoritative reset time.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub auto_resume: Option<bool>,
+    /// Stop harness-driven continuation when a known provider window has less than this much
+    /// usage remaining. Explicit user turns are not blocked by this floor. Omit
+    /// the field to preserve its current value; pass `null` to clear the floor.
+    #[serde(
+        default,
+        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
+        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(range(max = 100))]
+    #[ts(type = "number | null")]
+    #[ts(optional = nullable)]
+    pub minimum_remaining_percent: Option<Option<u8>>,
+}
+
+impl From<ThreadUsagePolicyParams> for ThreadUsagePolicy {
+    fn from(value: ThreadUsagePolicyParams) -> Self {
+        Self {
+            auto_resume: value.auto_resume.unwrap_or_default(),
+            minimum_remaining_percent: value.minimum_remaining_percent.flatten(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
@@ -235,6 +304,9 @@ pub struct ThreadStartResponse {
     pub memory_policy: MemoryAccessPolicy,
     #[serde(default)]
     pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
+    /// Current per-thread usage and automatic-resume policy.
+    #[serde(default)]
+    pub usage_policy: ThreadUsagePolicy,
     /// @deprecated Always `explicitRequestOnly`. Use `reasoningEffort` for Ultra behavior.
     #[experimental("thread/start.multiAgentMode")]
     #[serde(default)]
@@ -306,6 +378,9 @@ pub struct ThreadSettingsUpdateParams {
     /// Override the personality for subsequent turns.
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
+    /// Configure usage-limit auto-resume and the remaining-usage floor for automatic continuation.
+    #[ts(optional = nullable)]
+    pub usage_policy: Option<ThreadUsagePolicyParams>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -337,6 +412,9 @@ pub struct ThreadSettings {
     pub memory_policy: MemoryAccessPolicy,
     #[serde(default)]
     pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
+    /// Current per-thread usage and automatic-resume policy.
+    #[serde(default)]
+    pub usage_policy: ThreadUsagePolicy,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -492,6 +570,9 @@ pub struct ThreadResumeResponse {
     pub memory_policy: MemoryAccessPolicy,
     #[serde(default)]
     pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
+    /// Current per-thread usage and automatic-resume policy.
+    #[serde(default)]
+    pub usage_policy: ThreadUsagePolicy,
     /// @deprecated Always `explicitRequestOnly`. Use `reasoningEffort` for Ultra behavior.
     #[experimental("thread/resume.multiAgentMode")]
     #[serde(default)]
@@ -702,6 +783,9 @@ pub struct ThreadForkResponse {
     pub memory_policy: MemoryAccessPolicy,
     #[serde(default)]
     pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
+    /// Current per-thread usage and automatic-resume policy.
+    #[serde(default)]
+    pub usage_policy: ThreadUsagePolicy,
     /// @deprecated Always `explicitRequestOnly`. Use `reasoningEffort` for Ultra behavior.
     #[experimental("thread/fork.multiAgentMode")]
     #[serde(default)]

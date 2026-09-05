@@ -183,6 +183,7 @@ mod thread_processor_behavior_tests {
             originator: "test_originator".to_string(),
             memory_policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
             user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
+            usage_policy: Default::default(),
             multi_agent_mode: Default::default(),
         }
     }

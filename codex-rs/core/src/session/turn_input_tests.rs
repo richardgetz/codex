@@ -22,7 +22,10 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::turn_input::TurnInput as SubmittedTurnInput;
 use codex_protocol::user_input::UserInput;
@@ -512,6 +515,48 @@ async fn automatic_admission_uses_current_candidate_after_plan_preview() {
         turn_context.initial_settings.selected_collaboration_mode(),
         &expected
     );
+}
+
+#[tokio::test]
+async fn automatic_admission_rejects_below_usage_floor_without_reserving() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let usage_policy = ThreadUsagePolicy {
+        auto_resume: false,
+        minimum_remaining_percent: Some(20),
+    };
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.usage_policy = usage_policy;
+        state.set_rate_limits(RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
+            primary: Some(RateLimitWindow {
+                used_percent: 85.0,
+                window_minutes: None,
+                resets_at: None,
+            }),
+            secondary: None,
+            credits: None,
+            individual_limit: None,
+            spend_control_reached: None,
+            plan_type: None,
+            rate_limit_reached_type: None,
+        });
+    }
+
+    let submission = submit_start_only(
+        &session,
+        SubmittedTurnInput::ResponseItem(user_message("automatic continuation")),
+    )
+    .await;
+
+    assert_eq!(
+        submission,
+        TurnInputSubmission::NotSubmitted {
+            reason: NotSubmittedReason::UsageLimitFloor,
+        }
+    );
+    assert!(session.active_turn.lock().await.is_none());
 }
 
 #[tokio::test]

@@ -11,6 +11,8 @@ use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
@@ -19,6 +21,8 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
+use codex_app_server_protocol::ThreadUsagePolicy;
+use codex_app_server_protocol::ThreadUsagePolicyParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -54,8 +58,18 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
         .with_codex_home(codex_home.path())
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    let thread = start_thread(&mut mcp).await?.thread;
+    let started = start_thread(&mut mcp).await?;
+    assert_eq!(started.usage_policy, ThreadUsagePolicy::default());
+    let thread = started.thread;
 
+    let usage_policy = ThreadUsagePolicy {
+        auto_resume: true,
+        minimum_remaining_percent: Some(20),
+    };
+    let usage_policy_params = ThreadUsagePolicyParams {
+        auto_resume: Some(true),
+        minimum_remaining_percent: Some(Some(20)),
+    };
     send_thread_settings_update(
         &mut mcp,
         ThreadSettingsUpdateParams {
@@ -69,6 +83,7 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
                 },
             }),
             service_tier: Some(Some(service_tier_id.clone())),
+            usage_policy: Some(usage_policy_params),
             ..Default::default()
         },
     )
@@ -87,6 +102,7 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
         updated.thread_settings.service_tier.as_deref(),
         Some(service_tier_id.as_str())
     );
+    assert_eq!(updated.thread_settings.usage_policy, usage_policy);
 
     timeout(
         DEFAULT_TIMEOUT,
@@ -145,6 +161,17 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
         (listed.model.as_deref(), listed.reasoning_effort.clone()),
         (Some(model_id.as_str()), None)
     );
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resumed: ThreadResumeResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(resume_id)).await??;
+    assert_eq!(resumed.usage_policy, usage_policy);
+
     let unsubscribe_id = mcp
         .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
             thread_id: thread.id.clone(),
@@ -152,7 +179,7 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
         .await?;
     let unsubscribed: ThreadUnsubscribeResponse =
         timeout(DEFAULT_TIMEOUT, mcp.read_response(unsubscribe_id)).await??;
-    assert_eq!(unsubscribed.status, ThreadUnsubscribeStatus::NotSubscribed);
+    assert_eq!(unsubscribed.status, ThreadUnsubscribeStatus::Unsubscribed);
 
     let request_bodies = received_response_bodies(&server).await?;
     assert!(
@@ -162,6 +189,83 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
                     == Some(service_tier_id.as_str())
         }),
         "future turn did not use updated model/service tier: {request_bodies:#?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_settings_update_usage_policy_preserves_omitted_nested_fields() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let thread = start_thread(&mut mcp).await?.thread;
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id.clone(),
+            usage_policy: Some(ThreadUsagePolicyParams {
+                auto_resume: Some(true),
+                minimum_remaining_percent: Some(Some(20)),
+            }),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let first_update = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(
+        first_update.thread_settings.usage_policy,
+        ThreadUsagePolicy {
+            auto_resume: true,
+            minimum_remaining_percent: Some(20),
+        }
+    );
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id.clone(),
+            usage_policy: Some(ThreadUsagePolicyParams {
+                auto_resume: Some(false),
+                minimum_remaining_percent: None,
+            }),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let partial_update = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(
+        partial_update.thread_settings.usage_policy,
+        ThreadUsagePolicy {
+            auto_resume: false,
+            minimum_remaining_percent: Some(20),
+        }
+    );
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id,
+            usage_policy: Some(ThreadUsagePolicyParams {
+                auto_resume: None,
+                minimum_remaining_percent: Some(None),
+            }),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let cleared_update = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(
+        cleared_update.thread_settings.usage_policy,
+        ThreadUsagePolicy {
+            auto_resume: false,
+            minimum_remaining_percent: None,
+        }
     );
     Ok(())
 }

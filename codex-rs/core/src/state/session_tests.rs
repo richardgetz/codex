@@ -266,3 +266,96 @@ async fn set_rate_limits_carries_account_metadata_from_codex_to_codex_other() {
         Some(false)
     );
 }
+
+#[tokio::test]
+async fn set_rate_limits_does_not_carry_windows_between_limit_ids() {
+    let session_configuration = make_session_configuration_for_tests().await;
+    let mut state = SessionState::new(session_configuration);
+
+    state.set_rate_limits(RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: None,
+        primary: Some(RateLimitWindow {
+            used_percent: 90.0,
+            window_minutes: Some(300),
+            resets_at: Some(100),
+        }),
+        secondary: None,
+        credits: None,
+        individual_limit: None,
+        spend_control_reached: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    });
+    state.set_rate_limits(RateLimitSnapshot {
+        limit_id: Some("codex_other".to_string()),
+        limit_name: None,
+        primary: None,
+        secondary: None,
+        credits: None,
+        individual_limit: None,
+        spend_control_reached: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    });
+
+    assert_eq!(
+        state
+            .rate_limits_by_limit_id
+            .get("codex_other")
+            .and_then(|snapshot| snapshot.primary.as_ref()),
+        None
+    );
+    assert_eq!(
+        state
+            .rate_limits_by_limit_id
+            .get("codex")
+            .and_then(|snapshot| snapshot.primary.as_ref())
+            .map(|window| window.used_percent),
+        Some(90.0)
+    );
+}
+
+#[tokio::test]
+async fn set_rate_limits_preserves_default_bucket_when_capping_known_snapshots() {
+    let session_configuration = make_session_configuration_for_tests().await;
+    let mut state = SessionState::new(session_configuration);
+
+    for limit_id in [
+        "codex",
+        "codex_other_0",
+        "codex_other_1",
+        "codex_other_2",
+        "codex_other_3",
+        "codex_other_4",
+        "codex_other_5",
+        "codex_other_6",
+    ] {
+        state.set_rate_limits(RateLimitSnapshot {
+            limit_id: Some(limit_id.to_string()),
+            limit_name: None,
+            primary: None,
+            secondary: None,
+            credits: None,
+            individual_limit: None,
+            spend_control_reached: None,
+            plan_type: None,
+            rate_limit_reached_type: None,
+        });
+    }
+    state.set_rate_limits(RateLimitSnapshot {
+        limit_id: Some("new_bucket".to_string()),
+        limit_name: None,
+        primary: None,
+        secondary: None,
+        credits: None,
+        individual_limit: None,
+        spend_control_reached: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    });
+
+    assert_eq!(state.rate_limits_by_limit_id.len(), 8);
+    assert!(state.rate_limits_by_limit_id.contains_key("codex"));
+    assert!(state.rate_limits_by_limit_id.contains_key("new_bucket"));
+}

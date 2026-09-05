@@ -35,6 +35,9 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSearchOccurrencesParams;
 use codex_app_server_protocol::ThreadSearchOccurrencesResponse;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
+use codex_app_server_protocol::ThreadSettingsUpdateResponse;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -43,6 +46,8 @@ use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
+use codex_app_server_protocol::ThreadUsagePolicy;
+use codex_app_server_protocol::ThreadUsagePolicyParams;
 use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
@@ -285,6 +290,92 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     expected_started_thread.turns.clear();
     assert_eq!(started.thread, expected_started_thread);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_inherits_usage_policy() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+
+    let (source_thread_id, source_turn_id) = {
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .build_initialized()
+            .await?;
+        let start_id = mcp
+            .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+            .await?;
+        let ThreadStartResponse { thread, .. } =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
+
+        let update_id = mcp
+            .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+                thread_id: thread.id.clone(),
+                usage_policy: Some(ThreadUsagePolicyParams {
+                    auto_resume: Some(true),
+                    minimum_remaining_percent: Some(Some(20)),
+                }),
+                ..Default::default()
+            })
+            .await?;
+        let _: ThreadSettingsUpdateResponse =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(update_id)).await??;
+        let updated: ThreadSettingsUpdatedNotification = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_notification("thread/settings/updated"),
+        )
+        .await??;
+        assert_eq!(
+            updated.thread_settings.usage_policy,
+            ThreadUsagePolicy {
+                auto_resume: true,
+                minimum_remaining_percent: Some(20),
+            }
+        );
+
+        let turn_id = mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread.id.clone(),
+                input: vec![UserInput::Text {
+                    text: "persist usage policy".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let TurnStartResponse { turn } =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_id)).await??;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+        (thread.id, turn.id)
+    };
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: source_thread_id,
+            last_turn_id: Some(source_turn_id),
+            ..Default::default()
+        })
+        .await?;
+    let fork: ThreadForkResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(fork_id)).await??;
+
+    assert_eq!(
+        fork.usage_policy,
+        ThreadUsagePolicy {
+            auto_resume: true,
+            minimum_remaining_percent: Some(20),
+        }
+    );
     Ok(())
 }
 

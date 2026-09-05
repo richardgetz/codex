@@ -5,6 +5,7 @@ use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::ResponseItem;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_state::ThreadControlRecord;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -30,6 +31,8 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_utils_output_truncation::TruncationPolicy;
 use tokio_util::task::AbortOnDropHandle;
 
+const MAX_RATE_LIMIT_SNAPSHOTS: usize = 8;
+
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
@@ -37,6 +40,7 @@ pub(crate) struct SessionState {
     pub(crate) base_instructions_provenance: Option<BaseInstructionsProvenance>,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    pub(crate) rate_limits_by_limit_id: BTreeMap<String, RateLimitSnapshot>,
     pub(crate) latest_token_usage_record: Option<TokenUsageRecord>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
@@ -80,6 +84,7 @@ impl SessionState {
             base_instructions_provenance: None,
             history,
             latest_rate_limits: None,
+            rate_limits_by_limit_id: BTreeMap::new(),
             latest_token_usage_record: None,
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
@@ -291,10 +296,34 @@ impl SessionState {
     }
 
     pub(crate) fn set_rate_limits(&mut self, snapshot: RateLimitSnapshot) {
+        let limit_id = rate_limit_id(&snapshot);
+        if !self.rate_limits_by_limit_id.contains_key(&limit_id)
+            && self.rate_limits_by_limit_id.len() >= MAX_RATE_LIMIT_SNAPSHOTS
+            && let Some(evicted_limit_id) = self
+                .rate_limits_by_limit_id
+                .keys()
+                .find(|limit_id| limit_id.as_str() != "codex")
+                .cloned()
+                .or_else(|| self.rate_limits_by_limit_id.keys().next().cloned())
+        {
+            self.rate_limits_by_limit_id.remove(&evicted_limit_id);
+        }
+        let merged = merge_rate_limit_fields(
+            self.rate_limits_by_limit_id.get(&limit_id),
+            snapshot.clone(),
+        );
+        self.rate_limits_by_limit_id.insert(limit_id, merged);
         self.latest_rate_limits = Some(merge_rate_limit_fields(
             self.latest_rate_limits.as_ref(),
             snapshot,
         ));
+    }
+
+    pub(crate) fn rate_limit_snapshots(&self) -> Vec<RateLimitSnapshot> {
+        if self.rate_limits_by_limit_id.is_empty() {
+            return self.latest_rate_limits.clone().into_iter().collect();
+        }
+        self.rate_limits_by_limit_id.values().cloned().collect()
     }
 
     pub(crate) fn token_info_and_rate_limits(
@@ -413,9 +442,9 @@ impl SessionState {
     }
 }
 
-// Sometimes new snapshots don't include credits or plan information.
-// Preserve those from the previous snapshot when missing. For `limit_id`, treat
-// missing values as the default `"codex"` bucket.
+// Sometimes new snapshots don't include previously reported budget information.
+// Preserve account-wide metadata from the previous snapshot when missing. Window
+// fields belong to a specific `limit_id` and are only retained within that bucket.
 fn merge_rate_limit_fields(
     previous: Option<&RateLimitSnapshot>,
     mut snapshot: RateLimitSnapshot,
@@ -425,6 +454,14 @@ fn merge_rate_limit_fields(
     }
     if snapshot.credits.is_none() {
         snapshot.credits = previous.and_then(|prior| prior.credits.clone());
+    }
+    if previous.is_some_and(|prior| rate_limit_id(prior) == rate_limit_id(&snapshot)) {
+        if snapshot.primary.is_none() {
+            snapshot.primary = previous.and_then(|prior| prior.primary.clone());
+        }
+        if snapshot.secondary.is_none() {
+            snapshot.secondary = previous.and_then(|prior| prior.secondary.clone());
+        }
     }
     if snapshot.individual_limit.is_none() {
         snapshot.individual_limit = previous.and_then(|prior| prior.individual_limit.clone());
@@ -436,6 +473,10 @@ fn merge_rate_limit_fields(
         snapshot.plan_type = previous.and_then(|prior| prior.plan_type);
     }
     snapshot
+}
+
+fn rate_limit_id(snapshot: &RateLimitSnapshot) -> String {
+    snapshot.limit_id.as_deref().unwrap_or("codex").to_string()
 }
 
 #[cfg(test)]

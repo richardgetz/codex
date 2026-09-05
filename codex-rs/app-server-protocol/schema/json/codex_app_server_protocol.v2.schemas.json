@@ -18964,6 +18964,18 @@
         "thread": {
           "$ref": "#/definitions/Thread"
         },
+        "usagePolicy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadUsagePolicy"
+            }
+          ],
+          "default": {
+            "autoResume": false,
+            "minimumRemainingPercent": null
+          },
+          "description": "Current per-thread usage and automatic-resume policy."
+        },
         "userPreferencesMemoryPolicy": {
           "allOf": [
             {
@@ -21370,6 +21382,18 @@
             "null"
           ]
         },
+        "usagePolicy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadUsagePolicy"
+            }
+          ],
+          "default": {
+            "autoResume": false,
+            "minimumRemainingPercent": null
+          },
+          "description": "Current per-thread usage and automatic-resume policy."
+        },
         "userPreferencesMemoryPolicy": {
           "allOf": [
             {
@@ -21895,6 +21919,18 @@
             }
           ]
         },
+        "usagePolicy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadUsagePolicy"
+            }
+          ],
+          "default": {
+            "autoResume": false,
+            "minimumRemainingPercent": null
+          },
+          "description": "Current per-thread usage and automatic-resume policy."
+        },
         "userPreferencesMemoryPolicy": {
           "allOf": [
             {
@@ -22221,6 +22257,18 @@
         },
         "thread": {
           "$ref": "#/definitions/Thread"
+        },
+        "usagePolicy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadUsagePolicy"
+            }
+          ],
+          "default": {
+            "autoResume": false,
+            "minimumRemainingPercent": null
+          },
+          "description": "Current per-thread usage and automatic-resume policy."
         },
         "userPreferencesMemoryPolicy": {
           "allOf": [
@@ -22856,6 +22904,52 @@
       "required": [
         "estimatedUsageCreditsMicros"
       ],
+      "type": "object"
+    },
+    "ThreadUsagePolicy": {
+      "description": "Per-thread controls for continuing work near or after provider usage limits. Auto-resume waits only while the rejected turn remains active in the current process; the policy itself persists for later turns and future resumes.",
+      "properties": {
+        "autoResume": {
+          "default": false,
+          "description": "Retry a resettable provider usage limit after its authoritative reset time.",
+          "type": "boolean"
+        },
+        "minimumRemainingPercent": {
+          "default": null,
+          "description": "Stop harness-driven continuation when a known provider window has less than this much usage remaining. Explicit user turns are not blocked by this floor.",
+          "format": "uint8",
+          "maximum": 100.0,
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ThreadUsagePolicyParams": {
+      "description": "Client settings for configuring per-thread usage-limit behavior.",
+      "properties": {
+        "autoResume": {
+          "default": null,
+          "description": "Retry a resettable provider usage limit after its authoritative reset time.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "minimumRemainingPercent": {
+          "description": "Stop harness-driven continuation when a known provider window has less than this much usage remaining. Explicit user turns are not blocked by this floor. Omit the field to preserve its current value; pass `null` to clear the floor.",
+          "format": "uint8",
+          "maximum": 100.0,
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "ThreadUserPreferencesMemoryMigrateParams": {

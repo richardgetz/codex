@@ -119,7 +119,12 @@ async fn settings_notifications_keep_their_commit_across_postcommit_work(
                     Ok(turn_id)
                 }
                 SettingsOperation::Standalone => {
-                    codex.submit(Op::ThreadSettings { thread_settings }).await
+                    codex
+                        .submit(Op::ThreadSettings {
+                            thread_settings,
+                            usage_policy_update: None,
+                        })
+                        .await
                 }
             }
         }

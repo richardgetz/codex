@@ -45,7 +45,14 @@ impl SettingsOperation {
         thread_settings: ThreadSettingsOverrides,
     ) -> Result<ThreadSettingsSnapshot> {
         let id = match self {
-            Self::Standalone => codex.submit(Op::ThreadSettings { thread_settings }).await?,
+            Self::Standalone => {
+                codex
+                    .submit(Op::ThreadSettings {
+                        thread_settings,
+                        usage_policy_update: None,
+                    })
+                    .await?
+            }
             Self::TurnStart => {
                 let result = codex
                     .start_or_steer_turn(

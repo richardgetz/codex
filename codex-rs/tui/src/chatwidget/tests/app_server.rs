@@ -42,6 +42,7 @@ fn thread_settings_for_test(
             personality: Some(Personality::Pragmatic),
             memory_policy: MemoryAccessPolicy::default(),
             user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
+            usage_policy: Default::default(),
         },
     }
 }

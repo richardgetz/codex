@@ -167,6 +167,7 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
@@ -285,6 +286,7 @@ pub(crate) mod turn_context;
 mod turn_input;
 mod turn_provenance;
 mod turn_suspension;
+mod usage_policy;
 mod world_state;
 use self::code_mode_warning::unsupported_code_mode_warning;
 use self::config_lock::export_config_lock_if_configured;
@@ -311,6 +313,9 @@ use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::filter_connectors_for_input;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
+pub(crate) use self::usage_policy::MAX_USAGE_LIMIT_RETRIES;
+pub(crate) use self::usage_policy::automatic_continuation_allowed;
+pub(crate) use self::usage_policy::wait_for_usage_limit_reset;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
@@ -531,10 +536,15 @@ pub(crate) enum GitEnrichmentPolicy {
 
 /// Controls which fork history belongs in the newly created thread's own rollout.
 pub(crate) enum ForkPersistence {
-    Copied,
+    Copied {
+        /// Effective source-thread policy when the copied history was truncated
+        /// past its settings snapshot.
+        inherited_usage_policy: Option<ThreadUsagePolicy>,
+    },
     Referenced {
         history_base: Option<HistoryPosition>,
         inherited_item_count: usize,
+        inherited_usage_policy: ThreadUsagePolicy,
     },
 }
 
@@ -910,6 +920,7 @@ impl Session {
                 config.memories.generate_memories,
             ),
             user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
+            usage_policy: Default::default(),
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
             app_server_client_name: None,
@@ -1924,6 +1935,13 @@ impl Session {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
+                let rate_limits = Self::rate_limits_from_rollout(&rollout_items);
+                if !rate_limits.is_empty() {
+                    let mut state = self.state.lock().await;
+                    for rate_limits in rate_limits {
+                        state.set_rate_limits(rate_limits);
+                    }
+                }
                 self.state.lock().await.latest_token_usage_record =
                     Self::last_token_usage_record_from_rollout(&rollout_items);
 
@@ -1940,11 +1958,42 @@ impl Session {
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
 
+                // Forks receive a new thread id, so source-thread settings snapshots do not
+                // match the child by id. Carry the usage policy forward before synthesizing the
+                // child's local settings snapshot; this keeps auto-resume and continuation floors
+                // stable across both copied and reference-backed forks.
+                let usage_policy = match &self.fork_persistence {
+                    ForkPersistence::Referenced {
+                        inherited_usage_policy,
+                        ..
+                    } => Some(*inherited_usage_policy),
+                    ForkPersistence::Copied {
+                        inherited_usage_policy,
+                    } => inherited_usage_policy.or_else(|| {
+                        rollout_items.iter().rev().find_map(|item| match item {
+                            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
+                                Some(event.thread_settings.usage_policy)
+                            }
+                            _ => None,
+                        })
+                    }),
+                };
+                if let Some(usage_policy) = usage_policy {
+                    self.state.lock().await.session_configuration.usage_policy = usage_policy;
+                }
+
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
                 if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
+                }
+                let rate_limits = Self::rate_limits_from_rollout(&rollout_items);
+                if !rate_limits.is_empty() {
+                    let mut state = self.state.lock().await;
+                    for rate_limits in rate_limits {
+                        state.set_rate_limits(rate_limits);
+                    }
                 }
                 self.state.lock().await.latest_token_usage_record =
                     Self::last_token_usage_record_from_rollout(&rollout_items);
@@ -1961,13 +2010,13 @@ impl Session {
                         rollout_items.drain(..*inherited_item_count);
                         rollout_items.insert(0, thread_settings_applied);
                     }
-                    ForkPersistence::Copied if is_paginated_subagent => {
+                    ForkPersistence::Copied { .. } if is_paginated_subagent => {
                         // Paginated subagents already persist inherited context when their live
                         // thread is created.
                         rollout_items.clear();
                         rollout_items.push(thread_settings_applied);
                     }
-                    ForkPersistence::Copied => {
+                    ForkPersistence::Copied { .. } => {
                         // Keep the copied prefix and effective child settings in one append so a
                         // cold resume cannot observe inherited settings as the latest value.
                         rollout_items.push(thread_settings_applied);
@@ -2129,6 +2178,21 @@ impl Session {
             RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
             _ => None,
         })
+    }
+
+    fn rate_limits_from_rollout(rollout_items: &[RolloutItem]) -> Vec<RateLimitSnapshot> {
+        rollout_items
+            .iter()
+            .flat_map(|item| match item {
+                RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev
+                    .rate_limit_snapshots
+                    .as_ref()
+                    .filter(|snapshots| !snapshots.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| ev.rate_limits.clone().into_iter().collect()),
+                _ => Vec::new(),
+            })
+            .collect()
     }
 
     fn build_active_scratchpad_context(
@@ -5415,11 +5479,21 @@ impl Session {
     }
 
     pub(crate) async fn send_token_count_event(&self, turn_context: &TurnContext) {
-        let (info, rate_limits) = {
+        let (info, rate_limits, rate_limit_snapshots) = {
             let state = self.state.lock().await;
-            state.token_info_and_rate_limits()
+            let (info, rate_limits) = state.token_info_and_rate_limits();
+            let rate_limit_snapshots = state.rate_limit_snapshots();
+            (
+                info,
+                rate_limits,
+                (!rate_limit_snapshots.is_empty()).then_some(rate_limit_snapshots),
+            )
         };
-        let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
+        let event = EventMsg::TokenCount(TokenCountEvent {
+            info,
+            rate_limits,
+            rate_limit_snapshots,
+        });
         self.send_event(turn_context, event).await;
     }
 
@@ -5659,10 +5733,6 @@ impl Session {
         }
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "active turn checks and turn state updates must remain atomic"
-    )]
     pub async fn get_pending_input(&self) -> Vec<TurnInput> {
         self.input_queue
             .get_pending_input(&self.active_turn)
@@ -5670,10 +5740,6 @@ impl Session {
             .0
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "active turn checks and turn state reads must remain atomic"
-    )]
     pub async fn has_pending_input(&self) -> bool {
         self.input_queue.has_pending_input(&self.active_turn).await
     }

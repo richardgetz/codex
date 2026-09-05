@@ -11,6 +11,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
+use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::protocol::TurnContextItem;
 use codex_rollout::RolloutItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -51,6 +52,7 @@ fn settings_item(
                 },
                 memory_policy: Default::default(),
                 user_preferences_memory_policy: Default::default(),
+                usage_policy: Default::default(),
             },
         },
     ))
@@ -100,6 +102,7 @@ fn latest_settings_snapshot_wins() {
         approval_policy: AskForApproval::OnRequest,
         approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
         active_permission_profile: Some(ActivePermissionProfile::new("dev")),
+        usage_policy: ThreadUsagePolicy::default(),
     };
     let history = vec![
         settings_item(
@@ -123,6 +126,7 @@ fn latest_turn_context_wins_over_earlier_settings_update() {
         approval_policy: AskForApproval::UnlessTrusted,
         approvals_reviewer: Some(ApprovalsReviewer::User),
         active_permission_profile: Some(ActivePermissionProfile::read_only()),
+        usage_policy: ThreadUsagePolicy::default(),
     };
     let history = vec![
         settings_item(
@@ -164,6 +168,7 @@ fn older_reviewer_is_used_when_latest_turn_context_omits_it() {
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             active_permission_profile: None,
+            usage_policy: ThreadUsagePolicy::default(),
         })
     );
 }
