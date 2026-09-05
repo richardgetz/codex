@@ -22,6 +22,7 @@ use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_thread_store::PersistContext;
 
 pub(super) const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
@@ -1806,6 +1807,7 @@ impl ThreadRequestProcessor {
             reasoning_effort: config_snapshot.reasoning_effort,
             memory_policy: config_snapshot.memory_policy,
             user_preferences_memory_policy: config_snapshot.user_preferences_memory_policy,
+            usage_policy: config_snapshot.usage_policy.into(),
             multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         };
         let notif = thread_started_notification(thread);
@@ -4364,6 +4366,7 @@ impl ThreadRequestProcessor {
                     reasoning_effort: session_configured.reasoning_effort,
                     memory_policy: config_snapshot.memory_policy,
                     user_preferences_memory_policy: config_snapshot.user_preferences_memory_policy,
+                    usage_policy: config_snapshot.usage_policy.into(),
                     multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
                     initial_turns_page,
                     turns_backwards_cursor,
@@ -5246,8 +5249,10 @@ impl ThreadRequestProcessor {
                 .is_some_and(|overrides| overrides.contains_key("approvals_reviewer"));
         let restore_permission_profile =
             !has_permission_override(request_overrides.as_ref(), &typesafe_overrides);
-        let needs_latest_settings =
-            restore_approval_policy || restore_approvals_reviewer || restore_permission_profile;
+        let needs_latest_settings = paginated_source
+            || restore_approval_policy
+            || restore_approvals_reviewer
+            || restore_permission_profile;
         let loaded_parent_settings = if paginated_source && needs_latest_settings {
             if let Ok(parent) = self.thread_manager.get_thread(source_thread_id).await {
                 let snapshot = parent.thread_settings_snapshot().await;
@@ -5255,6 +5260,7 @@ impl ThreadRequestProcessor {
                     approval_policy: snapshot.approval_policy,
                     approvals_reviewer: Some(snapshot.approvals_reviewer),
                     active_permission_profile: snapshot.active_permission_profile,
+                    usage_policy: snapshot.usage_policy,
                 })
             } else {
                 None
@@ -5287,6 +5293,9 @@ impl ThreadRequestProcessor {
                     .unwrap_or_else(|| source_history_items.as_ref()),
             )
         });
+        let inherited_usage_policy = persisted_settings
+            .as_ref()
+            .map_or_else(ThreadUsagePolicy::default, |settings| settings.usage_policy);
         if let Some(persisted_settings) = persisted_settings {
             if restore_approval_policy {
                 typesafe_overrides.approval_policy = Some(persisted_settings.approval_policy);
@@ -5370,6 +5379,7 @@ impl ThreadRequestProcessor {
                     parent_trace,
                     client_mcp_extensions,
                     reserved_thread_id,
+                    inherited_usage_policy,
                 )
                 .await
         } else {
@@ -5386,6 +5396,7 @@ impl ThreadRequestProcessor {
                     parent_trace,
                     client_mcp_extensions,
                     reserved_thread_id,
+                    /*inherited_usage_policy*/ Some(inherited_usage_policy),
                 )
                 .await
         };
@@ -5569,6 +5580,7 @@ impl ThreadRequestProcessor {
             reasoning_effort: session_configured.reasoning_effort,
             memory_policy: config_snapshot.memory_policy,
             user_preferences_memory_policy: config_snapshot.user_preferences_memory_policy,
+            usage_policy: config_snapshot.usage_policy.into(),
             multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         };
 

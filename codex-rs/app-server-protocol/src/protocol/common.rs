@@ -3254,6 +3254,7 @@ mod tests {
                 memory_policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
                 user_preferences_memory_policy:
                     codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
+                usage_policy: Default::default(),
                 multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
             },
         };
@@ -3332,6 +3333,10 @@ mod tests {
                             "ongoing_threads",
                             "followup_state"
                         ]
+                    },
+                    "usagePolicy": {
+                        "autoResume": false,
+                        "minimumRemainingPercent": null
                     },
                     "multiAgentMode": "explicitRequestOnly"
                 }
@@ -4563,6 +4568,7 @@ mod tests {
                     memory_policy: codex_protocol::config_types::MemoryAccessPolicy::default(),
                     user_preferences_memory_policy:
                         codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
+                    usage_policy: Default::default(),
                 },
             });
 

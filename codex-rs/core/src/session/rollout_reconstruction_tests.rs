@@ -17,9 +17,11 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::WorldStateItem;
 use codex_protocol::security_risk::SecurityRiskScore;
 use codex_rollout::ModelContextScan;
@@ -208,6 +210,37 @@ fn completed_user_turn_rollout(
         },
     )));
     rollout_items
+}
+
+#[test]
+fn rate_limits_from_rollout_restores_all_persisted_buckets() {
+    let first = RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: None,
+        primary: None,
+        secondary: None,
+        credits: None,
+        individual_limit: None,
+        spend_control_reached: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    };
+    let second = RateLimitSnapshot {
+        limit_id: Some("codex_other".to_string()),
+        ..first.clone()
+    };
+    let history = vec![RolloutItem::EventMsg(EventMsg::TokenCount(
+        TokenCountEvent {
+            info: None,
+            rate_limits: Some(first.clone()),
+            rate_limit_snapshots: Some(vec![first.clone(), second.clone()]),
+        },
+    ))];
+
+    assert_eq!(
+        Session::rate_limits_from_rollout(&history),
+        vec![first, second]
+    );
 }
 
 #[tokio::test]

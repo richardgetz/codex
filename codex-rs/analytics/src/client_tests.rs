@@ -77,6 +77,7 @@ use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
+use codex_app_server_protocol::ThreadUsagePolicy;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -637,6 +638,7 @@ fn sample_thread_start_response() -> ClientResponsePayload {
         reasoning_effort: None,
         memory_policy: Default::default(),
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
+        usage_policy: ThreadUsagePolicy::default(),
         multi_agent_mode: Default::default(),
     })
 }
@@ -657,6 +659,7 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
         reasoning_effort: None,
         memory_policy: Default::default(),
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
+        usage_policy: ThreadUsagePolicy::default(),
         multi_agent_mode: Default::default(),
         initial_turns_page: None,
         turns_backwards_cursor: None,
@@ -680,6 +683,7 @@ fn sample_thread_fork_response() -> ClientResponsePayload {
         reasoning_effort: None,
         memory_policy: Default::default(),
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
+        usage_policy: ThreadUsagePolicy::default(),
         multi_agent_mode: Default::default(),
     })
 }

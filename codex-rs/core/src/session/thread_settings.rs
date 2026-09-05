@@ -12,6 +12,8 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
+use codex_protocol::protocol::ThreadUsagePolicy;
+use codex_protocol::protocol::ThreadUsagePolicyUpdate;
 use std::sync::Arc;
 use tokio::sync::SemaphorePermit;
 
@@ -21,8 +23,10 @@ pub(super) async fn update(
     session: &Arc<Session>,
     submission_id: String,
     overrides: ThreadSettingsOverrides,
+    usage_policy_update: Option<ThreadUsagePolicyUpdate>,
 ) {
-    let updates = prepare_update(overrides);
+    let mut updates = prepare_update(overrides);
+    updates.usage_policy_update = usage_policy_update;
     if let Err(error) = apply_update(session, submission_id.clone(), updates).await {
         session
             .send_event_raw(Event {
@@ -54,6 +58,7 @@ pub(super) fn prepare_update(overrides: ThreadSettingsOverrides) -> SessionSetti
         service_tier,
         collaboration_mode,
         personality,
+        usage_policy,
     } = overrides;
     SessionSettingsUpdate {
         step_settings: StepSettingsUpdate {
@@ -72,6 +77,7 @@ pub(super) fn prepare_update(overrides: ThreadSettingsOverrides) -> SessionSetti
         permission_profile,
         active_permission_profile,
         windows_sandbox_level,
+        usage_policy,
         ..Default::default()
     }
 }
@@ -107,12 +113,22 @@ pub(super) async fn emit_applied(
         thread_id: Some(session.thread_id()),
         thread_settings: snapshot,
     });
-    session
-        .send_event_raw_without_materializing_rollout(Event {
-            id: submission_id,
-            msg,
-        })
-        .await;
+    let event = Event {
+        id: submission_id,
+        msg,
+    };
+    let EventMsg::ThreadSettingsApplied(applied) = &event.msg else {
+        unreachable!("usage policy persistence only receives thread settings events");
+    };
+    if applied.thread_settings.usage_policy != ThreadUsagePolicy::default() {
+        // Usage policy is thread-owned durable state. Materialize a lazy thread when the
+        // policy is first enabled so a later cold resume or fork can recover it.
+        session.send_event_raw(event).await;
+    } else {
+        session
+            .send_event_raw_without_materializing_rollout(event)
+            .await;
+    }
 }
 
 /// Builds a current thread-owned snapshot for fork and compaction persistence.

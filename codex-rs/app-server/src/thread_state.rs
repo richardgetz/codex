@@ -332,6 +332,7 @@ mod tests {
             personality: None,
             memory_policy: MemoryAccessPolicy::default(),
             user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
+            usage_policy: Default::default(),
         }
     }
 }

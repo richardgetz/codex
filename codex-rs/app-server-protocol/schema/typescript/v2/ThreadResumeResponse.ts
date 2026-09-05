@@ -10,6 +10,7 @@ import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
+import type { ThreadUsagePolicy } from "./ThreadUsagePolicy";
 
 export type ThreadResumeResponse = {thread: Thread, model: string, modelProvider: string, serviceTier: string | null, cwd: AbsolutePathBuf, /**
  * Environment-native paths to instruction source files currently loaded for this thread.
@@ -22,6 +23,9 @@ approvalsReviewer: ApprovalsReviewer, /**
  * should prefer `activePermissionProfile` for profile provenance.
  */
 sandbox: SandboxPolicy, reasoningEffort: ReasoningEffort | null, memoryPolicy: MemoryAccessPolicy, userPreferencesMemoryPolicy: UserPreferencesMemoryBucketPolicy, /**
+ * Current per-thread usage and automatic-resume policy.
+ */
+usagePolicy: ThreadUsagePolicy, /**
  * Opaque cursor for hydrating paginated turns backwards.
  *
  * Pass this as `cursor` to `thread/turns/list` with

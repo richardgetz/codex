@@ -4245,6 +4245,7 @@ mod tests {
             memory_policy: Default::default(),
             user_preferences_memory_policy:
                 codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
+            usage_policy: Default::default(),
             multi_agent_mode: Default::default(),
             initial_turns_page: None,
             turns_backwards_cursor: None,

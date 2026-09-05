@@ -69,6 +69,12 @@ pub(crate) enum InputQueueActivity {
     Steer,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PendingInputStatus {
+    pub(crate) has_pending_input: bool,
+    pub(crate) has_user_input: bool,
+}
+
 /// Turn-local pending input storage owned by the input queue flow.
 #[derive(Default)]
 pub(crate) struct TurnInputQueue {
@@ -338,42 +344,64 @@ impl InputQueue {
         }
     }
 
+    pub(crate) async fn has_pending_input(&self, active_turn: &Mutex<Option<ActiveTurn>>) -> bool {
+        self.pending_input_status(active_turn)
+            .await
+            .has_pending_input
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state reads must remain atomic"
     )]
-    pub(crate) async fn has_pending_input(&self, active_turn: &Mutex<Option<ActiveTurn>>) -> bool {
-        let (has_turn_pending_input, accepts_mailbox_delivery) = {
+    pub(crate) async fn pending_input_status(
+        &self,
+        active_turn: &Mutex<Option<ActiveTurn>>,
+    ) -> PendingInputStatus {
+        let (turn_status, accepts_mailbox_delivery) = {
             let active = active_turn.lock().await;
             match active.as_ref() {
                 Some(active_turn) => {
                     let turn_state = active_turn.turn_state.lock().await;
                     (
-                        turn_state.has_pending_input(),
+                        turn_state.pending_input.status(),
                         turn_state.accepts_mailbox_delivery_for_current_turn(),
                     )
                 }
-                None => (false, true),
+                None => (PendingInputStatus::default(), true),
             }
         };
         if !accepts_mailbox_delivery {
-            return false;
+            return PendingInputStatus::default();
         }
-        if has_turn_pending_input {
-            return true;
+        if turn_status.has_pending_input {
+            return turn_status;
         }
-        self.has_pending_mailbox_items().await
+        PendingInputStatus {
+            has_pending_input: self.has_pending_mailbox_items().await,
+            ..turn_status
+        }
     }
 }
 
 impl TurnInputQueue {
     fn has_pending_input(&self) -> bool {
-        self.items.iter().any(|input| {
-            matches!(
-                input,
-                TurnInput::UserInput { .. } | TurnInput::FunctionCallOutput(_)
-            )
-        })
+        self.status().has_pending_input
+    }
+
+    fn status(&self) -> PendingInputStatus {
+        PendingInputStatus {
+            has_pending_input: self.items.iter().any(|input| {
+                matches!(
+                    input,
+                    TurnInput::UserInput { .. } | TurnInput::FunctionCallOutput(_)
+                )
+            }),
+            has_user_input: self
+                .items
+                .iter()
+                .any(|input| matches!(input, TurnInput::UserInput { .. })),
+        }
     }
 }
 
@@ -522,6 +550,39 @@ mod tests {
             input_queue.subscribe_activity(Some(&turn_state)).await;
 
         assert_eq!(pending_activity, Some(InputQueueActivity::Steer));
+    }
+
+    #[test]
+    fn turn_input_queue_distinguishes_user_and_automatic_pending_input() {
+        let automatic_output = TurnInput::FunctionCallOutput(ResponseItem::Other);
+        let user_input = TurnInput::UserInput {
+            content: vec![UserInput::Text {
+                text: "user steer".to_string(),
+                text_elements: Vec::new(),
+            }],
+            client_id: None,
+        };
+
+        assert_eq!(
+            TurnInputQueue {
+                items: vec![automatic_output, user_input],
+            }
+            .status(),
+            PendingInputStatus {
+                has_pending_input: true,
+                has_user_input: true,
+            }
+        );
+        assert_eq!(
+            TurnInputQueue {
+                items: vec![TurnInput::FunctionCallOutput(ResponseItem::Other)],
+            }
+            .status(),
+            PendingInputStatus {
+                has_pending_input: true,
+                has_user_input: false,
+            }
+        );
     }
 
     #[tokio::test]

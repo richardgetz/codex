@@ -593,6 +593,8 @@ export type { ThreadUnsubscribeResponse } from "./ThreadUnsubscribeResponse";
 export type { ThreadUnsubscribeStatus } from "./ThreadUnsubscribeStatus";
 export type { ThreadUsage } from "./ThreadUsage";
 export type { ThreadUsageBreakdownGroup } from "./ThreadUsageBreakdownGroup";
+export type { ThreadUsagePolicy } from "./ThreadUsagePolicy";
+export type { ThreadUsagePolicyParams } from "./ThreadUsagePolicyParams";
 export type { ThreadUserPreferencesMemoryMigrateParams } from "./ThreadUserPreferencesMemoryMigrateParams";
 export type { ThreadUserPreferencesMemoryMigrateResponse } from "./ThreadUserPreferencesMemoryMigrateResponse";
 export type { ThreadUserPreferencesMemoryPolicySetParams } from "./ThreadUserPreferencesMemoryPolicySetParams";

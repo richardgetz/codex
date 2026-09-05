@@ -11,6 +11,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
+use codex_protocol::protocol::ThreadUsagePolicyUpdate;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_skills::system_cache_root_dir;
@@ -126,6 +127,7 @@ struct ThreadSettingsBuildParams {
     summary: Option<ReasoningSummary>,
     collaboration_mode: Option<CollaborationMode>,
     personality: Option<Personality>,
+    usage_policy: Option<codex_app_server_protocol::ThreadUsagePolicyParams>,
 }
 
 impl TurnRequestProcessor {
@@ -631,6 +633,7 @@ impl TurnRequestProcessor {
                     summary: params.summary,
                     collaboration_mode: params.collaboration_mode,
                     personality: params.personality,
+                    usage_policy: None,
                 },
             )
             .await?;
@@ -793,8 +796,8 @@ impl TurnRequestProcessor {
             summary,
             collaboration_mode,
             personality,
+            usage_policy,
         } = params;
-
         if sandbox_policy.is_some() && permissions.is_some() {
             return Err(invalid_request(
                 "`permissions` cannot be combined with `sandboxPolicy`",
@@ -806,9 +809,28 @@ impl TurnRequestProcessor {
         let has_environment_override = environments.is_some();
         // `thread/settings/update` only acknowledges that the update was queued.
         // Clients that send dependent partial updates should wait for
-        // `thread/settings/updated` or combine the fields in one request.
-        let snapshot = if permissions.is_some() {
+        // `thread/settings/updated` or combine the fields in one request. Nested
+        // usage-policy fields also preserve their current values when omitted.
+        let snapshot = if permissions.is_some() || usage_policy.is_some() {
             Some(thread.config_snapshot().await)
+        } else {
+            None
+        };
+
+        let usage_policy = if let Some(usage_policy) = usage_policy {
+            let Some(snapshot) = snapshot.as_ref() else {
+                return Err(internal_error(format!(
+                    "{method} usage policy missing thread snapshot"
+                )));
+            };
+            Some(codex_protocol::protocol::ThreadUsagePolicy {
+                auto_resume: usage_policy
+                    .auto_resume
+                    .unwrap_or(snapshot.usage_policy.auto_resume),
+                minimum_remaining_percent: usage_policy
+                    .minimum_remaining_percent
+                    .unwrap_or(snapshot.usage_policy.minimum_remaining_percent),
+            })
         } else {
             None
         };
@@ -823,7 +845,8 @@ impl TurnRequestProcessor {
             || effort.is_some()
             || summary.is_some()
             || collaboration_mode.is_some()
-            || personality.is_some();
+            || personality.is_some()
+            || usage_policy.is_some();
 
         let approval_policy =
             approval_policy.map(codex_app_server_protocol::AskForApproval::to_core);
@@ -892,6 +915,7 @@ impl TurnRequestProcessor {
                     service_tier: service_tier.clone(),
                     collaboration_mode: collaboration_mode.clone(),
                     personality,
+                    usage_policy,
                 })
                 .await
                 .map_err(|err| {
@@ -914,6 +938,7 @@ impl TurnRequestProcessor {
             service_tier,
             collaboration_mode,
             personality,
+            usage_policy,
         })
     }
 
@@ -925,6 +950,12 @@ impl TurnRequestProcessor {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
         self.ensure_direct_input_allowed(request_id, thread.as_ref())
             .await?;
+        let usage_policy_update = params
+            .usage_policy
+            .map(|usage_policy| ThreadUsagePolicyUpdate {
+                auto_resume: usage_policy.auto_resume,
+                minimum_remaining_percent: usage_policy.minimum_remaining_percent,
+            });
         let cwd = resolve_request_cwd(params.cwd)?;
         let environments = self
             .build_environment_override(
@@ -950,15 +981,25 @@ impl TurnRequestProcessor {
                     summary: params.summary,
                     collaboration_mode: params.collaboration_mode,
                     personality: params.personality,
+                    usage_policy: params.usage_policy,
                 },
             )
             .await?;
 
-        if thread_settings != codex_protocol::protocol::ThreadSettingsOverrides::default() {
+        let mut thread_settings = thread_settings;
+        // The builder uses a full snapshot only to validate the candidate. Preserve the
+        // client's sparse nested patch so Core can merge it under its settings lock.
+        thread_settings.usage_policy = None;
+        if thread_settings != codex_protocol::protocol::ThreadSettingsOverrides::default()
+            || usage_policy_update.is_some()
+        {
             self.submit_core_op(
                 request_id,
                 thread.as_ref(),
-                Op::ThreadSettings { thread_settings },
+                Op::ThreadSettings {
+                    thread_settings,
+                    usage_policy_update,
+                },
             )
             .await
             .map_err(|err| internal_error(format!("failed to update thread settings: {err}")))?;
@@ -1138,6 +1179,11 @@ impl TurnRequestProcessor {
                         Some(AnalyticsJsonRpcError::TurnSteer(
                             TurnSteerRequestError::NoActiveTurn,
                         )),
+                    ),
+                    NotSubmittedReason::UsageLimitFloor => (
+                        "automatic continuation is below the configured usage floor".to_string(),
+                        None,
+                        None,
                     ),
                 };
                 let mut error = invalid_request(message);

@@ -35,6 +35,8 @@ use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::ThreadUsagePolicy;
+use codex_protocol::protocol::ThreadUsagePolicyUpdate;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_skills::SkillError;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -137,6 +139,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) thread_name: Option<String>,
     pub(super) memory_policy: MemoryAccessPolicy,
     pub(super) user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
+    /// Per-thread usage and automatic-resume policy.
+    pub(super) usage_policy: ThreadUsagePolicy,
 
     // TODO(pakrym): Remove config from here
     pub(super) original_config_do_not_use: Arc<Config>,
@@ -347,6 +351,7 @@ impl SessionConfiguration {
             thread_source: self.thread_source.clone(),
             memory_policy: self.memory_policy,
             user_preferences_memory_policy: self.user_preferences_memory_policy.clone(),
+            usage_policy: self.usage_policy,
             originator: self.originator.clone(),
         }
     }
@@ -371,6 +376,7 @@ impl SessionConfiguration {
             collaboration_mode: self.step_settings.collaboration_mode.clone(),
             memory_policy: self.memory_policy,
             user_preferences_memory_policy: self.user_preferences_memory_policy.clone(),
+            usage_policy: self.usage_policy,
         }
     }
 
@@ -398,6 +404,7 @@ impl SessionConfiguration {
             service_tier: Some(self.step_settings.service_tier.clone()),
             collaboration_mode: Some(self.step_settings.collaboration_mode.clone()),
             personality: self.step_settings.personality,
+            usage_policy: Some(self.usage_policy),
             ..Default::default()
         }
     }
@@ -459,6 +466,29 @@ impl SessionConfiguration {
         }
         if let Some(policy) = updates.user_preferences_memory_policy.clone() {
             next_configuration.user_preferences_memory_policy = policy;
+        }
+        let mut usage_policy = updates.usage_policy.unwrap_or(self.usage_policy);
+        if let Some(update) = updates.usage_policy_update {
+            usage_policy.auto_resume = update.auto_resume.unwrap_or(usage_policy.auto_resume);
+            usage_policy.minimum_remaining_percent = update
+                .minimum_remaining_percent
+                .unwrap_or(usage_policy.minimum_remaining_percent);
+        }
+        if updates.usage_policy.is_some() || updates.usage_policy_update.is_some() {
+            if usage_policy
+                .minimum_remaining_percent
+                .is_some_and(|percent| percent > 100)
+            {
+                return Err(ConstraintError::InvalidValue {
+                    field_name: "usage_policy.minimum_remaining_percent",
+                    candidate: usage_policy
+                        .minimum_remaining_percent
+                        .map_or_else(|| "none".to_string(), |percent| percent.to_string()),
+                    allowed: "an integer from 0 through 100".to_string(),
+                    requirement_source: codex_config::RequirementSource::Unknown,
+                });
+            }
+            next_configuration.usage_policy = usage_policy;
         }
         if let Some(windows_sandbox_level) = updates.windows_sandbox_level {
             next_configuration.windows_sandbox_level = windows_sandbox_level;
@@ -750,6 +780,8 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) app_server_client_version: Option<String>,
     pub(crate) memory_policy: Option<MemoryAccessPolicy>,
     pub(crate) user_preferences_memory_policy: Option<UserPreferencesMemoryBucketPolicy>,
+    pub(crate) usage_policy: Option<ThreadUsagePolicy>,
+    pub(crate) usage_policy_update: Option<ThreadUsagePolicyUpdate>,
 }
 
 pub(crate) struct AppServerClientMetadata {
@@ -929,7 +961,7 @@ impl Session {
             ForkPersistence::Referenced { history_base, .. } => {
                 history_base.map(|position| position.end_ordinal_exclusive)
             }
-            ForkPersistence::Copied => match &initial_history {
+            ForkPersistence::Copied { .. } => match &initial_history {
                 InitialHistory::Resumed(resumed) => {
                     // Both local and CCA thread stores place the resumed thread's
                     // canonical SessionMeta first. Never inspect inherited metadata:
@@ -991,6 +1023,31 @@ impl Session {
                 ));
             }
         };
+        if let Some(usage_policy) =
+            initial_history
+                .get_rollout_items()
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
+                        if event.thread_id == Some(thread_id) =>
+                    {
+                        Some(event.thread_settings.usage_policy)
+                    }
+                    _ => None,
+                })
+        {
+            session_configuration.usage_policy = usage_policy;
+        }
+        if let ForkPersistence::Referenced {
+            inherited_usage_policy,
+            ..
+        } = &fork_persistence
+        {
+            // Reference-backed paginated forks may not include the source settings event in
+            // their model-context prefix. Carry the source snapshot explicitly in that case.
+            session_configuration.usage_policy = *inherited_usage_policy;
+        }
         let resumed_session_id = match &initial_history {
             InitialHistory::Resumed(resumed) => {
                 resumed.history.iter().find_map(|item| match item {
@@ -1111,7 +1168,7 @@ impl Session {
                             multi_agent_version: initial_multi_agent_version,
                             history_mode: session_configuration.history_mode,
                             history_base: match &fork_persistence {
-                                ForkPersistence::Copied => None,
+                                ForkPersistence::Copied { .. } => None,
                                 ForkPersistence::Referenced { history_base, .. } => *history_base,
                             },
                             subagent_history_start_ordinal: None,
@@ -1129,7 +1186,7 @@ impl Session {
                             },
                         };
                         if is_paginated_subagent
-                            && matches!(&fork_persistence, ForkPersistence::Copied)
+                            && matches!(&fork_persistence, ForkPersistence::Copied { .. })
                             && let InitialHistory::Forked(items) = &initial_history
                         {
                             LiveThread::create_with_inherited_model_context(

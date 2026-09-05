@@ -17,6 +17,7 @@ use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::ForkBoundary;
 use codex_thread_store::LoadThreadHistoryParams;
@@ -94,6 +95,7 @@ async fn compressed_shared_fork_resume_preserves_checkpoint_and_frozen_history()
             /*parent_trace*/ None,
             ClientMcpExtensions::default(),
             /*reserved_thread_id*/ None,
+            /*inherited_usage_policy*/ ThreadUsagePolicy::default(),
         )
         .await?;
     turn(

@@ -238,6 +238,7 @@ async fn settings_updates_preserve_turn_identity_and_target(target: SettingsTarg
                         service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
                         ..Default::default()
                     },
+                    usage_policy_update: None,
                 })
                 .await?;
         }
@@ -870,6 +871,7 @@ async fn sparse_updates_preserve_divergent_active_and_future_models() -> Result<
                 service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
                 ..Default::default()
             },
+            usage_policy_update: None,
         })
         .await?;
     assert_eq!(

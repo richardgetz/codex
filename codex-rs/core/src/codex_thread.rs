@@ -49,6 +49,7 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
@@ -110,6 +111,7 @@ pub struct ThreadConfigSnapshot {
     pub thread_source: Option<ThreadSource>,
     pub memory_policy: MemoryAccessPolicy,
     pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
+    pub usage_policy: ThreadUsagePolicy,
     pub originator: String,
 }
 
@@ -157,6 +159,7 @@ impl ThreadConfigSnapshot {
             collaboration_mode: self.collaboration_mode,
             memory_policy: self.memory_policy,
             user_preferences_memory_policy: self.user_preferences_memory_policy,
+            usage_policy: self.usage_policy,
         }
     }
 
@@ -172,6 +175,7 @@ impl ThreadConfigSnapshot {
             service_tier: Some(self.service_tier),
             collaboration_mode: Some(self.collaboration_mode),
             personality: self.personality,
+            usage_policy: Some(self.usage_policy),
             ..Default::default()
         }
     }
@@ -194,6 +198,7 @@ pub struct CodexThreadSettingsOverrides {
     pub service_tier: Option<Option<String>>,
     pub collaboration_mode: Option<CollaborationMode>,
     pub personality: Option<Personality>,
+    pub usage_policy: Option<ThreadUsagePolicy>,
 }
 
 pub use codex_guardian_context::GuardianRootMessage;
@@ -635,6 +640,7 @@ impl CodexThread {
             service_tier,
             collaboration_mode,
             personality,
+            usage_policy,
         } = overrides;
         SessionSettingsUpdate {
             step_settings: StepSettingsUpdate {
@@ -653,6 +659,7 @@ impl CodexThread {
             permission_profile,
             active_permission_profile,
             windows_sandbox_level,
+            usage_policy,
             ..Default::default()
         }
     }

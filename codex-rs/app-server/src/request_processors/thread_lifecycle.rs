@@ -746,6 +746,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         reasoning_effort,
         memory_policy,
         user_preferences_memory_policy,
+        usage_policy,
         originator,
         ..
     } = config_snapshot;
@@ -770,6 +771,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         reasoning_effort,
         memory_policy,
         user_preferences_memory_policy,
+        usage_policy: usage_policy.into(),
         multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         initial_turns_page,
         turns_backwards_cursor,

@@ -23,6 +23,7 @@ use crate::context::world_state::PersonalityState;
 use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::RealtimeState;
 use crate::context::world_state::ToolsState;
+use crate::context::world_state::UsageLimitsState;
 use crate::context::world_state::WorldState;
 use crate::realtime_prompt::RealtimePreamblePolicy;
 use codex_connectors::AppToolPolicyEvaluator;
@@ -170,6 +171,8 @@ impl Session {
                 /*thread_hint*/ None,
             ));
         }
+        let (usage_policy, rate_limits) = self.usage_policy_and_rate_limits().await;
+        world_state.add_section(UsageLimitsState::new(usage_policy, &rate_limits));
         let guidance = step_context
             .token_budget
             .as_ref()

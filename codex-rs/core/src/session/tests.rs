@@ -3079,24 +3079,28 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
         TokenCountEvent {
             info: Some(info1),
             rate_limits: None,
+            rate_limit_snapshots: None,
         },
     )));
     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
         TokenCountEvent {
             info: None,
             rate_limits: None,
+            rate_limit_snapshots: None,
         },
     )));
     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
         TokenCountEvent {
             info: Some(info2.clone()),
             rate_limits: None,
+            rate_limit_snapshots: None,
         },
     )));
     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
         TokenCountEvent {
             info: None,
             rate_limits: None,
+            rate_limit_snapshots: None,
         },
     )));
 
@@ -5000,6 +5004,7 @@ async fn set_rate_limits_retains_previous_credits() {
             write: config.memories.generate_memories,
         },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
+        usage_policy: Default::default(),
         user_shell_override: None,
     };
 
@@ -5123,6 +5128,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
             write: config.memories.generate_memories,
         },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
+        usage_policy: Default::default(),
         user_shell_override: None,
     };
 
@@ -5175,7 +5181,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
             limit_id: Some("codex".to_string()),
             limit_name: None,
             primary: update.primary,
-            secondary: update.secondary,
+            secondary: initial.secondary,
             credits: initial.credits,
             individual_limit: initial.individual_limit,
             spend_control_reached: initial.spend_control_reached,
@@ -6056,6 +6062,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
             write: config.memories.generate_memories,
         },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
+        usage_policy: Default::default(),
         user_shell_override: None,
     }
 }
@@ -7238,6 +7245,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
             write: config.memories.generate_memories,
         },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
+        usage_policy: Default::default(),
         user_shell_override: None,
     };
 
@@ -7267,7 +7275,9 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         tx_event,
         agent_status_tx,
         InitialHistory::New,
-        ForkPersistence::Copied,
+        ForkPersistence::Copied {
+            inherited_usage_policy: None,
+        },
         SessionSource::Exec,
         skills_service,
         plugins_manager,
@@ -7399,6 +7409,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             write: config.memories.generate_memories,
         },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
+        usage_policy: Default::default(),
         user_shell_override: None,
     };
     let session_telemetry = session_telemetry(
@@ -7576,7 +7587,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services,
         session_tmp: None,
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
-        fork_persistence: ForkPersistence::Copied,
+        fork_persistence: ForkPersistence::Copied {
+            inherited_usage_policy: None,
+        },
         forked_from_ordinal_exclusive: None,
         next_internal_sub_id: AtomicU64::new(0),
     };
@@ -7719,6 +7732,7 @@ async fn make_session_with_config_and_rx(
             write: config.memories.generate_memories,
         },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
+        usage_policy: Default::default(),
         user_shell_override: None,
     };
 
@@ -7749,7 +7763,9 @@ async fn make_session_with_config_and_rx(
         tx_event,
         agent_status_tx,
         InitialHistory::New,
-        ForkPersistence::Copied,
+        ForkPersistence::Copied {
+            inherited_usage_policy: None,
+        },
         SessionSource::Exec,
         skills_service,
         plugins_manager,
@@ -7853,6 +7869,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
             write: config.memories.generate_memories,
         },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
+        usage_policy: Default::default(),
         user_shell_override: None,
     };
 
@@ -7883,7 +7900,9 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         tx_event,
         agent_status_tx,
         initial_history,
-        ForkPersistence::Copied,
+        ForkPersistence::Copied {
+            inherited_usage_policy: None,
+        },
         session_source,
         skills_service,
         plugins_manager,
@@ -8819,6 +8838,7 @@ fn op_kind_distinguishes_turn_ops() {
     assert_eq!(
         Op::ThreadSettings {
             thread_settings: Default::default(),
+            usage_policy_update: None,
         }
         .kind(),
         "thread_settings"
@@ -9807,6 +9827,7 @@ where
             write: config.memories.generate_memories,
         },
         user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
+        usage_policy: Default::default(),
         user_shell_override: None,
     };
     let session_telemetry = session_telemetry(
@@ -9983,7 +10004,9 @@ where
         services,
         session_tmp: None,
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
-        fork_persistence: ForkPersistence::Copied,
+        fork_persistence: ForkPersistence::Copied {
+            inherited_usage_policy: None,
+        },
         forked_from_ordinal_exclusive: None,
         next_internal_sub_id: AtomicU64::new(0),
     });

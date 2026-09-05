@@ -15,6 +15,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
 use crate::connectors;
 use crate::context::ContextualUserFragment;
+use crate::context::world_state::WorldState;
 use crate::enablement::filter_connectors_for_mode;
 use crate::enablement::filter_discoverable_tools_for_mode;
 use crate::enablement::filter_mcp_tools_for_mode;
@@ -39,13 +40,17 @@ use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::ResponsesStreamRetryState;
 use crate::responses_retry::handle_retryable_response_stream_error;
+use crate::session::MAX_USAGE_LIMIT_RETRIES;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
+use crate::session::automatic_continuation_allowed;
 use crate::session::capacity_retry::wait_for_model_capacity_retry;
+use crate::session::input_queue::PendingInputStatus;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_provenance;
+use crate::session::wait_for_usage_limit_reset;
 use crate::skills::emit_explicit_skill_invocations;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::InFlightFuture;
@@ -173,6 +178,9 @@ pub(crate) async fn run_turn(
     // Record results from hooks that finished after the previous turn before this turn's user prompt.
     drain_async_hook_results(&sess, &turn_context, /*before_user_prompt*/ true).await;
 
+    let mut has_explicit_user_input = input
+        .iter()
+        .any(|item| matches!(item, TurnInput::UserInput { .. }));
     let user_input = turn_user_input(&input);
     if matches!(
         turn_provenance::record_turn_provenance_preflight(
@@ -352,6 +360,12 @@ pub(crate) async fn run_turn(
         } else {
             Vec::new()
         };
+        if pending_input
+            .iter()
+            .any(|item| matches!(item, TurnInput::UserInput { .. }))
+        {
+            has_explicit_user_input = true;
+        }
 
         if run_hooks_and_record_inputs(
             &sess,
@@ -362,6 +376,24 @@ pub(crate) async fn run_turn(
         .await
         {
             break;
+        }
+
+        if !has_explicit_user_input {
+            let (usage_policy, rate_limits) = sess.usage_policy_and_rate_limits().await;
+            if !automatic_continuation_allowed(usage_policy, &rate_limits) {
+                if let Some(minimum_remaining_percent) = usage_policy.minimum_remaining_percent {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::Warning(WarningEvent {
+                            message: format!(
+                                "Automatic continuation stopped because known provider usage is below the configured {minimum_remaining_percent}% remaining floor."
+                            ),
+                        }),
+                    )
+                    .await;
+                }
+                break;
+            }
         }
 
         let window_id = sess.current_window_id().await;
@@ -420,6 +452,11 @@ pub(crate) async fn run_turn(
             let responses_metadata = sess
                 .responses_metadata(turn_context.as_ref(), CodexResponsesRequestKind::Turn)
                 .await;
+            let usage_limit_retry_mode = if has_explicit_user_input {
+                UsageLimitRetryMode::ExplicitUserTurn
+            } else {
+                UsageLimitRetryMode::AutomaticContinuation
+            };
             run_sampling_request(
                 Arc::clone(&sess),
                 Arc::clone(&step_context),
@@ -427,9 +464,11 @@ pub(crate) async fn run_turn(
                 Arc::clone(&turn_diff_tracker),
                 &mut client_session,
                 &responses_metadata,
+                &mut world_state,
                 sampling_request_input,
                 &explicitly_enabled_connectors,
                 Some(skills_outcome),
+                usage_limit_retry_mode,
                 cancellation_token.child_token(),
             )
             .await
@@ -452,9 +491,11 @@ pub(crate) async fn run_turn(
                 can_drain_pending_input = true;
                 // Process async hooks only after sampling and its tools have finished.
                 drain_async_hook_results(&sess, &turn_context, /*before_user_prompt*/ false).await;
-                let (has_pending_input, token_status) = async {
-                    let has_pending_input =
-                        sess.input_queue.has_pending_input(&sess.active_turn).await;
+                let (pending_input_status, token_status) = async {
+                    let pending_input_status = sess
+                        .input_queue
+                        .pending_input_status(&sess.active_turn)
+                        .await;
                     let token_status =
                         super::context_window::context_window_token_status_for_model(
                             sess.as_ref(),
@@ -463,12 +504,24 @@ pub(crate) async fn run_turn(
                             &step_context.settings.model_info,
                         )
                         .await;
-                    (has_pending_input, token_status)
+                    (pending_input_status, token_status)
                 }
                 .instrument(trace_span!("run_turn.collect_post_sampling_state"))
                 .await;
+                let PendingInputStatus {
+                    has_pending_input,
+                    has_user_input: has_pending_user_input,
+                } = pending_input_status;
                 let needs_follow_up = model_needs_follow_up || has_pending_input;
                 let token_limit_reached = token_status.token_limit_reached;
+                let (usage_policy, rate_limits) = sess.usage_policy_and_rate_limits().await;
+                let automatic_continuation_is_allowed =
+                    automatic_continuation_allowed(usage_policy, &rate_limits);
+                // The initial user prompt authorizes this sampling request only. Any model/tool
+                // continuation must be admitted again; a queued user message authorizes the
+                // following request explicitly.
+                let explicit_follow_up_is_allowed = has_pending_user_input;
+                has_explicit_user_input = has_pending_user_input;
                 trace!(
                     turn_id = %turn_context.sub_id,
                     total_usage_tokens = token_status.active_context_tokens,
@@ -481,6 +534,7 @@ pub(crate) async fn run_turn(
                     token_limit_reached,
                     model_needs_follow_up,
                     has_pending_input,
+                    has_pending_user_input,
                     needs_follow_up,
                     "post sampling token usage"
                 );
@@ -499,6 +553,24 @@ pub(crate) async fn run_turn(
                         estimated_token_count = ?estimated_token_count,
                         "post sampling token estimate"
                     );
+                }
+
+                if needs_follow_up
+                    && !explicit_follow_up_is_allowed
+                    && let Some(minimum_remaining_percent) = usage_policy.minimum_remaining_percent
+                    && !automatic_continuation_is_allowed
+                {
+                    last_agent_message = sampling_request_last_agent_message;
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::Warning(WarningEvent {
+                            message: format!(
+                                "Automatic continuation stopped because known provider usage is below the configured {minimum_remaining_percent}% remaining floor."
+                            ),
+                        }),
+                    )
+                    .await;
+                    break;
                 }
 
                 let should_roll_over = needs_follow_up
@@ -552,6 +624,7 @@ pub(crate) async fn run_turn(
                     .filter(|scratchpad| {
                         super::continuous_run_policy_enabled(scratchpad)
                             && super::scratchpad_has_continuous_work(scratchpad)
+                            && automatic_continuation_is_allowed
                     }) {
                         let (loopback_allowed, loopback_config) =
                             sess.try_record_scratchpad_loopback(Instant::now()).await;
@@ -612,7 +685,7 @@ pub(crate) async fn run_turn(
                             "Memory consolidation was rejected by a Stop hook.".to_string(),
                         ));
                     }
-                    if stop_outcome.should_block {
+                    if stop_outcome.should_block && automatic_continuation_is_allowed {
                         if let Some(hook_prompt_message) =
                             build_hook_prompt_message(&stop_outcome.continuation_fragments)
                         {
@@ -1763,9 +1836,11 @@ async fn run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
     responses_metadata: &CodexResponsesMetadata,
+    world_state: &mut Arc<WorldState>,
     input: Vec<ResponseItem>,
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
+    usage_limit_retry_mode: UsageLimitRetryMode,
     cancellation_token: CancellationToken,
 ) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
     let turn_context = Arc::clone(&step_context.turn);
@@ -1796,6 +1871,7 @@ async fn run_sampling_request(
     );
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retry_state = ResponsesStreamRetryState::default();
+    let mut usage_limit_retries = 0;
     let mut initial_input = Some(input);
     let mut original_input = None;
     let mut executed_tool_calls_by_output = HashMap::new();
@@ -1844,6 +1920,40 @@ async fn run_sampling_request(
                     let rate_limits = e.rate_limits.clone();
                     if let Some(rate_limits) = rate_limits {
                         sess.update_rate_limits(&turn_context, *rate_limits).await;
+                        let previous_world_state = Arc::clone(world_state);
+                        *world_state = sess
+                            .record_step_world_state_if_changed(
+                                &previous_world_state,
+                                step_context.as_ref(),
+                            )
+                            .await?;
+                    }
+                    if usage_limit_retries < MAX_USAGE_LIMIT_RETRIES
+                        && wait_for_usage_limit_reset(&sess, &turn_context, e, &cancellation_token)
+                            .await?
+                    {
+                        if matches!(
+                            usage_limit_retry_mode,
+                            UsageLimitRetryMode::AutomaticContinuation
+                        ) {
+                            let (usage_policy, rate_limits) =
+                                sess.usage_policy_and_rate_limits().await;
+                            if !automatic_continuation_allowed(usage_policy, &rate_limits) {
+                                return Err(err);
+                            }
+                        }
+                        usage_limit_retries += 1;
+                        if cancellation_token.is_cancelled() {
+                            return Err(CodexErr::TurnAborted);
+                        }
+                        let previous_world_state = Arc::clone(world_state);
+                        *world_state = sess
+                            .record_step_world_state_if_changed(
+                                &previous_world_state,
+                                step_context.as_ref(),
+                            )
+                            .await?;
+                        continue;
                     }
                     return Err(err);
                 }
@@ -2207,6 +2317,12 @@ pub(crate) async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsageLimitRetryMode {
+    ExplicitUserTurn,
+    AutomaticContinuation,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.

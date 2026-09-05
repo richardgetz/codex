@@ -43,6 +43,7 @@ const CONTEXTUAL_DEVELOPER_PREFIXES: &[&str] = &[
     "<model_switch>",
     "<managed_developer_instructions>",
     "<persistent_mode>",
+    "<thread_usage_limits>",
     APPS_INSTRUCTIONS_OPEN_TAG,
     COLLABORATION_MODE_OPEN_TAG,
     "<multi_agent_role>",
