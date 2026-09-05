@@ -4,6 +4,42 @@ This file tracks fork-only changes that ship with this build. Keep it updated as
 the fork evolves, and use it as a merge-awareness checklist whenever upstream
 stable/mainline is pulled in.
 
+## Maintenance Rule
+
+Every fork-only feature or behavior change must update this inventory in the
+same change. This includes fork-specific defaults, commands, configuration,
+MCP or skill behavior, API surfaces, persistence/compatibility behavior, and
+release or merge rules.
+
+- Add a concise entry under `## Unreleased` (or move it into the applicable
+  release section when the fork version is cut).
+- Add or update a `Merge Checklist` item when an upstream refresh could remove
+  or regress the behavior.
+- If the change is not fork-only, explicitly confirm in the pull request that
+  no inventory entry is needed.
+
+## Unreleased
+
+- Per-thread usage visibility, budgets, and reset-aware auto-resume:
+  - App-server v2 exposes a persisted `usagePolicy` on thread start, resume,
+    fork, and settings-update surfaces. It is disabled by default per thread.
+  - `autoResume` opts a thread into reset-aware continuation, while
+    `minimumRemainingPercent` stops automatic continuation, loopbacks, hooks,
+    and queued automatic work before the configured provider-window floor is
+    crossed. Explicit user turns remain allowed.
+  - The model receives bounded advisory status for provider usage windows,
+    including remaining percentage and reset time for 5-hour, weekly, and
+    other known windows.
+  - Resettable provider limits can be retried after reset with cancellation
+    awareness and a bounded retry count. Workspace or credit-cap failures are
+    not automatically retried.
+  - The policy is preserved through resume, copied/reference/paginated forks,
+    Last-N forks, and spawned subthreads. The persisted policy survives a cold
+    resume, but an in-flight reset wait is process-local.
+  - A hard API-equivalent dollar cap is not enforced because ordinary provider
+    responses do not expose authoritative spend limits; local spend estimates
+    remain informational.
+
 ## Introduced In 0.124.0-rick.2 (Recent)
 
 - First-class commit and intent guidance:
@@ -331,3 +367,7 @@ stable/mainline is pulled in.
 - Verify first-class Conventional Commits and git intent notes guidance appears
   by default, can be disabled by config, and intent-note metadata access does
   not make `.git/config`, hooks, or escaped linked-worktree metadata writable.
+- Verify per-thread `usagePolicy` remains disabled by default, persists through
+  resume and all fork modes, exposes bounded provider-window status to models,
+  and only auto-resumes resettable provider limits while respecting the
+  configured continuation floor.
