@@ -104,6 +104,7 @@ fn bedrock_model(
     model.slug = bedrock_slug.to_string();
     model.display_name = display_name.to_string();
     model.priority = priority;
+    model.default_reasoning_level = Some(ReasoningEffort::High);
     model.visibility = ModelVisibility::List;
     model.availability_nux = None;
     model.upgrade = None;
