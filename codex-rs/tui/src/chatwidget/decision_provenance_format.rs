@@ -2,7 +2,9 @@
 
 use codex_state::decision_provenance::Decision;
 use codex_state::decision_provenance::DecisionWhy;
+use codex_state::decision_provenance::EventSummary;
 use codex_state::decision_provenance::PreferenceBoundary;
+use codex_state::decision_provenance::ProvenanceRelationship;
 use codex_state::decision_provenance::ScopeRef;
 use std::fmt::Write;
 
@@ -30,24 +32,149 @@ pub(super) fn format_crossroads(
     crossroads: Vec<codex_state::decision_provenance::Crossroad>,
 ) -> anyhow::Result<String> {
     if crossroads.is_empty() {
-        return Ok("No open crossroads found.".to_string());
+        return Ok("No crossroads found.".to_string());
     }
-    let mut output = String::from("Open crossroads:\n");
+    let mut output = String::from("Crossroads (informational; nothing here blocks work):\n");
     for crossroad in crossroads {
         writeln!(
             output,
-            "- {} — {} ({} option{})",
+            "- {} [{}] — {} ({} option{}, {} source{})",
             crossroad.id,
+            display_crossroad_status(crossroad.status),
             crossroad.question,
             crossroad.options.len(),
             if crossroad.options.len() == 1 {
                 ""
             } else {
                 "s"
-            }
+            },
+            crossroad.source_refs.len(),
+            if crossroad.source_refs.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
         )?;
     }
+    output.push_str(
+        "Entry point: `/decisions crossroads [all]`. Use full or unique short IDs; ambiguous prefixes are rejected.\nReview bookkeeping: `/decisions reviewed <id>`, `/decisions dismiss <id>`, or `/decisions revisit <id>`; these never approve, block, or roll back work.\nUse `/decisions show <id>` to discuss sources and linked history.\n",
+    );
     Ok(output)
+}
+
+pub(super) fn format_crossroad_detail(
+    crossroad: &codex_state::decision_provenance::Crossroad,
+    relationships: &[ProvenanceRelationship],
+    linked_decisions: &[Decision],
+    history: &[EventSummary],
+) -> String {
+    let mut output = format!(
+        "Crossroad `{}`\nStatus: {}\nQuestion: {}\n\nThis record is informational bookkeeping. It does not approve a path, block execution, or roll back code.",
+        crossroad.id,
+        display_crossroad_status(crossroad.status),
+        crossroad.question
+    );
+    let _ = write!(
+        output,
+        "\n\nReview bookkeeping: `/decisions reviewed {}`, `/decisions dismiss {}`, or `/decisions revisit {}`. These commands only append review history; they do not approve, block, or roll back work.\nUse a full ID or a unique short prefix; ambiguous prefixes must be disambiguated.",
+        crossroad.id, crossroad.id, crossroad.id
+    );
+    if !crossroad.options.is_empty() {
+        output.push_str("\n\nOptions recorded for discussion/reference:");
+    }
+    for option in &crossroad.options {
+        let _ = write!(
+            output,
+            "\n- `{}`: {} — {}",
+            option.id,
+            option.label,
+            option.summary.as_deref().unwrap_or("no summary recorded")
+        );
+        for tradeoff in &option.tradeoffs {
+            let _ = write!(output, "\n  Tradeoff: {tradeoff}");
+        }
+    }
+    if !crossroad.expected_tradeoffs.is_empty() {
+        let _ = write!(
+            output,
+            "\n\nRecorded caveats: {}",
+            crossroad.expected_tradeoffs.join("; ")
+        );
+    }
+    if crossroad.privacy == codex_state::decision_provenance::PrivacyClass::Sensitive {
+        output.push_str("\n\nPrior sources: (sensitive references withheld)");
+    } else if !crossroad.source_refs.is_empty() {
+        output.push_str("\n\nPrior sources (references only):");
+        for source in &crossroad.source_refs {
+            let _ = write!(output, "\n- {}:{}", source.source_type, source.reference);
+        }
+    }
+    if !relationships.is_empty() {
+        output.push_str("\n\nLinked records:");
+        for relationship in relationships {
+            if relationship.from_type == codex_state::decision_provenance::EntityType::Crossroad
+                && relationship.from_id == crossroad.id
+                && relationship.to_type == codex_state::decision_provenance::EntityType::Crossroad
+                && relationship.to_id == crossroad.id
+            {
+                continue;
+            }
+            let (arrow, endpoint_type, endpoint_id) = if relationship.from_type
+                == codex_state::decision_provenance::EntityType::Crossroad
+                && relationship.from_id == crossroad.id
+            {
+                ("→", relationship.to_type, relationship.to_id.as_str())
+            } else if relationship.to_type
+                == codex_state::decision_provenance::EntityType::Crossroad
+                && relationship.to_id == crossroad.id
+            {
+                ("←", relationship.from_type, relationship.from_id.as_str())
+            } else {
+                ("→", relationship.to_type, relationship.to_id.as_str())
+            };
+            let _ = write!(
+                output,
+                "\n- {} {arrow} {}:{} [{}]{}",
+                relationship.relation.as_str(),
+                endpoint_type.as_str(),
+                endpoint_id,
+                relationship.evidence.as_str(),
+                relationship
+                    .summary
+                    .as_deref()
+                    .map(|summary| format!(" — {summary}"))
+                    .unwrap_or_default()
+            );
+        }
+    }
+    if !linked_decisions.is_empty() {
+        output.push_str("\n\nLinked decisions:");
+        for decision in linked_decisions {
+            let _ = write!(
+                output,
+                "\n- `{}` [{}] selected `{}` by {} — {}",
+                decision.id,
+                decision.status.as_str(),
+                decision.selected_option,
+                decision.actor.as_str(),
+                decision.summary
+            );
+        }
+    }
+    if !history.is_empty() {
+        output.push_str("\n\nHistory:");
+        for event in history {
+            let _ = write!(
+                output,
+                "\n- {} {} by {} ({})",
+                event.occurred_at.to_rfc3339(),
+                event.event_type,
+                event.actor.as_str(),
+                event.event_id
+            );
+        }
+    }
+    output
 }
 
 pub(super) fn format_boundaries(boundaries: Vec<PreferenceBoundary>) -> anyhow::Result<String> {
@@ -100,6 +227,17 @@ pub(super) fn format_boundary(boundary: &PreferenceBoundary) -> String {
 
 fn format_scope(scope: &ScopeRef) -> String {
     format!("{}:{}", scope.kind.as_str(), scope.id)
+}
+
+fn display_crossroad_status(
+    status: codex_state::decision_provenance::CrossroadStatus,
+) -> &'static str {
+    match status {
+        codex_state::decision_provenance::CrossroadStatus::Open => "open",
+        codex_state::decision_provenance::CrossroadStatus::Resolved => "reviewed",
+        codex_state::decision_provenance::CrossroadStatus::Cancelled => "dismissed",
+        codex_state::decision_provenance::CrossroadStatus::Reopened => "reopened",
+    }
 }
 
 pub(super) fn format_decision_why(why: &DecisionWhy) -> String {

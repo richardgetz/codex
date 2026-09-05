@@ -2,7 +2,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn only_must_notes_relevant_to_a_code_change_become_conflicts() {
+fn only_must_notes_relevant_to_a_code_change_become_candidates() {
     let request_tokens = intent_tokens("please modify generated files for the API contract");
     let must_note = GitIntentNote {
         commit: "abc123".to_string(),
@@ -19,10 +19,10 @@ fn only_must_notes_relevant_to_a_code_change_become_conflicts() {
             .to_string(),
     };
 
-    let conflict = relevant_git_intent_conflict(must_note, &request_tokens)
-        .expect("relevant must note should produce a conflict");
-    assert_eq!(conflict.commit, "abc123");
-    assert!(relevant_git_intent_conflict(should_note, &request_tokens).is_none());
+    let candidate = relevant_git_intent_candidate(must_note, &request_tokens)
+        .expect("relevant must note should produce a candidate");
+    assert_eq!(candidate.commit, "abc123");
+    assert!(relevant_git_intent_candidate(should_note, &request_tokens).is_none());
 }
 
 #[test]
@@ -34,18 +34,8 @@ fn non_code_change_questions_do_not_enter_git_intent_preflight() {
 }
 
 #[test]
-fn git_intent_requires_a_named_explicit_user_approval() {
-    assert!(request_has_explicit_git_intent_override(
-        "please override the prior Git intent and modify generated files"
-    ));
-    assert!(!request_has_explicit_git_intent_override(
-        "please override that preference and modify generated files"
-    ));
-}
-
-#[test]
 fn note_content_is_not_copied_into_the_provenance_source_label() {
-    let conflict = relevant_git_intent_conflict(
+    let candidate = relevant_git_intent_candidate(
         GitIntentNote {
             commit: "abc123".to_string(),
             timestamp: 1,
@@ -55,11 +45,14 @@ fn note_content_is_not_copied_into_the_provenance_source_label() {
         },
         &intent_tokens("please modify generated files"),
     )
-    .expect("relevant must note should produce a conflict");
+    .expect("relevant must note should produce a candidate");
 
     assert_eq!(
-        conflict.source_ref.label.as_deref(),
+        candidate.source_ref.label.as_deref(),
         Some("must-level Git intent note")
     );
-    assert_eq!(conflict.source_ref.reference, "refs/notes/intention@abc123");
+    assert_eq!(
+        candidate.source_ref.reference,
+        "refs/notes/intention@abc123"
+    );
 }

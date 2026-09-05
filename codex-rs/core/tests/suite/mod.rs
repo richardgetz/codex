@@ -65,6 +65,7 @@ mod current_time_reminder;
 mod cyber_access_program;
 mod cyber_exec_policy;
 mod daybreak_access;
+mod decision_provenance;
 mod deprecation_notice;
 mod exec;
 mod exec_policy;

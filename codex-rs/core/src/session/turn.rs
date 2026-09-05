@@ -182,20 +182,13 @@ pub(crate) async fn run_turn(
         .iter()
         .any(|item| matches!(item, TurnInput::UserInput { .. }));
     let user_input = turn_user_input(&input);
-    if matches!(
-        turn_provenance::record_turn_provenance_preflight(
-            &sess,
-            turn_context.as_ref(),
-            &user_input,
-        )
-        .await,
-        turn_provenance::ProvenancePreflightOutcome::Blocked
-    ) {
-        let _ =
-            run_hooks_and_record_inputs(&sess, &turn_context, &input, PersistContext::TurnStart)
-                .await;
-        return Ok(None);
-    }
+    let provenance_advisory = turn_provenance::record_turn_provenance_preflight(
+        &sess,
+        turn_context.as_ref(),
+        &user_input,
+    )
+    .await
+    .advisory;
 
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
@@ -283,7 +276,7 @@ pub(crate) async fn run_turn(
     );
     let mut world_state = world_state?;
 
-    let Some((injection_items, explicitly_enabled_connectors)) = build_skills_and_plugins(
+    let Some((mut injection_items, explicitly_enabled_connectors)) = build_skills_and_plugins(
         &sess,
         first_step_context.as_ref(),
         &user_input,
@@ -293,6 +286,10 @@ pub(crate) async fn run_turn(
     else {
         return Ok(None);
     };
+    if let Some(advisory) = provenance_advisory {
+        let advisory: ResponseItem = ContextualUserFragment::into(advisory);
+        injection_items.push(advisory);
+    }
     let skills_outcome = turn_context.turn_skills.snapshot.outcome();
 
     if run_pending_session_start_hooks(&sess, &turn_context).await {

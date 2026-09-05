@@ -40,7 +40,7 @@ impl ContextualUserFragment for GitIntentNotesInstructions {
         "\n## Git Intent Notes\n\
 For code changes, preserve the why in git notes under `refs/notes/intention` instead of overloading commit messages.\n\
 - Before behavior, API, invariant, or public-contract changes, look up related intent notes. Prefer the `git-intent-notes` MCP (`find_related_intent_notes` with an explicit `workdir`) when available; otherwise use `git log --show-notes=refs/notes/intention` scoped to relevant paths.\n\
-- If a must-level note conflicts with the planned change, ask the user before proceeding.\n\
+- Treat matching notes as informational context; do not infer approval, block normal work, or treat silence as an override. Independent permissions, safety checks, and explicit user instructions still apply.\n\
 - When committing, attach one intent note to the final feature/fix commit unless the user asks for per-commit notes. Prefer MCP `validate_intent_note` and `add_intent_note`; fall back to `git notes --ref=refs/notes/intention` only when the MCP is unavailable.\n\
 - Use this minimal YAML shape: `intent.id`, `change_type`, `scope`, `summary`, `decision`, `constraints`, `intent_priority`, `code_locations`, `requested_by`, and `recorded_by`.\n\
 - Do not record secrets or sensitive/private details in intent notes; ask first if sensitivity is unclear.\n"

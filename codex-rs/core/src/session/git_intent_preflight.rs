@@ -7,16 +7,16 @@ use std::path::Path;
 
 const MAX_RELEVANT_GIT_INTENT_NOTES: usize = 4;
 
-pub(super) struct GitIntentConflict {
+pub(super) struct GitIntentCandidate {
     pub(super) commit: String,
     pub(super) source_ref: SourceReference,
 }
 
-pub(super) async fn find_git_intent_conflicts(
+pub(super) async fn find_git_intent_candidates(
     cwd: &Path,
     request_text: &str,
     request_tokens: &HashSet<String>,
-) -> Vec<GitIntentConflict> {
+) -> Vec<GitIntentCandidate> {
     if !looks_like_code_change_request(request_text) {
         return Vec::new();
     }
@@ -24,15 +24,15 @@ pub(super) async fn find_git_intent_conflicts(
     recent_git_intent_notes(cwd, 64)
         .await
         .into_iter()
-        .filter_map(|note| relevant_git_intent_conflict(note, request_tokens))
+        .filter_map(|note| relevant_git_intent_candidate(note, request_tokens))
         .take(MAX_RELEVANT_GIT_INTENT_NOTES)
         .collect()
 }
 
-fn relevant_git_intent_conflict(
+fn relevant_git_intent_candidate(
     note: GitIntentNote,
     request_tokens: &HashSet<String>,
-) -> Option<GitIntentConflict> {
+) -> Option<GitIntentCandidate> {
     if !has_must_priority(&note.body) || !note_matches_request(&note.body, request_tokens) {
         return None;
     }
@@ -43,7 +43,7 @@ fn relevant_git_intent_conflict(
         label: Some("must-level Git intent note".to_string()),
         privacy: PrivacyClass::Private,
     };
-    Some(GitIntentConflict {
+    Some(GitIntentCandidate {
         commit: note.commit,
         source_ref,
     })
@@ -94,21 +94,6 @@ fn note_matches_request(note: &str, request_tokens: &HashSet<String>) -> bool {
     note_tokens.intersection(request_tokens).count() >= 2
 }
 
-pub(super) fn request_has_explicit_git_intent_override(request_text: &str) -> bool {
-    let request_text = request_text.to_ascii_lowercase();
-    [
-        "override the prior git intent",
-        "override the git intent",
-        "override this git intent",
-        "approve overriding the prior git intent",
-        "approve overriding the git intent",
-        "proceed despite the prior git intent",
-        "proceed despite the git intent",
-    ]
-    .iter()
-    .any(|marker| request_text.contains(marker))
-}
-
 fn intent_tokens(text: &str) -> HashSet<String> {
     const STOP_WORDS: [&str; 33] = [
         "add",
@@ -147,9 +132,12 @@ fn intent_tokens(text: &str) -> HashSet<String> {
     ];
     text.split(|character: char| !character.is_ascii_alphanumeric())
         .filter_map(|token| {
-            let token = token.to_ascii_lowercase();
+            let mut token = token.to_ascii_lowercase();
             if token.len() < 3 || STOP_WORDS.contains(&token.as_str()) {
                 None
+            } else if token.ends_with('s') && token.len() > 3 {
+                token.pop();
+                Some(token)
             } else {
                 Some(token)
             }
