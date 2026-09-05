@@ -616,6 +616,12 @@ fn built_in_rate_for_model(
             /*input_usd_per_1m*/ 1.75, /*cached_input_usd_per_1m*/ 0.175,
             /*output_usd_per_1m*/ 14.0,
         )),
+        ("gpt-6-astra", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 10.0, /*cached_input_usd_per_1m*/ 1.0,
+                /*cache_write_usd_per_1m*/ 12.50, /*output_usd_per_1m*/ 50.0,
+            ))
+        }
         ("gpt-5.4", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Short) => Some(rate(
             /*input_usd_per_1m*/ 2.5, /*cached_input_usd_per_1m*/ 0.25,
             /*output_usd_per_1m*/ 15.0,
@@ -688,6 +694,12 @@ fn built_in_rate_for_model(
                 /*cache_write_usd_per_1m*/ 0.50, /*output_usd_per_1m*/ 1.80,
             ))
         }
+        ("gpt-6-astra", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Long) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 20.0, /*cached_input_usd_per_1m*/ 2.0,
+                /*cache_write_usd_per_1m*/ 25.0, /*output_usd_per_1m*/ 75.0,
+            ))
+        }
         ("gpt-5.4", "priority" | "fast", ContextLength::Short) => Some(rate(
             /*input_usd_per_1m*/ 5.0, /*cached_input_usd_per_1m*/ 0.50,
             /*output_usd_per_1m*/ 30.0,
@@ -720,6 +732,18 @@ fn built_in_rate_for_model(
             Some(rate_with_cache_write(
                 /*input_usd_per_1m*/ 0.40, /*cached_input_usd_per_1m*/ 0.04,
                 /*cache_write_usd_per_1m*/ 0.50, /*output_usd_per_1m*/ 2.40,
+            ))
+        }
+        ("gpt-6-astra", "priority" | "fast", ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 20.0, /*cached_input_usd_per_1m*/ 2.0,
+                /*cache_write_usd_per_1m*/ 25.0, /*output_usd_per_1m*/ 100.0,
+            ))
+        }
+        ("gpt-6-astra", "priority" | "fast", ContextLength::Long) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 40.0, /*cached_input_usd_per_1m*/ 4.0,
+                /*cache_write_usd_per_1m*/ 50.0, /*output_usd_per_1m*/ 150.0,
             ))
         }
         ("gpt-5.4", "priority" | "fast", ContextLength::Long)
@@ -766,6 +790,12 @@ fn built_in_rate_for_model(
                 /*cache_write_usd_per_1m*/ 0.125, /*output_usd_per_1m*/ 0.60,
             ))
         }
+        ("gpt-6-astra", "flex" | "batch", ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 5.0, /*cached_input_usd_per_1m*/ 0.50,
+                /*cache_write_usd_per_1m*/ 6.25, /*output_usd_per_1m*/ 25.0,
+            ))
+        }
         ("gpt-5.4", "flex" | "batch", ContextLength::Long) => Some(rate(
             /*input_usd_per_1m*/ 2.50, /*cached_input_usd_per_1m*/ 0.25,
             /*output_usd_per_1m*/ 11.25,
@@ -790,6 +820,12 @@ fn built_in_rate_for_model(
             Some(rate_with_cache_write(
                 /*input_usd_per_1m*/ 0.20, /*cached_input_usd_per_1m*/ 0.02,
                 /*cache_write_usd_per_1m*/ 0.25, /*output_usd_per_1m*/ 0.90,
+            ))
+        }
+        ("gpt-6-astra", "flex" | "batch", ContextLength::Long) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 10.0, /*cached_input_usd_per_1m*/ 1.0,
+                /*cache_write_usd_per_1m*/ 12.50, /*output_usd_per_1m*/ 37.5,
             ))
         }
         _ => None,
