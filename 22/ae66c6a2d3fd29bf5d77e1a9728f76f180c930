@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-09-06/lead-worker-teams#22ae66c6a2d3"
+  change_type: "feat"
+  scope: "team"
+  summary: "Make Lead/Worker model routing configurable and easy to toggle per session."
+  decision: "Use two roles with enforced model and effort assignments, durable thread-owned snapshots, and sparse on/off updates; retain applicable Worker skill and review guidance before Lead acceptance."
+  constraints:
+    - "Team mode is opt-in; slash toggles must not change defaults for future sessions."
+    - "Off restores the prior single-model settings; explicit resume/fork overrides remain effective."
+    - "Workers and their independent reviewers retain Worker routing and applicable skill budgets."
+    - "Role context is bounded and append-only; internal Guardian and memory policies remain independent."
+    - "This version does not add a separate tool sandbox or external skill-completion attestation."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/config/src/team.rs"
+    - "codex-rs/core/src/session/team.rs"
+    - "codex-rs/core/src/thread_manager.rs"
+    - "codex-rs/app-server/src/request_processors/team.rs"
+    - "codex-rs/tui/src/chatwidget/team.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "unknown"
