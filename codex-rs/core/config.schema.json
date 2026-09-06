@@ -4521,6 +4521,46 @@
         }
       ]
     },
+    "TeamModelProfileToml": {
+      "additionalProperties": false,
+      "description": "A model and reasoning effort read from config.toml.",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        }
+      },
+      "type": "object"
+    },
+    "TeamToml": {
+      "additionalProperties": false,
+      "description": "Effective `[team]` configuration.",
+      "properties": {
+        "enabled": {
+          "description": "Whether new sessions should start with Lead/Worker assignments enabled.",
+          "type": "boolean"
+        },
+        "lead": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TeamModelProfileToml"
+            }
+          ],
+          "description": "Model assignment for the root coordinator and acceptance agent."
+        },
+        "worker": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TeamModelProfileToml"
+            }
+          ],
+          "description": "Model assignment for delegated work and independent reviewers."
+        }
+      },
+      "type": "object"
+    },
     "ThreadControlToml": {
       "additionalProperties": false,
       "description": "Thread-control settings loaded from config.toml.",
@@ -8029,6 +8069,14 @@
     "suppress_unstable_features_warning": {
       "description": "Suppress warnings about unstable (under development) features.",
       "type": "boolean"
+    },
+    "team": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/TeamToml"
+        }
+      ],
+      "description": "Optional Lead/Worker model assignments for the current session."
     },
     "thread_control": {
       "allOf": [

@@ -6,6 +6,7 @@ use std::num::NonZeroU64;
 use std::path::Path;
 
 use crate::HooksToml;
+use crate::TeamToml;
 use crate::browser_use::BrowserUseConfigToml;
 use crate::computer_use::ComputerUseConfigToml;
 use crate::exec_policy_toml::ExecPolicyToml;
@@ -506,6 +507,9 @@ pub struct ConfigToml {
 
     /// Agent-related settings (thread limits, etc.).
     pub agents: Option<AgentsToml>,
+
+    /// Optional Lead/Worker model assignments for the current session.
+    pub team: Option<TeamToml>,
 
     /// Goal-related settings.
     pub goals: Option<GoalsToml>,
