@@ -8,6 +8,8 @@ use codex_core::config::Config;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use std::sync::Arc;
@@ -47,6 +49,30 @@ impl AgentRunner {
         parent_thread_id: ThreadId,
         invocation: AgentInvocation,
     ) -> CodexResult<AgentRun> {
+        self.start_with_source(parent_thread_id, invocation, None)
+            .await
+    }
+
+    /// Starts a resolved agent as a detached review in a fork of `parent_thread_id`.
+    pub async fn start_review(
+        &self,
+        parent_thread_id: ThreadId,
+        invocation: AgentInvocation,
+    ) -> CodexResult<AgentRun> {
+        self.start_with_source(
+            parent_thread_id,
+            invocation,
+            Some(SessionSource::SubAgent(SubAgentSource::Review)),
+        )
+        .await
+    }
+
+    async fn start_with_source(
+        &self,
+        parent_thread_id: ThreadId,
+        invocation: AgentInvocation,
+        session_source: Option<SessionSource>,
+    ) -> CodexResult<AgentRun> {
         let AgentInvocation {
             config,
             prompt,
@@ -62,17 +88,24 @@ impl AgentRunner {
             .thread_manager
             .upgrade()
             .ok_or_else(|| CodexErr::UnsupportedOperation("thread manager dropped".to_string()))?;
+        let options = StartThreadOptions {
+            parent_trace: parent_trace.clone(),
+            ..StartThreadOptions::new(config)
+        };
         let NewThread {
             thread_id, thread, ..
-        } = thread_manager
-            .spawn_subagent(
-                parent_thread_id,
-                StartThreadOptions {
-                    parent_trace: parent_trace.clone(),
-                    ..StartThreadOptions::new(config)
-                },
-            )
-            .await?;
+        } = match session_source {
+            Some(session_source) => {
+                thread_manager
+                    .spawn_subagent_with_source(parent_thread_id, options, session_source)
+                    .await?
+            }
+            None => {
+                thread_manager
+                    .spawn_subagent(parent_thread_id, options)
+                    .await?
+            }
+        };
         let turn_id = match thread
             .start_turn_if_idle(
                 TurnInputRequest::user_input(vec![UserInput::Text {

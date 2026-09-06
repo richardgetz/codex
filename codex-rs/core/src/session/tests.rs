@@ -7277,6 +7277,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         InitialHistory::New,
         ForkPersistence::Copied {
             inherited_usage_policy: None,
+            inherited_thread_settings: None,
         },
         SessionSource::Exec,
         skills_service,
@@ -7589,6 +7590,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
         fork_persistence: ForkPersistence::Copied {
             inherited_usage_policy: None,
+            inherited_thread_settings: None,
         },
         forked_from_ordinal_exclusive: None,
         next_internal_sub_id: AtomicU64::new(0),
@@ -7765,6 +7767,7 @@ async fn make_session_with_config_and_rx(
         InitialHistory::New,
         ForkPersistence::Copied {
             inherited_usage_policy: None,
+            inherited_thread_settings: None,
         },
         SessionSource::Exec,
         skills_service,
@@ -7902,6 +7905,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         initial_history,
         ForkPersistence::Copied {
             inherited_usage_policy: None,
+            inherited_thread_settings: None,
         },
         session_source,
         skills_service,
@@ -10006,6 +10010,7 @@ where
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
         fork_persistence: ForkPersistence::Copied {
             inherited_usage_policy: None,
+            inherited_thread_settings: None,
         },
         forked_from_ordinal_exclusive: None,
         next_internal_sub_id: AtomicU64::new(0),

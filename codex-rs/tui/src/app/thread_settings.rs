@@ -4,12 +4,15 @@ use super::App;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
+use crate::chatwidget::TeamCommand;
 use crate::chatwidget::cyber_model_approval_reviewer;
 use crate::session_state::ThreadSessionState;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
+use codex_app_server_protocol::TeamMode;
 use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
+use codex_app_server_protocol::ThreadTeamSettingsUpdate;
 use codex_config::types::ApprovalsReviewer;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
@@ -18,6 +21,59 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 
 impl App {
+    pub(super) async fn handle_team_command(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+        command: TeamCommand,
+    ) {
+        if self.active_thread_id != Some(thread_id) {
+            return;
+        }
+
+        let Some(params) = team_settings_update_params(thread_id, command) else {
+            self.chat_widget.show_team_status();
+            return;
+        };
+        if self.chat_widget.team_settings().is_none() {
+            self.chat_widget
+                .add_error_message("Team mode is not configured for this session.".to_string());
+            return;
+        }
+        let Some(mode) = params.team.as_ref().map(|team| team.mode) else {
+            self.chat_widget.show_team_status();
+            return;
+        };
+        let mode_label = match mode {
+            TeamMode::Off => "off",
+            TeamMode::LeadWorker => "on",
+        };
+        if self.chat_widget.team_command_is_already_applied(command) {
+            self.chat_widget.show_team_status();
+            return;
+        }
+        match app_server.thread_settings_update(params).await {
+            Ok(true) => {
+                self.chat_widget.set_pending_team_command(command);
+                self.chat_widget.add_info_message(
+                    format!("Switching this session to Lead/Worker team mode {mode_label}…"),
+                    /*hint*/ None,
+                );
+            }
+            Ok(false) => {
+                self.chat_widget.clear_pending_team_command();
+                self.chat_widget.add_error_message(
+                    "Lead/Worker team mode is unavailable on this server.".to_string(),
+                );
+            }
+            Err(err) => {
+                self.chat_widget.clear_pending_team_command();
+                self.chat_widget
+                    .add_error_message(format!("Failed to update team mode: {err}"));
+            }
+        }
+    }
+
     pub(super) async fn sync_active_thread_model_setting(
         &mut self,
         app_server: &mut AppServerSession,
@@ -233,6 +289,22 @@ impl App {
     }
 }
 
+fn team_settings_update_params(
+    thread_id: ThreadId,
+    command: TeamCommand,
+) -> Option<ThreadSettingsUpdateParams> {
+    let mode = match command {
+        TeamCommand::On => TeamMode::LeadWorker,
+        TeamCommand::Off => TeamMode::Off,
+        TeamCommand::Status => return None,
+    };
+    Some(ThreadSettingsUpdateParams {
+        thread_id: thread_id.to_string(),
+        team: Some(ThreadTeamSettingsUpdate { mode }),
+        ..ThreadSettingsUpdateParams::default()
+    })
+}
+
 fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: &ThreadSettings) {
     if settings.collaboration_mode.mode == ModeKind::Default {
         session.model = settings.model.clone();
@@ -249,6 +321,7 @@ fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: 
     session.active_permission_profile = settings.active_permission_profile.clone().map(Into::into);
     session.set_cwd_retargeting_implicit_runtime_workspace_root(settings.cwd.clone());
     session.personality = settings.personality;
+    session.team = settings.team.clone();
     let mut collaboration_mode = settings.collaboration_mode.clone();
     collaboration_mode
         .settings
@@ -270,4 +343,9 @@ fn thread_settings_update_has_changes(params: &ThreadSettingsUpdateParams) -> bo
         || params.summary.is_some()
         || params.collaboration_mode.is_some()
         || params.personality.is_some()
+        || params.team.is_some()
 }
+
+#[cfg(test)]
+#[path = "thread_settings_tests.rs"]
+mod tests;

@@ -135,6 +135,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
+use codex_app_server_protocol::ThreadTeamSettings;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
@@ -2516,6 +2517,7 @@ async fn thread_session_state_from_thread_start_response(
         response.runtime_workspace_roots.clone(),
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
+        response.team.clone(),
         config,
     )
     .await
@@ -2557,6 +2559,7 @@ async fn thread_session_state_from_thread_resume_response(
         response.runtime_workspace_roots.clone(),
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
+        response.team.clone(),
         config,
     )
     .await
@@ -2589,6 +2592,7 @@ async fn thread_session_state_from_thread_fork_response(
         response.runtime_workspace_roots.clone(),
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
+        response.team.clone(),
         config,
     )
     .await
@@ -2639,6 +2643,7 @@ async fn thread_session_state_from_thread_response(
     runtime_workspace_roots: Vec<AbsolutePathBuf>,
     instruction_source_paths: Vec<PathUri>,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    team: Option<ThreadTeamSettings>,
     config: &Config,
 ) -> Result<ThreadSessionState, String> {
     let thread_id = ThreadId::from_string(thread_id)
@@ -2668,6 +2673,7 @@ async fn thread_session_state_from_thread_response(
         instruction_source_paths,
         reasoning_effort,
         collaboration_mode: None,
+        team,
         personality: config.personality,
         message_history: Some(MessageHistoryMetadata {
             log_id,
@@ -4246,6 +4252,7 @@ mod tests {
             user_preferences_memory_policy:
                 codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
             usage_policy: Default::default(),
+            team: None,
             multi_agent_mode: Default::default(),
             initial_turns_page: None,
             turns_backwards_cursor: None,
@@ -4381,6 +4388,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             /*reasoning_effort*/ None,
+            /*team*/ None,
             &config,
         )
         .await
@@ -4416,6 +4424,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             /*reasoning_effort*/ None,
+            /*team*/ None,
             &config,
         )
         .await
@@ -4447,6 +4456,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             /*reasoning_effort*/ None,
+            /*team*/ None,
             &config,
         )
         .await

@@ -49,6 +49,11 @@ impl Session {
         };
 
         let mut world_state = WorldState::default();
+        if let Some(team_policy) =
+            super::team::world_state_policy(&turn_context.config, &turn_context.session_source)
+        {
+            world_state.add_section(team_policy);
+        }
         if turn_context.config.include_environment_context {
             world_state.add_section(
                 EnvironmentsState::from_turn_context_with_environments(
@@ -125,6 +130,8 @@ impl Session {
             String::new()
         };
         let mut world_state = WorldState::default();
+        let team_policy =
+            super::team::world_state_policy(&turn_context.config, &turn_context.session_source);
         world_state.add_section(ModelInstructionsState::new(
             &step_model_info.slug,
             previous_model.as_deref(),
@@ -389,7 +396,12 @@ impl Session {
             multi_agent_mode = multi_agent_mode.with_usage_hint(&usage_hint);
             world_state.add_section(usage_hint);
         }
+        let team_policy =
+            team_policy.map(|team_policy| team_policy.with_multi_agent_mode(&multi_agent_mode));
         world_state.add_section(multi_agent_mode);
+        if let Some(team_policy) = team_policy {
+            world_state.add_section(team_policy);
+        }
         if !crate::guardian::is_basic_session_source(&turn_context.session_source) {
             world_state.add_section(ManagedDeveloperInstructionsState::new(
                 turn_context

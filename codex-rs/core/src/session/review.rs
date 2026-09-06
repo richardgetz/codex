@@ -12,9 +12,17 @@ pub(super) async fn spawn_review_thread(
     sub_id: String,
     resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
-    let model = config
-        .review_model
-        .clone()
+    let team_worker_profile = (config.team_mode == codex_protocol::protocol::TeamMode::LeadWorker)
+        .then(|| {
+            config
+                .effective_team_profile(codex_config::TeamRole::Worker)
+                .cloned()
+        })
+        .flatten();
+    let model = team_worker_profile
+        .as_ref()
+        .map(|profile| profile.model.clone())
+        .or_else(|| config.review_model.clone())
         .unwrap_or_else(|| parent_turn_context.model_info().slug.clone());
     let available_models = sess
         .services
@@ -29,6 +37,28 @@ pub(super) async fn spawn_review_thread(
         .models_manager
         .get_model_info(&model, &config.to_models_manager_config())
         .await;
+    if let Some(profile) = team_worker_profile.as_ref()
+        && (review_model_info.used_fallback_model_metadata
+            || !review_model_info
+                .supported_reasoning_levels
+                .iter()
+                .any(|preset| preset.effort == profile.reasoning_effort))
+    {
+        let message = format!(
+            "Configured team Worker review assignment is unavailable: model `{}` does not support reasoning effort `{}`",
+            profile.model, profile.reasoning_effort
+        );
+        sess.send_event(
+            &parent_turn_context,
+            EventMsg::Error(ErrorEvent {
+                misalignment: None,
+                message,
+                codex_error_info: Some(CodexErrorInfo::Other),
+            }),
+        )
+        .await;
+        return;
+    }
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
     let _ = review_features.disable(Feature::WebSearchRequest);
@@ -93,13 +123,19 @@ pub(super) async fn spawn_review_thread(
     let auth_manager = parent_turn_context.auth_manager.clone();
     let model_info = review_model_info.clone();
     let mut selected = parent_turn_context.initial_settings.selected().clone();
-    let mut reasoning_effort = selected.collaboration_mode.reasoning_effort();
+    let mut reasoning_effort = team_worker_profile
+        .as_ref()
+        .map(|profile| profile.reasoning_effort.clone())
+        .or_else(|| selected.collaboration_mode.reasoning_effort());
 
     // Build per‑turn client with the requested model/family.
     let mut per_turn_config = (*parent_turn_context.config).clone();
     // Preserve configured overrides without carrying over the parent model's defaults.
     per_turn_config.token_budget = config.token_budget.clone();
     per_turn_config.features = review_features.clone();
+    if team_worker_profile.is_some() {
+        per_turn_config.team_persisted_role = Some(codex_protocol::protocol::TeamRole::Worker);
+    }
     if let Some(current_effort) = reasoning_effort.as_ref()
         && review_model_info.slug != parent_turn_context.model_info().slug
         && !review_model_info.used_fallback_model_metadata

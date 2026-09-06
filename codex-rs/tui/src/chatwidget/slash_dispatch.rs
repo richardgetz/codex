@@ -1005,6 +1005,9 @@ impl ChatWidget {
             SlashCommand::Plan => {
                 self.apply_plan_slash_command();
             }
+            SlashCommand::Team => {
+                self.dispatch_team_command("");
+            }
             SlashCommand::Goal => {
                 if !self.config.features.enabled(Feature::Goals) {
                     return;
@@ -1539,6 +1542,9 @@ impl ChatWidget {
                 "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
                 _ => self.add_error_message("Usage: /mcp [verbose]".to_string()),
             },
+            SlashCommand::Team => {
+                self.dispatch_team_command(trimmed);
+            }
             SlashCommand::Continuous => {
                 self.dispatch_continuous_command(Some(trimmed));
             }
@@ -2226,6 +2232,7 @@ impl ChatWidget {
         }
         match cmd {
             SlashCommand::Ide
+            | SlashCommand::Team
             | SlashCommand::Status
             | SlashCommand::Spend
             | SlashCommand::Mic

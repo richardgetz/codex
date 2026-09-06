@@ -271,7 +271,7 @@ impl Session {
             summary,
             service_tier,
         } = update;
-        let update = StepSettingsUpdate {
+        let mut update = StepSettingsUpdate {
             approvals_reviewer,
             model,
             effort,
@@ -279,6 +279,16 @@ impl Session {
             service_tier,
             ..Default::default()
         };
+        {
+            let state = self.state.lock().await;
+            if let Err(error) =
+                super::team::enforce_active_assignment(&state.session_configuration, &mut update)
+            {
+                return TurnSettingsUpdateOutcome::Rejected {
+                    reason: error.to_string(),
+                };
+            }
+        }
         // Apply the sparse patch to the captured active base using the shared
         // settings rules. The task can progress, finish, or be cancelled while
         // preparation awaits; no publication locks are held here.

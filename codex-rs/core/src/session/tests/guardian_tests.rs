@@ -1303,6 +1303,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         requested_history_mode: None,
         fork_persistence: ForkPersistence::Copied {
             inherited_usage_policy: None,
+            inherited_thread_settings: None,
         },
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
             GUARDIAN_REVIEWER_NAME.to_string(),
@@ -1328,6 +1329,8 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         attestation_provider: None,
         external_time_provider: None,
         inherited_multi_agent_version: None,
+        thread_settings_override_flags: crate::thread_manager::ThreadSettingsOverrideFlags::default(
+        ),
         git_enrichment_policy: GitEnrichmentPolicy::Skip,
         windows_sandbox_proxy_settings_mode:
             codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve,

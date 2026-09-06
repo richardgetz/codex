@@ -52,6 +52,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::ConnectorScopeGeneration;
+use crate::chatwidget::TeamCommand;
 use crate::chatwidget::ThreadUsageOutcome;
 use crate::chatwidget::UserMessage;
 use crate::goal_files::GoalDraft;
@@ -1020,6 +1021,12 @@ pub(crate) enum AppEvent {
 
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
+
+    /// Change or report the session-scoped Lead/Worker team mode.
+    TeamCommand {
+        thread_id: ThreadId,
+        command: TeamCommand,
+    },
 
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),

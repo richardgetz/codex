@@ -2,15 +2,17 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_rollout::RolloutItem;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct PersistedResumeSettings {
     pub(super) approval_policy: AskForApproval,
     pub(super) approvals_reviewer: Option<ApprovalsReviewer>,
     pub(super) active_permission_profile: Option<ActivePermissionProfile>,
     pub(super) usage_policy: ThreadUsagePolicy,
+    pub(super) thread_settings: Option<ThreadSettingsSnapshot>,
 }
 
 pub(super) fn latest_persisted_resume_settings(
@@ -43,6 +45,12 @@ pub(super) fn latest_persisted_resume_settings(
                         _ => None,
                     })
                     .unwrap_or_default(),
+                thread_settings: history[..index].iter().rev().find_map(|item| match item {
+                    RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
+                        Some(event.thread_settings.clone())
+                    }
+                    _ => None,
+                }),
             }),
             RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
                 Some(PersistedResumeSettings {
@@ -53,6 +61,7 @@ pub(super) fn latest_persisted_resume_settings(
                         .active_permission_profile
                         .clone(),
                     usage_policy: event.thread_settings.usage_policy,
+                    thread_settings: Some(event.thread_settings.clone()),
                 })
             }
             _ => None,

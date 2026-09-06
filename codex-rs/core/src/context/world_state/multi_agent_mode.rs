@@ -38,6 +38,12 @@ impl MultiAgentModeState {
         self.usage_hint_hash = Some(usage_hint.snapshot());
         self
     }
+
+    pub(crate) fn team_policy_dependency(
+        &self,
+    ) -> (Option<MultiAgentMode>, Option<WorldStateHash>) {
+        (self.mode.clone(), self.usage_hint_hash.clone())
+    }
 }
 
 impl WorldStateSection for MultiAgentModeState {

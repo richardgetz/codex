@@ -320,6 +320,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
         memory_policy: Default::default(),
         user_preferences_memory_policy: Default::default(),
         usage_policy: ThreadUsagePolicy::default(),
+        team: None,
         multi_agent_mode: Default::default(),
         initial_turns_page: Some(TurnsPage {
             data: Vec::new(),

@@ -1229,6 +1229,7 @@ impl App {
             session.model.clear();
         }
         session.message_history = None;
+        session.team = None;
         session.rollout_path = rollout_path;
         Some(session)
     }

@@ -10,6 +10,7 @@ import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
+import type { ThreadTeamSettings } from "./ThreadTeamSettings";
 import type { ThreadUsagePolicy } from "./ThreadUsagePolicy";
 
 export type ThreadStartResponse = {thread: Thread, model: string, modelProvider: string, serviceTier: string | null, cwd: AbsolutePathBuf, /**
@@ -25,4 +26,7 @@ approvalsReviewer: ApprovalsReviewer, /**
 sandbox: SandboxPolicy, reasoningEffort: ReasoningEffort | null, memoryPolicy: MemoryAccessPolicy, userPreferencesMemoryPolicy: UserPreferencesMemoryBucketPolicy, /**
  * Current per-thread usage and automatic-resume policy.
  */
-usagePolicy: ThreadUsagePolicy};
+usagePolicy: ThreadUsagePolicy, /**
+ * Effective Lead/Worker model policy, when configured for this thread.
+ */
+team: ThreadTeamSettings | null};

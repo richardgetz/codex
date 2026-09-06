@@ -1752,6 +1752,9 @@ impl App {
                         .await;
                 }
             }
+            AppEvent::TeamCommand { thread_id, command } => {
+                self.handle_team_command(app_server, thread_id, command).await;
+            }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
                 self.sync_active_thread_personality_setting(app_server, personality)

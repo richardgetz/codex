@@ -16,6 +16,7 @@ use app_test_support::rollout_path;
 use app_test_support::test_absolute_path;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use app_test_support::write_models_cache;
 use chrono::Utc;
 use codex_app_server_protocol::ActivePermissionProfile;
 use codex_app_server_protocol::ApprovalsReviewer;
@@ -68,6 +69,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
+use codex_app_server_protocol::ThreadTeamSettings;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
@@ -106,6 +108,8 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource as RolloutSessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TeamMode;
+use codex_protocol::protocol::TeamRole;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
@@ -1024,6 +1028,118 @@ async fn thread_resume_preserves_goal_first_and_fork_approvals_reviewer() -> Res
         assert_eq!(approvals_reviewer, expected_reviewer);
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_explicit_model_and_effort_overrides_win_over_off_team_snapshot() -> Result<()>
+{
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    write_models_cache(codex_home.path())?;
+    write_team_resume_config(
+        codex_home.path(),
+        &server.uri(),
+        /*enabled*/ false,
+        "gpt-6-astra",
+        "high",
+        "gpt-5.6-luna",
+        "max",
+    )?;
+
+    let thread_id = {
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .build_initialized()
+            .await?;
+        let start_id = mcp
+            .send_thread_start_request_with_auto_env(ThreadStartParams {
+                model: Some("mock-model".to_string()),
+                history_mode: Some(ThreadHistoryMode::Legacy),
+                ..Default::default()
+            })
+            .await?;
+        let ThreadStartResponse { thread, .. } =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
+        let turn_id = mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread.id.clone(),
+                input: vec![UserInput::Text {
+                    text: "materialize the Off team snapshot".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let TurnStartResponse { .. } =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_id)).await??;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+        thread.id
+    };
+
+    // Changed defaults must not replace the source thread's persisted Off state or assignments.
+    write_team_resume_config(
+        codex_home.path(),
+        &server.uri(),
+        /*enabled*/ true,
+        "gpt-5.6-luna",
+        "low",
+        "gpt-5.6-terra",
+        "high",
+    )?;
+    let expected_team = ThreadTeamSettings {
+        mode: TeamMode::Off,
+        role: Some(TeamRole::Lead),
+        lead_model: Some("gpt-6-astra".to_string()),
+        lead_reasoning_effort: Some(ReasoningEffort::High),
+        worker_model: Some("gpt-5.6-luna".to_string()),
+        worker_reasoning_effort: Some(ReasoningEffort::Max),
+        previous_model: None,
+        previous_reasoning_effort: None,
+    };
+
+    {
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .build_initialized()
+            .await?;
+        let resume_id = mcp
+            .send_thread_resume_request(ThreadResumeParams {
+                thread_id: thread_id.clone(),
+                model: Some("gpt-6-astra".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        let response: ThreadResumeResponse =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
+        assert_eq!(response.model, "gpt-6-astra");
+        assert_eq!(response.reasoning_effort, None);
+        assert_eq!(response.team, Some(expected_team.clone()));
+    }
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            config: Some(std::collections::HashMap::from([(
+                "model_reasoning_effort".to_string(),
+                json!("high"),
+            )])),
+            ..Default::default()
+        })
+        .await?;
+    let response: ThreadResumeResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
+    assert_eq!(response.model, "mock-model");
+    assert_eq!(response.reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(response.team, Some(expected_team));
     Ok(())
 }
 
@@ -5952,6 +6068,35 @@ fn mock_responses_config(server_uri: &str) -> MockResponsesConfig {
     MockResponsesConfig::new(server_uri)
         .with_model("gpt-5.4")
         .enable_feature(Feature::Personality)
+}
+
+fn write_team_resume_config(
+    codex_home: &Path,
+    server_uri: &str,
+    enabled: bool,
+    lead_model: &str,
+    lead_effort: &str,
+    worker_model: &str,
+    worker_effort: &str,
+) -> std::io::Result<()> {
+    let extra_config = format!(
+        r#"[team]
+enabled = {enabled}
+
+[team.lead]
+model = "{lead_model}"
+reasoning_effort = "{lead_effort}"
+
+[team.worker]
+model = "{worker_model}"
+reasoning_effort = "{worker_effort}"
+"#
+    );
+    MockResponsesConfig::new(server_uri)
+        .with_root_config("compact_prompt = \"compact\"\nmodel_auto_compact_token_limit = 200000")
+        .with_provider_config("supports_websockets = false")
+        .with_extra_config(&extra_config)
+        .write(codex_home)
 }
 
 #[allow(dead_code)]

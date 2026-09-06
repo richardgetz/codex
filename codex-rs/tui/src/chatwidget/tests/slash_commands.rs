@@ -109,6 +109,46 @@ fn expect_token_activity_refresh(rx: &mut tokio::sync::mpsc::UnboundedReceiver<A
 }
 
 #[tokio::test]
+async fn team_slash_command_dispatches_session_setting_without_config_mutation() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.set_thread_id_for_test(thread_id);
+    let previous_model = chat.config_ref().model.clone();
+    let previous_effort = chat.current_reasoning_effort();
+
+    chat.dispatch_command_with_args(SlashCommand::Team, "on".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::TeamCommand {
+            thread_id: actual_thread_id,
+            command: crate::chatwidget::TeamCommand::On,
+        }) if actual_thread_id == thread_id
+    );
+    assert_eq!(chat.config_ref().model, previous_model);
+    assert_eq!(chat.current_reasoning_effort(), previous_effort);
+
+    chat.dispatch_command_with_args(SlashCommand::Team, "off".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::TeamCommand {
+            thread_id: actual_thread_id,
+            command: crate::chatwidget::TeamCommand::Off,
+        }) if actual_thread_id == thread_id
+    );
+    assert_eq!(chat.config_ref().model, previous_model);
+    assert_eq!(chat.current_reasoning_effort(), previous_effort);
+
+    chat.dispatch_command(SlashCommand::Team);
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::TeamCommand {
+            thread_id: actual_thread_id,
+            command: crate::chatwidget::TeamCommand::Status,
+        }) if actual_thread_id == thread_id
+    );
+}
+
+#[tokio::test]
 async fn mic_slash_command_dispatches_mode_controls() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

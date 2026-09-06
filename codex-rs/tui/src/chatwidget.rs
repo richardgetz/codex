@@ -111,6 +111,7 @@ use codex_app_server_protocol::ThreadGoalStatus as AppThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
+use codex_app_server_protocol::ThreadTeamSettings;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::Turn;
@@ -389,6 +390,8 @@ mod hook_lifecycle;
 mod hooks;
 mod interaction;
 mod session_tmp_command;
+mod team;
+pub(crate) use self::team::TeamCommand;
 mod skills;
 mod slash_dispatch;
 use self::skills::collect_tool_mentions;
@@ -589,6 +592,11 @@ pub(crate) struct ChatWidget {
     current_collaboration_mode: CollaborationMode,
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
+    /// The authoritative Lead/Worker team snapshot for the active thread.
+    team_settings: Option<ThreadTeamSettings>,
+    /// Team mode requested by the user until the server confirms it in a
+    /// thread settings snapshot.
+    pending_team_command: Option<TeamCommand>,
     has_chatgpt_account: bool,
     has_codex_backend_auth: bool,
     model_catalog: Arc<ModelCatalog>,

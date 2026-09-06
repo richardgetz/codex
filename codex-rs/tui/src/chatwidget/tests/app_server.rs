@@ -43,6 +43,7 @@ fn thread_settings_for_test(
             memory_policy: MemoryAccessPolicy::default(),
             user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
             usage_policy: Default::default(),
+            team: None,
         },
     }
 }
@@ -65,6 +66,7 @@ fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::Threa
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
+        team: None,
         personality: None,
         message_history: None,
         network_proxy: None,
@@ -414,6 +416,129 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
     );
 
     assert_eq!(chat.current_model(), "gpt-5.4");
+}
+
+#[tokio::test]
+async fn team_status_reflects_thread_settings_notification() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let _ = drain_insert_history(&mut rx);
+
+    let mut notification = thread_settings_for_test("gpt-5.4", thread_id);
+    notification.thread_settings.team = Some(codex_app_server_protocol::ThreadTeamSettings {
+        mode: codex_app_server_protocol::TeamMode::LeadWorker,
+        role: Some(codex_app_server_protocol::TeamRole::Lead),
+        lead_model: Some("gpt-lead".to_string()),
+        lead_reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Max),
+        worker_model: Some("gpt-worker".to_string()),
+        worker_reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
+        previous_model: Some("gpt-single".to_string()),
+        previous_reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
+    });
+
+    chat.set_pending_team_command(crate::chatwidget::TeamCommand::On);
+    let mut stale_notification = thread_settings_for_test("gpt-5.4", thread_id);
+    stale_notification.thread_settings.team = Some(codex_app_server_protocol::ThreadTeamSettings {
+        mode: codex_app_server_protocol::TeamMode::Off,
+        role: None,
+        lead_model: None,
+        lead_reasoning_effort: None,
+        worker_model: None,
+        worker_reasoning_effort: None,
+        previous_model: None,
+        previous_reasoning_effort: None,
+    });
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(stale_notification),
+        /*replay_kind*/ None,
+    );
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(notification),
+        /*replay_kind*/ None,
+    );
+    let confirmation = drain_insert_history(&mut rx);
+    assert_eq!(confirmation.len(), 1);
+    assert!(lines_to_single_string(&confirmation[0]).contains("Lead/Worker team: on"));
+
+    chat.show_team_status();
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell).trim().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!("team_status_after_thread_settings_notification", rendered);
+}
+
+#[tokio::test]
+async fn team_toggle_pending_state_clears_on_terminal_error_but_survives_retry() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let _ = drain_insert_history(&mut rx);
+
+    chat.set_pending_team_command(crate::chatwidget::TeamCommand::Off);
+    chat.handle_server_notification(
+        ServerNotification::Error(ErrorNotification {
+            error: AppServerTurnError {
+                misalignment: None,
+                message: "turn input was rejected".to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+                additional_details: None,
+            },
+            will_retry: false,
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+        }),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(
+        chat.pending_team_command,
+        Some(crate::chatwidget::TeamCommand::Off)
+    );
+    let _ = drain_insert_history(&mut rx);
+
+    chat.set_pending_team_command(crate::chatwidget::TeamCommand::Off);
+    chat.handle_server_notification(
+        ServerNotification::Error(ErrorNotification {
+            error: AppServerTurnError {
+                misalignment: None,
+                message:
+                    "invalid thread settings override: Worker sessions cannot disable team mode"
+                        .to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+                additional_details: None,
+            },
+            will_retry: false,
+            thread_id: thread_id.to_string(),
+            turn_id: "settings-update-1".to_string(),
+        }),
+        /*replay_kind*/ None,
+    );
+    assert!(chat.pending_team_command.is_none());
+    let _ = drain_insert_history(&mut rx);
+
+    chat.set_pending_team_command(crate::chatwidget::TeamCommand::Off);
+    chat.handle_server_notification(
+        ServerNotification::Error(ErrorNotification {
+            error: AppServerTurnError {
+                misalignment: None,
+                message: "Reconnecting... 1/5".to_string(),
+                codex_error_info: Some(CodexErrorInfo::Other),
+                additional_details: None,
+            },
+            will_retry: true,
+            thread_id: thread_id.to_string(),
+            turn_id: "settings-update-2".to_string(),
+        }),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(
+        chat.pending_team_command,
+        Some(crate::chatwidget::TeamCommand::Off)
+    );
 }
 
 #[tokio::test]

@@ -83,6 +83,7 @@ impl App {
                 // `thread/read` does not include thread settings, so do not carry
                 // thread-scoped state from the currently active session.
                 session.collaboration_mode = None;
+                session.team = None;
                 session.personality = None;
             }
             session
@@ -106,6 +107,7 @@ impl App {
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: self.chat_widget.current_reasoning_effort(),
                 collaboration_mode: None,
+                team: None,
                 personality: None,
                 message_history: None,
                 network_proxy: None,
@@ -188,6 +190,7 @@ mod tests {
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,
+            team: None,
             personality: None,
             message_history: None,
             network_proxy: None,

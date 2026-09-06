@@ -639,6 +639,7 @@ fn sample_thread_start_response() -> ClientResponsePayload {
         memory_policy: Default::default(),
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
         usage_policy: ThreadUsagePolicy::default(),
+        team: None,
         multi_agent_mode: Default::default(),
     })
 }
@@ -660,6 +661,7 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
         memory_policy: Default::default(),
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
         usage_policy: ThreadUsagePolicy::default(),
+        team: None,
         multi_agent_mode: Default::default(),
         initial_turns_page: None,
         turns_backwards_cursor: None,
@@ -684,6 +686,7 @@ fn sample_thread_fork_response() -> ClientResponsePayload {
         memory_policy: Default::default(),
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
         usage_policy: ThreadUsagePolicy::default(),
+        team: None,
         multi_agent_mode: Default::default(),
     })
 }

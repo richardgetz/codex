@@ -558,6 +558,52 @@ pub struct ThreadUsagePolicyUpdate {
     pub minimum_remaining_percent: Option<Option<u8>>,
 }
 
+/// Selects whether a thread uses its configured Lead/Worker model assignments.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum TeamMode {
+    #[default]
+    Off,
+    LeadWorker,
+}
+
+/// Role and assignments captured with a thread's durable team setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum TeamRole {
+    Lead,
+    Worker,
+}
+
+/// Effective team state persisted in thread settings events.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ThreadTeamSettings {
+    pub mode: TeamMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<TeamRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_reasoning_effort: Option<ReasoningEffortConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_reasoning_effort: Option<ReasoningEffortConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_reasoning_effort: Option<ReasoningEffortConfig>,
+}
+
+/// Client-requested team transition. Assignment and restoration fields are
+/// thread-owned and are never accepted from a settings override.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ThreadTeamSettingsUpdate {
+    pub mode: TeamMode,
+}
+
 /// Thread-settings overrides that can be applied before user input or on their
 /// own. Standalone updates change the settings inherited by future turns.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -615,6 +661,9 @@ pub struct ThreadSettingsOverrides {
 
     /// Updated per-thread usage and automatic-resume policy.
     pub usage_policy: Option<ThreadUsagePolicy>,
+
+    /// Updated Lead/Worker model policy for this thread.
+    pub team: Option<ThreadTeamSettingsUpdate>,
 }
 
 impl ThreadSettingsOverrides {
@@ -2364,6 +2413,9 @@ pub struct ThreadSettingsSnapshot {
     /// Per-thread usage and automatic-resume policy.
     #[serde(default)]
     pub usage_policy: ThreadUsagePolicy,
+    /// Effective Lead/Worker model policy, when configured for this thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<ThreadTeamSettings>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]

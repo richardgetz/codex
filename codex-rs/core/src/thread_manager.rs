@@ -65,6 +65,7 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::protocol::TurnAbortReason;
@@ -219,6 +220,7 @@ struct ForkHistory {
     snapshot: ForkSnapshot,
     initial_history: InitialHistory,
     persistence: ForkPersistence,
+    thread_settings_override_flags: ThreadSettingsOverrideFlags,
 }
 
 /// Preserve legacy `fork_thread(usize, ...)` callsites by mapping them to the
@@ -266,6 +268,20 @@ pub struct StartThreadOptions {
     pub reserved_thread_id: Option<ThreadId>,
 }
 
+/// Identifies which persisted thread settings were explicitly supplied by a
+/// resume or fork request.
+///
+/// The flags are kept separate because callers may override only the model or
+/// only the reasoning effort. This lets a persisted single-model snapshot
+/// restore the other dimension without replacing an explicit request value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ThreadSettingsOverrideFlags {
+    /// The request explicitly selected a model or model provider.
+    pub model: bool,
+    /// The request explicitly selected or cleared the reasoning effort.
+    pub reasoning_effort: bool,
+}
+
 impl StartThreadOptions {
     pub fn new(config: Config) -> Self {
         Self {
@@ -288,6 +304,7 @@ impl StartThreadOptions {
 
 struct ThreadSpawnRequest {
     options: StartThreadOptions,
+    thread_settings_override_flags: ThreadSettingsOverrideFlags,
     auth_manager: Arc<AuthManager>,
     agent_control: AgentControl,
     parent_thread_id: Option<ThreadId>,
@@ -307,6 +324,7 @@ impl ThreadSpawnRequest {
     ) -> Self {
         Self {
             options,
+            thread_settings_override_flags: ThreadSettingsOverrideFlags::default(),
             auth_manager,
             agent_control,
             parent_thread_id: None,
@@ -314,6 +332,7 @@ impl ThreadSpawnRequest {
             initial_collaboration_mode: None,
             fork_persistence: ForkPersistence::Copied {
                 inherited_usage_policy: None,
+                inherited_thread_settings: None,
             },
             inherited_environments: None,
             inherited_exec_policy: None,
@@ -970,7 +989,12 @@ impl ThreadManager {
     }
 
     pub async fn start_thread(&self, options: StartThreadOptions) -> CodexResult<NewThread> {
-        Box::pin(self.start_thread_inner(options, /*forked_from_thread_id*/ None)).await
+        Box::pin(self.start_thread_inner(
+            options,
+            /*forked_from_thread_id*/ None,
+            ThreadSettingsOverrideFlags::default(),
+        ))
+        .await
     }
 
     /// Starts a fresh internal session associated with an existing parent thread.
@@ -1004,6 +1028,7 @@ impl ThreadManager {
         &self,
         mut options: StartThreadOptions,
         forked_from_thread_id: Option<ThreadId>,
+        thread_settings_override_flags: ThreadSettingsOverrideFlags,
     ) -> CodexResult<NewThread> {
         let environments = options.environments.unwrap_or_else(|| {
             default_thread_environment_selections(
@@ -1035,6 +1060,7 @@ impl ThreadManager {
         options.thread_source = options.thread_source.take().or(resumed_thread_source);
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.state.auth_manager), agent_control);
+        request.thread_settings_override_flags = thread_settings_override_flags;
         request.forked_from_thread_id = forked_from_thread_id;
         request.inherited_exec_policy = inherited_exec_policy;
         Box::pin(self.state.spawn_thread(request)).await
@@ -1045,7 +1071,32 @@ impl ThreadManager {
     pub async fn spawn_subagent(
         &self,
         forked_from_thread_id: ThreadId,
+        options: StartThreadOptions,
+    ) -> CodexResult<NewThread> {
+        self.spawn_subagent_inner(forked_from_thread_id, options, None)
+            .await
+    }
+
+    /// Spawn a subagent by forking persisted history with an explicit session source.
+    ///
+    /// The source is authoritative for the new thread and is used when the parent history would
+    /// otherwise make the child inherit a different source, such as assigning a detached review
+    /// to a team lead.
+    pub async fn spawn_subagent_with_source(
+        &self,
+        forked_from_thread_id: ThreadId,
+        options: StartThreadOptions,
+        session_source: SessionSource,
+    ) -> CodexResult<NewThread> {
+        self.spawn_subagent_inner(forked_from_thread_id, options, Some(session_source))
+            .await
+    }
+
+    async fn spawn_subagent_inner(
+        &self,
+        forked_from_thread_id: ThreadId,
         mut options: StartThreadOptions,
+        session_source: Option<SessionSource>,
     ) -> CodexResult<NewThread> {
         let fork_source = self.get_thread(forked_from_thread_id).await?;
         // Persist queued rollout updates before reading the fork snapshot.
@@ -1073,8 +1124,30 @@ impl ThreadManager {
                 inherited_multi_agent_version,
             ),
         );
-        self.start_thread_inner(options, Some(forked_from_thread_id))
-            .await
+        if let Some(session_source) = session_source {
+            if matches!(
+                &session_source,
+                SessionSource::SubAgent(SubAgentSource::Review)
+            ) {
+                options.thread_source = Some(ThreadSource::Subagent);
+            }
+            options.session_source = Some(session_source);
+        }
+        let thread_settings_override_flags = matches!(
+            options.session_source.as_ref(),
+            Some(SessionSource::SubAgent(SubAgentSource::Review))
+        )
+        .then_some(ThreadSettingsOverrideFlags {
+            model: true,
+            ..ThreadSettingsOverrideFlags::default()
+        })
+        .unwrap_or_default();
+        self.start_thread_inner(
+            options,
+            Some(forked_from_thread_id),
+            thread_settings_override_flags,
+        )
+        .await
     }
 
     pub async fn resume_thread_from_rollout(
@@ -1133,7 +1206,6 @@ impl ThreadManager {
             .await
     }
 
-    #[instrument(level = "trace", skip_all)]
     pub async fn resume_thread_with_history(
         &self,
         config: Config,
@@ -1141,6 +1213,30 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
+    ) -> CodexResult<NewThread> {
+        self.resume_thread_with_history_with_overrides(
+            config,
+            initial_history,
+            auth_manager,
+            parent_trace,
+            client_mcp_extensions,
+            ThreadSettingsOverrideFlags::default(),
+        )
+        .await
+    }
+
+    /// Resumes a thread while preserving any model or reasoning-effort values
+    /// explicitly supplied by the caller over a persisted single-model
+    /// snapshot.
+    #[instrument(level = "trace", skip_all)]
+    pub async fn resume_thread_with_history_with_overrides(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+        parent_trace: Option<W3cTraceContext>,
+        client_mcp_extensions: ClientMcpExtensions,
+        thread_settings_override_flags: ThreadSettingsOverrideFlags,
     ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&config);
         let (session_source, thread_source) = initial_history
@@ -1162,12 +1258,9 @@ impl ThreadManager {
             client_mcp_extensions,
             ..StartThreadOptions::new(config)
         };
-        Box::pin(self.state.spawn_thread(ThreadSpawnRequest::new(
-            options,
-            auth_manager,
-            agent_control,
-        )))
-        .await
+        let mut request = ThreadSpawnRequest::new(options, auth_manager, agent_control);
+        request.thread_settings_override_flags = thread_settings_override_flags;
+        Box::pin(self.state.spawn_thread(request)).await
     }
 
     pub(crate) async fn start_thread_with_user_shell_override_for_tests(
@@ -1354,6 +1447,40 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
+        self.fork_thread_from_history_with_settings(
+            snapshot,
+            config,
+            history,
+            thread_source,
+            parent_trace,
+            client_mcp_extensions,
+            reserved_thread_id,
+            inherited_usage_policy,
+            None,
+            ThreadSettingsOverrideFlags::default(),
+        )
+        .await
+    }
+
+    /// Fork an existing thread while explicitly carrying the trusted source
+    /// settings snapshot when the selected history prefix omits it.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn fork_thread_from_history_with_settings<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        history: InitialHistory,
+        thread_source: Option<ThreadSource>,
+        parent_trace: Option<W3cTraceContext>,
+        client_mcp_extensions: ClientMcpExtensions,
+        reserved_thread_id: Option<ThreadId>,
+        inherited_usage_policy: Option<ThreadUsagePolicy>,
+        inherited_thread_settings: Option<ThreadSettingsSnapshot>,
+        thread_settings_override_flags: ThreadSettingsOverrideFlags,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
         self.fork_thread_with_initial_history(
             config,
             ForkHistory {
@@ -1361,7 +1488,9 @@ impl ThreadManager {
                 initial_history: history,
                 persistence: ForkPersistence::Copied {
                     inherited_usage_policy,
+                    inherited_thread_settings,
                 },
+                thread_settings_override_flags,
             },
             thread_source,
             parent_trace,
@@ -1386,6 +1515,38 @@ impl ThreadManager {
         reserved_thread_id: Option<ThreadId>,
         inherited_usage_policy: ThreadUsagePolicy,
     ) -> CodexResult<NewThread> {
+        self.fork_prepared_thread_with_settings(
+            config,
+            prepared,
+            thread_source,
+            parent_trace,
+            client_mcp_extensions,
+            reserved_thread_id,
+            inherited_usage_policy,
+            None,
+            ThreadSettingsOverrideFlags::default(),
+        )
+        .await
+    }
+
+    /// Fork reference-backed history while explicitly carrying the trusted
+    /// source settings snapshot omitted from the prepared model context.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "prepared fork inputs mirror the public fork operation contract"
+    )]
+    pub async fn fork_prepared_thread_with_settings(
+        &self,
+        config: Config,
+        prepared: PreparedFork,
+        thread_source: Option<ThreadSource>,
+        parent_trace: Option<W3cTraceContext>,
+        client_mcp_extensions: ClientMcpExtensions,
+        reserved_thread_id: Option<ThreadId>,
+        inherited_usage_policy: ThreadUsagePolicy,
+        inherited_thread_settings: Option<ThreadSettingsSnapshot>,
+        thread_settings_override_flags: ThreadSettingsOverrideFlags,
+    ) -> CodexResult<NewThread> {
         let history = InitialHistory::Resumed(ResumedHistory {
             conversation_id: prepared.source_thread_id,
             history: Arc::clone(&prepared.model_context),
@@ -1395,6 +1556,7 @@ impl ThreadManager {
             history_base: prepared.history_base,
             inherited_item_count: prepared.model_context.len(),
             inherited_usage_policy,
+            inherited_thread_settings,
         };
         let result = self
             .fork_thread_with_initial_history(
@@ -1403,6 +1565,7 @@ impl ThreadManager {
                     snapshot: ForkSnapshot::Interrupted,
                     initial_history: history,
                     persistence: fork_persistence,
+                    thread_settings_override_flags,
                 },
                 thread_source,
                 parent_trace,
@@ -1427,6 +1590,7 @@ impl ThreadManager {
             snapshot,
             initial_history: history,
             persistence: fork_persistence,
+            thread_settings_override_flags,
         } = fork_history;
         // `forked_from_id()` describes this history's existing lineage. When
         // forking a resumed thread, the child copies the resumed thread itself.
@@ -1469,6 +1633,7 @@ impl ThreadManager {
         };
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.state.auth_manager), agent_control);
+        request.thread_settings_override_flags = thread_settings_override_flags;
         request.forked_from_thread_id = source_thread_id;
         request.initial_collaboration_mode = initial_collaboration_mode;
         request.fork_persistence = fork_persistence;
@@ -1936,6 +2101,7 @@ impl ThreadManagerState {
     async fn spawn_thread(&self, request: ThreadSpawnRequest) -> CodexResult<NewThread> {
         let ThreadSpawnRequest {
             options,
+            thread_settings_override_flags,
             auth_manager,
             agent_control,
             parent_thread_id,
@@ -2100,6 +2266,7 @@ impl ThreadManagerState {
             attestation_provider: self.attestation_provider.clone(),
             external_time_provider: self.external_time_provider.clone(),
             inherited_multi_agent_version: multi_agent_version,
+            thread_settings_override_flags,
             git_enrichment_policy: GitEnrichmentPolicy::Fresh,
             windows_sandbox_proxy_settings_mode,
         })

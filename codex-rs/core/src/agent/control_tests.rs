@@ -1292,6 +1292,7 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
                         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(
                         ),
                         usage_policy: ThreadUsagePolicy::default(),
+                        team: None,
                         collaboration_mode: CollaborationMode {
                             mode: ModeKind::Default,
                             settings: Settings {

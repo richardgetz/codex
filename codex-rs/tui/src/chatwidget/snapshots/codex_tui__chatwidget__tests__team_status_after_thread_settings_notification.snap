@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+assertion_line: 455
+expression: rendered
+---
+• Lead/Worker team: on
+Role: Lead
+Lead: gpt-lead (max)
+Worker: gpt-worker (high)

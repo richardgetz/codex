@@ -1307,15 +1307,14 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
     true
 }
 
-pub async fn review(
-    sess: &Arc<Session>,
-    config: &Arc<Config>,
-    sub_id: String,
-    review_request: ReviewRequest,
-) {
+pub async fn review(sess: &Arc<Session>, sub_id: String, review_request: ReviewRequest) {
     let turn_context = sess
         .new_turn_with_default_settings(sub_id.clone(), Default::default())
         .await;
+    // This function is called from a long-lived submission loop. Read the
+    // session-owned snapshot here so live thread-settings updates, including
+    // team mode, are reflected in the review child.
+    let config = sess.get_config().await;
     sess.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
         .await;
     #[allow(deprecated)]
@@ -1323,7 +1322,7 @@ pub async fn review(
         Ok(resolved) => {
             spawn_review_thread(
                 Arc::clone(sess),
-                Arc::clone(config),
+                config,
                 turn_context.clone(),
                 sub_id,
                 resolved,
@@ -1582,7 +1581,7 @@ pub(super) async fn submission_loop(
                 }
                 Op::Shutdown => shutdown(&sess, sub.id.clone()).await,
                 Op::Review { review_request } => {
-                    review(&sess, &config, sub.id.clone(), review_request).await;
+                    review(&sess, sub.id.clone(), review_request).await;
                     false
                 }
                 Op::ApproveGuardianDeniedAction { event } => {
