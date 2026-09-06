@@ -318,20 +318,20 @@ async fn team_toggle_pins_lead_and_restores_original_model() -> Result<()> {
     .await?;
 
     submit_thread_settings(&test.codex, team_mode_update(TeamMode::LeadWorker)).await?;
-    let reenabled = test.codex.config_snapshot().await;
-    assert_assignment(&reenabled, TeamMode::LeadWorker, TeamRole::Lead);
+    let enabled_again = test.codex.config_snapshot().await;
+    assert_assignment(&enabled_again, TeamMode::LeadWorker, TeamRole::Lead);
     submit_thread_settings(&test.codex, team_mode_update(TeamMode::LeadWorker)).await?;
-    let reenabled_again = test.codex.config_snapshot().await;
+    let enabled_idempotently = test.codex.config_snapshot().await;
     assert_eq!(
         (
-            &reenabled_again.model,
-            &reenabled_again.reasoning_effort,
-            reenabled_again.team.as_ref().map(|team| team.mode),
+            &enabled_idempotently.model,
+            &enabled_idempotently.reasoning_effort,
+            enabled_idempotently.team.as_ref().map(|team| team.mode),
         ),
         (
-            &reenabled.model,
-            &reenabled.reasoning_effort,
-            reenabled.team.as_ref().map(|team| team.mode),
+            &enabled_again.model,
+            &enabled_again.reasoning_effort,
+            enabled_again.team.as_ref().map(|team| team.mode),
         )
     );
     submit_turn(
