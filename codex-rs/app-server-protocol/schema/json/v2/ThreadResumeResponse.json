@@ -1259,6 +1259,22 @@
         }
       ]
     },
+    "TeamMode": {
+      "description": "Selects whether a thread uses its configured Lead/Worker model assignments.",
+      "enum": [
+        "off",
+        "leadWorker"
+      ],
+      "type": "string"
+    },
+    "TeamRole": {
+      "description": "Role and assignments captured with a thread's durable team setting.",
+      "enum": [
+        "lead",
+        "worker"
+      ],
+      "type": "string"
+    },
     "TextElement": {
       "properties": {
         "byteRange": {
@@ -2487,6 +2503,76 @@
         }
       ]
     },
+    "ThreadTeamSettings": {
+      "description": "Effective team state returned in thread settings.",
+      "properties": {
+        "leadModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "leadReasoningEffort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "$ref": "#/definitions/TeamMode"
+        },
+        "previousModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "previousReasoningEffort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TeamRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workerModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workerReasoningEffort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    },
     "ThreadUsagePolicy": {
       "description": "Per-thread controls for continuing work near or after provider usage limits. Auto-resume waits only while the rejected turn remains active in the current process; the policy itself persists for later turns and future resumes.",
       "properties": {
@@ -3064,6 +3150,18 @@
         "string",
         "null"
       ]
+    },
+    "team": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadTeamSettings"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Effective Lead/Worker model policy, when configured for this thread."
     },
     "thread": {
       "$ref": "#/definitions/Thread"

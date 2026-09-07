@@ -20414,6 +20414,22 @@
         "title": "SwitchAccountResponse",
         "type": "object"
       },
+      "TeamMode": {
+        "description": "Selects whether a thread uses its configured Lead/Worker model assignments.",
+        "enum": [
+          "off",
+          "leadWorker"
+        ],
+        "type": "string"
+      },
+      "TeamRole": {
+        "description": "Role and assignments captured with a thread's durable team setting.",
+        "enum": [
+          "lead",
+          "worker"
+        ],
+        "type": "string"
+      },
       "TerminalInteractionNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -21246,6 +21262,18 @@
               "string",
               "null"
             ]
+          },
+          "team": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadTeamSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Effective Lead/Worker model policy, when configured for this thread."
           },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
@@ -23657,6 +23685,18 @@
               "null"
             ]
           },
+          "team": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadTeamSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Effective Lead/Worker model policy, when configured for this thread."
+          },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
           },
@@ -24205,6 +24245,18 @@
               }
             ]
           },
+          "team": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadTeamSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Effective Lead/Worker model policy, when configured for this thread."
+          },
           "usagePolicy": {
             "allOf": [
               {
@@ -24541,6 +24593,18 @@
               "null"
             ]
           },
+          "team": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadTeamSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Effective Lead/Worker model policy, when configured for this thread."
+          },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
           },
@@ -24704,6 +24768,88 @@
           "threadId"
         ],
         "title": "ThreadStatusChangedNotification",
+        "type": "object"
+      },
+      "ThreadTeamSettings": {
+        "description": "Effective team state returned in thread settings.",
+        "properties": {
+          "leadModel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "leadReasoningEffort": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mode": {
+            "$ref": "#/definitions/v2/TeamMode"
+          },
+          "previousModel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previousReasoningEffort": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "role": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/TeamRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workerModel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workerReasoningEffort": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "type": "object"
+      },
+      "ThreadTeamSettingsUpdate": {
+        "description": "Team mode accepted by `thread/settings/update`.",
+        "properties": {
+          "mode": {
+            "$ref": "#/definitions/v2/TeamMode"
+          }
+        },
+        "required": [
+          "mode"
+        ],
         "type": "object"
       },
       "ThreadTimelineEntry": {

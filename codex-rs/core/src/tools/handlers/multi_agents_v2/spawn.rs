@@ -143,7 +143,7 @@ async fn handle_spawn_agent(
     }
     apply_spawn_agent_service_tier(&session, &mut config).await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
-    apply_spawn_agent_overrides(&mut config, child_depth);
+    apply_spawn_agent_overrides(&mut config, child_depth, turn.multi_agent_version);
 
     // Remember an applied configured default so cold reload reapplies its restrictions.
     let persisted_role_name = role_name.or_else(|| {

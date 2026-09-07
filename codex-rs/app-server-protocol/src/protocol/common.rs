@@ -3255,6 +3255,7 @@ mod tests {
                 user_preferences_memory_policy:
                     codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
                 usage_policy: Default::default(),
+                team: None,
                 multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
             },
         };
@@ -3338,6 +3339,7 @@ mod tests {
                         "autoResume": false,
                         "minimumRemainingPercent": null
                     },
+                    "team": null,
                     "multiAgentMode": "explicitRequestOnly"
                 }
             }),
@@ -4569,6 +4571,7 @@ mod tests {
                     user_preferences_memory_policy:
                         codex_protocol::config_types::UserPreferencesMemoryBucketPolicy::default(),
                     usage_policy: Default::default(),
+                    team: None,
                 },
             });
 

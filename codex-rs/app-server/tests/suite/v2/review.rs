@@ -5,6 +5,7 @@ use app_test_support::create_command_execution_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::write_models_cache;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -16,18 +17,25 @@ use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
+use codex_app_server_protocol::ThreadSettingsUpdateResponse;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
+use codex_app_server_protocol::ThreadTeamSettingsUpdate;
 use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_features::Feature;
+use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TeamMode;
 use codex_skills::system_cache_root_dir;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -338,12 +346,18 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
                 responses::ev_assistant_message("review-message", "No findings."),
                 responses::ev_completed("review-response"),
             ]),
+            responses::sse(vec![
+                responses::ev_response_created("review-off-response"),
+                responses::ev_assistant_message("review-off-message", "No findings."),
+                responses::ev_completed("review-off-response"),
+            ]),
         ],
     )
     .await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    create_team_config_toml(codex_home.path(), &server.uri())?;
+    write_models_cache(codex_home.path())?;
     let colliding_skill_dir = codex_home.path().join("skills/review-agent-collision");
     std::fs::create_dir_all(&colliding_skill_dir)?;
     std::fs::write(
@@ -379,6 +393,30 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
     .await??;
     let thread_id = thread.id;
     materialize_thread_rollout(&mut mcp, &thread_id).await?;
+    let settings_update_id = mcp
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+            thread_id: thread_id.clone(),
+            team: Some(ThreadTeamSettingsUpdate {
+                mode: TeamMode::LeadWorker,
+            }),
+            ..Default::default()
+        })
+        .await?;
+    let _: ThreadSettingsUpdateResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(settings_update_id)).await??;
+    let settings_updated: ThreadSettingsUpdatedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_notification("thread/settings/updated"),
+    )
+    .await??;
+    assert_eq!(
+        settings_updated
+            .thread_settings
+            .team
+            .as_ref()
+            .map(|team| team.mode),
+        Some(TeamMode::LeadWorker)
+    );
     let ReviewStartResponse {
         turn,
         review_thread_id,
@@ -437,7 +475,10 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
     let started: ThreadStartedNotification =
         serde_json::from_value(notification.params.expect("params must be present"))?;
     assert_eq!(started.thread.id, review_thread_id);
-    assert_eq!(started.thread.session_id, review_thread_id);
+    assert_eq!(
+        started.thread.source,
+        SessionSource::SubAgent(SubAgentSource::Review)
+    );
 
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -448,7 +489,11 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
     let review_request = &requests[1];
-    assert_eq!(review_request.header("x-openai-subagent"), None);
+    assert_eq!(
+        review_request.header("x-openai-subagent").as_deref(),
+        Some("review")
+    );
+    assert_eq!(review_request.body_json()["model"], "gpt-5.6-luna");
     assert!(review_request.body_contains_text("Colliding user review skill."));
     let user_messages = review_request.message_input_texts("user");
     assert!(user_messages.iter().any(|text| text == &expected_prompt));
@@ -458,6 +503,91 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
             && text.contains("Do not modify files")
     }));
     assert!(!review_request.body_contains_text(COLLIDING_REVIEW_SKILL_MARKER));
+
+    let settings_update_id = mcp
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+            thread_id: thread_id.clone(),
+            team: Some(ThreadTeamSettingsUpdate {
+                mode: TeamMode::Off,
+            }),
+            ..Default::default()
+        })
+        .await?;
+    let _: ThreadSettingsUpdateResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(settings_update_id)).await??;
+    let settings_updated: ThreadSettingsUpdatedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_notification("thread/settings/updated"),
+    )
+    .await??;
+    assert_eq!(
+        settings_updated
+            .thread_settings
+            .team
+            .as_ref()
+            .map(|team| team.mode),
+        Some(TeamMode::Off)
+    );
+    let ReviewStartResponse {
+        turn,
+        review_thread_id,
+    } = mcp
+        .request(|request_id| ClientRequest::ReviewStart {
+            request_id,
+            params: ReviewStartParams {
+                thread_id: thread_id.clone(),
+                delivery: Some(ReviewDelivery::Detached),
+                target: ReviewTarget::Custom {
+                    instructions: "detached review after team off".to_string(),
+                },
+            },
+        })
+        .await?;
+    assert_eq!(turn.status, TurnStatus::InProgress);
+    assert_eq!(turn.items_view, TurnItemsView::NotLoaded);
+
+    let deadline = tokio::time::Instant::now() + DEFAULT_READ_TIMEOUT;
+    let notification = loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let message = timeout(remaining, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notification) = message else {
+            continue;
+        };
+        if notification.method == "thread/status/changed" {
+            let status_changed: ThreadStatusChangedNotification =
+                serde_json::from_value(notification.params.expect("params must be present"))?;
+            if status_changed.thread_id == review_thread_id {
+                anyhow::bail!(
+                    "detached review threads should be introduced without a preceding thread/status/changed"
+                );
+            }
+            continue;
+        }
+        if notification.method == "thread/started" {
+            break notification;
+        }
+    };
+    let started: ThreadStartedNotification =
+        serde_json::from_value(notification.params.expect("params must be present"))?;
+    assert_eq!(started.thread.id, review_thread_id);
+    assert_eq!(
+        started.thread.source,
+        SessionSource::SubAgent(SubAgentSource::Review)
+    );
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let review_off_request = &requests[2];
+    assert_eq!(
+        review_off_request.header("x-openai-subagent").as_deref(),
+        Some("review")
+    );
+    assert_eq!(review_off_request.body_json()["model"], "gpt-5.5");
 
     Ok(())
 }
@@ -580,5 +710,26 @@ fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io
     MockResponsesConfig::new(server_uri)
         .with_provider_name("Mock provider")
         .disable_feature(Feature::ShellSnapshot)
+        .write(codex_home)
+}
+
+fn create_team_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+    MockResponsesConfig::new(server_uri)
+        .with_provider_name("Mock provider")
+        .disable_feature(Feature::ShellSnapshot)
+        .with_root_config("review_model = \"gpt-5.5\"")
+        .with_extra_config(
+            r#"[team]
+enabled = false
+
+[team.lead]
+model = "gpt-6-astra"
+reasoning_effort = "high"
+
+[team.worker]
+model = "gpt-5.6-luna"
+reasoning_effort = "max"
+"#,
+        )
         .write(codex_home)
 }

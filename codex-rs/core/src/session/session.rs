@@ -35,6 +35,8 @@ use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::ThreadTeamSettings;
+use codex_protocol::protocol::ThreadTeamSettingsUpdate;
 use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::protocol::ThreadUsagePolicyUpdate;
 use codex_protocol::protocol::TurnEnvironmentSelections;
@@ -352,6 +354,12 @@ impl SessionConfiguration {
             memory_policy: self.memory_policy,
             user_preferences_memory_policy: self.user_preferences_memory_policy.clone(),
             usage_policy: self.usage_policy,
+            team: self.original_config_do_not_use.team_settings_snapshot(
+                super::team::protocol_role_for_session_source(
+                    &self.original_config_do_not_use,
+                    &self.session_source,
+                ),
+            ),
             originator: self.originator.clone(),
         }
     }
@@ -377,6 +385,12 @@ impl SessionConfiguration {
             memory_policy: self.memory_policy,
             user_preferences_memory_policy: self.user_preferences_memory_policy.clone(),
             usage_policy: self.usage_policy,
+            team: self.original_config_do_not_use.team_settings_snapshot(
+                super::team::protocol_role_for_session_source(
+                    &self.original_config_do_not_use,
+                    &self.session_source,
+                ),
+            ),
         }
     }
 
@@ -405,6 +419,12 @@ impl SessionConfiguration {
             collaboration_mode: Some(self.step_settings.collaboration_mode.clone()),
             personality: self.step_settings.personality,
             usage_policy: Some(self.usage_policy),
+            team: self.original_config_do_not_use.team_settings_snapshot(
+                super::team::protocol_role_for_session_source(
+                    &self.original_config_do_not_use,
+                    &self.session_source,
+                ),
+            ),
             ..Default::default()
         }
     }
@@ -611,10 +631,25 @@ impl SessionConfiguration {
                 environments.environments.as_slice()
             });
         super::environment::validate_environment_selections(next_environments)?;
+        let mut step_settings_update = updates.step_settings.clone();
+        if let Some(team_snapshot) = updates.team_snapshot.as_ref() {
+            let mut config = (*next_configuration.original_config_do_not_use).clone();
+            super::team::restore_team_snapshot(&mut config, team_snapshot)?;
+            next_configuration.original_config_do_not_use = Arc::new(config);
+        }
+        if let Some(team_update) = updates.team.as_ref() {
+            super::team::apply_team_update(
+                &mut next_configuration,
+                self,
+                *team_update,
+                &mut step_settings_update,
+            )?;
+        }
+        super::team::enforce_active_assignment(&next_configuration, &mut step_settings_update)?;
         // Apply step settings last: the proposed permissions and environment
         // selections must be complete before deriving their validation constraints.
         next_configuration.step_settings = Arc::new(self.step_settings.apply(
-            &updates.step_settings,
+            &step_settings_update,
             &next_configuration.step_settings_constraints(next_environments),
         )?);
         Ok(next_configuration)
@@ -782,6 +817,8 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) user_preferences_memory_policy: Option<UserPreferencesMemoryBucketPolicy>,
     pub(crate) usage_policy: Option<ThreadUsagePolicy>,
     pub(crate) usage_policy_update: Option<ThreadUsagePolicyUpdate>,
+    pub(crate) team: Option<ThreadTeamSettingsUpdate>,
+    pub(crate) team_snapshot: Option<ThreadTeamSettings>,
 }
 
 pub(crate) struct AppServerClientMetadata {

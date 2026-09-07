@@ -35,6 +35,8 @@ pub use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 pub use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
+pub use codex_protocol::protocol::TeamMode;
+pub use codex_protocol::protocol::TeamRole;
 use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
 use codex_protocol::protocol::ThreadUsagePolicy as CoreThreadUsagePolicy;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
@@ -307,10 +309,21 @@ pub struct ThreadStartResponse {
     /// Current per-thread usage and automatic-resume policy.
     #[serde(default)]
     pub usage_policy: ThreadUsagePolicy,
+    /// Effective Lead/Worker model policy, when configured for this thread.
+    #[serde(default)]
+    pub team: Option<ThreadTeamSettings>,
     /// @deprecated Always `explicitRequestOnly`. Use `reasoningEffort` for Ultra behavior.
     #[experimental("thread/start.multiAgentMode")]
     #[serde(default)]
     pub multi_agent_mode: MultiAgentMode,
+}
+
+/// Team mode accepted by `thread/settings/update`.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ThreadTeamSettingsUpdate {
+    pub mode: TeamMode,
 }
 
 impl ThreadStartResponse {
@@ -381,6 +394,9 @@ pub struct ThreadSettingsUpdateParams {
     /// Configure usage-limit auto-resume and the remaining-usage floor for automatic continuation.
     #[ts(optional = nullable)]
     pub usage_policy: Option<ThreadUsagePolicyParams>,
+    /// Select or disable the configured Lead/Worker model assignments for this thread.
+    #[ts(optional = nullable)]
+    pub team: Option<ThreadTeamSettingsUpdate>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -415,6 +431,24 @@ pub struct ThreadSettings {
     /// Current per-thread usage and automatic-resume policy.
     #[serde(default)]
     pub usage_policy: ThreadUsagePolicy,
+    /// Effective Lead/Worker model policy, when configured for this thread.
+    #[serde(default)]
+    pub team: Option<ThreadTeamSettings>,
+}
+
+/// Effective team state returned in thread settings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ThreadTeamSettings {
+    pub mode: TeamMode,
+    pub role: Option<TeamRole>,
+    pub lead_model: Option<String>,
+    pub lead_reasoning_effort: Option<ReasoningEffort>,
+    pub worker_model: Option<String>,
+    pub worker_reasoning_effort: Option<ReasoningEffort>,
+    pub previous_model: Option<String>,
+    pub previous_reasoning_effort: Option<ReasoningEffort>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -573,6 +607,9 @@ pub struct ThreadResumeResponse {
     /// Current per-thread usage and automatic-resume policy.
     #[serde(default)]
     pub usage_policy: ThreadUsagePolicy,
+    /// Effective Lead/Worker model policy, when configured for this thread.
+    #[serde(default)]
+    pub team: Option<ThreadTeamSettings>,
     /// @deprecated Always `explicitRequestOnly`. Use `reasoningEffort` for Ultra behavior.
     #[experimental("thread/resume.multiAgentMode")]
     #[serde(default)]
@@ -786,6 +823,9 @@ pub struct ThreadForkResponse {
     /// Current per-thread usage and automatic-resume policy.
     #[serde(default)]
     pub usage_policy: ThreadUsagePolicy,
+    /// Effective Lead/Worker model policy, when configured for this thread.
+    #[serde(default)]
+    pub team: Option<ThreadTeamSettings>,
     /// @deprecated Always `explicitRequestOnly`. Use `reasoningEffort` for Ultra behavior.
     #[experimental("thread/fork.multiAgentMode")]
     #[serde(default)]

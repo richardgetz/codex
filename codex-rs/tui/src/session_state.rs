@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::ThreadTeamSettings;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
@@ -51,6 +52,8 @@ pub(crate) struct ThreadSessionState {
     pub(crate) instruction_source_paths: Vec<PathUri>,
     pub(crate) reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     pub(crate) collaboration_mode: Option<Box<CollaborationMode>>,
+    /// Authoritative Lead/Worker mode and profile snapshot for this thread.
+    pub(crate) team: Option<ThreadTeamSettings>,
     pub(crate) personality: Option<Personality>,
     pub(crate) message_history: Option<MessageHistoryMetadata>,
     pub(crate) network_proxy: Option<SessionNetworkProxyRuntime>,

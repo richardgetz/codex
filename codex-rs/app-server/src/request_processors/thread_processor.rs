@@ -312,6 +312,23 @@ fn has_model_resume_override(
             .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"))
 }
 
+fn build_thread_settings_override_flags(
+    request_overrides: Option<&HashMap<String, serde_json::Value>>,
+    typesafe_overrides: &ConfigOverrides,
+) -> ThreadSettingsOverrideFlags {
+    let request_model_override = request_overrides.is_some_and(|overrides| {
+        overrides.contains_key("model") || overrides.contains_key("model_provider")
+    });
+    let request_reasoning_effort_override =
+        request_overrides.is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"));
+    ThreadSettingsOverrideFlags {
+        model: request_model_override
+            || typesafe_overrides.model.is_some()
+            || typesafe_overrides.model_provider.is_some(),
+        reasoning_effort: request_reasoning_effort_override,
+    }
+}
+
 fn escape_identifier_for_error(value: &str) -> String {
     value.escape_default().to_string()
 }
@@ -1808,6 +1825,7 @@ impl ThreadRequestProcessor {
             memory_policy: config_snapshot.memory_policy,
             user_preferences_memory_policy: config_snapshot.user_preferences_memory_policy,
             usage_policy: config_snapshot.usage_policy.into(),
+            team: team_settings_from_core(config_snapshot.team),
             multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         };
         let notif = thread_started_notification(thread);
@@ -4128,6 +4146,8 @@ impl ThreadRequestProcessor {
         }
         let has_explicit_model_resume_override =
             has_model_resume_override(request_overrides.as_ref(), &typesafe_overrides);
+        let thread_settings_override_flags =
+            build_thread_settings_override_flags(request_overrides.as_ref(), &typesafe_overrides);
         let persisted_reasoning_effort_was_explicitly_cleared = match &thread_history {
             InitialHistory::Resumed(resumed) => resumed
                 .history
@@ -4176,12 +4196,13 @@ impl ThreadRequestProcessor {
 
         match self
             .thread_manager
-            .resume_thread_with_history(
+            .resume_thread_with_history_with_overrides(
                 config,
                 thread_history,
                 self.auth_manager.clone(),
                 self.request_trace_context(&request_id).await,
                 client_mcp_extensions,
+                thread_settings_override_flags,
             )
             .await
         {
@@ -4367,6 +4388,7 @@ impl ThreadRequestProcessor {
                     memory_policy: config_snapshot.memory_policy,
                     user_preferences_memory_policy: config_snapshot.user_preferences_memory_policy,
                     usage_policy: config_snapshot.usage_policy.into(),
+                    team: team_settings_from_core(config_snapshot.team.clone()),
                     multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
                     initial_turns_page,
                     turns_backwards_cursor,
@@ -5242,6 +5264,8 @@ impl ThreadRequestProcessor {
             exec_policy_rulesets,
         );
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
+        let thread_settings_override_flags =
+            build_thread_settings_override_flags(request_overrides.as_ref(), &typesafe_overrides);
         let restore_approval_policy = typesafe_overrides.approval_policy.is_none();
         let restore_approvals_reviewer = typesafe_overrides.approvals_reviewer.is_none()
             && !request_overrides
@@ -5259,8 +5283,9 @@ impl ThreadRequestProcessor {
                 Some(PersistedResumeSettings {
                     approval_policy: snapshot.approval_policy,
                     approvals_reviewer: Some(snapshot.approvals_reviewer),
-                    active_permission_profile: snapshot.active_permission_profile,
+                    active_permission_profile: snapshot.active_permission_profile.clone(),
                     usage_policy: snapshot.usage_policy,
+                    thread_settings: Some(snapshot),
                 })
             } else {
                 None
@@ -5296,6 +5321,9 @@ impl ThreadRequestProcessor {
         let inherited_usage_policy = persisted_settings
             .as_ref()
             .map_or_else(ThreadUsagePolicy::default, |settings| settings.usage_policy);
+        let inherited_thread_settings = persisted_settings
+            .as_ref()
+            .and_then(|settings| settings.thread_settings.clone());
         if let Some(persisted_settings) = persisted_settings {
             if restore_approval_policy {
                 typesafe_overrides.approval_policy = Some(persisted_settings.approval_policy);
@@ -5372,7 +5400,7 @@ impl ThreadRequestProcessor {
 
         let new_thread = if let Some(prepared_fork) = prepared_fork {
             self.thread_manager
-                .fork_prepared_thread(
+                .fork_prepared_thread_with_settings(
                     config,
                     prepared_fork,
                     thread_source,
@@ -5380,11 +5408,13 @@ impl ThreadRequestProcessor {
                     client_mcp_extensions,
                     reserved_thread_id,
                     inherited_usage_policy,
+                    inherited_thread_settings.clone(),
+                    thread_settings_override_flags,
                 )
                 .await
         } else {
             self.thread_manager
-                .fork_thread_from_history(
+                .fork_thread_from_history_with_settings(
                     ForkSnapshot::Interrupted,
                     config,
                     InitialHistory::Resumed(ResumedHistory {
@@ -5397,6 +5427,8 @@ impl ThreadRequestProcessor {
                     client_mcp_extensions,
                     reserved_thread_id,
                     /*inherited_usage_policy*/ Some(inherited_usage_policy),
+                    inherited_thread_settings,
+                    thread_settings_override_flags,
                 )
                 .await
         };
@@ -5581,6 +5613,7 @@ impl ThreadRequestProcessor {
             memory_policy: config_snapshot.memory_policy,
             user_preferences_memory_policy: config_snapshot.user_preferences_memory_policy,
             usage_policy: config_snapshot.usage_policy.into(),
+            team: team_settings_from_core(config_snapshot.team),
             multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         };
 

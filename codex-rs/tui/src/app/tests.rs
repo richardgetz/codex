@@ -128,6 +128,9 @@ use codex_app_server_protocol::WarningNotification;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
 use codex_config::McpServerStartupMode;
+use codex_config::TeamConfig;
+use codex_config::TeamModelProfile;
+use codex_config::TeamModelProfiles;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
@@ -152,6 +155,7 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionSource as RolloutSessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TeamMode;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
@@ -2580,7 +2584,7 @@ fn selected_and_resumed_threads_use_server_capability_for_v1_and_v2_children() -
         .build()?;
 
     runtime.block_on(async {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
         let root_thread_id = ThreadId::new();
         let rollout_dir = app
             .config
@@ -5874,6 +5878,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             instruction_source_paths: Vec::new(),
             reasoning_effort: Some(ReasoningEffortConfig::High),
             collaboration_mode: None,
+            team: None,
             personality: None,
             message_history: None,
             network_proxy: None,
@@ -6429,6 +6434,7 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
+        team: None,
         personality: None,
         message_history: None,
         network_proxy: None,
@@ -7280,6 +7286,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,
+            team: None,
             personality: None,
             message_history: None,
             network_proxy: None,
@@ -7351,6 +7358,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,
+            team: None,
             personality: None,
             message_history: None,
             network_proxy: None,
@@ -8469,6 +8477,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,
+            team: None,
             personality: None,
             message_history: None,
             network_proxy: None,
@@ -8661,6 +8670,7 @@ async fn override_turn_context_sends_thread_settings_update() {
                 memory_policy: MemoryAccessPolicy::default(),
                 user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
                 usage_policy: Default::default(),
+                team: None,
             },
         };
         assert_eq!(notification.thread_settings.model, "gpt-5.4");
@@ -8738,6 +8748,203 @@ async fn override_turn_context_sends_thread_settings_update() {
         );
     })
     .await;
+}
+
+#[test]
+fn team_commands_update_only_the_active_thread_and_follow_server_snapshot() -> Result<()> {
+    const TEST_STACK_SIZE_BYTES: usize = 64 * 1024 * 1024;
+
+    std::thread::Builder::new()
+        .name("tui-team-settings".to_string())
+        .stack_size(TEST_STACK_SIZE_BYTES)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(async {
+                let (mut app, mut app_event_rx, _op_rx) =
+                    Box::pin(make_test_app_with_channels()).await;
+                let configured_team = TeamConfig {
+                    enabled: false,
+                    profiles: Some(TeamModelProfiles {
+                        lead: TeamModelProfile {
+                            model: "gpt-6-astra".to_string(),
+                            reasoning_effort: codex_protocol::openai_models::ReasoningEffort::High,
+                        },
+                        worker: TeamModelProfile {
+                            model: "gpt-5.6-luna".to_string(),
+                            reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Max,
+                        },
+                    }),
+                };
+                app.config.team = configured_team.clone();
+                app.config.team_mode = TeamMode::Off;
+                app.config.team_state_persisted = true;
+
+                // The embedded app-server reloads the effective config from its
+                // codex home when it starts a thread. Keep the fixture's user
+                // config in sync with the in-memory TUI config so the initial
+                // default-off thread carries the configured Lead/Worker snapshot.
+                let team_config_toml = r#"
+[team]
+enabled = false
+
+[team.lead]
+model = "gpt-6-astra"
+reasoning_effort = "high"
+
+[team.worker]
+model = "gpt-5.6-luna"
+reasoning_effort = "max"
+"#;
+                let config_toml_path = app.config.codex_home.join("config.toml").abs();
+                std::fs::write(config_toml_path.as_path(), team_config_toml)?;
+                app.config.config_layer_stack = app.config.config_layer_stack.with_user_config(
+                    &config_toml_path,
+                    toml::from_str::<TomlValue>(team_config_toml)?,
+                )?;
+
+                let initial_global_model = app.config.model.clone();
+                let initial_global_effort = app.config.model_reasoning_effort.clone();
+                let mut app_server =
+                    Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+                let started = Box::pin(app_server.start_thread(&app.config))
+                    .await
+                    .expect("thread/start should succeed");
+                let thread_id = started.session.thread_id;
+                let initial_team = started
+                    .session
+                    .team
+                    .as_ref()
+                    .expect("configured team should be present in the initial thread snapshot");
+                assert_eq!(initial_team.mode, TeamMode::Off);
+                assert_eq!(initial_team.lead_model.as_deref(), Some("gpt-6-astra"));
+                assert_eq!(initial_team.worker_model.as_deref(), Some("gpt-5.6-luna"));
+                let initial_thread_model = started.session.model.clone();
+                Box::pin(app.enqueue_primary_thread_session(started.session, started.turns))
+                    .await
+                    .expect("primary thread should be registered");
+                while app_event_rx.try_recv().is_ok() {}
+
+                let mut tui = crate::tui::test_support::make_test_tui()?;
+                let control = Box::pin(app.handle_event(
+                    &mut tui,
+                    &mut app_server,
+                    AppEvent::TeamCommand {
+                        thread_id,
+                        command: crate::chatwidget::TeamCommand::On,
+                    },
+                ))
+                .await?;
+                assert!(matches!(control, AppRunControl::Continue));
+
+                let enabled =
+                    Box::pin(next_thread_settings_updated(&mut app_server, thread_id)).await;
+                assert_eq!(enabled.thread_settings.model, "gpt-6-astra");
+                assert_eq!(
+                    enabled.thread_settings.team.as_ref().map(|team| team.mode),
+                    Some(TeamMode::LeadWorker)
+                );
+                assert_eq!(app.config.model, initial_global_model);
+                assert_eq!(app.config.model_reasoning_effort, initial_global_effort);
+
+                Box::pin(app.handle_app_server_event(
+                    &app_server,
+                    codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+                        ServerNotification::ThreadSettingsUpdated(enabled),
+                    )),
+                ))
+                .await;
+                app.drain_active_thread_events(&mut tui).await?;
+                assert_eq!(app.chat_widget.current_model(), "gpt-6-astra");
+
+                let control = Box::pin(app.handle_event(
+                    &mut tui,
+                    &mut app_server,
+                    AppEvent::TeamCommand {
+                        thread_id,
+                        command: crate::chatwidget::TeamCommand::On,
+                    },
+                ))
+                .await?;
+                assert!(matches!(control, AppRunControl::Continue));
+                assert!(
+                    time::timeout(
+                        std::time::Duration::from_millis(100),
+                        app_server.next_event()
+                    )
+                    .await
+                    .is_err()
+                );
+
+                let control = Box::pin(app.handle_event(
+                    &mut tui,
+                    &mut app_server,
+                    AppEvent::TeamCommand {
+                        thread_id,
+                        command: crate::chatwidget::TeamCommand::Off,
+                    },
+                ))
+                .await?;
+                assert!(matches!(control, AppRunControl::Continue));
+
+                let disabled =
+                    Box::pin(next_thread_settings_updated(&mut app_server, thread_id)).await;
+                assert_eq!(disabled.thread_settings.model, initial_thread_model);
+                assert_eq!(
+                    disabled.thread_settings.team.as_ref().map(|team| team.mode),
+                    Some(TeamMode::Off)
+                );
+                assert_eq!(app.config.model, initial_global_model);
+                assert_eq!(app.config.model_reasoning_effort, initial_global_effort);
+
+                Box::pin(app.handle_app_server_event(
+                    &app_server,
+                    codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+                        ServerNotification::ThreadSettingsUpdated(disabled),
+                    )),
+                ))
+                .await;
+                app.drain_active_thread_events(&mut tui).await?;
+                assert_eq!(app.chat_widget.current_model(), initial_thread_model);
+
+                let control = Box::pin(app.handle_event(
+                    &mut tui,
+                    &mut app_server,
+                    AppEvent::TeamCommand {
+                        thread_id,
+                        command: crate::chatwidget::TeamCommand::Off,
+                    },
+                ))
+                .await?;
+                assert!(matches!(control, AppRunControl::Continue));
+                assert!(
+                    time::timeout(
+                        std::time::Duration::from_millis(100),
+                        app_server.next_event()
+                    )
+                    .await
+                    .is_err()
+                );
+
+                while app_event_rx.try_recv().is_ok() {}
+                app.chat_widget.show_team_status();
+                let status = loop {
+                    match app_event_rx.try_recv() {
+                        Ok(AppEvent::InsertHistoryCell(cell)) => {
+                            break lines_to_single_string(&cell.display_lines(/*width*/ 120));
+                        }
+                        Ok(_) => continue,
+                        Err(err) => panic!("expected team status history cell: {err}"),
+                    }
+                };
+                assert!(status.contains("Lead/Worker team: off"));
+                Box::pin(app_server.shutdown()).await?;
+                Ok(())
+            })
+        })?
+        .join()
+        .expect("team settings test thread")
 }
 
 #[tokio::test]
@@ -9136,6 +9343,7 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
             memory_policy: MemoryAccessPolicy::default(),
             user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
             usage_policy: Default::default(),
+            team: None,
         },
     };
     let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
@@ -9227,6 +9435,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,
+            team: None,
             personality: None,
             message_history: None,
             network_proxy: None,

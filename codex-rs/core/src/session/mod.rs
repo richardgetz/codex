@@ -277,6 +277,7 @@ pub(crate) mod session;
 mod step_activation;
 pub(crate) mod step_context;
 pub(crate) mod step_settings;
+pub(crate) mod team;
 mod thread_inbound_messages;
 mod thread_settings;
 pub(crate) mod time_reminder;
@@ -540,11 +541,17 @@ pub(crate) enum ForkPersistence {
         /// Effective source-thread policy when the copied history was truncated
         /// past its settings snapshot.
         inherited_usage_policy: Option<ThreadUsagePolicy>,
+        /// Trusted source-thread settings when the copied history does not include
+        /// the source settings event (for example, a paginated fork boundary).
+        inherited_thread_settings: Option<ThreadSettingsSnapshot>,
     },
     Referenced {
         history_base: Option<HistoryPosition>,
         inherited_item_count: usize,
         inherited_usage_policy: ThreadUsagePolicy,
+        /// Trusted source-thread settings when the referenced history does not
+        /// include the source settings event in its model-context prefix.
+        inherited_thread_settings: Option<ThreadSettingsSnapshot>,
     },
 }
 
@@ -592,6 +599,7 @@ pub(crate) struct SessionSpawnArgs {
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     pub(crate) external_time_provider: Option<Arc<dyn TimeProvider>>,
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
+    pub(crate) thread_settings_override_flags: crate::thread_manager::ThreadSettingsOverrideFlags,
     pub(crate) git_enrichment_policy: GitEnrichmentPolicy,
     pub(crate) windows_sandbox_proxy_settings_mode:
         codex_sandboxing::WindowsSandboxProxySettingsMode,
@@ -656,7 +664,7 @@ impl Session {
     async fn spawn_internal(args: SessionSpawnArgs) -> CodexResult<(Arc<Self>, SessionIo)> {
         let SessionSpawnArgs {
             mut config,
-            allow_provider_model_fallback,
+            mut allow_provider_model_fallback,
             user_instructions,
             installation_id,
             auth_manager,
@@ -694,14 +702,100 @@ impl Session {
             attestation_provider,
             external_time_provider,
             inherited_multi_agent_version,
+            thread_settings_override_flags,
             git_enrichment_policy,
             windows_sandbox_proxy_settings_mode,
         } = args;
+        let team_baseline_model = config.model.clone();
+        let team_baseline_reasoning_effort = config.model_reasoning_effort.clone();
+        let team_baseline_allow_provider_model_fallback = allow_provider_model_fallback;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
+
+        let history_thread_settings = conversation_history
+            .get_rollout_items()
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
+                    Some(&event.thread_settings)
+                }
+                _ => None,
+            });
+        let inherited_thread_settings = match &fork_persistence {
+            ForkPersistence::Copied {
+                inherited_thread_settings,
+                ..
+            }
+            | ForkPersistence::Referenced {
+                inherited_thread_settings,
+                ..
+            } => inherited_thread_settings.as_ref(),
+        };
+        if let Some(thread_settings) = inherited_thread_settings.or(history_thread_settings)
+            && let Some(team_settings) = thread_settings.team.as_ref()
+        {
+            config
+                .restore_team_snapshot(team_settings)
+                .map_err(CodexErr::InvalidRequest)?;
+            if team_settings.mode == codex_protocol::protocol::TeamMode::Off {
+                if !thread_settings_override_flags.model {
+                    config.model = Some(thread_settings.model.clone());
+                }
+                if !thread_settings_override_flags.reasoning_effort {
+                    config.model_reasoning_effort = thread_settings.reasoning_effort.clone();
+                }
+            }
+        }
+        let team_role = team::effective_role_for_session_source(&config, &session_source);
+        let team_multi_agent_version = if config.team_mode
+            == codex_protocol::protocol::TeamMode::LeadWorker
+            && team_role.is_some()
+        {
+            let selected_multi_agent_version =
+                config.multi_agent_version_override().or_else(|| {
+                    resolve_multi_agent_version(
+                        &conversation_history,
+                        inherited_multi_agent_version,
+                    )
+                });
+            Some(
+                team::validate_profiles(
+                    &config,
+                    &models_manager,
+                    selected_multi_agent_version,
+                    if matches!(
+                        &session_source,
+                        SessionSource::SubAgent(SubAgentSource::Review)
+                    ) {
+                        team::TeamValidationScope::RoutingOnly
+                    } else {
+                        team::TeamValidationScope::Delegation
+                    },
+                )
+                .await
+                .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?,
+            )
+        } else {
+            None
+        };
+        let team_assignment_active = if let Some(role) = team_role {
+            let active =
+                team::apply_assignment(&mut config, role).map_err(CodexErr::InvalidRequest)?;
+            if active {
+                allow_provider_model_fallback = false;
+            }
+            active
+        } else {
+            false
+        };
+        team::prepare_spawn_depth(&mut config, &session_source, team_multi_agent_version)
+            .map_err(CodexErr::InvalidRequest)?;
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
             && depth >= config.agent_max_depth
             && !config.features.enabled(Feature::MultiAgentV2)
+            && (config.team_mode != codex_protocol::protocol::TeamMode::LeadWorker
+                || team_multi_agent_version != Some(MultiAgentVersion::V2))
         {
             let _ = config.features.disable(Feature::SpawnCsv);
             let _ = config.features.disable(Feature::Collab);
@@ -757,7 +851,8 @@ impl Session {
         } else {
             codex_models_manager::manager::RefreshStrategy::OnlineIfUncached
         };
-        if config.model.is_none()
+        if team_assignment_active
+            || config.model.is_none()
             || !matches!(
                 refresh_strategy,
                 codex_models_manager::manager::RefreshStrategy::Offline
@@ -767,6 +862,23 @@ impl Session {
                 .list_models(refresh_strategy, config.http_client_factory())
                 .await;
         }
+        if team_assignment_active && config.team_previous_model.is_none() {
+            let baseline_model = if let Some(model) = team_baseline_model {
+                model
+            } else {
+                models_manager
+                    .get_default_model(
+                        &None,
+                        team_baseline_allow_provider_model_fallback,
+                        refresh_strategy,
+                        config.http_client_factory(),
+                    )
+                    .await
+            };
+            let config = Arc::make_mut(&mut config);
+            config.team_previous_model = Some(baseline_model);
+            config.team_previous_reasoning_effort = team_baseline_reasoning_effort;
+        }
         let model = models_manager
             .get_default_model(
                 &config.model,
@@ -775,6 +887,12 @@ impl Session {
                 config.http_client_factory(),
             )
             .await;
+        if team_assignment_active && config.model.as_deref() != Some(model.as_str()) {
+            return Err(CodexErr::InvalidRequest(format!(
+                "configured team model `{}` is unavailable",
+                config.model.as_deref().unwrap_or_default()
+            )));
+        }
         let trusted_guardian_reviewer = crate::guardian::is_basic_session_source(&session_source)
             && !matches!(conversation_history, InitialHistory::Resumed(_));
         if config
@@ -1969,6 +2087,7 @@ impl Session {
                     } => Some(*inherited_usage_policy),
                     ForkPersistence::Copied {
                         inherited_usage_policy,
+                        ..
                     } => inherited_usage_policy.or_else(|| {
                         rollout_items.iter().rev().find_map(|item| match item {
                             RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
@@ -2249,6 +2368,26 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<SessionSettingsCommit> {
+        if updates
+            .team
+            .as_ref()
+            .is_some_and(|team| team.mode == codex_protocol::protocol::TeamMode::LeadWorker)
+        {
+            let config = {
+                let state = self.state.lock().await;
+                Arc::clone(&state.session_configuration.original_config_do_not_use)
+            };
+            let selected_multi_agent_version = self
+                .multi_agent_version()
+                .or_else(|| config.multi_agent_version_override());
+            team::validate_profiles(
+                &config,
+                &self.services.models_manager,
+                selected_multi_agent_version,
+                team::TeamValidationScope::Delegation,
+            )
+            .await?;
+        }
         let _memory_write_gate = if updates.user_preferences_memory_policy.is_some()
             || updates
                 .memory_policy
@@ -5254,6 +5393,17 @@ impl Session {
         // latest durable baseline even when this turn emitted no model-visible context diffs.
         self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item.clone())])
             .await;
+
+        // A configured team is thread-owned state. Materialize its initial snapshot with the
+        // first real turn so a cold resume keeps the captured assignments even if global config
+        // changes before the next process starts. Ordinary single-model threads have no team
+        // snapshot and retain the existing rollout shape.
+        if should_inject_full_context && self.thread_settings_snapshot().await.team.is_some() {
+            self.persist_rollout_items(&[RolloutItem::EventMsg(
+                thread_settings::applied_event(self).await,
+            )])
+            .await;
+        }
 
         // Advance the persisted-settings baseline even when this turn emitted no model-visible
         // context items.

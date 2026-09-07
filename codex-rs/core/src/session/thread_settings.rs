@@ -59,6 +59,7 @@ pub(super) fn prepare_update(overrides: ThreadSettingsOverrides) -> SessionSetti
         collaboration_mode,
         personality,
         usage_policy,
+        team,
     } = overrides;
     SessionSettingsUpdate {
         step_settings: StepSettingsUpdate {
@@ -78,6 +79,7 @@ pub(super) fn prepare_update(overrides: ThreadSettingsOverrides) -> SessionSetti
         active_permission_profile,
         windows_sandbox_level,
         usage_policy,
+        team,
         ..Default::default()
     }
 }
@@ -120,9 +122,11 @@ pub(super) async fn emit_applied(
     let EventMsg::ThreadSettingsApplied(applied) = &event.msg else {
         unreachable!("usage policy persistence only receives thread settings events");
     };
-    if applied.thread_settings.usage_policy != ThreadUsagePolicy::default() {
-        // Usage policy is thread-owned durable state. Materialize a lazy thread when the
-        // policy is first enabled so a later cold resume or fork can recover it.
+    if applied.thread_settings.usage_policy != ThreadUsagePolicy::default()
+        || applied.thread_settings.team.is_some()
+    {
+        // Usage policy and team state are thread-owned durable state. Materialize a lazy thread
+        // when either is first enabled so a later cold resume or fork can recover it.
         session.send_event_raw(event).await;
     } else {
         session

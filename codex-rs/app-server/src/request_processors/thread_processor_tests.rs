@@ -185,6 +185,7 @@ mod thread_processor_behavior_tests {
             user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
             usage_policy: Default::default(),
             multi_agent_mode: Default::default(),
+            team: None,
         }
     }
 

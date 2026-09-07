@@ -108,6 +108,7 @@ pub(crate) async fn run_codex_thread_interactive(
         requested_history_mode: None,
         fork_persistence: ForkPersistence::Copied {
             inherited_usage_policy: None,
+            inherited_thread_settings: None,
         },
         session_source,
         forked_from_thread_id,
@@ -135,6 +136,7 @@ pub(crate) async fn run_codex_thread_interactive(
         attestation_provider: parent_session.services.attestation_provider.clone(),
         external_time_provider: Some(Arc::clone(&parent_session.services.time_provider)),
         inherited_multi_agent_version: Some(MultiAgentVersion::Disabled),
+        thread_settings_override_flags: crate::ThreadSettingsOverrideFlags::default(),
         git_enrichment_policy,
         windows_sandbox_proxy_settings_mode,
     })

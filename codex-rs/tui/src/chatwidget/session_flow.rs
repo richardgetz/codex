@@ -29,6 +29,7 @@ impl ChatWidget {
             self.pending_automatic_thread_names.clear();
             self.review.recent_auto_review_denials = RecentAutoReviewDenials::default();
             self.clear_thread_usage_state();
+            self.clear_pending_team_command();
         }
         self.turn_lifecycle.reset_thread();
         self.clear_safety_buffering();
@@ -82,6 +83,7 @@ impl ChatWidget {
         }
         self.config.approvals_reviewer = session.approvals_reviewer;
         self.config.personality = session.personality;
+        self.set_team_settings(session.team.clone());
         self.status_line_project_root_name_cache = None;
         let forked_from_id = session.forked_from_id;
         let default_model = session.model.clone();

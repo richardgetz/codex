@@ -26,6 +26,8 @@ use codex_config::ProfileV2Name;
 use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
+use codex_config::TeamConfig;
+use codex_config::TeamModelProfiles;
 use codex_config::ThreadConfigLoader;
 use codex_config::account_registry::account_storage_home;
 use codex_config::config_toml::ConfigLockfileToml;
@@ -147,6 +149,7 @@ use codex_protocol::permissions::ReadDenyMatcher;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TeamMode;
 use codex_rmcp_client::McpOAuthRefreshMode;
 use codex_rollout::ResumeLoadOptions;
 use codex_rollout::ResumeLoadStrategy as RolloutResumeLoadStrategy;
@@ -200,6 +203,7 @@ mod requirements;
 mod resolved_permission_profile;
 #[cfg(test)]
 mod schema;
+mod team;
 pub use auth_keyring::bootstrap_auth_config;
 pub use auth_keyring::resolve_bootstrap_auth_keyring_backend_kind;
 pub use codex_agent_roles::AgentRoleConfig;
@@ -1170,8 +1174,27 @@ pub struct Config {
     /// Maximum nesting depth for V1 agent threads. Ignored by V2.
     pub agent_max_depth: i32,
 
+    /// Whether `agents.max_depth` was explicitly set by the user.
+    pub agent_max_depth_explicit: bool,
+
     /// User-defined role declarations keyed by role name.
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
+
+    /// Named Lead and Worker model assignments. The assignments are opt-in;
+    /// `team_mode` records the live per-session selection.
+    pub team: TeamConfig,
+
+    /// Effective team assignments captured when a thread was resumed or forked.
+    /// This keeps a persisted thread independent of later global config edits.
+    pub team_runtime_profiles: Option<TeamModelProfiles>,
+
+    /// Live per-session team selection and the single-model settings to restore
+    /// when the selection is turned off.
+    pub team_mode: TeamMode,
+    pub team_state_persisted: bool,
+    pub team_persisted_role: Option<codex_protocol::protocol::TeamRole>,
+    pub team_previous_model: Option<String>,
+    pub team_previous_reasoning_effort: Option<ReasoningEffort>,
 
     /// Maximum token budget allowed for a goal and default budget for new goals.
     pub max_goal_token_budget: Option<i64>,
@@ -4312,6 +4335,14 @@ impl Config {
         let agent_roles =
             load_agent_roles(fs, &cfg, &config_layer_stack, &mut startup_warnings).await?;
 
+        let team = cfg
+            .team
+            .clone()
+            .map(TeamConfig::try_from)
+            .transpose()
+            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?
+            .unwrap_or_default();
+
         let openai_base_url = cfg
             .openai_base_url
             .clone()
@@ -4400,6 +4431,11 @@ impl Config {
             .as_ref()
             .and_then(|agents| agents.max_depth)
             .unwrap_or(DEFAULT_AGENT_MAX_DEPTH);
+        let agent_max_depth_explicit = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.max_depth)
+            .is_some();
         let agent_default_subagent_model = cfg
             .agents
             .as_ref()
@@ -4941,7 +4977,19 @@ impl Config {
             agent_default_subagent_model,
             agent_default_subagent_reasoning_effort,
             agent_max_depth,
+            agent_max_depth_explicit,
             agent_roles,
+            team_mode: if team.enabled {
+                TeamMode::LeadWorker
+            } else {
+                TeamMode::Off
+            },
+            team_state_persisted: team.enabled,
+            team_persisted_role: None,
+            team,
+            team_runtime_profiles: None,
+            team_previous_model: None,
+            team_previous_reasoning_effort: None,
             max_goal_token_budget: cfg
                 .goals
                 .as_ref()

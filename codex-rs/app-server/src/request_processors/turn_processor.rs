@@ -128,6 +128,7 @@ struct ThreadSettingsBuildParams {
     collaboration_mode: Option<CollaborationMode>,
     personality: Option<Personality>,
     usage_policy: Option<codex_app_server_protocol::ThreadUsagePolicyParams>,
+    team: Option<codex_protocol::protocol::ThreadTeamSettingsUpdate>,
 }
 
 impl TurnRequestProcessor {
@@ -634,6 +635,7 @@ impl TurnRequestProcessor {
                     collaboration_mode: params.collaboration_mode,
                     personality: params.personality,
                     usage_policy: None,
+                    team: None,
                 },
             )
             .await?;
@@ -797,6 +799,7 @@ impl TurnRequestProcessor {
             collaboration_mode,
             personality,
             usage_policy,
+            team,
         } = params;
         if sandbox_policy.is_some() && permissions.is_some() {
             return Err(invalid_request(
@@ -811,7 +814,7 @@ impl TurnRequestProcessor {
         // Clients that send dependent partial updates should wait for
         // `thread/settings/updated` or combine the fields in one request. Nested
         // usage-policy fields also preserve their current values when omitted.
-        let snapshot = if permissions.is_some() || usage_policy.is_some() {
+        let snapshot = if permissions.is_some() || usage_policy.is_some() || team.is_some() {
             Some(thread.config_snapshot().await)
         } else {
             None
@@ -846,7 +849,8 @@ impl TurnRequestProcessor {
             || summary.is_some()
             || collaboration_mode.is_some()
             || personality.is_some()
-            || usage_policy.is_some();
+            || usage_policy.is_some()
+            || team.is_some();
 
         let approval_policy =
             approval_policy.map(codex_app_server_protocol::AskForApproval::to_core);
@@ -897,6 +901,14 @@ impl TurnRequestProcessor {
                 (None, None, None)
             };
         let effort = effort.map(Some);
+        let team_snapshot = team.as_ref().and_then(|team_update| {
+            snapshot.as_ref().and_then(|snapshot| {
+                snapshot.team.clone().map(|mut team_snapshot| {
+                    team_snapshot.mode = team_update.mode;
+                    team_snapshot
+                })
+            })
+        });
 
         if has_any_overrides {
             thread
@@ -916,6 +928,7 @@ impl TurnRequestProcessor {
                     collaboration_mode: collaboration_mode.clone(),
                     personality,
                     usage_policy,
+                    team: team_snapshot,
                 })
                 .await
                 .map_err(|err| {
@@ -939,6 +952,7 @@ impl TurnRequestProcessor {
             collaboration_mode,
             personality,
             usage_policy,
+            team,
         })
     }
 
@@ -950,6 +964,7 @@ impl TurnRequestProcessor {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
         self.ensure_direct_input_allowed(request_id, thread.as_ref())
             .await?;
+        let team = params.team.map(team_settings_update_to_core);
         let usage_policy_update = params
             .usage_policy
             .map(|usage_policy| ThreadUsagePolicyUpdate {
@@ -982,6 +997,7 @@ impl TurnRequestProcessor {
                     collaboration_mode: params.collaboration_mode,
                     personality: params.personality,
                     usage_policy: params.usage_policy,
+                    team,
                 },
             )
             .await?;
@@ -1504,7 +1520,10 @@ impl TurnRequestProcessor {
                 "paginated threads do not support detached review",
             ));
         }
-        let mut config = self.config.as_ref().clone();
+        // Detached review inherits the parent's live settings. The app-server
+        // config only contains process defaults and would miss a per-thread
+        // team mode transition made through thread/settings/update.
+        let mut config = parent_thread.config().await.as_ref().clone();
         if let Some(review_model) = &config.review_model {
             config.model = Some(review_model.clone());
         }
@@ -1515,7 +1534,7 @@ impl TurnRequestProcessor {
             turn_id,
         } = self
             .agent_runner
-            .start(
+            .start_review(
                 parent_thread.session_configured().thread_id,
                 AgentInvocation {
                     config,

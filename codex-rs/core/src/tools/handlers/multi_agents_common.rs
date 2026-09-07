@@ -275,8 +275,19 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
     Ok(())
 }
 
-pub(crate) fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
-    if child_depth >= config.agent_max_depth && !config.features.enabled(Feature::MultiAgentV2) {
+pub(crate) fn apply_spawn_agent_overrides(
+    config: &mut Config,
+    child_depth: i32,
+    multi_agent_version: MultiAgentVersion,
+) {
+    if let Err(error) = crate::session::team::prepare_spawn_depth_for_child(
+        config,
+        child_depth,
+        Some(multi_agent_version),
+    ) {
+        tracing::warn!(%error, "team child depth could not be raised before spawn feature pruning");
+    }
+    if child_depth >= config.agent_max_depth && multi_agent_version != MultiAgentVersion::V2 {
         let _ = config.features.disable(Feature::SpawnCsv);
         let _ = config.features.disable(Feature::Collab);
     }

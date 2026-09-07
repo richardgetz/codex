@@ -18,6 +18,8 @@ use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadTeamSettings;
+use codex_app_server_protocol::ThreadTeamSettingsUpdate;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
@@ -32,6 +34,8 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::TeamMode;
+use codex_protocol::protocol::TeamRole;
 use codex_utils_absolute_path::test_support::PathExt;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -267,6 +271,103 @@ async fn thread_settings_update_usage_policy_preserves_omitted_nested_fields() -
             minimum_remaining_percent: None,
         }
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defaults() -> Result<()>
+{
+    let server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    create_team_config_toml(codex_home.path(), &server.uri())?;
+    write_models_cache(codex_home.path())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let started = start_thread(&mut mcp).await?;
+    let thread_id = started.thread.id.clone();
+    let default_team = ThreadTeamSettings {
+        mode: TeamMode::Off,
+        role: Some(TeamRole::Lead),
+        lead_model: Some("gpt-6-astra".to_string()),
+        lead_reasoning_effort: Some(ReasoningEffort::High),
+        worker_model: Some("gpt-5.6-luna".to_string()),
+        worker_reasoning_effort: Some(ReasoningEffort::Max),
+        previous_model: None,
+        previous_reasoning_effort: None,
+    };
+    assert_eq!(started.model, "mock-model");
+    assert_eq!(started.reasoning_effort, None);
+    assert_eq!(started.team, Some(default_team.clone()));
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread_id.clone(),
+            team: Some(ThreadTeamSettingsUpdate {
+                mode: TeamMode::LeadWorker,
+            }),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let enabled = read_thread_settings_updated(&mut mcp).await?;
+    let enabled_team = ThreadTeamSettings {
+        mode: TeamMode::LeadWorker,
+        role: Some(TeamRole::Lead),
+        lead_model: Some("gpt-6-astra".to_string()),
+        lead_reasoning_effort: Some(ReasoningEffort::High),
+        worker_model: Some("gpt-5.6-luna".to_string()),
+        worker_reasoning_effort: Some(ReasoningEffort::Max),
+        previous_model: Some("mock-model".to_string()),
+        previous_reasoning_effort: None,
+    };
+    assert_eq!(enabled.thread_settings.model, "gpt-6-astra");
+    assert_eq!(enabled.thread_settings.effort, Some(ReasoningEffort::High));
+    assert_eq!(enabled.thread_settings.team, Some(enabled_team.clone()));
+
+    let unsubscribe_id = mcp
+        .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
+            thread_id: thread_id.clone(),
+        })
+        .await?;
+    let unsubscribed: ThreadUnsubscribeResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(unsubscribe_id)).await??;
+    assert_eq!(unsubscribed.status, ThreadUnsubscribeStatus::Unsubscribed);
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resumed: ThreadResumeResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(resume_id)).await??;
+    assert_eq!(resumed.model, "gpt-6-astra");
+    assert_eq!(resumed.reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(resumed.team, Some(enabled_team));
+
+    let fresh = start_thread(&mut mcp).await?;
+    assert_eq!(fresh.model, "mock-model");
+    assert_eq!(fresh.reasoning_effort, None);
+    assert_eq!(fresh.team, Some(default_team.clone()));
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id,
+            team: Some(ThreadTeamSettingsUpdate {
+                mode: TeamMode::Off,
+            }),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let disabled = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(disabled.thread_settings.model, "mock-model");
+    assert_eq!(disabled.thread_settings.effort, None);
+    assert_eq!(disabled.thread_settings.team, Some(default_team));
     Ok(())
 }
 
@@ -612,5 +713,25 @@ fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io
     MockResponsesConfig::new(server_uri)
         .with_root_config("compact_prompt = \"compact\"\nmodel_auto_compact_token_limit = 200000")
         .with_provider_config("supports_websockets = false")
+        .write(codex_home)
+}
+
+fn create_team_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+    MockResponsesConfig::new(server_uri)
+        .with_root_config("compact_prompt = \"compact\"\nmodel_auto_compact_token_limit = 200000")
+        .with_provider_config("supports_websockets = false")
+        .with_extra_config(
+            r#"[team]
+enabled = false
+
+[team.lead]
+model = "gpt-6-astra"
+reasoning_effort = "high"
+
+[team.worker]
+model = "gpt-5.6-luna"
+reasoning_effort = "max"
+"#,
+        )
         .write(codex_home)
 }

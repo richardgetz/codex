@@ -1,4 +1,6 @@
 use anyhow::Context;
+use codex_config::TeamModelProfileToml;
+use codex_config::TeamToml;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::OrchestratorFeatureToml;
@@ -14,6 +16,7 @@ use codex_features::RolloutBudgetConfigToml;
 use codex_features::TokenBudgetConfigToml;
 use codex_features::ToolRegistryConfigToml;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::TeamMode;
 
 use crate::config::Config;
 use crate::config_lock::ConfigLockReplayOptions;
@@ -203,11 +206,34 @@ fn save_config_resolved_fields(
     let agents = lock_config.agents.get_or_insert_with(Default::default);
     agents.enabled = Some(config.agents_enabled);
     agents.max_concurrent_threads_per_session = config.agent_max_threads;
-    agents.max_depth = Some(config.agent_max_depth);
+    agents.max_depth = if config.team_mode == TeamMode::LeadWorker
+        && !config.agent_max_depth_explicit
+        && config.agent_max_depth < 2
+    {
+        // The legacy team default is raised only for Worker sessions. Keep a
+        // root lockfile from turning that implicit behavior into an explicit
+        // max-depth restriction on the next session.
+        None
+    } else {
+        Some(config.agent_max_depth)
+    };
     agents.default_subagent_model = config.agent_default_subagent_model.clone();
     agents.default_subagent_reasoning_effort =
         config.agent_default_subagent_reasoning_effort.clone();
     agents.interrupt_message = Some(config.agent_interrupt_message_enabled);
+
+    if config.team_state_persisted || config.effective_team_profiles().is_some() {
+        let profile_to_toml = |profile: &codex_config::TeamModelProfile| TeamModelProfileToml {
+            model: Some(profile.model.clone()),
+            reasoning_effort: Some(profile.reasoning_effort.clone()),
+        };
+        let profiles = config.effective_team_profiles();
+        lock_config.team = Some(TeamToml {
+            enabled: Some(config.team_mode == TeamMode::LeadWorker),
+            lead: profiles.map(|profiles| profile_to_toml(&profiles.lead)),
+            worker: profiles.map(|profiles| profile_to_toml(&profiles.worker)),
+        });
+    }
 
     lock_config
         .skills

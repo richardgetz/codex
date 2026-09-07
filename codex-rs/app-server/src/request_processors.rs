@@ -373,6 +373,7 @@ use codex_core::StartThreadOptions;
 use codex_core::SteerSubmission;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
+use codex_core::ThreadSettingsOverrideFlags;
 use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
@@ -585,6 +586,7 @@ mod process_exec_processor;
 mod projects;
 mod remote_control_processor;
 mod search;
+mod team;
 mod thread_control_api;
 mod thread_enrichment;
 mod thread_fork_goal;
@@ -724,6 +726,8 @@ use self::thread_lifecycle::*;
 use self::thread_resume_redaction::*;
 use self::thread_summary::*;
 
+pub(crate) use self::team::team_settings_from_core;
+pub(crate) use self::team::team_settings_update_to_core;
 pub(crate) use self::thread_lifecycle::populate_thread_turns_from_history;
 pub(crate) use self::thread_processor::thread_from_stored_thread;
 #[cfg(test)]

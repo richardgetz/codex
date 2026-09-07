@@ -893,6 +893,8 @@ fn sample_thread_start_response() -> ThreadStartResponse {
         active_permission_profile: None,
         memory_policy: Default::default(),
         user_preferences_memory_policy: Default::default(),
+        usage_policy: Default::default(),
+        team: None,
         reasoning_effort: None,
         multi_agent_mode: Default::default(),
     }

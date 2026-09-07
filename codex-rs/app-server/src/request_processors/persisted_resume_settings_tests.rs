@@ -30,32 +30,45 @@ fn settings_item(
     RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(
         ThreadSettingsAppliedEvent {
             thread_id: None,
-            thread_settings: ThreadSettingsSnapshot {
-                model: "gpt-5".to_string(),
-                model_provider_id: "openai".to_string(),
-                service_tier: None,
+            thread_settings: settings_snapshot(
                 approval_policy,
                 approvals_reviewer,
-                permission_profile: PermissionProfile::read_only(),
                 active_permission_profile,
-                cwd: cwd(),
-                reasoning_effort: None,
-                reasoning_summary: None,
-                personality: None,
-                collaboration_mode: CollaborationMode {
-                    mode: ModeKind::Default,
-                    settings: Settings {
-                        model: "gpt-5".to_string(),
-                        reasoning_effort: None,
-                        developer_instructions: None,
-                    },
-                },
-                memory_policy: Default::default(),
-                user_preferences_memory_policy: Default::default(),
-                usage_policy: Default::default(),
-            },
+            ),
         },
     ))
+}
+
+fn settings_snapshot(
+    approval_policy: AskForApproval,
+    approvals_reviewer: ApprovalsReviewer,
+    active_permission_profile: Option<ActivePermissionProfile>,
+) -> ThreadSettingsSnapshot {
+    ThreadSettingsSnapshot {
+        model: "gpt-5".to_string(),
+        model_provider_id: "openai".to_string(),
+        service_tier: None,
+        approval_policy,
+        approvals_reviewer,
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile,
+        cwd: cwd(),
+        reasoning_effort: None,
+        reasoning_summary: None,
+        personality: None,
+        collaboration_mode: CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model: "gpt-5".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        },
+        memory_policy: Default::default(),
+        user_preferences_memory_policy: Default::default(),
+        usage_policy: Default::default(),
+        team: None,
+    }
 }
 
 fn turn_context_item(
@@ -103,6 +116,11 @@ fn latest_settings_snapshot_wins() {
         approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
         active_permission_profile: Some(ActivePermissionProfile::new("dev")),
         usage_policy: ThreadUsagePolicy::default(),
+        thread_settings: Some(settings_snapshot(
+            AskForApproval::OnRequest,
+            ApprovalsReviewer::AutoReview,
+            Some(ActivePermissionProfile::new("dev")),
+        )),
     };
     let history = vec![
         settings_item(
@@ -127,6 +145,11 @@ fn latest_turn_context_wins_over_earlier_settings_update() {
         approvals_reviewer: Some(ApprovalsReviewer::User),
         active_permission_profile: Some(ActivePermissionProfile::read_only()),
         usage_policy: ThreadUsagePolicy::default(),
+        thread_settings: Some(settings_snapshot(
+            AskForApproval::Never,
+            ApprovalsReviewer::AutoReview,
+            Some(ActivePermissionProfile::new("dev")),
+        )),
     };
     let history = vec![
         settings_item(
@@ -169,6 +192,7 @@ fn older_reviewer_is_used_when_latest_turn_context_omits_it() {
             approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             active_permission_profile: None,
             usage_policy: ThreadUsagePolicy::default(),
+            thread_settings: None,
         })
     );
 }

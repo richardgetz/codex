@@ -4070,6 +4070,14 @@
       },
       "type": "object"
     },
+    "TeamMode": {
+      "description": "Selects whether a thread uses its configured Lead/Worker model assignments.",
+      "enum": [
+        "off",
+        "leadWorker"
+      ],
+      "type": "string"
+    },
     "TextElement": {
       "properties": {
         "byteRange": {
@@ -5425,6 +5433,18 @@
         "clear"
       ],
       "type": "string"
+    },
+    "ThreadTeamSettingsUpdate": {
+      "description": "Team mode accepted by `thread/settings/update`.",
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/TeamMode"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
     },
     "ThreadTurnsListParams": {
       "properties": {

@@ -531,6 +531,7 @@ impl ChatWidget {
             }
         }
 
+        self.set_team_settings(settings.team.clone());
         settings.collaboration_mode.settings.model = settings.model;
         settings.collaboration_mode.settings.reasoning_effort = settings.effort;
         self.set_effective_collaboration_mode(settings.collaboration_mode);
@@ -544,6 +545,7 @@ impl ChatWidget {
             self.refresh_connector_mentions(/*force_refresh*/ false);
         }
         self.refresh_plugin_mentions();
+        self.confirm_pending_team_command();
         self.request_redraw();
     }
 

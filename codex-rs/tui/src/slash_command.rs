@@ -40,6 +40,7 @@ pub enum SlashCommand {
     Compact,
     Recap,
     Plan,
+    Team,
     Goal,
     Agent,
     #[strum(serialize = "agents-prune")]
@@ -158,6 +159,7 @@ impl SlashCommand {
             }
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Plan => "switch to Plan mode",
+            SlashCommand::Team => "show or toggle Lead/Worker team mode for this session",
             SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::AgentsPrune => "close idle agents in this session",
@@ -226,6 +228,7 @@ impl SlashCommand {
                 | SlashCommand::Clear
                 | SlashCommand::Fork
                 | SlashCommand::Plan
+                | SlashCommand::Team
                 | SlashCommand::Goal
                 | SlashCommand::Ide
                 | SlashCommand::Keymap
@@ -322,6 +325,7 @@ impl SlashCommand {
             | SlashCommand::Stop
             | SlashCommand::App
             | SlashCommand::Goal
+            | SlashCommand::Team
             | SlashCommand::Mcp
             | SlashCommand::OrchestratorMemoryForget
             | SlashCommand::OrchestratorMemoryConsolidate
@@ -416,6 +420,8 @@ mod tests {
         assert!(SlashCommand::Raw.available_in_side_conversation());
         assert!(SlashCommand::Raw.supports_inline_args());
         assert!(SlashCommand::App.available_during_task());
+        assert!(SlashCommand::Team.available_during_task());
+        assert!(SlashCommand::Team.supports_inline_args());
     }
 
     #[test]

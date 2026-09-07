@@ -20,6 +20,17 @@ release or merge rules.
 
 ## Unreleased
 
+- Opt-in Lead/Worker model teams:
+  - `[team]` can define exactly one Lead and one Worker model/effort profile;
+    profiles remain disabled for new sessions unless `team.enabled = true`.
+  - `/team on`, `/team off`, and `/team status` switch and report the live
+    per-thread assignment without changing global config defaults. The active
+    snapshot survives resume and fork, while in-flight workers stay pinned.
+  - Root sessions use Lead and delegated ThreadSpawn/review sessions use
+    Worker; model and effort overrides cannot promote or bypass that assignment.
+  - Routing enforces the selected catalog model and effort. It does not provide
+    a hard tool sandbox or attest that an external skill completed.
+
 - Advisory crossroads and decision-history traversal:
   - Request-start provenance matches no longer block model flow or infer user
     approval. Matching guidance is bounded informational context; independent
@@ -345,6 +356,11 @@ release or merge rules.
 
 ## Merge Checklist
 
+- Verify `[team]` rejects enabled configurations without both complete profiles,
+  remains disabled by default, and `/team` state survives resume/fork without
+  mutating global config. Verify Lead routing, Worker routing for all delegated
+  and review sessions, nested Worker depth handling, override rejection, and
+  single-model restoration after `/team off`.
 - Verify decision-provenance matches remain advisory retrieval candidates: they
   never gate normal model flow, infer approval, or turn historical options into
   current approval choices.

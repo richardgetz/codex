@@ -49,6 +49,7 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::ThreadTeamSettings;
 use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -112,6 +113,7 @@ pub struct ThreadConfigSnapshot {
     pub memory_policy: MemoryAccessPolicy,
     pub user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
     pub usage_policy: ThreadUsagePolicy,
+    pub team: Option<ThreadTeamSettings>,
     pub originator: String,
 }
 
@@ -160,6 +162,7 @@ impl ThreadConfigSnapshot {
             memory_policy: self.memory_policy,
             user_preferences_memory_policy: self.user_preferences_memory_policy,
             usage_policy: self.usage_policy,
+            team: self.team,
         }
     }
 
@@ -176,6 +179,7 @@ impl ThreadConfigSnapshot {
             collaboration_mode: Some(self.collaboration_mode),
             personality: self.personality,
             usage_policy: Some(self.usage_policy),
+            team: self.team,
             ..Default::default()
         }
     }
@@ -199,6 +203,7 @@ pub struct CodexThreadSettingsOverrides {
     pub collaboration_mode: Option<CollaborationMode>,
     pub personality: Option<Personality>,
     pub usage_policy: Option<ThreadUsagePolicy>,
+    pub team: Option<ThreadTeamSettings>,
 }
 
 pub use codex_guardian_context::GuardianRootMessage;
@@ -641,6 +646,7 @@ impl CodexThread {
             collaboration_mode,
             personality,
             usage_policy,
+            team,
         } = overrides;
         SessionSettingsUpdate {
             step_settings: StepSettingsUpdate {
@@ -660,6 +666,8 @@ impl CodexThread {
             active_permission_profile,
             windows_sandbox_level,
             usage_policy,
+            team: None,
+            team_snapshot: team,
             ..Default::default()
         }
     }
