@@ -145,6 +145,64 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   days and is capped at ten years. These are API-equivalent estimates, not a
   billing statement.
 
+### Per-thread usage budgets and automatic resume after reset
+
+The fork provides usage visibility, a remaining-usage floor, and automatic retry after a usage window
+resets. The model receives bounded advisory status with the remaining percentage
+and reset time for known 5-hour, weekly, and other provider windows. This status
+can be stale and does not guarantee available capacity.
+
+Configure the policy through app-server v2's `usagePolicy` field on
+`thread/start`, `thread/resume`, `thread/fork`, or `thread/settings/update`.
+Automatic resume defaults to `false`, and the remaining-usage floor defaults to
+`null` (disabled). Configure these per-thread settings through the API.
+
+For example, an initialized app-server client can enable automatic resume and
+set a 10% floor on an existing thread:
+
+```json
+{
+  "id": 1,
+  "method": "thread/settings/update",
+  "params": {
+    "threadId": "<thread-id>",
+    "usagePolicy": {
+      "autoResume": true,
+      "minimumRemainingPercent": 10
+    }
+  }
+}
+```
+
+- `minimumRemainingPercent` accepts an integer from 0 to 100. When any known
+  provider window has less than that percentage remaining, the harness stops
+  automatic continuation, including model/tool follow-ups, scratchpad loopbacks,
+  hooks, and queued automatic work. Explicit user turns remain allowed. Unknown
+  usage does not block work, and the floor is checked between requests; it is
+  not a guarantee that an in-flight request cannot consume the remaining budget.
+- `autoResume: true` lets a request that hits a resettable provider usage limit
+  wait until the reported reset time and retry, with at most three usage-limit
+  retries per sampling request. The wait can be cancelled and rechecks live
+  policy changes. Workspace usage caps and depleted credits are not retried
+  automatically, and a retry requires an available reset timestamp.
+- The floor and reset retry are separate controls. Reaching the floor stops
+  automatic work; it does not itself schedule a wake-up at reset. An automatic
+  continuation retry must still pass the floor check after its reset wait.
+- On a settings update, omitted policy fields preserve their existing values.
+  Send `"autoResume": false` to disable reset retry, or
+  `"minimumRemainingPercent": null` to clear the floor. Wait for
+  `thread/settings/updated` before sending a dependent partial update.
+- The policy persists across resume and is inherited by copied, reference,
+  paginated, and Last-N forks, as well as spawned subthreads. A cold resume
+  restores the policy, but an active reset wait exists only in the running
+  process and is not restored after restart.
+
+These controls use provider usage percentages. They do not enforce a dollar
+spending cap: the local `/status` and `/spend` API-equivalent cost estimates
+remain informational because ordinary provider responses do not expose
+authoritative billing limits. See the [app-server API](../codex-rs/app-server/README.md)
+for connection and thread lifecycle details.
+
 ### GPT-Live voice in the native TUI
 
 - The fork includes a native live voice mode that matches the Codex desktop

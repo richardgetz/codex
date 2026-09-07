@@ -47,6 +47,8 @@ release or merge rules.
     this foundation.
 
 - Per-thread usage visibility, budgets, and reset-aware auto-resume:
+  - Setup examples, defaults, and recovery limits are documented in
+    [Fork differences](../../../../docs/fork-differences.md#per-thread-usage-budgets-and-automatic-resume-after-reset).
   - App-server v2 exposes a persisted `usagePolicy` on thread start, resume,
     fork, and settings-update surfaces. It is disabled by default per thread.
   - `autoResume` opts a thread into reset-aware continuation, while
