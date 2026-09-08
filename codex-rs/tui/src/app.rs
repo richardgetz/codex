@@ -94,6 +94,7 @@ use crate::transcript_reflow::TranscriptReflowState;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
+use crate::usage_rollup;
 use crate::version::CODEX_CLI_VERSION;
 use crate::workspace_command::AppServerWorkspaceCommandRunner;
 use crate::workspace_command::WorkspaceCommandRunner;
@@ -559,6 +560,7 @@ pub(crate) struct App {
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
+    pub(crate) usage_rollup: usage_rollup::SharedUsageRollup,
     workspace_command_runner: Option<WorkspaceCommandRunner>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,

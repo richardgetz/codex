@@ -3313,11 +3313,12 @@ async fn try_run_sampling_request(
                     &mut assistant_message_stream_parsers,
                 )
                 .await;
-                sess.record_observed_response_completed(
-                    &turn_context,
+                sess.record_observed_response_completed_for_step(
+                    &step_context,
                     &response_id,
                     token_usage.as_ref(),
                     usage_metadata.as_ref(),
+                    service_tier.as_deref(),
                 )
                 .await;
                 let budget_result = sess

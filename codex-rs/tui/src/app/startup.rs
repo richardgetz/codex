@@ -507,6 +507,7 @@ impl App {
         chat_widget
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
 
+        let usage_rollup = chat_widget.usage_rollup_handle();
         let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let runtime_keymap = RuntimeKeymap::from_config(&config.tui_keymap).map_err(|err| {
             color_eyre::eyre::eyre!(
@@ -527,6 +528,7 @@ See the Codex keymap documentation for supported actions and examples."
             session_telemetry: session_telemetry.clone(),
             app_event_tx,
             chat_widget,
+            usage_rollup,
             workspace_command_runner: Some(workspace_command_runner),
             config,
             realtime_mic_mode,

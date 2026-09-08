@@ -14,18 +14,21 @@ use std::sync::Arc;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::ThreadTokenUsage;
+use codex_app_server_protocol::ThreadTokenUsageProjectionUpdatedNotification;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::CodexThread;
+use codex_core::ThreadManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_rollout::RolloutItem;
 
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::thread_state::ThreadStateManager;
 
-/// Sends a restored token usage update to the connection that attached to a thread.
+/// Sends the restored context-window counters to the connection that attached to a thread.
 ///
 /// This is lifecycle replay rather than a model event: the rollout already contains
 /// the original `TokenCount`, and emitting through `send_event` here would duplicate
@@ -53,6 +56,45 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
             ServerNotification::ThreadTokenUsageUpdated(notification),
         )
         .await;
+}
+
+/// Sends a complete recursive billing baseline without delaying thread admission or mixing it
+/// with context-window counters. Projection failures are represented as `None`, allowing clients
+/// to distinguish an unavailable read from a complete empty baseline.
+pub(super) async fn send_thread_token_usage_projection_to_connection(
+    outgoing: &Arc<OutgoingMessageSender>,
+    connection_id: ConnectionId,
+    thread_id: ThreadId,
+    thread_manager: &Arc<ThreadManager>,
+    thread_state_manager: &ThreadStateManager,
+) {
+    let outgoing = Arc::clone(outgoing);
+    let thread_manager = Arc::clone(thread_manager);
+    let delivery = thread_state_manager
+        .token_usage_projection_delivery(thread_id, connection_id)
+        .await;
+    let generation = delivery.begin();
+    tokio::spawn(async move {
+        let usage_projection = thread_manager
+            .token_usage_projection(thread_id)
+            .await
+            .ok()
+            .map(Into::into);
+        let _send_lock = delivery.send_lock().lock().await;
+        if !delivery.is_current(generation) {
+            return;
+        }
+        let notification = ThreadTokenUsageProjectionUpdatedNotification {
+            thread_id: thread_id.to_string(),
+            usage_projection,
+        };
+        outgoing
+            .send_server_notification_to_connections(
+                &[connection_id],
+                ServerNotification::ThreadTokenUsageProjectionUpdated(notification),
+            )
+            .await;
+    });
 }
 
 pub(super) fn restored_token_usage_turn_id(

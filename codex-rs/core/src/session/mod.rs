@@ -116,7 +116,6 @@ use codex_network_proxy::normalize_host;
 use codex_otel::current_span_trace_id;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
-use codex_protocol::ResponseUsageMetadata;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -287,6 +286,7 @@ pub(crate) mod turn_context;
 mod turn_input;
 mod turn_provenance;
 mod turn_suspension;
+mod usage;
 mod usage_policy;
 mod world_state;
 use self::code_mode_warning::unsupported_code_mode_warning;
@@ -480,7 +480,6 @@ use codex_protocol::protocol::ModelVerificationEvent;
 use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::RawResponseCompletedEvent;
 use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
@@ -2083,8 +2082,15 @@ impl Session {
                         state.set_rate_limits(rate_limits);
                     }
                 }
-                self.state.lock().await.latest_token_usage_record =
-                    Self::last_token_usage_record_from_rollout(&rollout_items);
+                let token_usage_records =
+                    Self::token_usage_records_from_rollout(&rollout_items, self.thread_id);
+                let latest_token_usage_record =
+                    Self::last_token_usage_record_from_rollout(&rollout_items)
+                        .filter(|record| record.thread_id == self.thread_id);
+                self.state
+                    .lock()
+                    .await
+                    .set_token_usage_records(token_usage_records, latest_token_usage_record);
 
                 // Defer seeding the session's initial context until the first turn starts so
                 // turn/start overrides can be merged before we write to the rollout.
@@ -2137,8 +2143,15 @@ impl Session {
                         state.set_rate_limits(rate_limits);
                     }
                 }
-                self.state.lock().await.latest_token_usage_record =
-                    Self::last_token_usage_record_from_rollout(&rollout_items);
+                let token_usage_records =
+                    Self::token_usage_records_from_rollout(&rollout_items, self.thread_id);
+                let latest_token_usage_record =
+                    Self::last_token_usage_record_from_rollout(&rollout_items)
+                        .filter(|record| record.thread_id == self.thread_id);
+                self.state
+                    .lock()
+                    .await
+                    .set_token_usage_records(token_usage_records, latest_token_usage_record);
 
                 let thread_settings_applied =
                     RolloutItem::EventMsg(thread_settings::applied_event(self).await);
@@ -2373,6 +2386,7 @@ impl Session {
         }
         None
     }
+
     async fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
         let state = self.state.lock().await;
         state.previous_turn_settings()
@@ -2600,6 +2614,23 @@ impl Session {
             .session_configuration
             .original_config_do_not_use
             .clone()
+    }
+
+    pub(crate) async fn session_source(&self) -> SessionSource {
+        self.state
+            .lock()
+            .await
+            .session_configuration
+            .session_source
+            .clone()
+    }
+
+    pub(crate) fn shutdown_requested(&self) -> bool {
+        self.mcp_prewarm_shutdown.is_cancelled()
+    }
+
+    pub(crate) async fn wait_for_shutdown(&self) {
+        self.mcp_prewarm_shutdown.cancelled().await;
     }
 
     pub(crate) async fn user_instructions(&self) -> Option<codex_extension_api::Instructions> {
@@ -5474,40 +5505,6 @@ impl Session {
             .await;
         self.send_token_count_event(turn_context).await;
         result
-    }
-
-    pub(crate) async fn record_observed_response_completed(
-        &self,
-        turn_context: &TurnContext,
-        response_id: &str,
-        usage: Option<&TokenUsage>,
-        usage_metadata: Option<&ResponseUsageMetadata>,
-    ) {
-        self.send_event(
-            turn_context,
-            EventMsg::RawResponseCompleted(RawResponseCompletedEvent {
-                response_id: response_id.to_string(),
-                token_usage: usage.cloned(),
-                usage_metadata: usage_metadata.cloned(),
-            }),
-        )
-        .await;
-        let Some(usage) = usage else {
-            return;
-        };
-        let record = self.state.lock().await.record_token_usage(
-            self.thread_id,
-            &turn_context.sub_id,
-            self.session_id(),
-            turn_context
-                .turn_metadata_state
-                .root_turn_id()
-                .unwrap_or_else(|| turn_context.sub_id.clone()),
-            response_id.to_string(),
-            usage,
-        );
-        self.persist_rollout_items(&[RolloutItem::TokenUsageRecord(record)])
-            .await;
     }
 
     pub(crate) async fn record_token_usage_info(

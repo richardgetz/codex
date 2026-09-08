@@ -32,6 +32,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
+use codex_app_server_protocol::ThreadTokenUsageProjectionUpdatedNotification;
 use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -476,6 +477,21 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
     assert_eq!(started.thread, thread);
+
+    let usage: ThreadTokenUsageProjectionUpdatedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_notification("thread/tokenUsageProjection/updated"),
+    )
+    .await??;
+    assert_eq!(usage.thread_id, thread.id);
+    let projection = usage
+        .usage_projection
+        .expect("fresh thread should publish a complete empty projection");
+    assert_eq!(projection.total.total_tokens, 0);
+    assert_eq!(projection.threads.len(), 1);
+    assert_eq!(projection.threads[0].thread_id, thread.id);
+    assert!(projection.threads[0].sources.is_empty());
+    assert!(projection.threads[0].response_ids.is_empty());
 
     Ok(())
 }

@@ -13004,6 +13004,67 @@ max_concurrent_threads_per_session = 9
 }
 
 #[tokio::test]
+async fn team_worker_max_concurrent_is_loaded_from_worker_profile() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[team]
+enabled = true
+
+[team.lead]
+model = "gpt-lead"
+reasoning_effort = "high"
+
+[team.worker]
+model = "gpt-worker"
+reasoning_effort = "max"
+max_concurrent = 4
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.team.worker_max_concurrent, Some(4));
+    Ok(())
+}
+
+#[tokio::test]
+async fn team_lead_rejects_worker_only_max_concurrent() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[team]
+enabled = false
+
+[team.lead]
+model = "gpt-lead"
+reasoning_effort = "high"
+max_concurrent = 4
+
+[team.worker]
+model = "gpt-worker"
+reasoning_effort = "max"
+"#,
+    )?;
+
+    let result = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await;
+    let error = match result {
+        Ok(_) => panic!("Lead must reject the Worker-only concurrency setting"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("unknown field"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn multi_agent_v2_default_session_thread_cap_counts_root() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(

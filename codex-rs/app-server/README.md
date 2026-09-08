@@ -430,7 +430,7 @@ Start a fresh thread when you need a new Codex conversation.
 
 Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
 
-To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`. When the stored session includes persisted token usage, the server emits `thread/tokenUsage/updated` immediately after the response so clients can render restored usage before the next turn starts. You can also pass the same configuration overrides supported by `thread/start`, including `approvalsReviewer`. On cold resume, approval policy and the active permission-profile ID select a source in this order: request override, latest persisted thread setting, current configured default. The persisted profile ID is resolved through the same config and requirements path as a `permissions` override. Threads without an active profile ID use current config instead of restoring their concrete historical permissions.
+To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`. When the stored session includes persisted token usage, the server schedules a `thread/tokenUsageProjection/updated` notification after the response so recursive history reads do not delay thread admission. Its `{ threadId, usageProjection }` payload contains a complete projection for the root and recursively reachable agent threads; `usageProjection: null` means the complete history was unavailable, while an empty projection is a complete zero-usage baseline. The projection is rebuilt from persisted per-response records, deduplicated by source thread and response ID, and carries model, provider, service tier, context-length, parent, fork, and response identity metadata. It is separate from the legacy `thread/tokenUsage/updated` notification, whose `tokenUsage` totals describe the active model context window. Clients can merge later `rawResponse/completed` events by their exact source response IDs. You can also pass the same configuration overrides supported by `thread/start`, including `approvalsReviewer`. On cold resume, approval policy and the active permission-profile ID select a source in this order: request override, latest persisted thread setting, current configured default. The persisted profile ID is resolved through the same config and requirements path as a `permissions` override. Threads without an active profile ID use current config instead of restoring their concrete historical permissions.
 
 Parent-owned Multi-Agent V2 children are an exception: `thread/resume` ignores configuration overrides and reattaches to the existing child. An unloaded child is reloaded through its actual, currently loaded parent using parent-derived configuration. If that owner-controlled reload cannot be performed, the request returns JSON-RPC error `-32600`; resume the parent first, or use `thread/read` or `thread/turns/list` to inspect the child's stored history without loading it. This policy follows the child's multi-agent runtime, including leaf workers whose models cannot delegate further.
 
@@ -482,7 +482,7 @@ Example:
 } }
 ```
 
-To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it. The returned `thread.sessionId` identifies the current live session tree root. Root threads use their own `thread.id` as `thread.sessionId`; stored threads that are not loaded also report their own `thread.id`, because resuming one makes it the root of a new live session tree. When the source history includes persisted token usage, the server also emits `thread/tokenUsage/updated` for the new thread immediately after the response. If the source thread is actively running, the fork snapshots it as if the current turn had been interrupted first. Pass `ephemeral: true` when the fork should stay in-memory only:
+To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it. The returned `thread.sessionId` identifies the current live session tree root. Root threads use their own `thread.id` as `thread.sessionId`; stored threads that are not loaded also report their own `thread.id`, because resuming one makes it the root of a new live session tree. When the source history includes persisted token usage, the server also schedules `thread/tokenUsageProjection/updated` for the new thread after the response. If the source thread is actively running, the fork snapshots it as if the current turn had been interrupted first. Pass `ephemeral: true` when the fork should stay in-memory only:
 
 ```json
 { "method": "thread/fork", "id": 12, "params": { "threadId": "thr_123", "ephemeral": true } }
@@ -509,7 +509,17 @@ reasoning_effort = "high"
 [team.worker]
 model = "gpt-5.6-luna"
 reasoning_effort = "max"
+# Optional: cap concurrently active direct Workers for each Lead.
+max_concurrent = 10
 ```
+
+`team.worker.max_concurrent` is an optional positive ceiling for direct Workers
+created by a Lead. It includes pending Worker starts, frees capacity when a
+Worker completes or aborts, and is a ceiling rather than a target; grandchildren
+are excluded. Existing global agent-count, depth, and resource limits still
+apply independently, and this setting does not raise or replace them. The Lead
+receives this guidance in its team instructions so it can balance useful
+parallelism with coordination overhead.
 
 Use `thread/settings/update` to select the mode for a loaded thread. The
 request is intentionally sparse: clients select only `mode`; role, assignments,
@@ -560,9 +570,10 @@ cannot be admitted while a root thread starts or resumes, the server emits a
 warning, keeps that thread in `off` mode, and restores the single-model
 selection and effort that preceded the assignment (explicit resume overrides take
 precedence). Worker starts and live mode toggles remain strict, and malformed
-persisted team snapshots still fail validation. A V1 Worker under a V2 Lead is a
-leaf worker without collaboration tools, so the Lead must schedule any nested
-review work separately.
+persisted team snapshots still fail validation. A V1 Worker under a V2 Lead can
+use the selected collaboration namespace and spawn nested Workers when its
+catalog metadata supports delegation; disabled assignments remain
+collaboration-tool-free.
 
 ### Listing projects
 
@@ -1876,13 +1887,13 @@ Because audio is intentionally separate from `ThreadItem`, clients can opt out o
 
 ### Turn events
 
-The app-server streams JSON-RPC notifications while a turn is running. Each turn emits `turn/started` when it begins running and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
+The app-server streams JSON-RPC notifications while a turn is running. Each turn emits `turn/started` when it begins running and ends with `turn/completed` (final `turn` status). Context-window counters stream via `thread/tokenUsage/updated`, while complete recursive billing baselines arrive separately via `thread/tokenUsageProjection/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
 
 - `turn/started` — `{ turn }` with the turn id, empty `items`, and `status: "inProgress"`.
 - `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; successful turns include their final agent message when available, and failures carry `{ error: { message, codexErrorInfo?, additionalDetails?, misalignment? } }`.
 - `turn/diff/updated` — `{ threadId, turnId, diff }` represents the up-to-date snapshot of the turn-level unified diff, emitted after every FileChange item. `diff` is the latest aggregated unified diff across every file change in the turn. UIs can render this to show the full "what changed" view without stitching individual `fileChange` items.
 - `turn/plan/updated` — `{ turnId, explanation?, plan }` whenever the agent shares or changes its plan; each `plan` entry is `{ step, status }` with `status` in `pending`, `inProgress`, or `completed`.
-- `rawResponse/completed` — internal-only; when `thread/start.experimentalRawEvents` is enabled, emits `{ threadId, turnId, responseId, usage }` once for each upstream Responses API completion. `usage` is the exact upstream usage payload mapped to the app-server token breakdown shape and is `null` when the upstream completion omitted usage. Unlike `thread/tokenUsage/updated`, this notification is not accumulated, estimated, persisted, or replayed.
+- `rawResponse/completed` — internal-only; emits `{ threadId, turnId, responseId, usage, sourceThreadId, parentThreadId, completedAt, attribution }` once for each upstream Responses API completion. `usage` is the exact upstream usage payload mapped to the app-server token breakdown shape and is `null` when the upstream completion omitted usage. `completedAt` is a Unix timestamp in seconds. The event is transient and is not itself accumulated or replayed; the corresponding exact usage record is persisted when usage is available and appears in the next `usageProjection`. The related raw response item stream remains gated by `experimentalRawEvents`.
 - `model/safetyBuffering/updated` — `{ threadId, turnId, model, useCases, reasons, showBufferingUi, fasterModel }` when a response enters safety buffering. `fasterModel` is nullable. This notification is transient and is not persisted in rollout history.
 - `model/rerouted` — `{ threadId, turnId, fromModel, toModel, reason }` when the backend reroutes a request to a different model (for example, due to high-risk cyber safety checks).
 - `model/verification` — `{ threadId, turnId, verifications }` when the backend flags additional account verification, such as `trustedAccessForCyber`.

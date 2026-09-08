@@ -13,6 +13,7 @@ use serde::Serialize;
 #[derive(Clone, Debug)]
 pub(crate) struct TeamPolicyState {
     role: Option<TeamRole>,
+    worker_max_concurrent: Option<usize>,
     multi_agent_mode: Option<MultiAgentMode>,
     multi_agent_usage_hint_hash: Option<WorldStateHash>,
 }
@@ -22,15 +23,20 @@ pub(crate) struct TeamPolicySnapshot {
     #[serde(default)]
     role: Option<TeamRole>,
     #[serde(default)]
+    worker_max_concurrent: Option<usize>,
+    #[serde(default)]
     multi_agent_mode: Option<MultiAgentMode>,
     #[serde(default)]
     multi_agent_usage_hint_hash: Option<WorldStateHash>,
 }
 
 impl TeamPolicyState {
-    pub(crate) fn new(role: TeamRole) -> Self {
+    pub(crate) fn new(role: TeamRole, worker_max_concurrent: Option<usize>) -> Self {
         Self {
             role: Some(role),
+            worker_max_concurrent: matches!(role, TeamRole::Lead)
+                .then_some(worker_max_concurrent)
+                .flatten(),
             multi_agent_mode: None,
             multi_agent_usage_hint_hash: None,
         }
@@ -39,6 +45,7 @@ impl TeamPolicyState {
     pub(crate) fn disabled() -> Self {
         Self {
             role: None,
+            worker_max_concurrent: None,
             multi_agent_mode: None,
             multi_agent_usage_hint_hash: None,
         }
@@ -59,6 +66,7 @@ impl WorldStateSection for TeamPolicyState {
     fn snapshot(&self) -> Self::Snapshot {
         TeamPolicySnapshot {
             role: self.role,
+            worker_max_concurrent: self.worker_max_concurrent,
             multi_agent_mode: self.multi_agent_mode.clone(),
             multi_agent_usage_hint_hash: self.multi_agent_usage_hint_hash.clone(),
         }
@@ -82,13 +90,17 @@ impl WorldStateSection for TeamPolicyState {
     ) -> Option<Box<dyn ContextualUserFragment>> {
         if matches!(previous, PreviousSectionState::Known(previous)
             if previous.role == self.role
+                && previous.worker_max_concurrent == self.worker_max_concurrent
                 && previous.multi_agent_mode == self.multi_agent_mode
                 && previous.multi_agent_usage_hint_hash == self.multi_agent_usage_hint_hash
         ) {
             return None;
         }
         match self.role {
-            Some(role) => Some(Box::new(TeamInstructions::new(role))),
+            Some(role) => Some(Box::new(TeamInstructions::new(
+                role,
+                self.worker_max_concurrent,
+            ))),
             None if matches!(
                 previous,
                 PreviousSectionState::Known(previous) if previous.role.is_some()
@@ -100,3 +112,7 @@ impl WorldStateSection for TeamPolicyState {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "team_tests.rs"]
+mod tests;

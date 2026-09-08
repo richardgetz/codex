@@ -1,4 +1,5 @@
 use crate::token_usage::TokenUsage;
+use crate::usage_rollup::UsageRollupSource;
 use codex_config::types::TuiStatusTokenUsage;
 use codex_config::types::TuiStatusTokenUsageRate;
 use codex_config::types::TuiStatusTokenUsageServiceTierRate;
@@ -203,6 +204,93 @@ pub(crate) fn estimate_cost_usd_for_usage(
         usage_by_service_tier_and_context_length,
     )
     .map(|cost| cost.total_usd)
+}
+
+/// Composes the opt-in cost card from exact sources belonging to a thread tree.
+///
+/// Every source is priced with its originating provider, model, and service tier. Sources with
+/// incomplete attribution still contribute token totals, but make the aggregate cost unavailable
+/// instead of silently pricing them with the foreground thread's rate.
+pub(crate) fn compose_status_token_usage_cost_for_sources(
+    config: &TuiStatusTokenUsage,
+    sources: &[UsageRollupSource],
+) -> Option<StatusTokenUsageCostData> {
+    if !config.enabled || sources.is_empty() {
+        return None;
+    }
+
+    let mut total_usage = TokenUsage::default();
+    let mut aggregate_cost = StatusTokenUsageCostBreakdown::default();
+    let mut cost_available = true;
+    let mut model_breakdowns =
+        BTreeMap::<String, (i64, Option<StatusTokenUsageCostBreakdown>, bool)>::new();
+    for source in sources {
+        if source.usage.is_zero() {
+            continue;
+        }
+        add_usage(&mut total_usage, &source.usage);
+        let model = source
+            .model
+            .clone()
+            .unwrap_or_else(|| UNATTRIBUTED_MODEL_LABEL.to_string());
+        let total_tokens = input_token_breakdown(&source.usage)
+            .0
+            .saturating_add(source.usage.output_tokens.max(0));
+        let cost = match (
+            source.model_provider_id.as_deref(),
+            source.model.as_deref(),
+            source.context_length.as_deref(),
+        ) {
+            (Some(model_provider_id), Some(model), Some(_)) => compose_single_model_cost(
+                config,
+                model_provider_id,
+                model,
+                &source.usage,
+                &source.usage_by_service_tier,
+                &source.usage_by_service_tier_and_context_length,
+            )
+            .and_then(|data| data.cost),
+            _ => None,
+        };
+        let model_entry = model_breakdowns.entry(model).or_insert((
+            0,
+            Some(StatusTokenUsageCostBreakdown::default()),
+            true,
+        ));
+        model_entry.0 += total_tokens;
+        match (model_entry.1.as_mut(), cost) {
+            (Some(existing), Some(cost)) => {
+                existing.add_assign(cost.clone());
+                aggregate_cost.add_assign(cost);
+            }
+            (_, None) => {
+                model_entry.1 = None;
+                model_entry.2 = false;
+                cost_available = false;
+            }
+            (None, Some(cost)) => {
+                aggregate_cost.add_assign(cost);
+            }
+        }
+    }
+    if model_breakdowns.is_empty() {
+        return None;
+    }
+    let model_breakdowns = model_breakdowns
+        .into_iter()
+        .map(
+            |(model, (total_tokens, cost, model_cost_available))| StatusTokenUsageCostModelData {
+                model,
+                total_tokens,
+                cost: model_cost_available.then_some(cost.unwrap_or_default()),
+            },
+        )
+        .collect();
+    Some(status_token_usage_cost_data(
+        &total_usage,
+        cost_available.then_some(aggregate_cost),
+        model_breakdowns,
+    ))
 }
 
 fn compose_single_model_cost(
@@ -1025,6 +1113,61 @@ mod tests {
         assert_eq!(
             span_text(data.summary_spans()),
             "3M API-equivalent tokens  ~$22.00"
+        );
+    }
+
+    #[test]
+    fn cost_prices_multiple_default_tier_short_sources_individually() {
+        let config = TuiStatusTokenUsage {
+            enabled: true,
+            daily_spend_retention_days: 30,
+            model_rates: BTreeMap::new(),
+        };
+        let source = |response_id: &str| {
+            let usage = TokenUsage {
+                input_tokens: 200_000,
+                total_tokens: 200_000,
+                ..TokenUsage::default()
+            };
+            UsageRollupSource {
+                thread_id: codex_protocol::ThreadId::new(),
+                parent_thread_id: None,
+                forked_from_id: None,
+                model_provider_id: Some("openai".to_string()),
+                model: Some("gpt-5.4".to_string()),
+                service_tier: None,
+                context_length: Some(TOKEN_USAGE_SHORT_CONTEXT.to_string()),
+                usage: usage.clone(),
+                usage_by_service_tier: BTreeMap::from([(
+                    TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
+                    usage.clone(),
+                )]),
+                usage_by_service_tier_and_context_length: BTreeMap::from([(
+                    TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
+                    BTreeMap::from([(TOKEN_USAGE_SHORT_CONTEXT.to_string(), usage)]),
+                )]),
+                response_ids: vec![response_id.to_string()],
+            }
+        };
+
+        let data = compose_status_token_usage_cost_for_sources(
+            &config,
+            &[source("first"), source("second")],
+        )
+        .expect("usage should render");
+
+        // The two requests are short individually even though their combined input exceeds the
+        // long-context threshold. The default tier remains the standard pricing bucket.
+        assert_eq!(
+            span_text(data.summary_spans()),
+            "400K API-equivalent tokens  ~$1.00"
+        );
+        assert_eq!(
+            data.model_spans()
+                .into_iter()
+                .map(span_text)
+                .collect::<Vec<_>>(),
+            vec!["gpt-5.4: 400K API-equivalent tokens  ~$1.00"]
         );
     }
 

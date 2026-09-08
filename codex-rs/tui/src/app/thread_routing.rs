@@ -1788,6 +1788,7 @@ impl App {
                     notification.as_ref(),
                     ServerNotification::TurnStarted(_)
                         | ServerNotification::ThreadTokenUsageUpdated(_)
+                        | ServerNotification::ThreadTokenUsageProjectionUpdated(_)
                 )
         );
         match event {

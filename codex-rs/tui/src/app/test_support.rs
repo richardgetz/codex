@@ -16,12 +16,14 @@ pub(super) async fn make_test_app() -> App {
     let realtime_mic_mode = RealtimeMicMode::from_config_enabled(config.realtime.enabled);
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
+    let usage_rollup = chat_widget.usage_rollup_handle();
 
     App {
         model_catalog: chat_widget.model_catalog(),
         session_telemetry,
         app_event_tx,
         chat_widget,
+        usage_rollup,
         workspace_command_runner: None,
         launch_cwd: config.cwd.to_path_buf(),
         runtime_working_directory_override: None,

@@ -312,8 +312,8 @@ async fn start_or_steer(
                 task_input.push(pending_turn_input(input));
             }
             session
-                .spawn_task(turn_context, task_input, RegularTask::new())
-                .await;
+                .try_spawn_task(turn_context, task_input, RegularTask::new())
+                .await?;
             Ok(TurnInputSubmission::Started {
                 turn_id: submission_id,
             })
@@ -422,6 +422,7 @@ async fn start_if_idle(
         .await;
 
     let mut task_input = merge_additional_context_input(session, additional_context).await;
+    let mut initial_pending_input = Vec::new();
     match kind {
         TurnStartKind::User => {
             session.clear_connector_selection().await;
@@ -433,22 +434,27 @@ async fn start_if_idle(
         TurnStartKind::Automatic => {
             // Empty automatic user input resumes sampling without a new message.
             if !matches!(&input, SubmittedTurnInput::UserInput { .. }) {
-                session
-                    .input_queue
-                    .extend_pending_input_for_turn_state(
-                        turn_state.as_ref(),
-                        vec![pending_turn_input(input)],
-                    )
-                    .await;
+                initial_pending_input.push(pending_turn_input(input));
             }
         }
         TurnStartKind::Recovery => {
             // Recovery resumes an existing turn without a new empty user message.
         }
     }
-    session
-        .start_task(turn_context, task_input, RegularTask::new())
-        .await;
+    if let Err(error) = session
+        .try_start_task_with_pending_input(
+            turn_context,
+            task_input,
+            initial_pending_input,
+            RegularTask::new(),
+        )
+        .await
+    {
+        // Central admission may fail after this idle turn was reserved by the router.
+        // Clear it so a later request can retry instead of observing a taskless turn.
+        session.clear_reserved_idle_turn(&turn_state).await;
+        return Err(error);
+    }
     Ok(TurnInputSubmission::Started {
         turn_id: submission_id,
     })
@@ -498,7 +504,10 @@ async fn steer(
 }
 
 impl Session {
-    async fn clear_reserved_idle_turn(&self, turn_state: &Arc<tokio::sync::Mutex<TurnState>>) {
+    pub(crate) async fn clear_reserved_idle_turn(
+        &self,
+        turn_state: &Arc<tokio::sync::Mutex<TurnState>>,
+    ) {
         let mut active_turn_guard = self.active_turn.lock().await;
         if let Some(active_turn) = active_turn_guard.as_ref()
             && active_turn.task.is_none()

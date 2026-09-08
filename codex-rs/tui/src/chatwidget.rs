@@ -54,7 +54,6 @@ use crate::bottom_pane::StatusSurfacePreviewData;
 use crate::bottom_pane::StatusSurfacePreviewItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
-use crate::daily_spend;
 use crate::diff_model::FileChange;
 use crate::git_action_directives::parse_assistant_markdown;
 use crate::legacy_core::config::Config;
@@ -79,6 +78,7 @@ use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
+use crate::usage_rollup;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
@@ -609,7 +609,7 @@ pub(crate) struct ChatWidget {
     runtime_model_provider_base_url: Option<String>,
     pub(crate) remote_connection: Option<RemoteConnectionStatus>,
     token_info: Option<TokenUsageInfo>,
-    daily_spend: daily_spend::DailySpendTracker,
+    usage_rollup: usage_rollup::SharedUsageRollup,
     account_generation: u64,
     token_usage_pending: bool,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
@@ -2045,6 +2045,14 @@ impl ChatWidget {
             .as_ref()
             .map(|ti| ti.total_token_usage.clone())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn usage_rollup_handle(&self) -> usage_rollup::SharedUsageRollup {
+        self.usage_rollup.clone()
+    }
+
+    pub(crate) fn set_usage_rollup(&mut self, usage_rollup: usage_rollup::SharedUsageRollup) {
+        self.usage_rollup = usage_rollup;
     }
 
     pub(crate) fn thread_id(&self) -> Option<ThreadId> {

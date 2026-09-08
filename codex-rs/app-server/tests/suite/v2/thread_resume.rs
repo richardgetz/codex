@@ -82,6 +82,7 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_features::Feature;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::MemoryAccessPolicy;
@@ -113,7 +114,9 @@ use codex_protocol::protocol::TeamRole;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageAttribution;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -3769,6 +3772,48 @@ async fn cold_paginated_resume_restores_usage_without_loading_turns() -> Result<
         })),
     )
     .await?;
+    let thread_id = ThreadId::from_string(&conversation_id)?;
+    let usage = TokenUsage {
+        input_tokens: 9,
+        output_tokens: 3,
+        total_tokens: 12,
+        ..Default::default()
+    };
+    let record = TokenUsageRecord {
+        thread_id,
+        parent_thread_id: None,
+        turn_id: canonical_turn_id.to_string(),
+        session_id: SessionId::from(thread_id),
+        root_turn_id: canonical_turn_id.to_string(),
+        response_id: "saved-response".to_string(),
+        usage: usage.clone(),
+        turn_token_usage: usage.clone(),
+        thread_token_usage: usage.clone(),
+        attribution: TokenUsageAttribution {
+            model: Some("mock-model".to_string()),
+            model_provider: Some("mock_provider".to_string()),
+            service_tier: Some("standard".to_string()),
+            context_length: Some("short".to_string()),
+        },
+        completed_at_ms: Some(1_735_000_000_000),
+    };
+    append_rollout_item_to_path(&path, &RolloutItem::TokenUsageRecord(record.clone())).await?;
+    append_rollout_item_to_path(
+        &path,
+        &RolloutItem::Compacted(CompactedItem {
+            message: "usage checkpoint".to_string(),
+            replacement_history: Some(Vec::new()),
+            guardian_history: None,
+            mcp_resource_origins: None,
+            window_number: Some(1),
+            first_window_id: None,
+            previous_window_id: None,
+            window_id: None,
+            compaction_response_id: None,
+            latest_token_usage_record: Some(record),
+        }),
+    )
+    .await?;
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build_initialized()
@@ -3796,6 +3841,35 @@ async fn cold_paginated_resume_restores_usage_without_loading_turns() -> Result<
     assert_eq!(notification.thread_id, thread.id);
     assert_eq!(notification.turn_id, canonical_turn_id);
     assert_eq!(notification.token_usage.total.total_tokens, 150);
+    let projection_notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_notification_message("thread/tokenUsageProjection/updated"),
+    )
+    .await??;
+    let ServerNotification::ThreadTokenUsageProjectionUpdated(projection_notification) =
+        projection_notification.try_into()?
+    else {
+        panic!("expected thread/tokenUsageProjection/updated notification");
+    };
+    let projection = projection_notification
+        .usage_projection
+        .expect("cold resume should include a complete usage projection");
+    assert_eq!(projection.total.total_tokens, 12);
+    assert_eq!(projection.threads.len(), 1);
+    assert_eq!(projection.threads[0].thread_id, thread.id);
+    assert_eq!(projection.threads[0].parent_thread_id, None);
+    assert_eq!(projection.threads[0].sources.len(), 1);
+    assert_eq!(
+        projection.threads[0].sources[0].response_ids,
+        vec!["saved-response".to_string()]
+    );
+    assert_eq!(
+        projection.threads[0].sources[0]
+            .attribution
+            .model
+            .as_deref(),
+        Some("mock-model")
+    );
 
     let turns_id = app_server
         .send_thread_turns_list_request(ThreadTurnsListParams {

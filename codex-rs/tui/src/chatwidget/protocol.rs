@@ -34,7 +34,7 @@ impl ChatWidget {
             ServerNotification::ThreadTokenUsageUpdated(notification) => {
                 let info = token_usage_info_from_app_server(notification.token_usage);
                 let current_model = self.current_model().to_string();
-                if let Err(err) = self.daily_spend.observe(
+                if let Err(err) = self.usage_rollup.lock().observe_legacy_snapshot(
                     &info,
                     from_replay,
                     &self.config.tui_status_token_usage,
@@ -44,6 +44,21 @@ impl ChatWidget {
                     tracing::warn!(%err, "failed to record daily spend");
                 }
                 self.set_token_info(Some(info));
+            }
+            ServerNotification::ThreadTokenUsageProjectionUpdated(notification) => {
+                let result = match notification.usage_projection.as_ref() {
+                    Some(projection) => self
+                        .usage_rollup
+                        .lock()
+                        .observe_app_projection(&notification.thread_id, projection),
+                    None => self
+                        .usage_rollup
+                        .lock()
+                        .observe_app_projection_unavailable(&notification.thread_id),
+                };
+                if let Err(err) = result {
+                    tracing::warn!(%err, "failed to merge usage projection");
+                }
             }
             ServerNotification::ThreadNameUpdated(notification) => {
                 match ThreadId::from_string(&notification.thread_id) {
@@ -57,6 +72,15 @@ impl ChatWidget {
                             "ignoring app-server ThreadNameUpdated with invalid thread_id"
                         );
                     }
+                }
+            }
+            ServerNotification::RawResponseCompleted(notification) => {
+                if let Err(err) = self
+                    .usage_rollup
+                    .lock()
+                    .observe_app_response(&notification, &self.config.tui_status_token_usage)
+                {
+                    tracing::warn!(%err, "failed to record exact response usage");
                 }
             }
             ServerNotification::ThreadGoalUpdated(notification) => {
@@ -292,7 +316,6 @@ impl ChatWidget {
             | ServerNotification::ThreadDeleted(_)
             | ServerNotification::ThreadUnarchived(_)
             | ServerNotification::RawResponseItemCompleted(_)
-            | ServerNotification::RawResponseCompleted(_)
             | ServerNotification::CommandExecOutputDelta(_)
             | ServerNotification::ProcessOutputDelta(_)
             | ServerNotification::ProcessExited(_)

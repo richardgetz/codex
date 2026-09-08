@@ -25,6 +25,7 @@ use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageAttribution;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnContextItem;
@@ -42,6 +43,9 @@ pub(crate) struct SessionState {
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) rate_limits_by_limit_id: BTreeMap<String, RateLimitSnapshot>,
     pub(crate) latest_token_usage_record: Option<TokenUsageRecord>,
+    /// Exact response records observed by this thread. Forked sessions retain their context
+    /// snapshot but rebuild this ledger from records carrying the new thread id.
+    pub(crate) token_usage_records: Vec<TokenUsageRecord>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
@@ -86,6 +90,7 @@ impl SessionState {
             latest_rate_limits: None,
             rate_limits_by_limit_id: BTreeMap::new(),
             latest_token_usage_record: None,
+            token_usage_records: Vec::new(),
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
@@ -184,6 +189,31 @@ impl SessionState {
         response_id: String,
         usage: &TokenUsage,
     ) -> TokenUsageRecord {
+        self.record_token_usage_with_attribution(
+            thread_id,
+            turn_id,
+            session_id,
+            root_turn_id,
+            response_id,
+            usage,
+            None,
+            TokenUsageAttribution::default(),
+            None,
+        )
+    }
+
+    pub(crate) fn record_token_usage_with_attribution(
+        &mut self,
+        thread_id: ThreadId,
+        turn_id: &str,
+        session_id: SessionId,
+        root_turn_id: String,
+        response_id: String,
+        usage: &TokenUsage,
+        parent_thread_id: Option<ThreadId>,
+        attribution: TokenUsageAttribution,
+        completed_at_ms: Option<i64>,
+    ) -> TokenUsageRecord {
         let mut turn_token_usage = self
             .latest_token_usage_record
             .as_ref()
@@ -201,6 +231,7 @@ impl SessionState {
         thread_token_usage.add_assign(usage);
         let record = TokenUsageRecord {
             thread_id,
+            parent_thread_id,
             turn_id: turn_id.to_string(),
             session_id,
             root_turn_id,
@@ -208,13 +239,25 @@ impl SessionState {
             usage: usage.clone(),
             turn_token_usage,
             thread_token_usage,
+            attribution,
+            completed_at_ms,
         };
         self.latest_token_usage_record = Some(record.clone());
+        self.token_usage_records.push(record.clone());
         record
     }
 
     pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
         self.history.set_reference_context_item(item);
+    }
+
+    pub(crate) fn set_token_usage_records(
+        &mut self,
+        records: Vec<TokenUsageRecord>,
+        latest_token_usage_record: Option<TokenUsageRecord>,
+    ) {
+        self.token_usage_records = records;
+        self.latest_token_usage_record = latest_token_usage_record;
     }
 
     pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {

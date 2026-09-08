@@ -212,6 +212,7 @@ pub use team::TeamModelProfileToml;
 pub use team::TeamModelProfiles;
 pub use team::TeamRole;
 pub use team::TeamToml;
+pub use team::TeamWorkerProfileToml;
 pub use thread_config::NoopThreadConfigLoader;
 pub use thread_config::RemoteThreadConfigLoader;
 pub use thread_config::SessionThreadConfig;

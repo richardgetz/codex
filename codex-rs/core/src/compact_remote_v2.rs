@@ -39,6 +39,7 @@ use codex_context_fragments::to_annotated_content;
 use codex_features::Feature;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -396,7 +397,15 @@ async fn run_remote_compaction_request_v2(
             )
             .await
         {
-            Ok(stream) => collect_compaction_output(sess, turn_context, stream).await,
+            Ok(stream) => {
+                collect_compaction_output(
+                    sess,
+                    turn_context,
+                    stream,
+                    step_context.settings.service_tier.as_deref(),
+                )
+                .await
+            }
             Err(err) => Err(err),
         };
 
@@ -429,6 +438,7 @@ async fn collect_compaction_output(
     sess: &Session,
     turn_context: &TurnContext,
     mut stream: ResponseStream,
+    requested_service_tier: Option<&str>,
 ) -> CodexResult<RemoteCompactionV2Output> {
     let mut output_item_count = 0usize;
     let mut compaction_count = 0usize;
@@ -449,14 +459,20 @@ async fn collect_compaction_output(
             ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                service_tier,
                 usage_metadata,
                 ..
             } => {
-                sess.record_observed_response_completed(
+                let effective_service_tier = service_tier
+                    .as_deref()
+                    .or(requested_service_tier)
+                    .or(Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE));
+                sess.record_observed_response_completed_with_attribution(
                     turn_context,
                     &response_id,
                     token_usage.as_ref(),
                     usage_metadata.as_ref(),
+                    effective_service_tier,
                 )
                 .await;
                 completed_response_id = Some(response_id);
@@ -1195,9 +1211,14 @@ mod tests {
 
         let (sess, turn_context, rx) =
             crate::session::tests::make_session_and_context_with_rx().await;
-        let output = collect_compaction_output(&sess, &turn_context, stream)
-            .await
-            .expect("compaction should be collected");
+        let output = collect_compaction_output(
+            &sess,
+            &turn_context,
+            stream,
+            /*requested_service_tier*/ None,
+        )
+        .await
+        .expect("compaction should be collected");
 
         assert_eq!(output.compaction_output, compaction);
         assert_eq!(output.response_id, "resp-compact");

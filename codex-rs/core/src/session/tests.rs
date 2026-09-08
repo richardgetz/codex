@@ -3121,6 +3121,7 @@ fn latest_token_usage_record_stops_at_compaction_checkpoint() {
     let thread_id = ThreadId::new();
     let checkpoint_record = TokenUsageRecord {
         thread_id,
+        parent_thread_id: None,
         turn_id: "turn-1".to_string(),
         session_id: SessionId::from(thread_id),
         root_turn_id: "turn-1".to_string(),
@@ -3128,6 +3129,8 @@ fn latest_token_usage_record_stops_at_compaction_checkpoint() {
         usage: TokenUsage::default(),
         turn_token_usage: TokenUsage::default(),
         thread_token_usage: TokenUsage::default(),
+        attribution: Default::default(),
+        completed_at_ms: None,
     };
     let checkpoint = |latest_token_usage_record| {
         RolloutItem::Compacted(CompactedItem {
@@ -3230,6 +3233,45 @@ async fn recompute_token_usage_updates_model_context_window() {
 }
 
 #[tokio::test]
+async fn observed_response_usage_uses_active_step_service_tier_when_response_omits_it() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    Arc::make_mut(&mut turn_context.config).service_tier = Some("fast".to_string());
+
+    let mut step_context = StepContext::for_test(Arc::new(turn_context));
+    let mut settings = step_context.settings.as_ref().clone();
+    settings.service_tier = Some("priority".to_string());
+    Arc::get_mut(&mut step_context)
+        .expect("test step context must not be shared")
+        .settings = Arc::new(settings);
+
+    let usage = TokenUsage {
+        input_tokens: 10,
+        cached_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        output_tokens: 5,
+        reasoning_output_tokens: 0,
+        total_tokens: 15,
+        codex_rollout_budget_units: None,
+    };
+    session
+        .record_observed_response_completed_for_step(
+            &step_context,
+            "response-active-tier",
+            Some(&usage),
+            None,
+            /*effective_service_tier*/ None,
+        )
+        .await;
+
+    let records = session.token_usage_records().await;
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].attribution.service_tier.as_deref(),
+        Some("priority")
+    );
+}
+
+#[tokio::test]
 async fn record_token_usage_info_notifies_extension_contributors() {
     struct SessionTokenUsageMarker;
     struct ThreadTokenUsageMarker;
@@ -3323,6 +3365,33 @@ async fn record_token_usage_info_notifies_extension_contributors() {
         TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
         expected_total_usage.clone(),
     );
+    let model = turn_context.model_info().slug.clone();
+    let first_usage_by_model =
+        std::collections::BTreeMap::from([(model.clone(), first_usage.clone())]);
+    let first_usage_by_model_and_service_tier_and_context_length =
+        std::collections::BTreeMap::from([(
+            model.clone(),
+            std::collections::BTreeMap::from([(
+                TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
+                std::collections::BTreeMap::from([(
+                    first_usage.context_length().to_string(),
+                    first_usage.clone(),
+                )]),
+            )]),
+        )]);
+    let expected_usage_by_model =
+        std::collections::BTreeMap::from([(model.clone(), expected_total_usage.clone())]);
+    let expected_usage_by_model_and_service_tier_and_context_length =
+        std::collections::BTreeMap::from([(
+            model,
+            std::collections::BTreeMap::from([(
+                TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
+                std::collections::BTreeMap::from([(
+                    expected_total_usage.context_length().to_string(),
+                    expected_total_usage.clone(),
+                )]),
+            )]),
+        )]);
     let expected = vec![
         RecordedTokenUsage {
             session_level_id: session.session_id().to_string(),
@@ -3342,8 +3411,9 @@ async fn record_token_usage_info_notifies_extension_contributors() {
                         first_usage.clone(),
                     )]),
                 )]),
-                usage_by_model: Default::default(),
-                usage_by_model_and_service_tier_and_context_length: Default::default(),
+                usage_by_model: first_usage_by_model,
+                usage_by_model_and_service_tier_and_context_length:
+                    first_usage_by_model_and_service_tier_and_context_length,
                 model_context_window: turn_context.model_context_window(),
             },
             saw_session_store: true,
@@ -3364,8 +3434,9 @@ async fn record_token_usage_info_notifies_extension_contributors() {
                         expected_total_usage.clone(),
                     )]),
                 )]),
-                usage_by_model: Default::default(),
-                usage_by_model_and_service_tier_and_context_length: Default::default(),
+                usage_by_model: expected_usage_by_model,
+                usage_by_model_and_service_tier_and_context_length:
+                    expected_usage_by_model_and_service_tier_and_context_length,
                 model_context_window: turn_context.model_context_window(),
             },
             saw_session_store: true,
@@ -3733,6 +3804,7 @@ async fn start_new_context_window_persists_checkpoint_state() {
     let thread_id = ThreadId::new();
     let token_usage_record = TokenUsageRecord {
         thread_id,
+        parent_thread_id: None,
         turn_id: "turn-1".to_string(),
         session_id: SessionId::from(thread_id),
         root_turn_id: "turn-1".to_string(),
@@ -3740,6 +3812,8 @@ async fn start_new_context_window_persists_checkpoint_state() {
         usage: TokenUsage::default(),
         turn_token_usage: TokenUsage::default(),
         thread_token_usage: TokenUsage::default(),
+        attribution: Default::default(),
+        completed_at_ms: None,
     };
     session.state.lock().await.latest_token_usage_record = Some(token_usage_record.clone());
     let step_context = session

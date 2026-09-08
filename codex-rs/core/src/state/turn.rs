@@ -18,6 +18,7 @@ use rmcp::model::RequestId;
 use tokio::sync::oneshot;
 
 use crate::agent::control::AgentExecutionGuard;
+use crate::agent::control::TeamWorkerLease;
 use crate::mcp_tool_call::McpToolApprovalMetadata;
 use crate::session::TurnInput;
 use crate::session::TurnInputQueue;
@@ -81,6 +82,7 @@ pub(crate) struct RunningTask {
     pub(crate) handle: AbortOnDropHandle<()>,
     pub(crate) turn_context: Arc<TurnContext>,
     pub(crate) _agent_execution_guard: Option<AgentExecutionGuard>,
+    pub(crate) _team_worker_lease: Option<TeamWorkerLease>,
     pub(crate) _diagnostics_guard: GaugeGuard,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<codex_otel::Timer>,

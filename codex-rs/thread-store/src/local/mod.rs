@@ -22,6 +22,7 @@ mod thread_rollout_resolver;
 mod thread_sections;
 mod unarchive_thread;
 mod update_thread_metadata;
+mod usage;
 mod writer_lock;
 
 #[cfg(test)]
@@ -415,6 +416,13 @@ impl LocalThreadStore {
         })
     }
 
+    async fn load_token_usage_records(
+        &self,
+        params: LoadThreadHistoryParams,
+    ) -> ThreadStoreResult<Vec<codex_protocol::protocol::TokenUsageRecord>> {
+        usage::load_token_usage_records(self, params).await
+    }
+
     async fn read_thread_by_rollout_path_params(
         &self,
         params: ReadThreadByRolloutPathParams,
@@ -524,6 +532,13 @@ impl ThreadStore for LocalThreadStore {
         params: LoadThreadHistoryParams,
     ) -> ThreadStoreFuture<'_, StoredThreadHistory> {
         Box::pin(LocalThreadStore::load_history(self, params))
+    }
+
+    fn load_token_usage_records(
+        &self,
+        params: LoadThreadHistoryParams,
+    ) -> ThreadStoreFuture<'_, Vec<codex_protocol::protocol::TokenUsageRecord>> {
+        Box::pin(LocalThreadStore::load_token_usage_records(self, params))
     }
 
     fn load_latest_model_context(

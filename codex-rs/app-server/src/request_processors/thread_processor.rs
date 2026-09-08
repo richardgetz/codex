@@ -1808,6 +1808,7 @@ impl ThreadRequestProcessor {
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
         let thread_originator = config_snapshot.originator.clone();
+        let connection_id = request_id.connection_id;
 
         let response = ThreadStartResponse {
             thread: thread.clone(),
@@ -1846,6 +1847,17 @@ impl ThreadRequestProcessor {
                 otel.name = "app_server.thread_start.notify_started",
             ))
             .await;
+        // A fresh thread has no context usage yet, but clients still need a complete recursive
+        // baseline so later live child responses can be merged without treating the baseline as
+        // an unknown or partial snapshot.
+        send_thread_token_usage_projection_to_connection(
+            &listener_task_context.outgoing,
+            connection_id,
+            thread_id,
+            &listener_task_context.thread_manager,
+            &listener_task_context.thread_state_manager,
+        )
+        .await;
         session_telemetry.record_startup_phase(
             "thread_start_total",
             thread_start_started_at.elapsed(),
@@ -4399,12 +4411,10 @@ impl ThreadRequestProcessor {
                 self.outgoing
                     .send_response_with_thread_originator(request_id, response, thread_originator)
                     .await;
-                // `excludeTurns` is explicitly the cheap resume path, so avoid
-                // rebuilding history only to attribute a replayed usage update.
+                // Preserve the cheap, ordered context replay before scheduling the recursive
+                // billing scan. Its full-history read may span unloaded descendants, so it must
+                // not delay thread admission.
                 if let Some(token_usage_turn_id) = token_usage_turn_id {
-                    // The client needs restored usage before it starts another turn.
-                    // Sending after the response preserves JSON-RPC request ordering while
-                    // still filling the status line before the next turn lifecycle begins.
                     send_thread_token_usage_update_to_connection(
                         &self.outgoing,
                         connection_id,
@@ -4414,6 +4424,14 @@ impl ThreadRequestProcessor {
                     )
                     .await;
                 }
+                send_thread_token_usage_projection_to_connection(
+                    &self.outgoing,
+                    connection_id,
+                    thread_id,
+                    &self.thread_manager,
+                    &self.thread_state_manager,
+                )
+                .await;
                 self.thread_goal_processor
                     .emit_resume_goal_snapshot(thread_id)
                     .await;
@@ -5622,11 +5640,9 @@ impl ThreadRequestProcessor {
         self.outgoing
             .send_response_with_thread_originator(request_id, response, thread_originator)
             .await;
-        // `excludeTurns` is the cheap fork path, so skip restored usage replay
-        // instead of rebuilding history only to attribute a historical update.
+        // Preserve the cheap, ordered context replay before scheduling the recursive billing
+        // scan. Its full-history read does not delay the new fork's admission.
         if let Some(token_usage_turn_id) = token_usage_turn_id {
-            // Mirror the resume contract for forks: the new thread is usable as soon
-            // as the response arrives, so restored usage must follow immediately.
             send_thread_token_usage_update_to_connection(
                 &self.outgoing,
                 connection_id,
@@ -5636,6 +5652,14 @@ impl ThreadRequestProcessor {
             )
             .await;
         }
+        send_thread_token_usage_projection_to_connection(
+            &self.outgoing,
+            connection_id,
+            thread_id,
+            &self.thread_manager,
+            &self.thread_state_manager,
+        )
+        .await;
 
         self.outgoing
             .send_server_notification(ServerNotification::ThreadStarted(notif))

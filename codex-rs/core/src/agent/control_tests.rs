@@ -61,6 +61,7 @@ use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageAttribution;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
@@ -1395,15 +1396,39 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
         "copied model context should be persisted once"
     );
     assert!(
-        !copied_prefix.iter().any(|line| {
-            matches!(
-                &line.item,
-                RolloutItem::EventMsg(
-                    EventMsg::ItemCompleted(_) | EventMsg::ThreadSettingsApplied(_)
+        !copied_prefix.iter().any(|line| matches!(
+            &line.item,
+            RolloutItem::EventMsg(EventMsg::ItemCompleted(_))
+        )),
+        "copied presentation records should not enter the child rollout"
+    );
+    let copied_settings = copied_prefix
+        .iter()
+        .find_map(|line| match &line.item {
+            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => Some(event),
+            _ => None,
+        })
+        .expect("the child should persist one child-owned settings snapshot");
+    assert_eq!(
+        copied_settings.thread_settings,
+        child_thread.session.thread_settings_snapshot().await
+    );
+    assert_ne!(
+        copied_settings.thread_settings.model, "parent-only-model",
+        "the synthetic parent settings marker must not be copied into the child prefix"
+    );
+    assert_eq!(
+        copied_prefix
+            .iter()
+            .filter(|line| {
+                matches!(
+                    &line.item,
+                    RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(_))
                 )
-            )
-        }),
-        "copied non-structural presentation and metadata records should not enter the child rollout"
+            })
+            .count(),
+        1,
+        "the child should persist one child-owned settings snapshot"
     );
 
     let _ = harness
@@ -1483,6 +1508,7 @@ async fn spawn_agent_fork_drops_inherited_token_usage_state() {
     };
     let parent_record = TokenUsageRecord {
         thread_id: parent_thread_id,
+        parent_thread_id: None,
         turn_id: "parent-turn".to_string(),
         session_id: parent_thread.session.session_id(),
         root_turn_id: "parent-turn".to_string(),
@@ -1490,6 +1516,8 @@ async fn spawn_agent_fork_drops_inherited_token_usage_state() {
         usage: parent_usage.clone(),
         turn_token_usage: parent_usage.clone(),
         thread_token_usage: parent_usage,
+        attribution: Default::default(),
+        completed_at_ms: None,
     };
     let parent_spawn_call_id = "spawn-call-token-usage".to_string();
     parent_thread
@@ -1577,19 +1605,35 @@ async fn spawn_agent_fork_drops_inherited_token_usage_state() {
         RolloutItem::TokenUsageRecord(record) => Some(record),
         _ => None,
     });
-    assert_eq!(
-        child_record,
-        Some(&TokenUsageRecord {
-            thread_id: child_thread_id,
-            turn_id: turn_context.sub_id.clone(),
-            session_id: child_thread.session.session_id(),
-            root_turn_id: turn_context.sub_id.clone(),
-            response_id: "child-response".to_string(),
-            usage: child_usage.clone(),
-            turn_token_usage: child_usage.clone(),
-            thread_token_usage: child_usage,
-        })
+    let child_record = child_record.cloned();
+    assert!(
+        child_record
+            .as_ref()
+            .and_then(|record| record.completed_at_ms)
+            .is_some_and(|completed_at_ms| completed_at_ms > 0),
+        "observed response usage should carry a positive completion timestamp"
     );
+    let expected_child_record = TokenUsageRecord {
+        thread_id: child_thread_id,
+        parent_thread_id: Some(parent_thread_id),
+        turn_id: turn_context.sub_id.clone(),
+        session_id: child_thread.session.session_id(),
+        root_turn_id: turn_context.sub_id.clone(),
+        response_id: "child-response".to_string(),
+        usage: child_usage.clone(),
+        turn_token_usage: child_usage.clone(),
+        thread_token_usage: child_usage.clone(),
+        attribution: TokenUsageAttribution {
+            model: Some(turn_context.model_info().slug.clone()),
+            model_provider: Some(turn_context.config.model_provider_id.clone()),
+            service_tier: None,
+            context_length: Some(child_usage.context_length().to_string()),
+        },
+        completed_at_ms: child_record
+            .as_ref()
+            .and_then(|record| record.completed_at_ms),
+    };
+    assert_eq!(child_record, Some(expected_child_record));
 }
 
 #[tokio::test]

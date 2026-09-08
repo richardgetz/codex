@@ -198,9 +198,31 @@ impl ChatWidget {
     ) {
         let default_usage = TokenUsage::default();
         let token_info = self.token_info.as_ref();
-        let total_usage = token_info
+        let direct_usage = token_info
             .map(|ti| &ti.total_token_usage)
             .unwrap_or(&default_usage);
+        let recursive_snapshot = self
+            .config
+            .tui_status_token_usage
+            .enabled
+            .then(|| {
+                self.thread_id
+                    .map(|thread_id| self.usage_rollup.lock().snapshot_for(thread_id))
+            })
+            .flatten();
+        let recursive_snapshot = recursive_snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.complete);
+        let (total_usage, usage_rollup_status) = match recursive_snapshot {
+            Some(snapshot) => (
+                &snapshot.total_usage,
+                crate::status::UsageRollupStatus::Complete(snapshot.sources.as_slice()),
+            ),
+            None if self.config.tui_status_token_usage.enabled && self.thread_id.is_some() => {
+                (direct_usage, crate::status::UsageRollupStatus::Unavailable)
+            }
+            None => (direct_usage, crate::status::UsageRollupStatus::Legacy),
+        };
         let collaboration_mode = self.collaboration_mode_label();
         let model = self.current_model().to_string();
         let model_default_reasoning_effort =
@@ -225,7 +247,7 @@ impl ChatWidget {
             .collect();
         let agents_summary =
             crate::status::compose_agents_summary(&self.config, &self.instruction_source_paths);
-        let (cell, handle) = crate::status::new_status_output_with_rate_limits_handle(
+        let (cell, handle) = crate::status::new_status_output_with_rate_limits_handle_with_sources(
             &self.config,
             self.runtime_model_provider_base_url.as_deref(),
             self.remote_connection.as_ref(),
@@ -241,6 +263,7 @@ impl ChatWidget {
             self.model_display_name(),
             collaboration_mode,
             reasoning_effort_override,
+            usage_rollup_status,
             agents_summary,
             refreshing_rate_limits,
         );

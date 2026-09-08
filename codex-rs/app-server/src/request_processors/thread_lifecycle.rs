@@ -294,6 +294,7 @@ pub(super) async fn ensure_listener_task_running(
                     handle_thread_listener_command(
                         conversation_id,
                         &conversation,
+                        &thread_manager,
                         codex_home.as_path(),
                         &thread_state_manager,
                         &thread_state,
@@ -330,11 +331,11 @@ pub(super) async fn ensure_listener_task_running(
                         thread_state.track_current_turn_event(&event.id, &event.msg);
                         thread_state.experimental_raw_events
                     };
-                    if matches!(
-                        &event.msg,
-                        EventMsg::RawResponseItem(_) | EventMsg::RawResponseCompleted(_)
-                    ) && !raw_events_enabled
-                    {
+                    // Exact response completions carry billing identity and usage metadata used
+                    // by every client, so they are delivered regardless of the optional raw
+                    // transcript subscription. Raw response items remain opt-in because they
+                    // expose the full provider transcript.
+                    if matches!(&event.msg, EventMsg::RawResponseItem(_)) && !raw_events_enabled {
                         continue;
                     }
                     let subscribed_connection_ids = thread_state_manager
@@ -489,6 +490,7 @@ pub(super) async fn unload_thread_without_subscribers(
 pub(super) async fn handle_thread_listener_command(
     conversation_id: ThreadId,
     conversation: &Arc<CodexThread>,
+    thread_manager: &Arc<ThreadManager>,
     codex_home: &Path,
     thread_state_manager: &ThreadStateManager,
     thread_state: &Arc<Mutex<ThreadState>>,
@@ -502,6 +504,7 @@ pub(super) async fn handle_thread_listener_command(
             handle_pending_thread_resume_request(
                 conversation_id,
                 conversation,
+                thread_manager,
                 codex_home,
                 thread_state_manager,
                 thread_state,
@@ -579,6 +582,7 @@ pub(super) async fn handle_thread_listener_command(
 pub(super) async fn handle_pending_thread_resume_request(
     conversation_id: ThreadId,
     conversation: &Arc<CodexThread>,
+    thread_manager: &Arc<ThreadManager>,
     _codex_home: &Path,
     thread_state_manager: &ThreadStateManager,
     thread_state: &Arc<Mutex<ThreadState>>,
@@ -782,20 +786,25 @@ pub(super) async fn handle_pending_thread_resume_request(
     outgoing
         .send_response_with_thread_originator(request_id, response, originator)
         .await;
-    // Warm metadata-only resumes skip history reconstruction. Cold paginated children can
-    // replay usage using attribution captured before the listener was attached.
+    // Preserve the cheap, ordered context replay before scheduling the recursive billing scan.
     if let Some(token_usage_turn_id) = token_usage_turn_id {
-        // Rejoining a loaded thread has the same UI contract as a cold resume, but
-        // uses the live conversation state instead of reconstructing a new session.
         send_thread_token_usage_update_to_connection(
             outgoing,
             connection_id,
             conversation_id,
-            conversation.as_ref(),
+            conversation,
             token_usage_turn_id,
         )
         .await;
     }
+    send_thread_token_usage_projection_to_connection(
+        outgoing,
+        connection_id,
+        conversation_id,
+        thread_manager,
+        thread_state_manager,
+    )
+    .await;
     if pending.emit_thread_goal_update {
         if let Some(state_db) = pending.thread_goal_state_db {
             send_thread_goal_snapshot_notification(outgoing, conversation_id, &state_db).await;

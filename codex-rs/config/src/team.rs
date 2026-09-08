@@ -10,6 +10,8 @@ pub struct TeamConfig {
     pub enabled: bool,
     /// The configured Lead and Worker assignments, when both are present.
     pub profiles: Option<TeamModelProfiles>,
+    /// Maximum number of concurrently active direct Workers for a Lead session.
+    pub worker_max_concurrent: Option<usize>,
 }
 
 /// The only roles recognized by the v1 team model policy.
@@ -35,22 +37,48 @@ pub struct TeamToml {
     /// Model assignment for the root coordinator and acceptance agent.
     pub lead: Option<TeamModelProfileToml>,
     /// Model assignment for delegated work and independent reviewers.
-    pub worker: Option<TeamModelProfileToml>,
+    pub worker: Option<TeamWorkerProfileToml>,
 }
 
 /// A model and reasoning effort read from config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TeamModelProfileToml {
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
+/// A Worker model and optional direct-child concurrency ceiling read from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct TeamWorkerProfileToml {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// Maximum number of concurrently active direct Workers for a Lead session.
+    #[schemars(range(min = 1))]
+    pub max_concurrent: Option<usize>,
+}
+
 impl TryFrom<TeamToml> for TeamConfig {
     type Error = String;
 
     fn try_from(value: TeamToml) -> Result<Self, Self::Error> {
-        let profiles = match (value.lead, value.worker) {
+        let TeamToml {
+            enabled,
+            lead,
+            worker,
+        } = value;
+        if worker
+            .as_ref()
+            .and_then(|worker| worker.max_concurrent)
+            .is_some_and(|max_concurrent| max_concurrent == 0)
+        {
+            return Err("team.worker.max_concurrent must be at least 1".into());
+        }
+        let worker_max_concurrent = worker.as_ref().and_then(|worker| worker.max_concurrent);
+        let profiles = match (lead, worker) {
             (None, None) => None,
             (Some(lead), Some(worker)) => Some(TeamModelProfiles {
                 lead: TeamModelProfile::try_from(("lead", lead))?,
@@ -63,11 +91,15 @@ impl TryFrom<TeamToml> for TeamConfig {
                 return Err("team.lead must be configured when team.worker is configured".into());
             }
         };
-        let enabled = value.enabled.unwrap_or(false);
+        let enabled = enabled.unwrap_or(false);
         if enabled && profiles.is_none() {
             return Err("team.enabled requires both team.lead and team.worker profiles".into());
         }
-        Ok(Self { enabled, profiles })
+        Ok(Self {
+            enabled,
+            profiles,
+            worker_max_concurrent,
+        })
     }
 }
 
@@ -94,6 +126,25 @@ impl TryFrom<(&str, TeamModelProfileToml)> for TeamModelProfile {
             model,
             reasoning_effort,
         })
+    }
+}
+
+impl TryFrom<(&str, TeamWorkerProfileToml)> for TeamModelProfile {
+    type Error = String;
+
+    fn try_from((role, value): (&str, TeamWorkerProfileToml)) -> Result<Self, Self::Error> {
+        let TeamWorkerProfileToml {
+            model,
+            reasoning_effort,
+            max_concurrent: _,
+        } = value;
+        TeamModelProfile::try_from((
+            role,
+            TeamModelProfileToml {
+                model,
+                reasoning_effort,
+            },
+        ))
     }
 }
 

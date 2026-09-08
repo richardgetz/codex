@@ -604,6 +604,8 @@ impl AgentControl {
         if let Some(session_source) = session_source.as_ref() {
             self.ensure_execution_capacity(multi_agent_version, session_source)?;
         }
+        let mut _team_worker_lease =
+            self.reserve_team_worker_spawn(&config, session_source.as_ref())?;
         let agent_max_threads = config.effective_agent_max_threads(multi_agent_version);
         let spawn_uses_v2_residency = multi_agent_version == MultiAgentVersion::V2
             && session_source
@@ -699,6 +701,9 @@ impl AgentControl {
         };
         agent_metadata.agent_id = Some(new_thread.thread_id);
         reservation.commit(agent_metadata.clone());
+        if let Some(team_worker_lease) = _team_worker_lease.as_mut() {
+            team_worker_lease.commit_pending_spawn(new_thread.thread_id);
+        }
         if let Some(residency_slot) = residency_slot {
             residency_slot.commit(new_thread.thread_id);
         }
@@ -754,10 +759,10 @@ impl AgentControl {
             cyber_access_program: options.cyber_access_program,
             ..Default::default()
         };
-        match initial_input {
+        let initial_input_result = match initial_input {
             SpawnInitialInput::UserInput(input) => {
                 self.send_input(new_thread.thread_id, input, start_options)
-                    .await?;
+                    .await
             }
             SpawnInitialInput::InterAgentCommunication(communication, context) => {
                 self.send_inter_agent_communication_after_capacity_check(
@@ -767,9 +772,14 @@ impl AgentControl {
                     context,
                     start_options,
                 )
-                .await?;
+                .await
             }
-        }
+        };
+        initial_input_result?;
+        // A UserInput start has transferred ownership to the child's RunningTask. A mailbox
+        // start will acquire its own reservation at the scheduler's actual task boundary. Do not
+        // keep the spawn borrow alive through completion-watcher setup.
+        drop(_team_worker_lease);
         if multi_agent_version != MultiAgentVersion::V2 {
             let child_reference = agent_metadata
                 .agent_path

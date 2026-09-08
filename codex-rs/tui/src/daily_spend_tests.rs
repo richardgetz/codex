@@ -2,6 +2,7 @@ use super::daily_spend_report::SpendPeriod;
 use super::*;
 use crate::token_usage::TokenUsage;
 use chrono::NaiveDate;
+use chrono::TimeZone;
 use codex_config::types::TuiStatusTokenUsageRate;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
@@ -253,6 +254,7 @@ fn spend_report_shows_daily_fluctuation_and_model_totals() {
                             estimated_usd: Some(1.25),
                         },
                     )]),
+                    ..Default::default()
                 },
             ),
             (
@@ -267,9 +269,11 @@ fn spend_report_shows_daily_fluctuation_and_model_totals() {
                             estimated_usd: Some(4.5),
                         },
                     )]),
+                    ..Default::default()
                 },
             ),
         ]),
+        response_dates: BTreeMap::new(),
     };
     write_history(&path, &history).expect("history should persist");
 
@@ -316,4 +320,166 @@ fn spend_period_supports_default_days_numeric_month_and_range() {
             end: today,
         }
     );
+}
+
+#[test]
+fn exact_response_replay_after_midnight_keeps_original_day() {
+    let temp_dir = TempDir::new().expect("temporary directory");
+    let tracker = DailySpendTracker::new(temp_dir.path());
+    let config = configured_usage();
+    let usage = usage(100, 20);
+    let first_day = NaiveDate::from_ymd_opt(2024, 1, 1).expect("first day");
+    let second_day = NaiveDate::from_ymd_opt(2024, 1, 2).expect("second day");
+    let first_timestamp = chrono::Local
+        .with_ymd_and_hms(2024, 1, 1, 23, 59, 59)
+        .single()
+        .expect("first timestamp")
+        .timestamp();
+    let second_timestamp = chrono::Local
+        .with_ymd_and_hms(2024, 1, 2, 0, 0, 1)
+        .single()
+        .expect("second timestamp")
+        .timestamp();
+
+    tracker
+        .observe_record_on_date(
+            DailySpendRecord {
+                response_key: "thread:response",
+                usage: &usage,
+                model_provider_id: Some("openai"),
+                model: Some("model-a"),
+                service_tier: Some("standard"),
+                context_length: Some("short"),
+                recorded_at: Some(first_timestamp),
+            },
+            &config,
+            first_day,
+        )
+        .expect("first response should persist");
+    tracker
+        .observe_record_on_date(
+            DailySpendRecord {
+                response_key: "thread:response",
+                usage: &usage,
+                model_provider_id: Some("openai"),
+                model: Some("model-a"),
+                service_tier: Some("standard"),
+                context_length: Some("short"),
+                recorded_at: Some(second_timestamp),
+            },
+            &config,
+            second_day,
+        )
+        .expect("replay should be idempotent");
+
+    let history = read_history(&spend_path(temp_dir.path())).expect("history should deserialize");
+    let first_day_key = first_day.to_string();
+    assert_eq!(
+        history.response_dates.get("thread:response"),
+        Some(&first_day_key)
+    );
+    assert_eq!(history.days.len(), 1);
+    assert_eq!(history.days[&first_day_key].tokens, usage.total_tokens);
+}
+
+#[test]
+fn exact_response_with_missing_attribution_keeps_tokens_but_no_cost() {
+    let temp_dir = TempDir::new().expect("temporary directory");
+    let tracker = DailySpendTracker::new(temp_dir.path());
+    let config = configured_usage();
+    let usage = usage(100, 20);
+    let today = NaiveDate::from_ymd_opt(2024, 1, 2).expect("day");
+
+    tracker
+        .observe_record_on_date(
+            DailySpendRecord {
+                response_key: "thread:legacy",
+                usage: &usage,
+                model_provider_id: None,
+                model: None,
+                service_tier: None,
+                context_length: None,
+                recorded_at: None,
+            },
+            &config,
+            today,
+        )
+        .expect("legacy response should persist");
+
+    let history = read_history(&spend_path(temp_dir.path())).expect("history should deserialize");
+    let amount = &history.days[&today.to_string()];
+    assert_eq!(amount.tokens, usage.total_tokens);
+    assert_eq!(amount.estimated_usd, None);
+    assert_eq!(amount.models["unattributed"].estimated_usd, None);
+}
+
+#[test]
+fn exact_response_with_default_tier_preserves_context_pricing() {
+    let temp_dir = TempDir::new().expect("temporary directory");
+    let tracker = DailySpendTracker::new(temp_dir.path());
+    let config = configured_usage();
+    let usage = usage(200_000, 0);
+    let today = NaiveDate::from_ymd_opt(2024, 1, 2).expect("day");
+
+    for response_key in ["thread:first", "thread:second"] {
+        tracker
+            .observe_record_on_date(
+                DailySpendRecord {
+                    response_key,
+                    usage: &usage,
+                    model_provider_id: Some("openai"),
+                    model: Some("model-a"),
+                    service_tier: None,
+                    context_length: Some("short"),
+                    recorded_at: None,
+                },
+                &config,
+                today,
+            )
+            .expect("default-tier response should persist");
+    }
+
+    let history = read_history(&spend_path(temp_dir.path())).expect("history should deserialize");
+    let amount = &history.days[&today.to_string()];
+    assert_eq!(amount.tokens, 400_000);
+    assert!((amount.estimated_usd.expect("configured price") - 0.8).abs() < f64::EPSILON);
+}
+
+#[test]
+fn exact_record_disables_legacy_cumulative_writes() {
+    let temp_dir = TempDir::new().expect("temporary directory");
+    let mut tracker = DailySpendTracker::new(temp_dir.path());
+    let config = configured_usage();
+    let exact_usage = usage(100, 20);
+    tracker
+        .observe_record(
+            DailySpendRecord {
+                response_key: "thread:exact",
+                usage: &exact_usage,
+                model_provider_id: Some("openai"),
+                model: Some("model-a"),
+                service_tier: Some("standard"),
+                context_length: Some("short"),
+                recorded_at: None,
+            },
+            &config,
+        )
+        .expect("exact response should persist");
+    tracker
+        .observe(
+            &model_info(
+                usage(200, 40),
+                BTreeMap::from([("model-a".to_string(), usage(200, 40))]),
+                BTreeMap::new(),
+            ),
+            false,
+            &config,
+            "openai",
+            "model-a",
+        )
+        .expect("legacy snapshot should remain informational");
+
+    let history = read_history(&spend_path(temp_dir.path())).expect("history should deserialize");
+    let total_tokens = history.days.values().map(|day| day.tokens).sum::<i64>();
+    assert_eq!(total_tokens, exact_usage.total_tokens);
 }
