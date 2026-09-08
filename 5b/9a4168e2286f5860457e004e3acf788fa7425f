@@ -1,0 +1,21 @@
+intent:
+  id: team-worker-cap-recursive-usage-2026-09-08
+  change_type: feat
+  scope: team
+  summary: Bound direct Workers and account for nested session usage.
+  decision: Permit nested delegation by compatible team Workers, enforce an optional direct Worker concurrency ceiling, and derive recursive spend from exact response identities independently of context-window counters.
+  constraints:
+    - Keep existing global agent and depth limits.
+    - Exclude grandchildren from the Lead direct Worker ceiling.
+    - Preserve fork ownership, source pricing attribution, and existing daily history without historical backfill.
+    - Use PR CI for final validation as explicitly requested by Rick.
+  intent_priority: high
+  code_locations:
+    - codex-rs/core/src/agent/control/worker_limit.rs
+    - codex-rs/core/src/tools/spec_plan.rs
+    - codex-rs/core/src/session/usage.rs
+    - codex-rs/tui/src/usage_rollup.rs
+  requested_by: Rick
+  recorded_by:
+    agent: Codex Lead and Workers
+    model: gpt-6
