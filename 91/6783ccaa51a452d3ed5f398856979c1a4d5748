@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-09-07/team-worker-compatibility#916783ccaa"
+  change_type: "fix"
+  scope: "team"
+  summary: "Allow V1 Workers and keep invalid team assignments from blocking root startup."
+  decision: "Use ordinary spawn compatibility for team admission and persist a warned Off transition when root Lead assignment validation fails."
+  constraints:
+    - "Keep delegated Worker startup and explicit live team toggles strict."
+    - "Restore prior model and effort while honoring explicit resume overrides."
+    - "Do not rewrite global team configuration."
+    - "Preserve existing V2 runtime policy that V1 Workers are leaf agents; the Lead arranges independent review."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session/team.rs"
+    - "codex-rs/core/src/session/mod.rs"
+    - "codex-rs/core/tests/suite/team.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "unknown"
