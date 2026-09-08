@@ -748,9 +748,9 @@ impl Session {
             }
         }
         let team_role = team::effective_role_for_session_source(&config, &session_source);
-        let team_multi_agent_version = if config.team_mode
-            == codex_protocol::protocol::TeamMode::LeadWorker
-            && team_role.is_some()
+        let mut team_multi_agent_version = None;
+        let mut team_startup_fallback_applied = false;
+        if config.team_mode == codex_protocol::protocol::TeamMode::LeadWorker && team_role.is_some()
         {
             let selected_multi_agent_version =
                 config.multi_agent_version_override().or_else(|| {
@@ -759,26 +759,39 @@ impl Session {
                         inherited_multi_agent_version,
                     )
                 });
-            Some(
-                team::validate_profiles(
-                    &config,
-                    &models_manager,
-                    selected_multi_agent_version,
-                    if matches!(
-                        &session_source,
-                        SessionSource::SubAgent(SubAgentSource::Review)
-                    ) {
-                        team::TeamValidationScope::RoutingOnly
-                    } else {
-                        team::TeamValidationScope::Delegation
-                    },
-                )
-                .await
-                .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?,
+            let validation_scope = if matches!(
+                &session_source,
+                SessionSource::SubAgent(SubAgentSource::Review)
+            ) {
+                team::TeamValidationScope::RoutingOnly
+            } else {
+                team::TeamValidationScope::Delegation
+            };
+            match team::validate_profiles(
+                &config,
+                &models_manager,
+                selected_multi_agent_version,
+                validation_scope,
             )
-        } else {
-            None
-        };
+            .await
+            {
+                Ok(version) => team_multi_agent_version = Some(version),
+                Err(error)
+                    if !session_source.is_non_root_agent()
+                        && team_role == Some(codex_config::TeamRole::Lead) =>
+                {
+                    team::disable_for_startup(
+                        &mut config,
+                        team_baseline_model.as_ref(),
+                        team_baseline_reasoning_effort.as_ref(),
+                        thread_settings_override_flags,
+                        &error,
+                    );
+                    team_startup_fallback_applied = true;
+                }
+                Err(error) => return Err(CodexErr::InvalidRequest(error.to_string())),
+            }
+        }
         let team_assignment_active = if let Some(role) = team_role {
             let active =
                 team::apply_assignment(&mut config, role).map_err(CodexErr::InvalidRequest)?;
@@ -1102,6 +1115,16 @@ impl Session {
             error!("Failed to create session: {e:#}");
             map_session_init_error(&e, &config.codex_home)
         })?;
+        if team_startup_fallback_applied {
+            // Persist the fail-open transition before the first user turn. Otherwise a
+            // process that exits immediately after startup can resume the invalid active
+            // assignment from its prior snapshot.
+            session
+                .persist_rollout_items(&[RolloutItem::EventMsg(
+                    thread_settings::applied_event(&session).await,
+                )])
+                .await;
+        }
         if let Some(message) = initial_service_tier_warning {
             session
                 .send_event_raw(Event {

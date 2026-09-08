@@ -37,6 +37,7 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use test_case::test_case;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
@@ -44,16 +45,23 @@ use tokio::time::timeout;
 
 const INITIAL_MODEL: &str = "gpt-5.4";
 const DEFAULT_MODEL: &str = "gpt-6-astra";
-const LEAD_MODEL: &str = "gpt-5.6-luna";
-const WORKER_MODEL: &str = "gpt-5.6-terra";
+const LEAD_MODEL: &str = "gpt-6-astra";
+const WORKER_MODEL: &str = "gpt-5.6-luna";
 const REQUESTED_MODEL: &str = "gpt-5.5";
 const TEAM_TOGGLE_COMP_HASH: &str = "team-toggle-compatible";
 const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
+const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 const ROOT_PROMPT: &str = "delegate a team worker";
 const CHILD_TASK: &str = "inspect the team implementation";
 const GRANDCHILD_TASK: &str = "inspect the team test";
 const SPAWN_CALL_ID: &str = "team-spawn";
 const CHILD_SPAWN_CALL_ID: &str = "team-child-spawn";
+
+#[derive(Clone, Copy)]
+enum WorkerSpawnBehavior {
+    Nested,
+    Leaf,
+}
 
 fn team_config(mode: TeamMode, lead_model: &str, worker_model: &str) -> TeamConfig {
     TeamConfig {
@@ -416,7 +424,7 @@ async fn team_off_restores_provider_default_after_startup_without_model() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn team_explicit_legacy_depth_rejects_startup_but_catalog_v2_allows_it() -> Result<()> {
+async fn team_explicit_legacy_depth_fails_open_but_catalog_v2_allows_it() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -437,14 +445,27 @@ async fn team_explicit_legacy_depth_rejects_startup_but_catalog_v2_allows_it() -
                 .expect("MultiAgentV2 feature");
             configure_team(config, TeamMode::LeadWorker);
         });
-    let error = match legacy_builder.build_with_auto_env(&server).await {
-        Ok(_) => anyhow::bail!("legacy team startup should reject explicit max depth 1"),
-        Err(error) => error,
+    let legacy = legacy_builder.build_with_auto_env(&server).await?;
+    let legacy_snapshot = legacy.codex.config_snapshot().await;
+    assert_eq!(
+        legacy_snapshot.team.as_ref().map(|team| team.mode),
+        Some(TeamMode::Off)
+    );
+    assert_eq!(legacy_snapshot.model, LEAD_MODEL);
+    let warning =
+        wait_for_event(&legacy.codex, |event| matches!(event, EventMsg::Warning(_))).await;
+    let EventMsg::Warning(warning) = warning else {
+        unreachable!("warning predicate should only return warning events")
     };
-    let error = format!("{error:#}");
     assert!(
-        error.contains("agents.max_depth must be at least 2"),
-        "legacy team startup should identify the depth requirement: {error}"
+        warning
+            .message
+            .contains("Team mode was disabled for this thread")
+    );
+    assert!(
+        warning
+            .message
+            .contains("agents.max_depth must be at least 2")
     );
 
     let mut v2_builder = test_codex()
@@ -489,7 +510,7 @@ async fn team_explicit_legacy_depth_rejects_startup_but_catalog_v2_allows_it() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn team_rejects_incompatible_worker_backend_on_startup_and_toggle() -> Result<()> {
+async fn team_fails_open_incompatible_worker_on_startup_but_rejects_toggle() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -500,13 +521,28 @@ async fn team_rejects_incompatible_worker_backend_on_startup_and_toggle() -> Res
         .with_model_info_override(WORKER_MODEL, |model_info| {
             model_info.multi_agent_version = Some(MultiAgentVersion::Disabled);
         })
+        .with_model(INITIAL_MODEL)
         .with_config(|config| configure_team(config, TeamMode::LeadWorker));
-    let error = match startup_builder.build_with_auto_env(&server).await {
-        Ok(_) => anyhow::bail!("team startup should reject an incompatible Worker backend"),
-        Err(error) => error,
+    let startup = startup_builder.build_with_auto_env(&server).await?;
+    let startup_snapshot = startup.codex.config_snapshot().await;
+    assert_eq!(startup_snapshot.model, INITIAL_MODEL);
+    assert_eq!(
+        startup_snapshot.team.as_ref().map(|team| team.mode),
+        Some(TeamMode::Off)
+    );
+    let warning = wait_for_event(&startup.codex, |event| {
+        matches!(event, EventMsg::Warning(_))
+    })
+    .await;
+    let EventMsg::Warning(warning) = warning else {
+        unreachable!("warning predicate should only return warning events")
     };
-    let error = format!("{error:#}");
-    assert_incompatible_worker_error(&error);
+    assert!(
+        warning
+            .message
+            .contains("Team mode was disabled for this thread")
+    );
+    assert_incompatible_worker_error(&warning.message);
 
     let mut toggle_builder = test_codex()
         .with_model_info_override(LEAD_MODEL, |model_info| {
@@ -542,13 +578,118 @@ async fn team_rejects_incompatible_worker_backend_on_startup_and_toggle() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn team_spawn_uses_worker_despite_role_and_model_overrides() -> Result<()> {
+async fn team_fails_open_incompatible_worker_on_cold_resume() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("team-resume-before-invalid"),
+            ev_completed("team-resume-before-invalid"),
+        ]),
+    )
+    .await;
+    let mut initial_builder = test_codex()
+        .with_model(INITIAL_MODEL)
+        .with_config(|config| {
+            config.model_reasoning_effort = Some(ReasoningEffort::Medium);
+            configure_team(config, TeamMode::LeadWorker);
+        });
+    let initial = initial_builder.build_with_auto_env(&server).await?;
+    submit_turn(
+        &initial.codex,
+        "persist an active team before resume",
+        ThreadSettingsOverrides::default(),
+    )
+    .await?;
+
+    let mut resume_builder = test_codex()
+        .with_model_info_override(LEAD_MODEL, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+        })
+        .with_model_info_override(WORKER_MODEL, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::Disabled);
+        })
+        .with_model(REQUESTED_MODEL)
+        .with_config(|config| {
+            config.model_reasoning_effort = Some(ReasoningEffort::Low);
+            configure_team(config, TeamMode::LeadWorker);
+        });
+    let resumed = resume_builder.restart(&server, &initial).await?;
+    let snapshot = resumed.codex.config_snapshot().await;
+    assert_eq!(snapshot.model, INITIAL_MODEL);
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Medium));
+    assert_eq!(
+        snapshot.team.as_ref().map(|team| team.mode),
+        Some(TeamMode::Off)
+    );
+    assert_eq!(
+        resumed.config.team,
+        team_config(TeamMode::LeadWorker, LEAD_MODEL, WORKER_MODEL)
+    );
+    let warning = wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::Warning(_))
+    })
+    .await;
+    let EventMsg::Warning(warning) = warning else {
+        unreachable!("warning predicate should only return warning events")
+    };
+    assert!(
+        warning
+            .message
+            .contains("Team mode was disabled for this thread")
+    );
+    assert_incompatible_worker_error(&warning.message);
+    insta::assert_snapshot!(warning.message, @r#"Team mode was disabled for this thread because its assignment is unavailable: invalid value for `team`: `Worker model `gpt-5.6-luna` is disabled for MultiAgentV2; choose a model that supports multi-agent delegation` is not in the allowed set configured Lead and Worker profiles (set by <unspecified>)"#);
+    assert_request_assignment(&response.single_request(), LEAD_MODEL, "max");
+
+    let mut compatible_resume_builder = test_codex()
+        .with_model_info_override(LEAD_MODEL, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+        })
+        .with_model_info_override(WORKER_MODEL, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+        })
+        .with_model(REQUESTED_MODEL)
+        .with_config(|config| {
+            config.model_reasoning_effort = Some(ReasoningEffort::Low);
+            configure_team(config, TeamMode::LeadWorker);
+        });
+    let resumed_again = compatible_resume_builder.restart(&server, &resumed).await?;
+    let resumed_again_snapshot = resumed_again.codex.config_snapshot().await;
+    assert_eq!(resumed_again_snapshot.model, INITIAL_MODEL);
+    assert_eq!(
+        resumed_again_snapshot.team.as_ref().map(|team| team.mode),
+        Some(TeamMode::Off)
+    );
+    Ok(())
+}
+
+#[test_case(
+    MultiAgentVersion::V1,
+    MULTI_AGENT_V1_NAMESPACE,
+    WorkerSpawnBehavior::Nested;
+    "legacy backend with nested worker"
+)]
+#[test_case(
+    MultiAgentVersion::V2,
+    MULTI_AGENT_V2_NAMESPACE,
+    WorkerSpawnBehavior::Leaf;
+    "v2 backend with v1 leaf worker"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_spawn_uses_worker_despite_role_and_model_overrides(
+    lead_multi_agent_version: MultiAgentVersion,
+    tool_namespace: &str,
+    worker_spawn_behavior: WorkerSpawnBehavior,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let spawn_args = serde_json::to_string(&json!({
         "message": CHILD_TASK,
-        "task_name": "team-worker",
+        "task_name": "team_worker",
         "agent_type": "team-reviewer",
         "model": REQUESTED_MODEL,
         "reasoning_effort": "high",
@@ -556,7 +697,7 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides() -> Result<()>
     }))?;
     let grandchild_args = serde_json::to_string(&json!({
         "message": GRANDCHILD_TASK,
-        "task_name": "team-review-worker",
+        "task_name": "team_review_worker",
         "agent_type": "team-reviewer",
         "model": REQUESTED_MODEL,
         "reasoning_effort": "high",
@@ -573,7 +714,7 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides() -> Result<()>
             ev_response_created("team-root-1"),
             ev_function_call_with_namespace(
                 SPAWN_CALL_ID,
-                MULTI_AGENT_V1_NAMESPACE,
+                tool_namespace,
                 "spawn_agent",
                 &spawn_args,
             ),
@@ -581,53 +722,81 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides() -> Result<()>
         ]),
     )
     .await;
-    let child_response = mount_sse_once_match(
-        &server,
-        |request: &wiremock::Request| {
-            body_contains(request, CHILD_TASK)
-                && !body_contains(request, GRANDCHILD_TASK)
-                && request_has_model(request, WORKER_MODEL)
-                && !request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
-        },
-        sse(vec![
-            ev_response_created("team-child-1"),
-            ev_function_call_with_namespace(
-                CHILD_SPAWN_CALL_ID,
-                MULTI_AGENT_V1_NAMESPACE,
-                "spawn_agent",
-                &grandchild_args,
-            ),
-            ev_completed("team-child-1"),
-        ]),
-    )
-    .await;
-    let grandchild_response = mount_sse_once_match(
-        &server,
-        |request: &wiremock::Request| {
-            body_contains(request, GRANDCHILD_TASK)
-                && request_has_model(request, WORKER_MODEL)
-                && !request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
-        },
-        sse(vec![
-            ev_response_created("team-grandchild"),
-            ev_assistant_message("team-grandchild-message", "review complete"),
-            ev_completed("team-grandchild"),
-        ]),
-    )
-    .await;
-    let child_completion_response = mount_sse_once_match(
-        &server,
-        |request: &wiremock::Request| {
-            request_has_model(request, WORKER_MODEL)
-                && request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
-        },
-        sse(vec![
-            ev_response_created("team-child-2"),
-            ev_assistant_message("team-child-message", "worker review complete"),
-            ev_completed("team-child-2"),
-        ]),
-    )
-    .await;
+    let (child_response, grandchild_response, child_completion_response) =
+        match worker_spawn_behavior {
+            WorkerSpawnBehavior::Nested => {
+                let child_response = mount_sse_once_match(
+                    &server,
+                    |request: &wiremock::Request| {
+                        body_contains(request, CHILD_TASK)
+                            && !body_contains(request, GRANDCHILD_TASK)
+                            && request_has_model(request, WORKER_MODEL)
+                            && !request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
+                    },
+                    sse(vec![
+                        ev_response_created("team-child-1"),
+                        ev_function_call_with_namespace(
+                            CHILD_SPAWN_CALL_ID,
+                            tool_namespace,
+                            "spawn_agent",
+                            &grandchild_args,
+                        ),
+                        ev_completed("team-child-1"),
+                    ]),
+                )
+                .await;
+                let grandchild_response = mount_sse_once_match(
+                    &server,
+                    |request: &wiremock::Request| {
+                        body_contains(request, GRANDCHILD_TASK)
+                            && request_has_model(request, WORKER_MODEL)
+                            && !request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
+                    },
+                    sse(vec![
+                        ev_response_created("team-grandchild"),
+                        ev_assistant_message("team-grandchild-message", "review complete"),
+                        ev_completed("team-grandchild"),
+                    ]),
+                )
+                .await;
+                let child_completion_response = mount_sse_once_match(
+                    &server,
+                    |request: &wiremock::Request| {
+                        request_has_model(request, WORKER_MODEL)
+                            && request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
+                    },
+                    sse(vec![
+                        ev_response_created("team-child-2"),
+                        ev_assistant_message("team-child-message", "worker review complete"),
+                        ev_completed("team-child-2"),
+                    ]),
+                )
+                .await;
+                (
+                    child_response,
+                    Some(grandchild_response),
+                    Some(child_completion_response),
+                )
+            }
+            WorkerSpawnBehavior::Leaf => {
+                let child_response = mount_sse_once_match(
+                    &server,
+                    |request: &wiremock::Request| {
+                        body_contains(request, CHILD_TASK)
+                            && !body_contains(request, GRANDCHILD_TASK)
+                            && request_has_model(request, WORKER_MODEL)
+                            && !request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
+                    },
+                    sse(vec![
+                        ev_response_created("team-child-leaf"),
+                        ev_assistant_message("team-child-message", "worker review complete"),
+                        ev_completed("team-child-leaf"),
+                    ]),
+                )
+                .await;
+                (child_response, None, None)
+            }
+        };
     let root_completion_response = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
@@ -644,8 +813,8 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides() -> Result<()>
 
     let role_model = "gpt-5.2";
     let mut builder = test_codex()
-        .with_model_info_override(LEAD_MODEL, |model_info| {
-            model_info.multi_agent_version = Some(MultiAgentVersion::V1);
+        .with_model_info_override(LEAD_MODEL, move |model_info| {
+            model_info.multi_agent_version = Some(lead_multi_agent_version);
         })
         .with_model(INITIAL_MODEL)
         .with_config(move |config| {
@@ -677,7 +846,7 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides() -> Result<()>
     submit_turn(&test.codex, ROOT_PROMPT, ThreadSettingsOverrides::default()).await?;
     assert_eq!(
         test.codex.multi_agent_version(),
-        Some(MultiAgentVersion::V1)
+        Some(lead_multi_agent_version)
     );
 
     let root_request = wait_for_captured_request(
@@ -706,14 +875,24 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides() -> Result<()>
     let root_result: Value = serde_json::from_str(&root_output).unwrap_or_else(|error| {
         panic!("root spawn output should be JSON ({error}); raw output: {root_output:?}");
     });
-    let root_agent_id = root_result
-        .get("agent_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    assert!(
-        ThreadId::from_string(root_agent_id).is_ok(),
-        "root spawn should return a valid agent_id; raw output: {root_output:?}"
-    );
+    if lead_multi_agent_version == MultiAgentVersion::V1 {
+        let root_agent_id = root_result
+            .get("agent_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            ThreadId::from_string(root_agent_id).is_ok(),
+            "root spawn should return a valid agent_id; raw output: {root_output:?}"
+        );
+    } else {
+        assert!(
+            root_result
+                .get("task_name")
+                .and_then(Value::as_str)
+                .is_some(),
+            "v2 root spawn should return a task_name; raw output: {root_output:?}"
+        );
+    }
     let child_request = wait_for_captured_request(
         &child_response,
         |request| {
@@ -725,44 +904,67 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides() -> Result<()>
         "child",
     )
     .await;
-    let grandchild_request = wait_for_captured_request(
-        &grandchild_response,
-        |request| {
-            request.body_contains_text(GRANDCHILD_TASK)
-                && response_request_has_model(request, WORKER_MODEL)
-                && !response_request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
-        },
-        "grandchild",
-    )
-    .await;
-    let child_completion_request = wait_for_captured_request(
-        &child_completion_response,
-        |request| {
-            response_request_has_model(request, WORKER_MODEL)
-                && response_request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
-        },
-        "child completion",
-    )
-    .await;
+    let grandchild_request = if let Some(grandchild_response) = grandchild_response.as_ref() {
+        Some(
+            wait_for_captured_request(
+                grandchild_response,
+                |request| {
+                    request.body_contains_text(GRANDCHILD_TASK)
+                        && response_request_has_model(request, WORKER_MODEL)
+                        && !response_request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
+                },
+                "grandchild",
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+    let child_completion_request = if let Some(child_completion_response) =
+        child_completion_response.as_ref()
+    {
+        Some(
+            wait_for_captured_request(
+                child_completion_response,
+                |request| {
+                    response_request_has_model(request, WORKER_MODEL)
+                        && response_request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
+                },
+                "child completion",
+            )
+            .await,
+        )
+    } else {
+        None
+    };
     assert_request_assignment(&root_request, LEAD_MODEL, "max");
     assert_request_assignment(&child_request, WORKER_MODEL, "low");
-    assert_request_assignment(&grandchild_request, WORKER_MODEL, "low");
-    child_completion_request.function_call_output(CHILD_SPAWN_CALL_ID);
+    if let Some(grandchild_request) = grandchild_request.as_ref() {
+        assert_request_assignment(grandchild_request, WORKER_MODEL, "low");
+    }
+    if let Some(child_completion_request) = child_completion_request.as_ref() {
+        child_completion_request.function_call_output(CHILD_SPAWN_CALL_ID);
+    }
 
     let child_thread_id = child_request.body_json()["client_metadata"]["thread_id"]
         .as_str()
         .and_then(|thread_id| ThreadId::from_string(thread_id).ok())
         .expect("child thread ID");
     let child_thread = test.thread_manager.get_thread(child_thread_id).await?;
-    let grandchild_thread_id = grandchild_request.body_json()["client_metadata"]["thread_id"]
-        .as_str()
-        .and_then(|thread_id| ThreadId::from_string(thread_id).ok())
-        .expect("grandchild thread ID");
-    let grandchild_thread = test.thread_manager.get_thread(grandchild_thread_id).await?;
-    wait_for_event(grandchild_thread.as_ref(), |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    let grandchild_thread = if let Some(grandchild_request) = grandchild_request.as_ref() {
+        let grandchild_thread_id = grandchild_request.body_json()["client_metadata"]["thread_id"]
+            .as_str()
+            .and_then(|thread_id| ThreadId::from_string(thread_id).ok())
+            .expect("grandchild thread ID");
+        let grandchild_thread = test.thread_manager.get_thread(grandchild_thread_id).await?;
+        wait_for_event(grandchild_thread.as_ref(), |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        Some(grandchild_thread)
+    } else {
+        None
+    };
     wait_for_event(child_thread.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
@@ -783,25 +985,27 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides() -> Result<()>
             Some(ReasoningEffort::Low),
         )
     );
-    let grandchild_snapshot = grandchild_thread.config_snapshot().await;
-    let grandchild_team = grandchild_snapshot
-        .team
-        .as_ref()
-        .expect("grandchild team snapshot");
-    assert_eq!(
-        (
-            grandchild_team.mode,
-            grandchild_team.role,
-            grandchild_snapshot.model,
-            grandchild_snapshot.reasoning_effort,
-        ),
-        (
-            TeamMode::LeadWorker,
-            Some(TeamRole::Worker),
-            WORKER_MODEL.to_string(),
-            Some(ReasoningEffort::Low),
-        )
-    );
+    if let Some(grandchild_thread) = grandchild_thread {
+        let grandchild_snapshot = grandchild_thread.config_snapshot().await;
+        let grandchild_team = grandchild_snapshot
+            .team
+            .as_ref()
+            .expect("grandchild team snapshot");
+        assert_eq!(
+            (
+                grandchild_team.mode,
+                grandchild_team.role,
+                grandchild_snapshot.model,
+                grandchild_snapshot.reasoning_effort,
+            ),
+            (
+                TeamMode::LeadWorker,
+                Some(TeamRole::Worker),
+                WORKER_MODEL.to_string(),
+                Some(ReasoningEffort::Low),
+            )
+        );
+    }
     Ok(())
 }
 
