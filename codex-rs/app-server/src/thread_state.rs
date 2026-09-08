@@ -27,6 +27,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::Weak;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -306,6 +308,19 @@ mod tests {
         assert_eq!(results, vec![true, false, true, false]);
     }
 
+    #[tokio::test]
+    async fn token_usage_projection_delivery_invalidates_stale_generations() {
+        let delivery = TokenUsageProjectionDelivery::default();
+        let first_generation = delivery.begin();
+        let second_generation = delivery.begin();
+
+        assert!(!delivery.is_current(first_generation));
+        assert!(delivery.is_current(second_generation));
+
+        delivery.invalidate();
+        assert!(!delivery.is_current(second_generation));
+    }
+
     fn thread_settings(model: &str) -> ThreadSettings {
         ThreadSettings {
             cwd: AbsolutePathBuf::from_absolute_path("/tmp").expect("absolute path"),
@@ -338,10 +353,46 @@ mod tests {
     }
 }
 
+/// Tracks a connection's latest recursive usage projection and serializes its delivery.
+pub(crate) struct TokenUsageProjectionDelivery {
+    generation: AtomicU64,
+    send_lock: Mutex<()>,
+}
+
+impl Default for TokenUsageProjectionDelivery {
+    fn default() -> Self {
+        Self {
+            generation: AtomicU64::new(0),
+            send_lock: Mutex::new(()),
+        }
+    }
+}
+
+impl TokenUsageProjectionDelivery {
+    pub(crate) fn begin(&self) -> u64 {
+        self.generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1)
+    }
+
+    pub(crate) fn is_current(&self, generation: u64) -> bool {
+        self.generation.load(Ordering::Acquire) == generation
+    }
+
+    pub(crate) fn invalidate(&self) {
+        let _ = self.generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn send_lock(&self) -> &Mutex<()> {
+        &self.send_lock
+    }
+}
+
 struct ThreadEntry {
     state: Arc<Mutex<ThreadState>>,
     connection_ids: HashSet<ConnectionId>,
     has_connections_watcher: watch::Sender<bool>,
+    token_usage_projection_deliveries: HashMap<ConnectionId, Arc<TokenUsageProjectionDelivery>>,
 }
 
 impl Default for ThreadEntry {
@@ -350,6 +401,7 @@ impl Default for ThreadEntry {
             state: Arc::new(Mutex::new(ThreadState::default())),
             connection_ids: HashSet::new(),
             has_connections_watcher: watch::channel(false).0,
+            token_usage_projection_deliveries: HashMap::new(),
         }
     }
 }
@@ -453,6 +505,22 @@ impl ThreadStateManager {
         state.threads.entry(thread_id).or_default().state.clone()
     }
 
+    pub(crate) async fn token_usage_projection_delivery(
+        &self,
+        thread_id: ThreadId,
+        connection_id: ConnectionId,
+    ) -> Arc<TokenUsageProjectionDelivery> {
+        let mut state = self.state.lock().await;
+        state
+            .threads
+            .entry(thread_id)
+            .or_default()
+            .token_usage_projection_deliveries
+            .entry(connection_id)
+            .or_insert_with(|| Arc::new(TokenUsageProjectionDelivery::default()))
+            .clone()
+    }
+
     pub(crate) fn current_listener_command_tx(
         &self,
         thread_id: ThreadId,
@@ -485,10 +553,12 @@ impl ThreadStateManager {
     pub(crate) async fn remove_thread_state(&self, thread_id: ThreadId) {
         let thread_state = {
             let mut state = self.state.lock().await;
-            let thread_state = state
-                .threads
-                .remove(&thread_id)
-                .map(|thread_entry| thread_entry.state);
+            let thread_state = state.threads.remove(&thread_id).map(|thread_entry| {
+                for delivery in thread_entry.token_usage_projection_deliveries.values() {
+                    delivery.invalidate();
+                }
+                thread_entry.state
+            });
             state.thread_ids_by_connection.retain(|_, thread_ids| {
                 thread_ids.remove(&thread_id);
                 !thread_ids.is_empty()
@@ -562,7 +632,13 @@ impl ThreadStateManager {
                 }
             }
             if let Some(thread_entry) = state.threads.get_mut(&thread_id) {
-                thread_entry.connection_ids.remove(&connection_id);
+                if thread_entry.connection_ids.remove(&connection_id)
+                    && let Some(delivery) = thread_entry
+                        .token_usage_projection_deliveries
+                        .remove(&connection_id)
+                {
+                    delivery.invalidate();
+                }
                 thread_entry.update_has_connections();
             }
         };
@@ -641,6 +717,12 @@ impl ThreadStateManager {
             for thread_id in &thread_ids {
                 if let Some(thread_entry) = state.threads.get_mut(thread_id) {
                     thread_entry.connection_ids.remove(&connection_id);
+                    if let Some(delivery) = thread_entry
+                        .token_usage_projection_deliveries
+                        .remove(&connection_id)
+                    {
+                        delivery.invalidate();
+                    }
                     thread_entry.update_has_connections();
                 }
             }

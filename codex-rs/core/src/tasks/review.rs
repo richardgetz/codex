@@ -176,6 +176,14 @@ async fn process_review_events(
                 // Cancellation or abort: consumer will finalize with None.
                 return None;
             }
+            EventMsg::RawResponseCompleted(event) => {
+                if let Some(record) = event.usage_record.clone() {
+                    session.persist_forwarded_response_usage(record).await;
+                }
+                session
+                    .send_event(ctx.as_ref(), EventMsg::RawResponseCompleted(event))
+                    .await;
+            }
             other => {
                 session.send_event(ctx.as_ref(), other).await;
             }

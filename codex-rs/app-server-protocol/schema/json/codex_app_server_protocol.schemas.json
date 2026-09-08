@@ -5095,6 +5095,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/tokenUsageProjection/updated"
+              ],
+              "title": "Thread/tokenUsageProjection/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadTokenUsageProjectionUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/tokenUsageProjection/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "turn/started"
               ],
               "title": "Turn/startedNotificationMethod",
@@ -17853,8 +17873,45 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Internal-only notification containing the exact usage from one upstream Responses API completion.",
         "properties": {
+          "attribution": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadTokenUsageAttribution"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Source metadata captured with the exact response usage."
+          },
+          "completedAt": {
+            "default": null,
+            "description": "Unix timestamp in seconds when the response completed.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "parentThreadId": {
+            "default": null,
+            "description": "Parent of the originating thread, when the response came from a child agent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "responseId": {
             "type": "string"
+          },
+          "sourceThreadId": {
+            "default": null,
+            "description": "Originating thread for forwarded one-shot child responses. Usually equal to `thread_id`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "threadId": {
             "type": "string"
@@ -25065,6 +25122,157 @@
         "required": [
           "last",
           "total"
+        ],
+        "type": "object"
+      },
+      "ThreadTokenUsageAttribution": {
+        "description": "Source metadata captured with one exact upstream response.",
+        "properties": {
+          "contextLength": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelProvider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "serviceTier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ThreadTokenUsageProjection": {
+        "properties": {
+          "threads": {
+            "items": {
+              "$ref": "#/definitions/v2/ThreadTokenUsageProjectionThread"
+            },
+            "type": "array"
+          },
+          "total": {
+            "$ref": "#/definitions/v2/TokenUsageBreakdown"
+          }
+        },
+        "required": [
+          "threads",
+          "total"
+        ],
+        "type": "object"
+      },
+      "ThreadTokenUsageProjectionThread": {
+        "properties": {
+          "forkedFromId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parentThreadId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "responseIds": {
+            "items": {
+              "$ref": "#/definitions/v2/ThreadTokenUsageResponseIdentity"
+            },
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/definitions/v2/ThreadTokenUsageSource"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "responseIds",
+          "sources",
+          "threadId"
+        ],
+        "type": "object"
+      },
+      "ThreadTokenUsageProjectionUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Complete billing usage reconstructed from persisted response records.\n\nThis notification is sent independently from the context-window counters in [`ThreadTokenUsageUpdatedNotification`]. A missing projection means the server could not read the complete history; an empty projection is a complete zero-usage baseline.",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "usageProjection": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadTokenUsageProjection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadTokenUsageProjectionUpdatedNotification",
+        "type": "object"
+      },
+      "ThreadTokenUsageResponseIdentity": {
+        "properties": {
+          "responseId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "responseId",
+          "threadId"
+        ],
+        "type": "object"
+      },
+      "ThreadTokenUsageSource": {
+        "description": "Cumulative exact usage for one model/provider/service-tier/context source. This is sent only as part of restored thread usage so clients can price mixed-model histories without replaying every response record.",
+        "properties": {
+          "attribution": {
+            "$ref": "#/definitions/v2/ThreadTokenUsageAttribution"
+          },
+          "responseIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/definitions/v2/TokenUsageBreakdown"
+          }
+        },
+        "required": [
+          "attribution",
+          "responseIds",
+          "threadId",
+          "usage"
         ],
         "type": "object"
       },

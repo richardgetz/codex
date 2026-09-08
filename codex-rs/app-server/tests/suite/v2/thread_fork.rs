@@ -1534,6 +1534,7 @@ async fn thread_fork_emits_restored_token_usage_before_next_turn() -> Result<()>
         "Saved user message",
         Some("mock_provider"),
     )?;
+    let source_thread_id = conversation_id.clone();
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -1570,6 +1571,25 @@ async fn thread_fork_emits_restored_token_usage_before_next_turn() -> Result<()>
     assert_eq!(notification.token_usage.total.reasoning_output_tokens, 10);
     assert_eq!(notification.token_usage.last.total_tokens, 90);
     assert_eq!(notification.token_usage.model_context_window, Some(200_000));
+    let projection_notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/tokenUsageProjection/updated"),
+    )
+    .await??;
+    let ServerNotification::ThreadTokenUsageProjectionUpdated(projection_notification) =
+        projection_notification.try_into()?
+    else {
+        panic!("expected thread/tokenUsageProjection/updated notification");
+    };
+    let projection = projection_notification
+        .usage_projection
+        .expect("fork should include a complete usage projection");
+    assert_eq!(projection.total.total_tokens, 0);
+    assert_eq!(projection.threads.len(), 1);
+    assert_eq!(projection.threads[0].thread_id, thread.id);
+    assert_eq!(projection.threads[0].forked_from_id, Some(source_thread_id));
+    assert!(projection.threads[0].sources.is_empty());
+    assert!(projection.threads[0].response_ids.is_empty());
 
     Ok(())
 }

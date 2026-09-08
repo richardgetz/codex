@@ -84,6 +84,15 @@ use tokio::sync::oneshot;
 use tracing::error;
 use ts_rs::TS;
 
+#[path = "token_usage.rs"]
+mod token_usage;
+
+pub use self::token_usage::TokenUsageAttribution;
+pub use self::token_usage::TokenUsageProjection;
+pub use self::token_usage::TokenUsageProjectionSource;
+pub use self::token_usage::TokenUsageProjectionThread;
+pub use self::token_usage::TokenUsageRecord;
+pub use self::token_usage::TokenUsageResponseIdentity;
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
@@ -2102,6 +2111,20 @@ pub struct RawResponseCompletedEvent {
     pub response_id: String,
     pub token_usage: Option<TokenUsage>,
     pub usage_metadata: Option<crate::ResponseUsageMetadata>,
+    /// Thread that originated this response. This differs from the forwarding thread for
+    /// one-shot review agents, whose completion event is relayed through their parent.
+    #[serde(default)]
+    pub thread_id: Option<ThreadId>,
+    /// Parent of the originating thread, when this response came from a child agent.
+    #[serde(default)]
+    pub parent_thread_id: Option<ThreadId>,
+    /// Unix timestamp in milliseconds when the response completed.
+    #[serde(default)]
+    pub completed_at_ms: Option<i64>,
+    /// Exact durable record for this response. This is carried internally so a parent can retain
+    /// usage from a one-shot child whose completion is forwarded through the parent thread.
+    #[serde(default)]
+    pub usage_record: Option<TokenUsageRecord>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -2444,19 +2467,6 @@ pub const TOKEN_USAGE_STANDARD_SERVICE_TIER: &str = "standard";
 pub const TOKEN_USAGE_SHORT_CONTEXT: &str = "short";
 pub const TOKEN_USAGE_LONG_CONTEXT: &str = "long";
 pub const TOKEN_USAGE_LONG_CONTEXT_THRESHOLD: i64 = 272_000;
-
-/// Best-effort Responses API usage observed for one completed response.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-pub struct TokenUsageRecord {
-    pub thread_id: ThreadId,
-    pub turn_id: String,
-    pub session_id: SessionId,
-    pub root_turn_id: String,
-    pub response_id: String,
-    pub usage: TokenUsage,
-    pub turn_token_usage: TokenUsage,
-    pub thread_token_usage: TokenUsage,
-}
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct TokenUsageInfo {

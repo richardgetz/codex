@@ -448,6 +448,12 @@ impl CodexThread {
             .agent_control
             .ensure_execution_capacity_for_turn_start(self)
             .await?;
+        let config = self.session.get_config().await;
+        let _worker_lease = self
+            .session
+            .services
+            .agent_control
+            .reserve_team_worker_turn(&config, &self.session_source, self.session.thread_id)?;
         let RecoverTurnRequest {
             turn_id,
             thread_settings,
@@ -465,11 +471,11 @@ impl CodexThread {
             root_turn_id,
             ..Default::default()
         };
-        match self
+        let submission = self
             .io
             .submit_recover_turn(thread_settings, start_options, trace, turn_id)
-            .await?
-        {
+            .await?;
+        match submission {
             TurnInputSubmission::Started { turn_id } => {
                 Ok(StartIfIdleSubmission::Started { turn_id })
             }
@@ -549,14 +555,22 @@ impl CodexThread {
         request: TurnInputRequest,
         mode: TurnInputMode,
     ) -> CodexResult<TurnInputSubmission> {
-        if !matches!(mode, TurnInputMode::Steer { .. }) {
+        let _worker_lease = if !matches!(mode, TurnInputMode::Steer { .. }) {
             self.session
                 .services
                 .agent_control
                 .ensure_execution_capacity_for_turn_start(self)
                 .await?;
-        }
-        self.io.submit_turn_input(request, mode).await
+            let config = self.session.get_config().await;
+            self.session
+                .services
+                .agent_control
+                .reserve_team_worker_turn(&config, &self.session_source, self.session.thread_id)?
+        } else {
+            None
+        };
+        let result = self.io.submit_turn_input(request, mode).await;
+        result
     }
 
     /// Persist whether this thread is eligible for future memory generation.
@@ -752,6 +766,11 @@ impl CodexThread {
     /// `thread/tokenUsage/updated` payload incomplete.
     pub async fn token_usage_info(&self) -> Option<TokenUsageInfo> {
         self.session.token_usage_info().await
+    }
+
+    /// Returns exact usage records owned by this thread for attribution-aware callers.
+    pub async fn token_usage_records(&self) -> Vec<codex_protocol::protocol::TokenUsageRecord> {
+        self.session.token_usage_records().await
     }
 
     /// Records a context fragment without creating a new user turn boundary.

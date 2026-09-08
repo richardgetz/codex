@@ -1,6 +1,7 @@
 use anyhow::Context;
 use codex_config::TeamModelProfileToml;
 use codex_config::TeamToml;
+use codex_config::TeamWorkerProfileToml;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::OrchestratorFeatureToml;
@@ -227,11 +228,17 @@ fn save_config_resolved_fields(
             model: Some(profile.model.clone()),
             reasoning_effort: Some(profile.reasoning_effort.clone()),
         };
+        let worker_profile_to_toml =
+            |profile: &codex_config::TeamModelProfile| TeamWorkerProfileToml {
+                model: Some(profile.model.clone()),
+                reasoning_effort: Some(profile.reasoning_effort.clone()),
+                max_concurrent: config.team.worker_max_concurrent,
+            };
         let profiles = config.effective_team_profiles();
         lock_config.team = Some(TeamToml {
             enabled: Some(config.team_mode == TeamMode::LeadWorker),
             lead: profiles.map(|profiles| profile_to_toml(&profiles.lead)),
-            worker: profiles.map(|profiles| profile_to_toml(&profiles.worker)),
+            worker: profiles.map(|profiles| worker_profile_to_toml(&profiles.worker)),
         });
     }
 

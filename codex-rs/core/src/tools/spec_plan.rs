@@ -756,6 +756,12 @@ fn collab_tools_enabled(turn_context: &TurnContext, model_info: &ModelInfo) -> b
         MultiAgentVersion::V2 => {
             turn_context.session_source.get_agent_path().is_none()
                 || model_info.multi_agent_version == Some(MultiAgentVersion::V2)
+                || (turn_context.config.team_mode == codex_protocol::protocol::TeamMode::LeadWorker
+                    && crate::session::team::effective_role_for_session_source(
+                        &turn_context.config,
+                        &turn_context.session_source,
+                    ) == Some(codex_config::TeamRole::Worker)
+                    && model_info.multi_agent_version != Some(MultiAgentVersion::Disabled))
         }
     }
 }

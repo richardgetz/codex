@@ -1,5 +1,8 @@
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::TokenUsageAttribution;
+use codex_protocol::protocol::TokenUsageRecord;
+use codex_rollout::RolloutItem;
 use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
@@ -143,6 +146,25 @@ pub trait ThreadStore: Any + Send + Sync {
         &self,
         params: LoadThreadHistoryParams,
     ) -> ThreadStoreFuture<'_, StoredThreadHistory>;
+
+    /// Loads every exact usage record physically retained by a thread's rollout.
+    ///
+    /// Unlike model-context loading, this operation must not use a latest-compaction suffix: a
+    /// billing projection needs the complete persisted record history. Stores with paginated
+    /// history should override this operation to scan all contributing rollout segments.
+    fn load_token_usage_records(
+        &self,
+        params: LoadThreadHistoryParams,
+    ) -> ThreadStoreFuture<'_, Vec<TokenUsageRecord>> {
+        Box::pin(async move {
+            let history = self.load_history(params).await?;
+            Ok(enrich_token_usage_records(
+                token_usage_records_from_rollout_items(&history.items),
+                &history.items,
+                None,
+            ))
+        })
+    }
 
     /// Loads the persisted rollout items needed to reconstruct the latest model-visible context.
     ///
@@ -445,3 +467,126 @@ pub trait ThreadStore: Any + Send + Sync {
         })
     }
 }
+
+/// Extracts exact records from a complete physical rollout, including the latest checkpoint copy
+/// retained in a compaction item. Callers deduplicate identities after combining parent and child
+/// rollouts because a checkpoint and its original record may both be present.
+pub(crate) fn token_usage_records_from_rollout_items(
+    items: &[RolloutItem],
+) -> Vec<TokenUsageRecord> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::TokenUsageRecord(record) => Some(record.clone()),
+            RolloutItem::Compacted(compacted) => compacted.latest_token_usage_record.clone(),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Fills only attribution fields that can be recovered from the same persisted rollout. Model
+/// names come from the record's turn context, while provider/tier defaults come from historical
+/// session/settings events. A missing field stays missing when the rollout contains no
+/// unambiguous evidence, so old records are never priced using the current thread configuration.
+pub(crate) fn enrich_token_usage_records(
+    mut records: Vec<TokenUsageRecord>,
+    items: &[RolloutItem],
+    default_model_provider: Option<&str>,
+) -> Vec<TokenUsageRecord> {
+    let mut session_attribution = TokenUsageAttribution {
+        model: None,
+        model_provider: default_model_provider.map(str::to_string),
+        service_tier: None,
+        context_length: None,
+    };
+    let mut turn_attributions = std::collections::HashMap::new();
+    let mut record_fallbacks =
+        std::collections::HashMap::<(ThreadId, String), TokenUsageAttribution>::new();
+
+    for item in items {
+        match item {
+            RolloutItem::SessionMeta(meta) => {
+                if let Some(model_provider) = meta.meta.model_provider.clone() {
+                    session_attribution.model_provider = Some(model_provider);
+                }
+            }
+            RolloutItem::TurnContext(turn_context) => {
+                if let Some(turn_id) = turn_context.turn_id.as_ref() {
+                    turn_attributions.insert(
+                        turn_id.clone(),
+                        TokenUsageAttribution {
+                            model: Some(turn_context.model.clone()),
+                            model_provider: session_attribution.model_provider.clone(),
+                            service_tier: session_attribution.service_tier.clone(),
+                            context_length: None,
+                        },
+                    );
+                }
+            }
+            RolloutItem::EventMsg(event) => match event {
+                codex_protocol::protocol::EventMsg::SessionConfigured(configured) => {
+                    session_attribution.model = Some(configured.model.clone());
+                    session_attribution.model_provider = Some(configured.model_provider_id.clone());
+                    session_attribution.service_tier = configured.service_tier.clone();
+                }
+                codex_protocol::protocol::EventMsg::ThreadSettingsApplied(applied) => {
+                    session_attribution.model = Some(applied.thread_settings.model.clone());
+                    session_attribution.model_provider =
+                        Some(applied.thread_settings.model_provider_id.clone());
+                    session_attribution.service_tier = applied.thread_settings.service_tier.clone();
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+
+        let record = match item {
+            RolloutItem::TokenUsageRecord(record) => Some(record),
+            RolloutItem::Compacted(compacted) => compacted.latest_token_usage_record.as_ref(),
+            _ => None,
+        };
+        if let Some(record) = record {
+            let fallback = turn_attributions
+                .get(&record.turn_id)
+                .cloned()
+                .unwrap_or_else(|| session_attribution.clone());
+            record_fallbacks
+                .entry((record.thread_id, record.response_id.clone()))
+                .or_insert(fallback);
+        }
+    }
+
+    // The store passes the rollout's historical provider even when a custom caller supplies the
+    // records directly. With no items there is no later state that could accidentally be used as
+    // a model/tier fallback; records with items always use the snapshot captured at their own
+    // position above.
+    let itemless_fallback = items.is_empty().then_some(session_attribution);
+    for record in &mut records {
+        let fallback = record_fallbacks
+            .get(&(record.thread_id, record.response_id.clone()))
+            .or(itemless_fallback.as_ref());
+        if let Some(fallback) = fallback {
+            let attribution_was_missing = record.attribution == TokenUsageAttribution::default();
+            if record.attribution.model.is_none() {
+                record.attribution.model = fallback.model.clone();
+            }
+            if record.attribution.model_provider.is_none() {
+                record.attribution.model_provider = fallback.model_provider.clone();
+            }
+            // A newly recorded response can intentionally omit the standard tier. Only fill a
+            // missing tier when the entire attribution was absent, which identifies an old record
+            // that needs historical enrichment rather than a current record with a null tier.
+            if attribution_was_missing {
+                record.attribution.service_tier = fallback.service_tier.clone();
+            }
+        }
+        if record.attribution.context_length.is_none() {
+            record.attribution.context_length = Some(record.usage.context_length().to_string());
+        }
+    }
+    records
+}
+
+#[cfg(test)]
+#[path = "store_tests.rs"]
+mod tests;

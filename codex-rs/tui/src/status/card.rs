@@ -49,7 +49,9 @@ use super::rate_limits::render_status_limit_progress_bar;
 use super::remote_connection::RemoteConnectionStatus;
 use super::thread_usage::StatusThreadUsage;
 use super::token_usage_cost::StatusTokenUsageCostData;
+use super::token_usage_cost::compose_status_token_usage_cost_for_sources;
 use super::token_usage_cost::compose_status_token_usage_cost_with_models;
+use crate::usage_rollup::UsageRollupSource;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
 use crate::wrapping::word_wrap_lines;
@@ -57,6 +59,19 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 const CHATGPT_USAGE_URL: &str = "https://chatgpt.com/codex/settings/usage";
+
+/// Describes whether the status card has a complete recursive usage projection.
+///
+/// The legacy state keeps the existing direct-thread behavior for callers that do not participate
+/// in the app-owned rollup. `Unavailable` deliberately remains distinct from `Complete(&[])`: a
+/// known-empty fork must render zero recursive usage instead of falling back to inherited direct
+/// counters, while an incomplete tree should tell the user why only direct usage is shown.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum UsageRollupStatus<'a> {
+    Legacy,
+    Unavailable,
+    Complete(&'a [UsageRollupSource]),
+}
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -134,6 +149,7 @@ struct StatusHistoryCell {
     forked_from: Option<String>,
     token_usage: StatusTokenUsageData,
     token_usage_cost: Option<StatusTokenUsageCostData>,
+    usage_rollup_unavailable: bool,
     rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
     thread_usage: StatusThreadUsage,
 }
@@ -234,6 +250,49 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
     agents_summary: String,
     refreshing_rate_limits: bool,
 ) -> (CompositeHistoryCell, StatusHistoryHandle) {
+    new_status_output_with_rate_limits_handle_with_sources(
+        config,
+        runtime_model_provider_base_url,
+        remote_connection,
+        account_display,
+        token_info,
+        total_usage,
+        session_id,
+        thread_name,
+        forked_from,
+        rate_limits,
+        _plan_type,
+        now,
+        model_name,
+        collaboration_mode,
+        reasoning_effort_override,
+        UsageRollupStatus::Legacy,
+        agents_summary,
+        refreshing_rate_limits,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn new_status_output_with_rate_limits_handle_with_sources(
+    config: &Config,
+    runtime_model_provider_base_url: Option<&str>,
+    remote_connection: Option<&RemoteConnectionStatus>,
+    account_display: Option<&StatusAccountDisplay>,
+    token_info: Option<&TokenUsageInfo>,
+    total_usage: &TokenUsage,
+    session_id: &Option<ThreadId>,
+    thread_name: Option<String>,
+    forked_from: Option<ThreadId>,
+    rate_limits: &[RateLimitSnapshotDisplay],
+    _plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    model_name: &str,
+    collaboration_mode: Option<&str>,
+    reasoning_effort_override: Option<Option<ReasoningEffort>>,
+    usage_rollup_status: UsageRollupStatus<'_>,
+    agents_summary: String,
+    refreshing_rate_limits: bool,
+) -> (CompositeHistoryCell, StatusHistoryHandle) {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let (card, handle) = StatusHistoryCell::new(
         config,
@@ -251,6 +310,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
         model_name,
         collaboration_mode,
         reasoning_effort_override,
+        usage_rollup_status,
         agents_summary,
         refreshing_rate_limits,
     );
@@ -279,6 +339,7 @@ impl StatusHistoryCell {
         model_name: &str,
         collaboration_mode: Option<&str>,
         reasoning_effort_override: Option<Option<ReasoningEffort>>,
+        usage_rollup_status: UsageRollupStatus<'_>,
         agents_summary: String,
         refreshing_rate_limits: bool,
     ) -> (Self, StatusHistoryHandle) {
@@ -374,16 +435,27 @@ impl StatusHistoryCell {
         let usage_by_model_and_service_tier_and_context_length = token_info
             .map(|info| &info.usage_by_model_and_service_tier_and_context_length)
             .unwrap_or(&empty_usage_by_model_and_service_tier_and_context_length);
-        let token_usage_cost = compose_status_token_usage_cost_with_models(
-            &config.tui_status_token_usage,
-            &config.model_provider_id,
-            &model_name,
-            total_usage,
-            usage_by_service_tier,
-            usage_by_service_tier_and_context_length,
-            usage_by_model,
-            usage_by_model_and_service_tier_and_context_length,
-        );
+        let token_usage_cost = match usage_rollup_status {
+            UsageRollupStatus::Legacy => compose_status_token_usage_cost_with_models(
+                &config.tui_status_token_usage,
+                &config.model_provider_id,
+                &model_name,
+                total_usage,
+                usage_by_service_tier,
+                usage_by_service_tier_and_context_length,
+                usage_by_model,
+                usage_by_model_and_service_tier_and_context_length,
+            ),
+            UsageRollupStatus::Unavailable => None,
+            UsageRollupStatus::Complete(usage_sources) => {
+                compose_status_token_usage_cost_for_sources(
+                    &config.tui_status_token_usage,
+                    usage_sources,
+                )
+            }
+        };
+        let usage_rollup_unavailable =
+            matches!(usage_rollup_status, UsageRollupStatus::Unavailable);
         let rate_limits = if rate_limits.len() <= 1 {
             compose_rate_limit_data(rate_limits.first(), now)
         } else {
@@ -412,6 +484,7 @@ impl StatusHistoryCell {
                 forked_from,
                 token_usage,
                 token_usage_cost,
+                usage_rollup_unavailable,
                 agents_summary,
                 rate_limit_state: rate_limit_state.clone(),
                 thread_usage: thread_usage.clone(),
@@ -824,6 +897,9 @@ impl HistoryCell for StatusHistoryCell {
         if self.token_usage.context_window.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
         }
+        if self.usage_rollup_unavailable {
+            push_label(&mut labels, &mut seen, "Usage tree");
+        }
         self.collect_rate_limit_labels(&rate_limit_state, &mut seen, &mut labels);
         if self.token_usage_cost.is_some() {
             push_label(&mut labels, &mut seen, "  Input");
@@ -922,6 +998,13 @@ impl HistoryCell for StatusHistoryCell {
 
         if let Some(spans) = self.context_window_spans() {
             lines.push(formatter.line("Context window", spans));
+        }
+
+        if self.usage_rollup_unavailable {
+            lines.push(formatter.line(
+                "Usage tree",
+                vec![Span::from("data not available yet; showing direct thread").dim()],
+            ));
         }
 
         lines.extend(self.rate_limit_lines(&rate_limit_state, available_inner_width, &formatter));

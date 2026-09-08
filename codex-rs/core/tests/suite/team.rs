@@ -23,12 +23,15 @@ use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_once_match;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::submit_thread_settings;
@@ -56,12 +59,22 @@ const CHILD_TASK: &str = "inspect the team implementation";
 const GRANDCHILD_TASK: &str = "inspect the team test";
 const SPAWN_CALL_ID: &str = "team-spawn";
 const CHILD_SPAWN_CALL_ID: &str = "team-child-spawn";
+const LIMIT_PROMPT: &str = "spawn two direct team workers";
+const FIRST_DIRECT_TASK: &str = "inspect the first direct task";
+const SECOND_DIRECT_TASK: &str = "inspect the second direct task";
+const THIRD_DIRECT_TASK: &str = "inspect the replacement direct task";
+const FOLLOWUP_TASK: &str = "continue after the worker slot is released";
+const REPLACEMENT_PROMPT: &str = "spawn a replacement direct team worker";
+const FIRST_DIRECT_CALL_ID: &str = "team-first-direct";
+const SECOND_DIRECT_CALL_ID: &str = "team-second-direct";
+const THIRD_DIRECT_CALL_ID: &str = "team-third-direct";
+const FIRST_DIRECT_GATE_CALL_ID: &str = "team-first-direct-gate";
+const ROOT_DIRECT_GATE_CALL_ID: &str = "team-root-direct-gate";
 
-#[derive(Clone, Copy)]
-enum WorkerSpawnBehavior {
-    Nested,
-    Leaf,
-}
+#[path = "team_usage.rs"]
+mod team_usage;
+#[path = "team_worker_limits.rs"]
+mod worker_limits;
 
 fn team_config(mode: TeamMode, lead_model: &str, worker_model: &str) -> TeamConfig {
     TeamConfig {
@@ -76,6 +89,7 @@ fn team_config(mode: TeamMode, lead_model: &str, worker_model: &str) -> TeamConf
                 reasoning_effort: ReasoningEffort::Low,
             },
         }),
+        worker_max_concurrent: None,
     }
 }
 
@@ -668,21 +682,18 @@ async fn team_fails_open_incompatible_worker_on_cold_resume() -> Result<()> {
 
 #[test_case(
     MultiAgentVersion::V1,
-    MULTI_AGENT_V1_NAMESPACE,
-    WorkerSpawnBehavior::Nested;
+    MULTI_AGENT_V1_NAMESPACE;
     "legacy backend with nested worker"
 )]
 #[test_case(
     MultiAgentVersion::V2,
-    MULTI_AGENT_V2_NAMESPACE,
-    WorkerSpawnBehavior::Leaf;
-    "v2 backend with v1 leaf worker"
+    MULTI_AGENT_V2_NAMESPACE;
+    "v2 backend with nested v1 worker"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn team_spawn_uses_worker_despite_role_and_model_overrides(
     lead_multi_agent_version: MultiAgentVersion,
     tool_namespace: &str,
-    worker_spawn_behavior: WorkerSpawnBehavior,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -722,81 +733,53 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides(
         ]),
     )
     .await;
-    let (child_response, grandchild_response, child_completion_response) =
-        match worker_spawn_behavior {
-            WorkerSpawnBehavior::Nested => {
-                let child_response = mount_sse_once_match(
-                    &server,
-                    |request: &wiremock::Request| {
-                        body_contains(request, CHILD_TASK)
-                            && !body_contains(request, GRANDCHILD_TASK)
-                            && request_has_model(request, WORKER_MODEL)
-                            && !request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
-                    },
-                    sse(vec![
-                        ev_response_created("team-child-1"),
-                        ev_function_call_with_namespace(
-                            CHILD_SPAWN_CALL_ID,
-                            tool_namespace,
-                            "spawn_agent",
-                            &grandchild_args,
-                        ),
-                        ev_completed("team-child-1"),
-                    ]),
-                )
-                .await;
-                let grandchild_response = mount_sse_once_match(
-                    &server,
-                    |request: &wiremock::Request| {
-                        body_contains(request, GRANDCHILD_TASK)
-                            && request_has_model(request, WORKER_MODEL)
-                            && !request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
-                    },
-                    sse(vec![
-                        ev_response_created("team-grandchild"),
-                        ev_assistant_message("team-grandchild-message", "review complete"),
-                        ev_completed("team-grandchild"),
-                    ]),
-                )
-                .await;
-                let child_completion_response = mount_sse_once_match(
-                    &server,
-                    |request: &wiremock::Request| {
-                        request_has_model(request, WORKER_MODEL)
-                            && request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
-                    },
-                    sse(vec![
-                        ev_response_created("team-child-2"),
-                        ev_assistant_message("team-child-message", "worker review complete"),
-                        ev_completed("team-child-2"),
-                    ]),
-                )
-                .await;
-                (
-                    child_response,
-                    Some(grandchild_response),
-                    Some(child_completion_response),
-                )
-            }
-            WorkerSpawnBehavior::Leaf => {
-                let child_response = mount_sse_once_match(
-                    &server,
-                    |request: &wiremock::Request| {
-                        body_contains(request, CHILD_TASK)
-                            && !body_contains(request, GRANDCHILD_TASK)
-                            && request_has_model(request, WORKER_MODEL)
-                            && !request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
-                    },
-                    sse(vec![
-                        ev_response_created("team-child-leaf"),
-                        ev_assistant_message("team-child-message", "worker review complete"),
-                        ev_completed("team-child-leaf"),
-                    ]),
-                )
-                .await;
-                (child_response, None, None)
-            }
-        };
+    let child_response = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, CHILD_TASK)
+                && !body_contains(request, GRANDCHILD_TASK)
+                && request_has_model(request, WORKER_MODEL)
+                && !request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("team-child-1"),
+            ev_function_call_with_namespace(
+                CHILD_SPAWN_CALL_ID,
+                tool_namespace,
+                "spawn_agent",
+                &grandchild_args,
+            ),
+            ev_completed("team-child-1"),
+        ]),
+    )
+    .await;
+    let grandchild_response = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, GRANDCHILD_TASK)
+                && request_has_model(request, WORKER_MODEL)
+                && !request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("team-grandchild"),
+            ev_assistant_message("team-grandchild-message", "review complete"),
+            ev_completed("team-grandchild"),
+        ]),
+    )
+    .await;
+    let child_completion_response = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("team-child-2"),
+            ev_assistant_message("team-child-message", "worker review complete"),
+            ev_completed("team-child-2"),
+        ]),
+    )
+    .await;
     let root_completion_response = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
@@ -816,6 +799,9 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides(
         .with_model_info_override(LEAD_MODEL, move |model_info| {
             model_info.multi_agent_version = Some(lead_multi_agent_version);
         })
+        .with_model_info_override(WORKER_MODEL, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V1);
+        })
         .with_model(INITIAL_MODEL)
         .with_config(move |config| {
             config
@@ -827,6 +813,7 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides(
                 .disable(Feature::MultiAgentV2)
                 .expect("MultiAgentV2 feature");
             configure_team(config, TeamMode::LeadWorker);
+            config.team.worker_max_concurrent = Some(1);
             let role_path = config.codex_home.join("team-reviewer.toml");
             std::fs::write(
                 &role_path,
@@ -904,67 +891,44 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides(
         "child",
     )
     .await;
-    let grandchild_request = if let Some(grandchild_response) = grandchild_response.as_ref() {
-        Some(
-            wait_for_captured_request(
-                grandchild_response,
-                |request| {
-                    request.body_contains_text(GRANDCHILD_TASK)
-                        && response_request_has_model(request, WORKER_MODEL)
-                        && !response_request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
-                },
-                "grandchild",
-            )
-            .await,
-        )
-    } else {
-        None
-    };
-    let child_completion_request = if let Some(child_completion_response) =
-        child_completion_response.as_ref()
-    {
-        Some(
-            wait_for_captured_request(
-                child_completion_response,
-                |request| {
-                    response_request_has_model(request, WORKER_MODEL)
-                        && response_request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
-                },
-                "child completion",
-            )
-            .await,
-        )
-    } else {
-        None
-    };
+    let grandchild_request = wait_for_captured_request(
+        &grandchild_response,
+        |request| {
+            request.body_contains_text(GRANDCHILD_TASK)
+                && response_request_has_model(request, WORKER_MODEL)
+                && !response_request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
+        },
+        "grandchild",
+    )
+    .await;
+    let child_completion_request = wait_for_captured_request(
+        &child_completion_response,
+        |request| {
+            response_request_has_model(request, WORKER_MODEL)
+                && response_request_has_function_call_output(request, CHILD_SPAWN_CALL_ID)
+        },
+        "child completion",
+    )
+    .await;
     assert_request_assignment(&root_request, LEAD_MODEL, "max");
     assert_request_assignment(&child_request, WORKER_MODEL, "low");
-    if let Some(grandchild_request) = grandchild_request.as_ref() {
-        assert_request_assignment(grandchild_request, WORKER_MODEL, "low");
-    }
-    if let Some(child_completion_request) = child_completion_request.as_ref() {
-        child_completion_request.function_call_output(CHILD_SPAWN_CALL_ID);
-    }
+    assert_request_assignment(&grandchild_request, WORKER_MODEL, "low");
+    child_completion_request.function_call_output(CHILD_SPAWN_CALL_ID);
 
     let child_thread_id = child_request.body_json()["client_metadata"]["thread_id"]
         .as_str()
         .and_then(|thread_id| ThreadId::from_string(thread_id).ok())
         .expect("child thread ID");
     let child_thread = test.thread_manager.get_thread(child_thread_id).await?;
-    let grandchild_thread = if let Some(grandchild_request) = grandchild_request.as_ref() {
-        let grandchild_thread_id = grandchild_request.body_json()["client_metadata"]["thread_id"]
-            .as_str()
-            .and_then(|thread_id| ThreadId::from_string(thread_id).ok())
-            .expect("grandchild thread ID");
-        let grandchild_thread = test.thread_manager.get_thread(grandchild_thread_id).await?;
-        wait_for_event(grandchild_thread.as_ref(), |event| {
-            matches!(event, EventMsg::TurnComplete(_))
-        })
-        .await;
-        Some(grandchild_thread)
-    } else {
-        None
-    };
+    let grandchild_thread_id = grandchild_request.body_json()["client_metadata"]["thread_id"]
+        .as_str()
+        .and_then(|thread_id| ThreadId::from_string(thread_id).ok())
+        .expect("grandchild thread ID");
+    let grandchild_thread = test.thread_manager.get_thread(grandchild_thread_id).await?;
+    wait_for_event(grandchild_thread.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     wait_for_event(child_thread.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
@@ -985,27 +949,322 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides(
             Some(ReasoningEffort::Low),
         )
     );
-    if let Some(grandchild_thread) = grandchild_thread {
-        let grandchild_snapshot = grandchild_thread.config_snapshot().await;
-        let grandchild_team = grandchild_snapshot
-            .team
-            .as_ref()
-            .expect("grandchild team snapshot");
-        assert_eq!(
-            (
-                grandchild_team.mode,
-                grandchild_team.role,
-                grandchild_snapshot.model,
-                grandchild_snapshot.reasoning_effort,
+    let grandchild_snapshot = grandchild_thread.config_snapshot().await;
+    let grandchild_team = grandchild_snapshot
+        .team
+        .as_ref()
+        .expect("grandchild team snapshot");
+    assert_eq!(
+        (
+            grandchild_team.mode,
+            grandchild_team.role,
+            grandchild_snapshot.model,
+            grandchild_snapshot.reasoning_effort,
+        ),
+        (
+            TeamMode::LeadWorker,
+            Some(TeamRole::Worker),
+            WORKER_MODEL.to_string(),
+            Some(ReasoningEffort::Low),
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_worker_limit_rejects_second_direct_spawn_and_reuses_completed_slot() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let first_args = serde_json::to_string(&json!({
+        "message": FIRST_DIRECT_TASK,
+        "task_name": "first_direct",
+        "fork_turns": "none",
+    }))?;
+    let second_args = serde_json::to_string(&json!({
+        "message": SECOND_DIRECT_TASK,
+        "task_name": "second_direct",
+        "fork_turns": "none",
+    }))?;
+    let third_args = serde_json::to_string(&json!({
+        "message": THIRD_DIRECT_TASK,
+        "task_name": "third_direct",
+        "fork_turns": "none",
+    }))?;
+    let gate_args = serde_json::to_string(&json!({
+        "barrier": {
+            "id": "team-worker-limit-direct-completion",
+            "participants": 2,
+            "timeout_ms": 10_000,
+        },
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, LIMIT_PROMPT)
+                && request_has_model(request, LEAD_MODEL)
+                && !request_has_function_call_output(request, FIRST_DIRECT_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("team-limit-root-1"),
+            ev_function_call_with_namespace(
+                FIRST_DIRECT_CALL_ID,
+                MULTI_AGENT_V1_NAMESPACE,
+                "spawn_agent",
+                &first_args,
             ),
-            (
-                TeamMode::LeadWorker,
-                Some(TeamRole::Worker),
-                WORKER_MODEL.to_string(),
-                Some(ReasoningEffort::Low),
-            )
-        );
-    }
+            ev_completed("team-limit-root-1"),
+        ]),
+    )
+    .await;
+    let root_after_first = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, FIRST_DIRECT_CALL_ID)
+                && !request_has_function_call_output(request, SECOND_DIRECT_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("team-limit-root-2"),
+            ev_function_call_with_namespace(
+                SECOND_DIRECT_CALL_ID,
+                MULTI_AGENT_V1_NAMESPACE,
+                "spawn_agent",
+                &second_args,
+            ),
+            ev_completed("team-limit-root-2"),
+        ]),
+    )
+    .await;
+    let root_after_second = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, SECOND_DIRECT_CALL_ID)
+                && !body_contains(request, REPLACEMENT_PROMPT)
+        },
+        sse(vec![
+            ev_response_created("team-limit-root-3"),
+            ev_function_call(ROOT_DIRECT_GATE_CALL_ID, "test_sync_tool", &gate_args),
+            ev_completed("team-limit-root-3"),
+        ]),
+    )
+    .await;
+    let root_after_gate = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, ROOT_DIRECT_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("team-limit-root-4"),
+            ev_assistant_message("team-limit-root-message", "direct worker limit checked"),
+            ev_completed("team-limit-root-4"),
+        ]),
+    )
+    .await;
+
+    let first_worker_response = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, FIRST_DIRECT_TASK) && request_has_model(request, WORKER_MODEL)
+        },
+        sse_response(sse(vec![
+            ev_response_created("team-limit-worker-1"),
+            ev_function_call(FIRST_DIRECT_GATE_CALL_ID, "test_sync_tool", &gate_args),
+            ev_completed("team-limit-worker-1"),
+        ])),
+    )
+    .await;
+    let first_worker_after_gate = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, FIRST_DIRECT_GATE_CALL_ID)
+        },
+        sse_response(sse(vec![
+            ev_response_created("team-limit-worker-2"),
+            ev_assistant_message("team-limit-worker-message", "first worker complete"),
+            ev_completed("team-limit-worker-2"),
+        ])),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_model_info_override(LEAD_MODEL, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V1);
+            model_info
+                .experimental_supported_tools
+                .push("test_sync_tool".to_string());
+        })
+        .with_model_info_override(WORKER_MODEL, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V1);
+            model_info
+                .experimental_supported_tools
+                .push("test_sync_tool".to_string());
+        })
+        .with_model(INITIAL_MODEL)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("Collab feature");
+            config
+                .features
+                .disable(Feature::MultiAgentV2)
+                .expect("MultiAgentV2 feature");
+            configure_team(config, TeamMode::LeadWorker);
+            config.team.worker_max_concurrent = Some(1);
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    submit_turn(
+        &test.codex,
+        LIMIT_PROMPT,
+        ThreadSettingsOverrides::default(),
+    )
+    .await?;
+    let _ = root_after_gate.single_request();
+
+    let first_output = root_after_first
+        .function_call_output_text(FIRST_DIRECT_CALL_ID)
+        .expect("first direct spawn output");
+    let first_result: Value = serde_json::from_str(&first_output)?;
+    let first_worker_id = first_result
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .and_then(|id| ThreadId::from_string(id).ok())
+        .expect("first direct spawn should return a valid agent_id");
+    let second_output = root_after_second
+        .function_call_output_text(SECOND_DIRECT_CALL_ID)
+        .expect("second direct spawn output");
+    assert!(
+        second_output.contains("agent thread limit reached"),
+        "second direct spawn should be rejected by the configured ceiling: {second_output}"
+    );
+
+    let first_worker_request = wait_for_captured_request(
+        &first_worker_response,
+        |request| {
+            response_request_has_model(request, WORKER_MODEL)
+                && request.body_contains_text(FIRST_DIRECT_TASK)
+        },
+        "first direct worker",
+    )
+    .await;
+    assert_request_assignment(&first_worker_request, WORKER_MODEL, "low");
+    let first_worker = test.thread_manager.get_thread(first_worker_id).await?;
+    wait_for_event(first_worker.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let _ = first_worker_after_gate.single_request();
+
+    let followup_response = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL) && body_contains(request, FOLLOWUP_TASK)
+        },
+        sse(vec![
+            ev_response_created("team-limit-worker-followup"),
+            ev_assistant_message("team-limit-worker-followup-message", "followup complete"),
+            ev_completed("team-limit-worker-followup"),
+        ]),
+    )
+    .await;
+    first_worker
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: FOLLOWUP_TASK.to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(first_worker.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_request_assignment(&followup_response.single_request(), WORKER_MODEL, "low");
+
+    let root_after_third = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && body_contains(request, REPLACEMENT_PROMPT)
+                && !request_has_function_call_output(request, THIRD_DIRECT_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("team-limit-root-5"),
+            ev_function_call_with_namespace(
+                THIRD_DIRECT_CALL_ID,
+                MULTI_AGENT_V1_NAMESPACE,
+                "spawn_agent",
+                &third_args,
+            ),
+            ev_completed("team-limit-root-5"),
+        ]),
+    )
+    .await;
+    let root_after_third_output = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, THIRD_DIRECT_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("team-limit-root-6"),
+            ev_assistant_message("team-limit-root-replacement", "replacement worker complete"),
+            ev_completed("team-limit-root-6"),
+        ]),
+    )
+    .await;
+    let replacement_worker_response = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL) && body_contains(request, THIRD_DIRECT_TASK)
+        },
+        sse_response(sse(vec![
+            ev_response_created("team-limit-worker-replacement"),
+            ev_assistant_message(
+                "team-limit-worker-replacement-message",
+                "replacement worker complete",
+            ),
+            ev_completed("team-limit-worker-replacement"),
+        ])),
+    )
+    .await;
+    submit_turn(
+        &test.codex,
+        REPLACEMENT_PROMPT,
+        ThreadSettingsOverrides::default(),
+    )
+    .await?;
+    let third_output = root_after_third_output
+        .function_call_output_text(THIRD_DIRECT_CALL_ID)
+        .expect("replacement direct spawn output");
+    let third_result: Value = serde_json::from_str(&third_output)?;
+    let third_worker_id = third_result
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .and_then(|id| ThreadId::from_string(id).ok())
+        .expect("replacement direct spawn should return a valid agent_id");
+    assert_ne!(
+        third_worker_id, first_worker_id,
+        "capacity reuse must admit a different direct Worker thread"
+    );
+    let replacement_worker = test.thread_manager.get_thread(third_worker_id).await?;
+    let replacement_request = wait_for_captured_request(
+        &replacement_worker_response,
+        |request| {
+            response_request_has_model(request, WORKER_MODEL)
+                && request.body_contains_text(THIRD_DIRECT_TASK)
+        },
+        "replacement direct worker",
+    )
+    .await;
+    assert_request_assignment(&replacement_request, WORKER_MODEL, "low");
+    wait_for_event(replacement_worker.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let _ = root_after_third.single_request();
     Ok(())
 }
 

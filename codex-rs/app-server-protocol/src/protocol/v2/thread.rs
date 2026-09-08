@@ -40,7 +40,11 @@ pub use codex_protocol::protocol::TeamRole;
 use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
 use codex_protocol::protocol::ThreadUsagePolicy as CoreThreadUsagePolicy;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
+use codex_protocol::protocol::TokenUsageAttribution as CoreTokenUsageAttribution;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
+use codex_protocol::protocol::TokenUsageProjection as CoreTokenUsageProjection;
+use codex_protocol::protocol::TokenUsageProjectionSource as CoreTokenUsageProjectionSource;
+use codex_protocol::protocol::TokenUsageProjectionThread as CoreTokenUsageProjectionThread;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
@@ -2088,6 +2092,19 @@ pub struct ThreadTokenUsageUpdatedNotification {
     pub token_usage: ThreadTokenUsage,
 }
 
+/// Complete billing usage reconstructed from persisted response records.
+///
+/// This notification is sent independently from the context-window counters in
+/// [`ThreadTokenUsageUpdatedNotification`]. A missing projection means the server could not read
+/// the complete history; an empty projection is a complete zero-usage baseline.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTokenUsageProjectionUpdatedNotification {
+    pub thread_id: String,
+    pub usage_projection: Option<ThreadTokenUsageProjection>,
+}
+
 /// Internal-only notification containing the exact usage from one upstream
 /// Responses API completion.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2099,6 +2116,18 @@ pub struct RawResponseCompletedNotification {
     pub response_id: String,
     pub usage: Option<TokenUsageBreakdown>,
     pub usage_metadata: Option<ResponseUsageMetadata>,
+    /// Originating thread for forwarded one-shot child responses. Usually equal to `thread_id`.
+    #[serde(default)]
+    pub source_thread_id: Option<String>,
+    /// Parent of the originating thread, when the response came from a child agent.
+    #[serde(default)]
+    pub parent_thread_id: Option<String>,
+    /// Unix timestamp in seconds when the response completed.
+    #[serde(default)]
+    pub completed_at: Option<i64>,
+    /// Source metadata captured with the exact response usage.
+    #[serde(default)]
+    pub attribution: Option<ThreadTokenUsageAttribution>,
 }
 
 /// Usage metadata reported for one upstream response.
@@ -2119,7 +2148,58 @@ impl From<codex_protocol::ResponseUsageMetadata> for ResponseUsageMetadata {
     }
 }
 
+/// Source metadata captured with one exact upstream response.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTokenUsageAttribution {
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub service_tier: Option<String>,
+    pub context_length: Option<String>,
+}
+
+/// Cumulative exact usage for one model/provider/service-tier/context source. This is sent only as
+/// part of restored thread usage so clients can price mixed-model histories without replaying every
+/// response record.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTokenUsageSource {
+    pub thread_id: String,
+    pub attribution: ThreadTokenUsageAttribution,
+    pub response_ids: Vec<String>,
+    pub usage: TokenUsageBreakdown,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTokenUsageResponseIdentity {
+    pub thread_id: String,
+    pub response_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTokenUsageProjectionThread {
+    pub thread_id: String,
+    pub parent_thread_id: Option<String>,
+    pub forked_from_id: Option<String>,
+    pub sources: Vec<ThreadTokenUsageSource>,
+    pub response_ids: Vec<ThreadTokenUsageResponseIdentity>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTokenUsageProjection {
+    pub total: TokenUsageBreakdown,
+    pub threads: Vec<ThreadTokenUsageProjectionThread>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadTokenUsage {
@@ -2319,7 +2399,64 @@ impl From<CoreTokenUsageInfo> for ThreadTokenUsage {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+impl From<CoreTokenUsageAttribution> for ThreadTokenUsageAttribution {
+    fn from(value: CoreTokenUsageAttribution) -> Self {
+        Self {
+            model: value.model,
+            model_provider: value.model_provider,
+            service_tier: value.service_tier,
+            context_length: value.context_length,
+        }
+    }
+}
+
+impl From<CoreTokenUsageProjectionSource> for ThreadTokenUsageSource {
+    fn from(value: CoreTokenUsageProjectionSource) -> Self {
+        Self {
+            thread_id: value.thread_id.to_string(),
+            attribution: value.attribution.into(),
+            response_ids: value.response_ids,
+            usage: value.usage.into(),
+        }
+    }
+}
+
+impl From<CoreTokenUsageProjectionThread> for ThreadTokenUsageProjectionThread {
+    fn from(value: CoreTokenUsageProjectionThread) -> Self {
+        let thread_id = value.thread_id.to_string();
+        let parent_thread_id = value
+            .parent_thread_id
+            .map(|thread_id| thread_id.to_string());
+        let forked_from_id = value.forked_from_id.map(|thread_id| thread_id.to_string());
+        let sources = value.sources.into_iter().map(Into::into).collect();
+        let response_ids = value
+            .response_ids
+            .into_iter()
+            .map(|identity| ThreadTokenUsageResponseIdentity {
+                thread_id: identity.thread_id.to_string(),
+                response_id: identity.response_id,
+            })
+            .collect();
+        Self {
+            thread_id,
+            parent_thread_id,
+            forked_from_id,
+            sources,
+            response_ids,
+        }
+    }
+}
+
+impl From<CoreTokenUsageProjection> for ThreadTokenUsageProjection {
+    fn from(value: CoreTokenUsageProjection) -> Self {
+        Self {
+            total: value.total_usage.into(),
+            threads: value.threads.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TokenUsageBreakdown {

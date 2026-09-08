@@ -172,7 +172,9 @@ pub(crate) fn world_state_policy(
 ) -> Option<TeamPolicyState> {
     role_for_session_source(source)?;
     if config.team_mode == codex_protocol::protocol::TeamMode::LeadWorker {
-        protocol_role_for_session_source(config, source).map(TeamPolicyState::new)
+        let worker_max_concurrent = config.team.worker_max_concurrent;
+        protocol_role_for_session_source(config, source)
+            .map(|role| TeamPolicyState::new(role, worker_max_concurrent))
     } else if config.team_state_persisted {
         Some(TeamPolicyState::disabled())
     } else {

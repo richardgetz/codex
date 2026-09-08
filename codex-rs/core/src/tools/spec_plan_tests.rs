@@ -28,6 +28,8 @@ use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TeamMode;
+use codex_protocol::protocol::TeamRole;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
@@ -3180,6 +3182,49 @@ async fn multi_agent_v2_bedrock_workers_only_delegate_when_model_supports_v2() {
             use_bedrock_provider(turn);
             update_turn_settings_for_test(turn, |settings| {
                 Arc::make_mut(&mut settings.model_info).slug = model.to_string();
+                Arc::make_mut(&mut settings.model_info).multi_agent_version =
+                    model_multi_agent_version;
+            });
+            turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: ThreadId::new(),
+                depth: 1,
+                agent_path: Some(AgentPath::try_from("/root/worker").expect("valid agent path")),
+                agent_nickname: None,
+                agent_role: None,
+            });
+        })
+        .await;
+
+        let spawn_agent_name = ToolName::namespaced("agents", "spawn_agent").to_string();
+        let followup_task_name = ToolName::namespaced("agents", "followup_task").to_string();
+        assert_eq!(plan.can_manage_children, supports_delegation);
+        if supports_delegation {
+            plan.assert_visible_contains(&["agents"]);
+            plan.assert_registered_contains(&[&spawn_agent_name, &followup_task_name]);
+        } else {
+            plan.assert_visible_lacks(&["agents"]);
+            plan.assert_registered_lacks(&[&spawn_agent_name, &followup_task_name]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn team_multi_agent_v2_workers_can_delegate_with_v1_models() {
+    for (model_multi_agent_version, supports_delegation) in [
+        (Some(MultiAgentVersion::V1), true),
+        (Some(MultiAgentVersion::Disabled), false),
+    ] {
+        let plan = probe(move |turn| {
+            set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+            update_config(turn, |config| {
+                config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+                config.team_mode = TeamMode::LeadWorker;
+                config.team_persisted_role = Some(TeamRole::Worker);
+            });
+            use_bedrock_provider(turn);
+            update_turn_settings_for_test(turn, |settings| {
+                Arc::make_mut(&mut settings.model_info).slug =
+                    AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID.to_string();
                 Arc::make_mut(&mut settings.model_info).multi_agent_version =
                     model_multi_agent_version;
             });

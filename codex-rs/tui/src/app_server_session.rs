@@ -2305,6 +2305,9 @@ pub(crate) fn thread_start_params_from_config(
             config.memories.use_memories,
             config.memories.generate_memories,
         )),
+        // The TUI's opt-in usage ledger consumes exact completion metadata for live status and
+        // daily spend accounting. The server still persists the same records for cold projections.
+        experimental_raw_events: config.tui_status_token_usage.enabled,
         ..ThreadStartParams::default()
     }
 }
@@ -3025,6 +3028,23 @@ mod tests {
 
         assert_eq!(params.ephemeral, Some(true));
         assert_eq!(params.history_mode, None);
+        assert!(!params.experimental_raw_events);
+    }
+
+    #[tokio::test]
+    async fn usage_enabled_thread_start_requests_exact_response_events() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.tui_status_token_usage.enabled = true;
+
+        let params = thread_start_params_from_config(
+            &config,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
+        );
+
+        assert!(params.experimental_raw_events);
     }
 
     #[tokio::test]

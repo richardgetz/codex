@@ -14,6 +14,36 @@
       },
       "type": "object"
     },
+    "ThreadTokenUsageAttribution": {
+      "description": "Source metadata captured with one exact upstream response.",
+      "properties": {
+        "contextLength": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelProvider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "serviceTier": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "TokenUsageBreakdown": {
       "properties": {
         "cacheWriteInputTokens": {
@@ -54,8 +84,45 @@
   },
   "description": "Internal-only notification containing the exact usage from one upstream Responses API completion.",
   "properties": {
+    "attribution": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadTokenUsageAttribution"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Source metadata captured with the exact response usage."
+    },
+    "completedAt": {
+      "default": null,
+      "description": "Unix timestamp in seconds when the response completed.",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "parentThreadId": {
+      "default": null,
+      "description": "Parent of the originating thread, when the response came from a child agent.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "responseId": {
       "type": "string"
+    },
+    "sourceThreadId": {
+      "default": null,
+      "description": "Originating thread for forwarded one-shot child responses. Usually equal to `thread_id`.",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "threadId": {
       "type": "string"

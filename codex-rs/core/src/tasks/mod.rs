@@ -14,6 +14,7 @@ use futures::future::BoxFuture;
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
@@ -24,6 +25,7 @@ use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 
+use crate::agent::control::TeamWorkerLease;
 use crate::codex_thread::BackgroundTerminalInfo;
 use crate::config::Config;
 use crate::context::ContextualUserFragment;
@@ -286,9 +288,42 @@ impl Session {
         input: Vec<TurnInput>,
         task: T,
     ) {
+        let _ = self.try_spawn_task(turn_context, input, task).await;
+    }
+
+    pub(crate) async fn try_spawn_task<T: SessionTask>(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: Vec<TurnInput>,
+        task: T,
+    ) -> CodexResult<()> {
+        let team_worker_lease = match self.services.agent_control.reserve_team_worker_turn(
+            turn_context.config.as_ref(),
+            &turn_context.session_source,
+            self.thread_id,
+        ) {
+            Ok(lease) => lease,
+            Err(err) => {
+                self.send_event(
+                    turn_context.as_ref(),
+                    EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+                )
+                .await;
+                return Err(err);
+            }
+        };
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
-        self.start_task(turn_context, input, task).await;
+        self.start_task_with_active_turn_mode(
+            turn_context,
+            input,
+            Vec::new(),
+            task,
+            ActiveTurnStartMode::CreateIfMissing,
+            MailboxParentProvenance::Ignore,
+            team_worker_lease,
+        )
+        .await
     }
 
     pub(crate) async fn start_task<T: SessionTask>(
@@ -297,14 +332,36 @@ impl Session {
         input: Vec<TurnInput>,
         task: T,
     ) {
+        let _ = self.try_start_task(turn_context, input, task).await;
+    }
+
+    pub(crate) async fn try_start_task<T: SessionTask>(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: Vec<TurnInput>,
+        task: T,
+    ) -> CodexResult<()> {
+        self.try_start_task_with_pending_input(turn_context, input, Vec::new(), task)
+            .await
+    }
+
+    pub(crate) async fn try_start_task_with_pending_input<T: SessionTask>(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: Vec<TurnInput>,
+        initial_pending_input: Vec<TurnInput>,
+        task: T,
+    ) -> CodexResult<()> {
         self.start_task_with_active_turn_mode(
             turn_context,
             input,
+            initial_pending_input,
             task,
             ActiveTurnStartMode::CreateIfMissing,
             MailboxParentProvenance::Ignore,
+            None,
         )
-        .await;
+        .await
     }
 
     #[expect(
@@ -315,13 +372,50 @@ impl Session {
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         input: Vec<TurnInput>,
+        initial_pending_input: Vec<TurnInput>,
         task: T,
         active_turn_mode: ActiveTurnStartMode,
         mailbox_parent_provenance: MailboxParentProvenance,
-    ) {
+        pre_reserved_team_worker_lease: Option<TeamWorkerLease>,
+    ) -> CodexResult<()> {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
+        let (provisional_turn_state, existing_task_turn_state) = {
+            let active = self.active_turn.lock().await;
+            match active_turn_mode {
+                ActiveTurnStartMode::CreateIfMissing => {
+                    if let Some(turn) = active.as_ref() {
+                        let turn_state = Arc::clone(&turn.turn_state);
+                        let existing_task_turn_state =
+                            turn.task.is_some().then(|| Arc::clone(&turn_state));
+                        (Some(turn_state), existing_task_turn_state)
+                    } else {
+                        (None, None)
+                    }
+                }
+                ActiveTurnStartMode::RequireExisting => {
+                    let Some(turn) = active.as_ref() else {
+                        return Ok(());
+                    };
+                    let turn_state = Arc::clone(&turn.turn_state);
+                    let existing_task_turn_state =
+                        turn.task.is_some().then(|| Arc::clone(&turn_state));
+                    (Some(turn_state), existing_task_turn_state)
+                }
+            }
+        };
+        if let Some(existing_task_turn_state) = existing_task_turn_state {
+            let mut input = input;
+            input.extend(initial_pending_input);
+            self.preserve_unstarted_input(
+                &existing_task_turn_state,
+                &existing_task_turn_state,
+                input,
+            )
+            .await;
+            return Ok(());
+        }
         let started_at = Instant::now();
         let turn_started_at_unix_ms = turn_context
             .turn_timing_state
@@ -340,25 +434,27 @@ impl Session {
             .lock()
             .await
             .clear_turn(&turn_context.sub_id);
-
-        {
-            let mut active = self.active_turn.lock().await;
-            let turn = match active_turn_mode {
-                ActiveTurnStartMode::CreateIfMissing => {
-                    let turn = active.get_or_insert_with(ActiveTurn::default);
-                    &*turn
+        let mut team_worker_lease = match pre_reserved_team_worker_lease {
+            Some(lease) => Some(lease),
+            None => match self.services.agent_control.reserve_team_worker_turn(
+                turn_context.config.as_ref(),
+                &turn_context.session_source,
+                self.thread_id,
+            ) {
+                Ok(lease) => lease,
+                Err(err) => {
+                    if let Some(provisional_turn_state) = provisional_turn_state.as_ref() {
+                        self.clear_reserved_idle_turn(provisional_turn_state).await;
+                    }
+                    self.send_event(
+                        turn_context.as_ref(),
+                        EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+                    )
+                    .await;
+                    return Err(err);
                 }
-                ActiveTurnStartMode::RequireExisting => {
-                    let Some(turn) = active.as_ref() else {
-                        return;
-                    };
-                    turn
-                }
-            };
-            if turn.task.is_some() {
-                return;
-            }
-        }
+            },
+        };
         let (pending_items, start_options) = self.input_queue.drain_mailbox_input_items().await;
         if let MailboxParentProvenance::Attribute = mailbox_parent_provenance {
             if let Some(id) = start_options.parent_turn_id.clone() {
@@ -386,13 +482,16 @@ impl Session {
                 .turn_metadata_state
                 .set_root_turn_id(root_turn_id);
         }
-        let turn_state = {
+        let turn_state = if let Some(provisional_turn_state) = provisional_turn_state {
+            provisional_turn_state
+        } else {
             let mut active = self.active_turn.lock().await;
             let turn = active.get_or_insert_with(ActiveTurn::default);
-            debug_assert!(turn.task.is_none());
             Arc::clone(&turn.turn_state)
         };
         turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start.clone();
+        let mut pending_items = pending_items;
+        pending_items.extend(initial_pending_input);
         self.input_queue
             .extend_pending_input_for_turn_state(turn_state.as_ref(), pending_items)
             .await;
@@ -400,23 +499,49 @@ impl Session {
             .await;
 
         let mut active = self.active_turn.lock().await;
-        let maybe_turn = match active_turn_mode {
-            ActiveTurnStartMode::CreateIfMissing => {
-                Some(active.get_or_insert_with(ActiveTurn::default))
+        if let Some(target_turn_state) = active.as_ref().and_then(|active_turn| {
+            (!Arc::ptr_eq(&active_turn.turn_state, &turn_state))
+                .then(|| Arc::clone(&active_turn.turn_state))
+        }) {
+            drop(active);
+            self.preserve_unstarted_input(&turn_state, &target_turn_state, input)
+                .await;
+            return Ok(());
+        }
+        if active.is_none() {
+            // A pending-work turn must still be paired with the idle sentinel that admitted it.
+            // If an interrupt or shutdown removed that sentinel while turn setup was awaiting,
+            // do not resurrect it or start a task after the session has been torn down.
+            if matches!(active_turn_mode, ActiveTurnStartMode::RequireExisting)
+                || self.shutdown_requested()
+            {
+                drop(active);
+                self.requeue_pending_input_for_next_turn(&turn_state).await;
+                return Ok(());
             }
-            ActiveTurnStartMode::RequireExisting => active
-                .as_mut()
-                .filter(|active_turn| Arc::ptr_eq(&active_turn.turn_state, &turn_state)),
-        };
-        let Some(turn) = maybe_turn else {
-            drop(active);
-            self.requeue_pending_input_for_next_turn(&turn_state).await;
-            return;
-        };
+            // The active turn can be removed by a concurrent abort after mailbox input has been
+            // drained. Reinsert that same state so the drained input and admitted task stay
+            // paired instead of being discarded.
+            let _ = active.insert(ActiveTurn {
+                task: None,
+                turn_state: Arc::clone(&turn_state),
+            });
+        }
+        let turn = active
+            .as_mut()
+            .expect("a task start must have an active turn");
         if turn.task.is_some() {
+            let target_turn_state = Arc::clone(&turn.turn_state);
+            drop(active);
+            self.preserve_unstarted_input(&turn_state, &target_turn_state, input)
+                .await;
+            return Ok(());
+        }
+        if self.shutdown_requested() {
+            *active = None;
             drop(active);
             self.requeue_pending_input_for_next_turn(&turn_state).await;
-            return;
+            return Ok(());
         }
         let agent_execution_guard = self.services.agent_control.execution_guard(
             turn_context.multi_agent_version,
@@ -428,6 +553,10 @@ impl Session {
         let task_for_run = Arc::clone(&task);
         let task_input = input;
         let task_cancellation_token = cancellation_token.child_token();
+        // Publish the RunningTask before the task can finish. Without this gate, a fast task on
+        // another runtime worker could call `on_task_finished` while `turn.task` is still None,
+        // losing its terminal cleanup and its task-owned Worker admission.
+        let (start_tx, start_rx) = oneshot::channel();
         // Task-owned turn spans keep a core-owned span open for the
         // full task lifecycle after the submission dispatch span ends.
         let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
@@ -448,6 +577,9 @@ impl Session {
         );
         let handle = tokio::spawn(
             async move {
+                if start_rx.await.is_err() {
+                    return;
+                }
                 let ctx_for_finish = Arc::clone(&ctx);
                 let task_result = task_for_run
                     .run(
@@ -480,6 +612,9 @@ impl Session {
             }
             .instrument(task_span),
         );
+        if let Some(team_worker_lease) = team_worker_lease.as_mut() {
+            team_worker_lease.mark_task_started();
+        }
         let timer = turn_context
             .session_telemetry
             .start_timer(TURN_E2E_DURATION_METRIC, &[])
@@ -492,10 +627,32 @@ impl Session {
             cancellation_token,
             turn_context: Arc::clone(&turn_context),
             _agent_execution_guard: agent_execution_guard,
+            _team_worker_lease: team_worker_lease,
             _diagnostics_guard: ACTIVE_TURNS.track(),
             _timer: timer,
         };
         turn.task = Some(running_task);
+        let _ = start_tx.send(());
+        Ok(())
+    }
+
+    async fn preserve_unstarted_input(
+        &self,
+        source_turn_state: &Arc<tokio::sync::Mutex<TurnState>>,
+        target_turn_state: &Arc<tokio::sync::Mutex<TurnState>>,
+        mut input: Vec<TurnInput>,
+    ) {
+        let pending_input = self
+            .input_queue
+            .take_pending_input_for_turn_state(source_turn_state.as_ref())
+            .await;
+        input.extend(pending_input);
+        if input.is_empty() {
+            return;
+        }
+        self.input_queue
+            .extend_pending_input_for_turn_state(target_turn_state.as_ref(), input)
+            .await;
     }
 
     async fn requeue_pending_input_for_next_turn(
@@ -563,21 +720,43 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
-        if !self.input_queue.has_pending_mailbox_items().await
-            || (!self.input_queue.has_trigger_turn_mailbox_items().await
-                && !self.has_outstanding_durable_sleep())
-        {
-            return;
-        }
-
-        let turn_state = {
-            let mut active_turn = self.active_turn.lock().await;
-            if active_turn.is_some() {
+        let (turn_state, team_worker_lease) = loop {
+            if !self.input_queue.has_pending_mailbox_items().await
+                || (!self.input_queue.has_trigger_turn_mailbox_items().await
+                    && !self.has_outstanding_durable_sleep())
+            {
                 return;
             }
-            let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
-            Arc::clone(&active_turn.turn_state)
+
+            let turn_state = {
+                let mut active_turn = self.active_turn.lock().await;
+                if active_turn.is_some() {
+                    return;
+                }
+                let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
+                Arc::clone(&active_turn.turn_state)
+            };
+            let config = self.get_config().await;
+            let session_source = self.session_source().await;
+            match self.services.agent_control.reserve_team_worker_turn(
+                &config,
+                &session_source,
+                self.thread_id,
+            ) {
+                Ok(team_worker_lease) => break (turn_state, team_worker_lease),
+                Err(_) => {
+                    self.clear_reserved_idle_turn(&turn_state).await;
+                    tokio::select! {
+                        _ = self.services.agent_control.wait_for_team_worker_capacity() => {},
+                        _ = self.wait_for_shutdown() => return,
+                    }
+                }
+            }
         };
+        if self.shutdown_requested() {
+            self.clear_reserved_idle_turn(&turn_state).await;
+            return;
+        }
 
         let (input, mut start_options) =
             self.input_queue.get_pending_input(&self.active_turn).await;
@@ -625,14 +804,17 @@ impl Session {
         self.input_queue
             .extend_pending_input_for_turn_state(turn_state.as_ref(), input)
             .await;
-        self.start_task_with_active_turn_mode(
-            turn_context,
-            Vec::new(),
-            RegularTask::new(),
-            ActiveTurnStartMode::RequireExisting,
-            MailboxParentProvenance::Attribute,
-        )
-        .await;
+        let _ = self
+            .start_task_with_active_turn_mode(
+                turn_context,
+                Vec::new(),
+                Vec::new(),
+                RegularTask::new(),
+                ActiveTurnStartMode::RequireExisting,
+                MailboxParentProvenance::Attribute,
+                team_worker_lease,
+            )
+            .await;
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
@@ -724,6 +906,26 @@ impl Session {
         turn_context: Arc<TurnContext>,
         task_result: SessionTaskResult,
     ) {
+        // A replaced task can finish after its successor is installed. Claim the task while
+        // checking its identity so stale completion cannot report against or remove the successor.
+        let turn_state = {
+            let mut active = self.active_turn.lock().await;
+            let Some(active_turn) = active.as_mut() else {
+                return;
+            };
+            let Some(task) = active_turn.task.as_ref() else {
+                return;
+            };
+            if !Arc::ptr_eq(&task.turn_context, &turn_context) {
+                return;
+            }
+            let task = active_turn
+                .task
+                .take()
+                .expect("active task was checked above");
+            task.handle.detach();
+            Arc::clone(&active_turn.turn_state)
+        };
         let (last_agent_message, abort_reason) = match task_result {
             Ok(last_agent_message) => (last_agent_message, None),
             Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
@@ -748,18 +950,6 @@ impl Session {
         turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();
-
-        let turn_state = {
-            let mut active = self.active_turn.lock().await;
-            active.as_mut().and_then(|active_turn| {
-                let task = active_turn.task.take()?;
-                task.handle.detach();
-                Some(Arc::clone(&active_turn.turn_state))
-            })
-        };
-        let Some(turn_state) = turn_state else {
-            return;
-        };
         let pending_input = self
             .input_queue
             .take_pending_input_for_turn_state(turn_state.as_ref())

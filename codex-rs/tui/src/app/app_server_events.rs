@@ -115,6 +115,7 @@ impl App {
         {
             return;
         }
+        self.observe_usage_notification(&notification);
         // Hidden helper threads must not enter visible thread routing or overview refreshes.
         if let ServerNotificationThreadTarget::Thread(thread_id) =
             server_notification_thread_target(&notification)
@@ -359,6 +360,33 @@ impl App {
 
         self.chat_widget
             .handle_server_notification(notification, /*replay_kind*/ None);
+    }
+
+    fn observe_usage_notification(&mut self, notification: &ServerNotification) {
+        let config = &self.config.tui_status_token_usage;
+        let mut usage_rollup = self.usage_rollup.lock();
+        let result = match notification {
+            ServerNotification::ThreadStarted(notification) => {
+                usage_rollup.observe_app_thread_started(notification)
+            }
+            ServerNotification::ThreadTokenUsageProjectionUpdated(notification) => {
+                match notification.usage_projection.as_ref() {
+                    Some(projection) => {
+                        usage_rollup.observe_app_projection(&notification.thread_id, projection)
+                    }
+                    None => {
+                        usage_rollup.observe_app_projection_unavailable(&notification.thread_id)
+                    }
+                }
+            }
+            ServerNotification::RawResponseCompleted(notification) => {
+                usage_rollup.observe_app_response(notification, config)
+            }
+            _ => return,
+        };
+        if let Err(err) = result {
+            tracing::warn!(%err, "failed to merge app-server usage notification");
+        }
     }
 
     async fn handle_server_request_event(

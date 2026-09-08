@@ -1220,12 +1220,26 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing.send_server_notification(notification).await;
         }
         EventMsg::RawResponseCompleted(raw_response_completed_event) => {
+            let attribution = raw_response_completed_event
+                .usage_record
+                .as_ref()
+                .map(|record| record.attribution.clone().into());
             let notification = RawResponseCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id,
                 response_id: raw_response_completed_event.response_id,
                 usage: raw_response_completed_event.token_usage.map(Into::into),
                 usage_metadata: raw_response_completed_event.usage_metadata.map(Into::into),
+                source_thread_id: raw_response_completed_event
+                    .thread_id
+                    .map(|thread_id| thread_id.to_string()),
+                parent_thread_id: raw_response_completed_event
+                    .parent_thread_id
+                    .map(|thread_id| thread_id.to_string()),
+                completed_at: unix_timestamp_seconds_from_millis(
+                    raw_response_completed_event.completed_at_ms,
+                ),
+                attribution,
             };
             outgoing
                 .send_server_notification(ServerNotification::RawResponseCompleted(notification))
@@ -2378,6 +2392,10 @@ fn now_unix_timestamp_ms() -> i64 {
         .unwrap_or_default()
 }
 
+fn unix_timestamp_seconds_from_millis(timestamp_ms: Option<i64>) -> Option<i64> {
+    timestamp_ms.map(|timestamp| timestamp / 1_000)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2433,6 +2451,12 @@ mod tests {
     use codex_utils_absolute_path::test_support::test_path_buf;
     use core_test_support::load_default_config_for_test;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn converts_usage_completion_timestamp_to_wire_seconds() {
+        assert_eq!(unix_timestamp_seconds_from_millis(Some(12_345)), Some(12));
+        assert_eq!(unix_timestamp_seconds_from_millis(None), None);
+    }
     use serde_json::json;
     use tempfile::TempDir;
     use tokio::sync::Mutex;

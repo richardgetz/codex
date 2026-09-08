@@ -789,11 +789,12 @@ async fn drain_to_completed(
                 usage_metadata,
                 ..
             }) => {
-                sess.record_observed_response_completed(
+                sess.record_observed_response_completed_with_attribution(
                     turn_context,
                     &response_id,
                     token_usage.as_ref(),
                     usage_metadata.as_ref(),
+                    service_tier.as_deref(),
                 )
                 .await;
                 sess.update_token_usage_info_with_service_tier(

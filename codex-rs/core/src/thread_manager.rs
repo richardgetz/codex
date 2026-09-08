@@ -68,6 +68,9 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::ThreadUsagePolicy;
+use codex_protocol::protocol::TokenUsageProjection;
+use codex_protocol::protocol::TokenUsageProjectionThread;
+use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -986,6 +989,148 @@ impl ThreadManager {
         }
 
         Ok(subtree_thread_ids)
+    }
+
+    /// Reconstructs complete billing usage for a thread and every reachable agent source.
+    ///
+    /// The latest model-context checkpoint is deliberately not used here. Each physical rollout
+    /// is scanned through the thread-store's complete usage read, then exact `(thread, response)`
+    /// identities are deduplicated by the protocol projection builder. Parent-owned forwarded
+    /// records make one-shot Review usage durable even when the child rollout was ephemeral.
+    pub async fn token_usage_projection(
+        &self,
+        root_thread_id: ThreadId,
+    ) -> CodexResult<TokenUsageProjection> {
+        let mut pending_thread_ids = self.list_agent_subtree_thread_ids(root_thread_id).await?;
+        let mut seen_thread_ids = HashSet::new();
+        let mut forwarded_thread_ids = HashSet::new();
+        let mut projection_threads = HashMap::<ThreadId, TokenUsageProjectionThread>::new();
+        let mut records = Vec::<TokenUsageRecord>::new();
+
+        while let Some(thread_id) = pending_thread_ids.pop() {
+            if !seen_thread_ids.insert(thread_id) {
+                continue;
+            }
+            let live_thread = self.get_thread(thread_id).await.ok();
+            let live_records = if let Some(thread) = &live_thread {
+                thread.flush_rollout().await.map_err(|err| {
+                    CodexErr::Fatal(format!(
+                        "failed to flush thread {thread_id} before usage projection: {err}"
+                    ))
+                })?;
+                thread.token_usage_records().await
+            } else {
+                Vec::new()
+            };
+            // A one-shot review is not necessarily present in the initial root graph query. Once
+            // a forwarded record reveals such a source, walk its ordinary descendants as well so
+            // recursive usage remains complete when the source itself is unloaded.
+            for descendant_id in self.list_agent_subtree_thread_ids(thread_id).await? {
+                if !seen_thread_ids.contains(&descendant_id) {
+                    pending_thread_ids.push(descendant_id);
+                }
+            }
+            projection_threads
+                .entry(thread_id)
+                .or_insert_with(|| TokenUsageProjectionThread {
+                    thread_id,
+                    ..Default::default()
+                });
+
+            let stored_metadata = match self
+                .state
+                .thread_store
+                .read_thread(ReadThreadParams {
+                    thread_id,
+                    include_archived: true,
+                    include_history: false,
+                })
+                .await
+            {
+                Ok(stored_thread) => {
+                    Some((stored_thread.parent_thread_id, stored_thread.forked_from_id))
+                }
+                Err(ThreadStoreError::ThreadNotFound { .. }) => None,
+                Err(err) => {
+                    return Err(CodexErr::Fatal(format!(
+                        "failed to read thread {thread_id} for usage projection: {err}"
+                    )));
+                }
+            };
+            let has_stored_metadata = stored_metadata.is_some();
+            if let Some((parent_thread_id, forked_from_id)) = stored_metadata {
+                let metadata = projection_threads
+                    .get_mut(&thread_id)
+                    .expect("projection thread inserted above");
+                metadata.parent_thread_id = parent_thread_id;
+                metadata.forked_from_id = forked_from_id;
+            } else if let Some(thread) = &live_thread {
+                let config = thread.config_snapshot().await;
+                let metadata = projection_threads
+                    .get_mut(&thread_id)
+                    .expect("projection thread inserted above");
+                metadata.parent_thread_id = config.parent_thread_id;
+                metadata.forked_from_id = config.forked_from_thread_id;
+            }
+
+            let persisted_records = self
+                .state
+                .thread_store
+                .load_token_usage_records(LoadThreadHistoryParams {
+                    thread_id,
+                    include_archived: true,
+                })
+                .await;
+            let thread_records = match persisted_records {
+                Ok(records) => Some(records),
+                Err(ThreadStoreError::ThreadNotFound { .. }) => None,
+                Err(err) => {
+                    return Err(CodexErr::Fatal(format!(
+                        "failed to load complete token usage records for thread {thread_id}: {err}"
+                    )));
+                }
+            };
+            let has_durable_records = thread_records
+                .as_ref()
+                .is_some_and(|records| !records.is_empty());
+            let has_thread_evidence = live_thread.is_some()
+                || has_stored_metadata
+                || has_durable_records
+                || forwarded_thread_ids.contains(&thread_id);
+            if !has_thread_evidence {
+                return Err(CodexErr::Fatal(format!(
+                    "thread {thread_id} has no readable metadata or token usage records"
+                )));
+            }
+            let mut thread_records = thread_records.unwrap_or_default();
+            thread_records.extend(live_records);
+            for record in thread_records {
+                let source_is_owned_by_rollout =
+                    record.thread_id == thread_id || record.parent_thread_id == Some(thread_id);
+                if !source_is_owned_by_rollout {
+                    // Copied and reference-backed fork history can contain an ancestor's records;
+                    // those records describe the fork's context, not its spend.
+                    continue;
+                }
+                if record.thread_id != thread_id {
+                    forwarded_thread_ids.insert(record.thread_id);
+                    pending_thread_ids.push(record.thread_id);
+                    projection_threads
+                        .entry(record.thread_id)
+                        .or_insert_with(|| TokenUsageProjectionThread {
+                            thread_id: record.thread_id,
+                            parent_thread_id: record.parent_thread_id,
+                            ..Default::default()
+                        });
+                }
+                records.push(record);
+            }
+        }
+
+        Ok(TokenUsageProjection::from_threads_and_records(
+            projection_threads.into_values(),
+            records,
+        ))
     }
 
     pub async fn start_thread(&self, options: StartThreadOptions) -> CodexResult<NewThread> {

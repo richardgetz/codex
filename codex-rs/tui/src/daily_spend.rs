@@ -3,12 +3,15 @@
 use crate::status::estimate_cost_usd_for_usage;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
+use chrono::DateTime;
 use chrono::Duration;
 use chrono::Local;
 use chrono::NaiveDate;
+use chrono::Utc;
 use codex_config::types::DEFAULT_DAILY_SPEND_RETENTION_DAYS;
 use codex_config::types::MAX_DAILY_SPEND_RETENTION_DAYS;
 use codex_config::types::TuiStatusTokenUsage;
+use codex_protocol::protocol::TOKEN_USAGE_STANDARD_SERVICE_TIER;
 use ratatui::text::Line;
 use serde::Deserialize;
 use serde::Serialize;
@@ -52,6 +55,10 @@ struct DailySpendHistory {
     version: u32,
     #[serde(default)]
     days: BTreeMap<String, DailySpendDay>,
+    /// Response identity to the local date on which it was first recorded. Keeping this at the
+    /// history level makes replay idempotent even when the process crosses midnight.
+    #[serde(default)]
+    response_dates: BTreeMap<String, String>,
 }
 
 impl Default for DailySpendHistory {
@@ -59,6 +66,7 @@ impl Default for DailySpendHistory {
         Self {
             version: HISTORY_VERSION,
             days: BTreeMap::new(),
+            response_dates: BTreeMap::new(),
         }
     }
 }
@@ -74,6 +82,19 @@ struct DailySpendDelta {
 pub(crate) struct DailySpendTracker {
     path: PathBuf,
     previous_usage: Option<TokenUsageInfo>,
+    exact_records_observed: bool,
+}
+
+/// One response whose local spend entry should be recorded exactly once.
+pub(crate) struct DailySpendRecord<'a> {
+    pub(crate) response_key: &'a str,
+    pub(crate) usage: &'a TokenUsage,
+    pub(crate) model_provider_id: Option<&'a str>,
+    pub(crate) model: Option<&'a str>,
+    pub(crate) service_tier: Option<&'a str>,
+    pub(crate) context_length: Option<&'a str>,
+    /// Unix timestamp supplied by the response record. `None` is retained for legacy live events.
+    pub(crate) recorded_at: Option<i64>,
 }
 
 impl DailySpendTracker {
@@ -81,6 +102,18 @@ impl DailySpendTracker {
         Self {
             path: spend_path(codex_home),
             previous_usage: None,
+            exact_records_observed: false,
+        }
+    }
+
+    /// Creates a tracker for an app-owned response ledger. Cumulative snapshots can restore
+    /// context state, but they do not carry a durable response identity and therefore must never
+    /// write daily spend through this path, even before the first exact completion arrives.
+    pub(crate) fn new_exact_records_only(codex_home: &Path) -> Self {
+        Self {
+            path: spend_path(codex_home),
+            previous_usage: None,
+            exact_records_observed: true,
         }
     }
 
@@ -92,6 +125,13 @@ impl DailySpendTracker {
         model_provider_id: &str,
         current_model: &str,
     ) -> anyhow::Result<()> {
+        // Once an exact response has been observed, cumulative snapshots are informational. The
+        // exact path owns daily accounting for this tracker; allowing both paths would charge a
+        // response once by identity and once again by a cumulative delta.
+        if self.exact_records_observed {
+            self.previous_usage = Some(info.clone());
+            return Ok(());
+        }
         if replay {
             self.previous_usage = Some(info.clone());
             return Ok(());
@@ -111,6 +151,95 @@ impl DailySpendTracker {
         }
         self.previous_usage = Some(info.clone());
         Ok(())
+    }
+
+    /// Records one exact completion. Unlike cumulative token snapshots, a response identity can
+    /// be persisted and checked, so reconnects and replay cannot add the same request twice.
+    pub(crate) fn observe_record(
+        &mut self,
+        record: DailySpendRecord<'_>,
+        config: &TuiStatusTokenUsage,
+    ) -> anyhow::Result<()> {
+        self.exact_records_observed = true;
+        if !config.enabled {
+            return Ok(());
+        }
+        self.observe_record_on_date(record, config, Local::now().date_naive())
+    }
+
+    pub(crate) fn mark_exact_records_observed(&mut self) {
+        self.exact_records_observed = true;
+    }
+
+    /// Records an exact response using an explicit local date for retention and legacy timestamp
+    /// fallbacks. The production path supplies today's date; tests and replay reconstruction can
+    /// supply the date at which the observation occurred without mutating the process clock.
+    pub(crate) fn observe_record_on_date(
+        &self,
+        record: DailySpendRecord<'_>,
+        config: &TuiStatusTokenUsage,
+        today: NaiveDate,
+    ) -> anyhow::Result<()> {
+        if record.usage.is_zero() {
+            return Ok(());
+        }
+
+        let model = record.model.unwrap_or("unattributed");
+        let mut usage_by_service_tier = BTreeMap::new();
+        let mut usage_by_service_tier_and_context_length = BTreeMap::new();
+        // A missing tier means the provider used its standard tier. Keep the source metadata
+        // optional, but normalize the pricing bucket so short/long context is preserved.
+        let service_tier = record
+            .service_tier
+            .unwrap_or(TOKEN_USAGE_STANDARD_SERVICE_TIER);
+        usage_by_service_tier.insert(service_tier.to_string(), record.usage.clone());
+        if let Some(context_length) = record.context_length {
+            usage_by_service_tier_and_context_length.insert(
+                service_tier.to_string(),
+                BTreeMap::from([(context_length.to_string(), record.usage.clone())]),
+            );
+        }
+        let estimated_usd = match (
+            record.model_provider_id,
+            record.model,
+            record.context_length,
+        ) {
+            (Some(model_provider_id), Some(model), Some(_)) => estimate_cost_usd_for_usage(
+                config,
+                model_provider_id,
+                model,
+                record.usage,
+                &usage_by_service_tier,
+                &usage_by_service_tier_and_context_length,
+            ),
+            _ => None,
+        };
+
+        with_history_lock(&self.path, |history| {
+            let date = record
+                .recorded_at
+                .and_then(|timestamp| DateTime::<Utc>::from_timestamp(timestamp, 0))
+                .map(|timestamp| timestamp.with_timezone(&Local).date_naive())
+                .unwrap_or(today);
+            let date_key = date.to_string();
+            if history.response_dates.contains_key(record.response_key) {
+                return Ok(());
+            }
+            history
+                .response_dates
+                .insert(record.response_key.to_string(), date_key.clone());
+            let day = history.days.entry(date_key).or_default();
+            add_amount(
+                day,
+                model,
+                DailySpendAmount {
+                    tokens: record.usage.total_tokens,
+                    estimated_usd,
+                },
+            );
+            prune_history(history, today, config.daily_spend_retention_days);
+            write_history(&self.path, history)
+        })
     }
 
     pub(crate) fn render_report(&self, args: &str) -> anyhow::Result<Vec<Line<'static>>> {
@@ -321,6 +450,9 @@ fn prune_history(history: &mut DailySpendHistory, today: NaiveDate, retention_da
         NaiveDate::parse_from_str(date, "%Y-%m-%d")
             .is_ok_and(|date| date >= cutoff && date <= today)
     });
+    // Keep response identities beyond the displayed day window. The day buckets are a reporting
+    // retention policy; the identity map is the durable exactly-once ledger and must still reject
+    // a late replay of an older response instead of charging it again.
 }
 
 fn read_history(path: &Path) -> anyhow::Result<DailySpendHistory> {

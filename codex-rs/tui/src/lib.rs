@@ -218,6 +218,7 @@ mod tui;
 mod ui_consts;
 mod unarchive_prompt;
 pub(crate) mod update_action;
+mod usage_rollup;
 pub use update_action::UpdateAction;
 #[cfg(not(debug_assertions))]
 pub use update_action::get_update_action;

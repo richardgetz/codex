@@ -12,15 +12,24 @@ const DISABLED_TEAM_INSTRUCTIONS: &str = "Lead/Worker team mode is disabled for 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TeamInstructions {
     role: Option<TeamRole>,
+    worker_max_concurrent: Option<usize>,
 }
 
 impl TeamInstructions {
-    pub(crate) fn new(role: TeamRole) -> Self {
-        Self { role: Some(role) }
+    pub(crate) fn new(role: TeamRole, worker_max_concurrent: Option<usize>) -> Self {
+        Self {
+            role: Some(role),
+            worker_max_concurrent: matches!(role, TeamRole::Lead)
+                .then_some(worker_max_concurrent)
+                .flatten(),
+        }
     }
 
     pub(crate) fn disabled() -> Self {
-        Self { role: None }
+        Self {
+            role: None,
+            worker_max_concurrent: None,
+        }
     }
 }
 
@@ -46,10 +55,20 @@ impl ContextualUserFragment for TeamInstructions {
     }
 
     fn body(&self) -> String {
-        match self.role {
-            Some(TeamRole::Lead) => LEAD_TEAM_INSTRUCTIONS.to_string(),
-            Some(TeamRole::Worker) => WORKER_TEAM_INSTRUCTIONS.to_string(),
-            None => DISABLED_TEAM_INSTRUCTIONS.to_string(),
-        }
+        let instructions = match self.role {
+            Some(TeamRole::Lead) => LEAD_TEAM_INSTRUCTIONS,
+            Some(TeamRole::Worker) => WORKER_TEAM_INSTRUCTIONS,
+            None => DISABLED_TEAM_INSTRUCTIONS,
+        };
+        let Some(worker_max_concurrent) = self.worker_max_concurrent else {
+            return instructions.to_string();
+        };
+        format!(
+            "{instructions}\nDirect Worker concurrency ceiling: {worker_max_concurrent} concurrently active Workers. This is a ceiling, not a target; choose practical parallelism that balances useful progress with coordination overhead. Grandchildren are excluded from this ceiling. Existing global agent-count, depth, and resource limits still apply.\n"
+        )
     }
 }
+
+#[cfg(test)]
+#[path = "team_instructions_tests.rs"]
+mod tests;

@@ -1127,6 +1127,7 @@ impl Session {
             config
                 .effective_agent_max_threads(MultiAgentVersion::V2)
                 .unwrap_or(usize::MAX),
+            config.team.worker_max_concurrent,
         );
         let session_tmp_config = codex_session_tmp::SessionTmpConfig {
             enabled: config.session_tmp.enabled,

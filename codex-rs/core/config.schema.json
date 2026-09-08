@@ -4553,10 +4553,29 @@
         "worker": {
           "allOf": [
             {
-              "$ref": "#/definitions/TeamModelProfileToml"
+              "$ref": "#/definitions/TeamWorkerProfileToml"
             }
           ],
           "description": "Model assignment for delegated work and independent reviewers."
+        }
+      },
+      "type": "object"
+    },
+    "TeamWorkerProfileToml": {
+      "additionalProperties": false,
+      "description": "A Worker model and optional direct-child concurrency ceiling read from config.toml.",
+      "properties": {
+        "max_concurrent": {
+          "description": "Maximum number of concurrently active direct Workers for a Lead session.",
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
         }
       },
       "type": "object"

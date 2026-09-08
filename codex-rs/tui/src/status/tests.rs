@@ -1,6 +1,8 @@
+use super::UsageRollupStatus;
 use super::new_status_output;
 use super::new_status_output_with_rate_limits;
 use super::new_status_output_with_rate_limits_handle;
+use super::new_status_output_with_rate_limits_handle_with_sources;
 use super::rate_limit_snapshot_display;
 use super::rate_limits::RateLimitSnapshotDisplay;
 use super::rate_limits::RateLimitWindowDisplay;
@@ -20,6 +22,7 @@ use crate::test_support::PathBufExt;
 use crate::test_support::test_path_buf;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
+use crate::usage_rollup::UsageRollupSource;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_models_cache;
@@ -51,6 +54,8 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::TOKEN_USAGE_SHORT_CONTEXT;
+use codex_protocol::protocol::TOKEN_USAGE_STANDARD_SERVICE_TIER;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
@@ -1715,6 +1720,192 @@ async fn status_snapshot_keeps_multiple_model_prices_separate() {
         sanitize_directory(render_lines(&composite.display_lines(/*width*/ 120))).join("\n");
 
     assert_snapshot!(rendered);
+}
+
+fn recursive_status_source(
+    thread_id: ThreadId,
+    parent_thread_id: ThreadId,
+    response_id: &str,
+    usage: TokenUsage,
+) -> UsageRollupSource {
+    UsageRollupSource {
+        thread_id,
+        parent_thread_id: Some(parent_thread_id),
+        forked_from_id: None,
+        model_provider_id: Some("openai".to_string()),
+        model: Some("gpt-5.4".to_string()),
+        service_tier: None,
+        context_length: Some(TOKEN_USAGE_SHORT_CONTEXT.to_string()),
+        usage: usage.clone(),
+        usage_by_service_tier: BTreeMap::from([(
+            TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
+            usage.clone(),
+        )]),
+        usage_by_service_tier_and_context_length: BTreeMap::from([(
+            TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
+            BTreeMap::from([(TOKEN_USAGE_SHORT_CONTEXT.to_string(), usage)]),
+        )]),
+        response_ids: vec![response_id.to_string()],
+    }
+}
+
+#[tokio::test]
+async fn status_snapshot_shows_recursive_workers_and_unavailable_tree() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.4".to_string());
+    config.model_provider_id = "openai".to_string();
+    config.tui_status_token_usage.enabled = true;
+    config.tui_status_token_usage.model_rates = BTreeMap::from([(
+        "gpt-5.4".to_string(),
+        codex_config::types::TuiStatusTokenUsageRate {
+            input_usd_per_1m: 1.0,
+            cached_input_usd_per_1m: 0.5,
+            cache_write_usd_per_1m: 0.0,
+            output_usd_per_1m: 2.0,
+            service_tiers: BTreeMap::new(),
+        },
+    )]);
+    set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
+
+    let root_thread_id =
+        ThreadId::from_string("019cff70-2599-75e2-af72-b958ce5dc1cc").expect("valid thread");
+    let worker_a_thread_id =
+        ThreadId::from_string("019cff70-2599-75e2-af72-b958ce5dc1cd").expect("valid thread");
+    let worker_b_thread_id =
+        ThreadId::from_string("019cff70-2599-75e2-af72-b958ce5dc1ce").expect("valid thread");
+    let empty_fork_thread_id =
+        ThreadId::from_string("019cff70-2599-75e2-af72-b958ce5dc1cf").expect("valid thread");
+    let worker_a_usage = TokenUsage {
+        input_tokens: 100_000,
+        total_tokens: 100_000,
+        ..TokenUsage::default()
+    };
+    let worker_b_usage = TokenUsage {
+        input_tokens: 200_000,
+        total_tokens: 200_000,
+        ..TokenUsage::default()
+    };
+    let sources = vec![
+        recursive_status_source(
+            worker_a_thread_id,
+            root_thread_id,
+            "worker-a-response",
+            worker_a_usage,
+        ),
+        recursive_status_source(
+            worker_b_thread_id,
+            root_thread_id,
+            "worker-b-response",
+            worker_b_usage,
+        ),
+        UsageRollupSource {
+            thread_id: empty_fork_thread_id,
+            parent_thread_id: None,
+            forked_from_id: Some(root_thread_id),
+            model_provider_id: Some("openai".to_string()),
+            model: Some("gpt-5.4".to_string()),
+            service_tier: None,
+            context_length: Some(TOKEN_USAGE_SHORT_CONTEXT.to_string()),
+            usage: TokenUsage::default(),
+            usage_by_service_tier: BTreeMap::new(),
+            usage_by_service_tier_and_context_length: BTreeMap::new(),
+            response_ids: Vec::new(),
+        },
+    ];
+    let total_usage = TokenUsage {
+        input_tokens: 300_000,
+        total_tokens: 300_000,
+        ..TokenUsage::default()
+    };
+    let now = Local
+        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+        .single()
+        .expect("timestamp");
+    let (complete, _) = new_status_output_with_rate_limits_handle_with_sources(
+        &config,
+        /*runtime_model_provider_base_url*/ None,
+        /*remote_connection*/ None,
+        /*account_display*/ None,
+        /*token_info*/ None,
+        &total_usage,
+        &Some(root_thread_id),
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ &[],
+        None,
+        now,
+        "gpt-5.4",
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+        UsageRollupStatus::Complete(&sources),
+        "<none>".to_string(),
+        /*refreshing_rate_limits*/ false,
+    );
+    let complete =
+        sanitize_directory(render_lines(&complete.display_lines(/*width*/ 120))).join("\n");
+
+    let direct_usage = TokenUsage {
+        input_tokens: 42,
+        total_tokens: 42,
+        ..TokenUsage::default()
+    };
+    let (unavailable, _) = new_status_output_with_rate_limits_handle_with_sources(
+        &config,
+        /*runtime_model_provider_base_url*/ None,
+        /*remote_connection*/ None,
+        /*account_display*/ None,
+        /*token_info*/ None,
+        &direct_usage,
+        &Some(root_thread_id),
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ &[],
+        None,
+        now,
+        "gpt-5.4",
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+        UsageRollupStatus::Unavailable,
+        "<none>".to_string(),
+        /*refreshing_rate_limits*/ false,
+    );
+    let unavailable =
+        sanitize_directory(render_lines(&unavailable.display_lines(/*width*/ 120))).join("\n");
+
+    let inherited_direct_usage = TokenUsageInfo {
+        total_token_usage: direct_usage.clone(),
+        ..TokenUsageInfo::default()
+    };
+    let (known_empty, _) = new_status_output_with_rate_limits_handle_with_sources(
+        &config,
+        /*runtime_model_provider_base_url*/ None,
+        /*remote_connection*/ None,
+        /*account_display*/ None,
+        Some(&inherited_direct_usage),
+        &TokenUsage::default(),
+        &Some(empty_fork_thread_id),
+        /*thread_name*/ None,
+        Some(root_thread_id),
+        /*rate_limits*/ &[],
+        None,
+        now,
+        "gpt-5.4",
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+        UsageRollupStatus::Complete(&[]),
+        "<none>".to_string(),
+        /*refreshing_rate_limits*/ false,
+    );
+    let known_empty =
+        sanitize_directory(render_lines(&known_empty.display_lines(/*width*/ 120))).join("\n");
+
+    assert_snapshot!(
+        "status_recursive_usage_states",
+        format!(
+            "complete:\n{complete}\n\nunavailable:\n{unavailable}\n\nknown_empty:\n{known_empty}"
+        )
+    );
 }
 
 #[tokio::test]

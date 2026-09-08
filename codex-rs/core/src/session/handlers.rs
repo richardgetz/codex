@@ -207,6 +207,23 @@ async fn user_input_or_turn_inner_with_reasoning_effort(
     client_user_message_id: Option<String>,
     parent_turn_id: Option<String>,
 ) -> CodexResult<UserMessageAdmission> {
+    let config = sess.get_config().await;
+    let session_source = sess.session_source().await;
+    let _team_worker_lease = match sess.services.agent_control.reserve_team_worker_turn(
+        &config,
+        &session_source,
+        sess.thread_id(),
+    ) {
+        Ok(lease) => lease,
+        Err(err) => {
+            sess.send_event_raw(Event {
+                id: sub_id.clone(),
+                msg: EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+            })
+            .await;
+            return Err(err);
+        }
+    };
     let Op::UserInput {
         items,
         final_output_json_schema,
@@ -331,12 +348,12 @@ async fn user_input_or_turn_inner_with_reasoning_effort(
                 .await;
                 return Ok(UserMessageAdmission::Started { turn_id: sub_id });
             }
-            sess.spawn_task(
+            sess.try_spawn_task(
                 Arc::clone(&current_context),
                 task_input,
                 crate::tasks::RegularTask::new(),
             )
-            .await;
+            .await?;
             Ok(UserMessageAdmission::Started { turn_id: sub_id })
         }
         Err(err) => {
@@ -1218,6 +1235,7 @@ async fn clear_memory_root_contents(memory_root: &std::path::Path) -> std::io::R
 }
 
 pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
+    sess.mcp_prewarm_shutdown.cancel();
     if let Some(startup_prewarm) = sess.take_session_startup_prewarm().await {
         startup_prewarm.abort().await;
     }

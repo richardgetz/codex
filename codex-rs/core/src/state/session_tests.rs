@@ -21,6 +21,7 @@ async fn record_token_usage_continues_restored_totals() {
     let mut restored = SessionState::new(make_session_configuration_for_tests().await);
     restored.latest_token_usage_record = Some(TokenUsageRecord {
         thread_id,
+        parent_thread_id: None,
         turn_id: "turn-b".to_string(),
         session_id,
         root_turn_id: "root-turn".to_string(),
@@ -28,6 +29,8 @@ async fn record_token_usage_continues_restored_totals() {
         usage: usage(30),
         turn_token_usage: usage(30),
         thread_token_usage: usage(230),
+        attribution: Default::default(),
+        completed_at_ms: None,
     });
     let after_resume = restored.record_token_usage(
         thread_id,
@@ -41,6 +44,7 @@ async fn record_token_usage_continues_restored_totals() {
         after_resume,
         TokenUsageRecord {
             thread_id,
+            parent_thread_id: None,
             turn_id: "turn-b".to_string(),
             session_id,
             root_turn_id: "root-turn".to_string(),
@@ -48,6 +52,8 @@ async fn record_token_usage_continues_restored_totals() {
             usage: usage(20),
             turn_token_usage: usage(50),
             thread_token_usage: usage(250),
+            attribution: Default::default(),
+            completed_at_ms: None,
         }
     );
 }

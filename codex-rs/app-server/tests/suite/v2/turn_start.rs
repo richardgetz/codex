@@ -36,7 +36,6 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
-use codex_app_server_protocol::RawResponseCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
@@ -917,7 +916,9 @@ async fn turn_start_emits_raw_response_completed_with_upstream_usage(
 
     let ThreadStartResponse { thread, .. } = mcp
         .start_thread(ThreadStartParams {
-            experimental_raw_events: true,
+            // Response completions carry usage identity for every client; only raw response
+            // items require the opt-in transcript stream.
+            experimental_raw_events: false,
             ..Default::default()
         })
         .await?;
@@ -955,23 +956,34 @@ async fn turn_start_emits_raw_response_completed_with_upstream_usage(
         anyhow::bail!("expected rawResponse/completed notification");
     };
 
+    assert_eq!(notification.thread_id, thread.id);
+    assert_eq!(notification.turn_id, turn.id);
+    assert_eq!(notification.response_id, "resp-1");
     assert_eq!(
-        notification,
-        RawResponseCompletedNotification {
-            thread_id: thread.id,
-            turn_id: turn.id,
-            response_id: "resp-1".to_string(),
-            usage_metadata: serde_json::from_value(expected_metadata)?,
-            usage: Some(TokenUsageBreakdown {
-                total_tokens: 37,
-                input_tokens: 30,
-                cached_input_tokens: 11,
-                cache_write_input_tokens: 0,
-                output_tokens: 7,
-                reasoning_output_tokens: 3,
-            }),
-        }
+        notification.usage_metadata,
+        serde_json::from_value(expected_metadata)?
     );
+    assert_eq!(
+        notification.usage,
+        Some(TokenUsageBreakdown {
+            total_tokens: 37,
+            input_tokens: 30,
+            cached_input_tokens: 11,
+            cache_write_input_tokens: 0,
+            output_tokens: 7,
+            reasoning_output_tokens: 3,
+        })
+    );
+    assert_eq!(notification.source_thread_id, Some(thread.id.clone()));
+    assert_eq!(notification.parent_thread_id, None);
+    assert!(notification.completed_at.is_some());
+    let attribution = notification
+        .attribution
+        .expect("usage completion should carry source attribution");
+    assert_eq!(attribution.model.as_deref(), Some("mock-model"));
+    assert_eq!(attribution.model_provider.as_deref(), Some("mock_provider"));
+    assert_eq!(attribution.service_tier, None);
+    assert_eq!(attribution.context_length.as_deref(), Some("short"));
 
     response_mock.single_request();
     Ok(())

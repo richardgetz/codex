@@ -85,7 +85,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
     })
     .to_string();
     let (server, request_log) = start_responses_server_with_sse(
-        assistant_message_sse(&review_json),
+        assistant_message_sse_with_tokens(&review_json, /*total_tokens*/ 17),
         /*expected_requests*/ 1,
     )
     .await;
@@ -292,6 +292,30 @@ async fn review_op_emits_lifecycle_and_review_output() {
     assert!(
         !saw_assistant_xml,
         "assistant review output contains user_action markup"
+    );
+
+    let forwarded_records = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| {
+            let rollout_line: RolloutLine = serde_json::from_str(line).expect("rollout line");
+            match rollout_line.item {
+                RolloutItem::TokenUsageRecord(record) if record.response_id == "resp-1" => {
+                    Some(record)
+                }
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(forwarded_records.len(), 1);
+    let forwarded_record = &forwarded_records[0];
+    assert_eq!(forwarded_record.usage.total_tokens, 17);
+    assert_ne!(forwarded_record.thread_id.to_string(), parent_thread_id);
+    assert_eq!(
+        forwarded_record
+            .parent_thread_id
+            .map(|thread_id| thread_id.to_string()),
+        Some(parent_thread_id.clone())
     );
 
     let _codex_home_guard = codex_home;
@@ -1455,6 +1479,13 @@ fn assistant_message_sse(text: &str) -> Vec<serde_json::Value> {
     vec![
         responses::ev_assistant_message("msg-1", text),
         responses::ev_completed("resp-1"),
+    ]
+}
+
+fn assistant_message_sse_with_tokens(text: &str, total_tokens: i64) -> Vec<serde_json::Value> {
+    vec![
+        responses::ev_assistant_message("msg-1", text),
+        responses::ev_completed_with_tokens("resp-1", total_tokens),
     ]
 }
 

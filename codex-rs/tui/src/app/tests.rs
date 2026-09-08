@@ -40,6 +40,8 @@ mod stream_animation_tests;
 mod thread_usage;
 #[path = "tests/turn_submission.rs"]
 mod turn_submission;
+#[path = "tests/usage_rollup.rs"]
+mod usage_rollup;
 
 use super::*;
 use crate::AppServerTarget;
@@ -908,7 +910,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
     let initial_prompt = "follow-up after replay".to_string();
     let config = app.config.clone();
     let model = get_model_offline_for_tests(config.model.as_deref());
-    app.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
+    app.replace_chat_widget(ChatWidget::new_with_app_event(ChatWidgetInit {
         config,
         environment_manager: app.environment_manager.clone(),
         frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -936,7 +938,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
         status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
         terminal_title_invalid_items_warned: app.terminal_title_invalid_items_warned.clone(),
         session_telemetry: app.session_telemetry.clone(),
-    });
+    }));
 
     app.enqueue_primary_thread_session(
         test_thread_session(thread_id, test_path_buf("/tmp/project")),
@@ -5995,12 +5997,14 @@ async fn make_test_app() -> App {
     let realtime_mic_mode = RealtimeMicMode::from_config_enabled(config.realtime.enabled);
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
+    let usage_rollup = chat_widget.usage_rollup_handle();
 
     App {
         model_catalog: chat_widget.model_catalog(),
         session_telemetry,
         app_event_tx,
         chat_widget,
+        usage_rollup,
         workspace_command_runner: None,
         launch_cwd: config.cwd.to_path_buf(),
         runtime_working_directory_override: None,
@@ -6098,6 +6102,7 @@ async fn make_test_app_with_channels() -> (
     let realtime_mic_mode = RealtimeMicMode::from_config_enabled(config.realtime.enabled);
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
+    let usage_rollup = chat_widget.usage_rollup_handle();
 
     (
         App {
@@ -6105,6 +6110,7 @@ async fn make_test_app_with_channels() -> (
             session_telemetry,
             app_event_tx,
             chat_widget,
+            usage_rollup,
             workspace_command_runner: None,
             launch_cwd: config.cwd.to_path_buf(),
             runtime_working_directory_override: None,
@@ -8776,6 +8782,7 @@ fn team_commands_update_only_the_active_thread_and_follow_server_snapshot() -> R
                             reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Max,
                         },
                     }),
+                    worker_max_concurrent: None,
                 };
                 app.config.team = configured_team.clone();
                 app.config.team_mode = TeamMode::Off;

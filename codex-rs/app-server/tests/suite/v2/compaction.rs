@@ -332,26 +332,37 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
     assert_eq!(started.thread_id, thread_id);
     assert_eq!(completed.thread_id, thread_id);
     assert_eq!(started_id, completed_id);
+    assert_eq!(raw_completed.thread_id, thread_id);
+    assert_eq!(raw_completed.turn_id, started.turn_id);
+    assert_eq!(raw_completed.response_id, "r1");
     assert_eq!(
-        raw_completed,
-        RawResponseCompletedNotification {
-            thread_id: thread_id.clone(),
-            turn_id: started.turn_id,
-            response_id: "r1".to_string(),
-            usage_metadata: Some(ResponseUsageMetadata {
-                amount: Some("0.125".to_string()),
-                metadata: Some(expected_metadata),
-            }),
-            usage: Some(TokenUsageBreakdown {
-                total_tokens: 200,
-                input_tokens: 200,
-                cached_input_tokens: 0,
-                cache_write_input_tokens: 0,
-                output_tokens: 0,
-                reasoning_output_tokens: 0,
-            }),
-        }
+        raw_completed.usage_metadata,
+        Some(ResponseUsageMetadata {
+            amount: Some("0.125".to_string()),
+            metadata: Some(expected_metadata),
+        })
     );
+    assert_eq!(
+        raw_completed.usage,
+        Some(TokenUsageBreakdown {
+            total_tokens: 200,
+            input_tokens: 200,
+            cached_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+        })
+    );
+    assert_eq!(raw_completed.source_thread_id, Some(thread_id.clone()));
+    assert_eq!(raw_completed.parent_thread_id, None);
+    assert!(raw_completed.completed_at.is_some());
+    let attribution = raw_completed
+        .attribution
+        .expect("compaction completion should carry source attribution");
+    assert_eq!(attribution.model.as_deref(), Some("mock-model"));
+    assert_eq!(attribution.model_provider.as_deref(), Some("mock_provider"));
+    assert_eq!(attribution.service_tier, None);
+    assert_eq!(attribution.context_length.as_deref(), Some("short"));
 
     // A completed turn after compaction permits bounded replay. Neither this turn nor
     // resume resends settings, so restoring the updated cwd depends on the checkpoint.

@@ -387,7 +387,8 @@ impl ChatWidget {
     }
 
     fn add_spend_output(&mut self, args: &str) {
-        match self.daily_spend.render_report(args) {
+        let report = self.usage_rollup.lock().render_report(args);
+        match report {
             Ok(lines) => self.add_plain_history_lines(lines),
             Err(err) => self.add_error_message(format!("{SPEND_USAGE}\n{err}")),
         }
