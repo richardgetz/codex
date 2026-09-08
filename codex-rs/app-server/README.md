@@ -553,6 +553,17 @@ guidance continue to apply; it does not add a separate tool sandbox or verify
 completion of external skills, and internal Guardian and memory policies remain
 independent.
 
+Team admission follows the same backend compatibility rule as ordinary agent
+spawning: a V2 Lead may use a Worker whose catalog metadata selects V1, while a
+Worker explicitly marked as disabled is rejected. If an active team assignment
+cannot be admitted while a root thread starts or resumes, the server emits a
+warning, keeps that thread in `off` mode, and restores the single-model
+selection and effort that preceded the assignment (explicit resume overrides take
+precedence). Worker starts and live mode toggles remain strict, and malformed
+persisted team snapshots still fail validation. A V1 Worker under a V2 Lead is a
+leaf worker without collaboration tools, so the Lead must schedule any nested
+review work separately.
+
 ### Listing projects
 
 `project/list` accepts optional `sortKey` (`position` or `recencyAt`) and

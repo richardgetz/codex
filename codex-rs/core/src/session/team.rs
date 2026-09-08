@@ -4,9 +4,11 @@ use crate::config::ConstraintResult;
 use crate::context::world_state::TeamPolicyState;
 use crate::session::session::SessionConfiguration;
 use crate::session::step_settings::StepSettingsUpdate;
+use crate::thread_manager::ThreadSettingsOverrideFlags;
 use codex_config::TeamRole as ConfigTeamRole;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -22,6 +24,8 @@ pub(crate) enum TeamValidationScope {
     /// Validate profile model and effort routing while allowing delegation to be disabled.
     RoutingOnly,
 }
+
+const MAX_TEAM_STARTUP_WARNING_CHARS: usize = 1_024;
 
 /// Resolves the only session sources that receive a team assignment. Internal
 /// memory and guardian sessions keep their dedicated model policies.
@@ -68,6 +72,53 @@ pub(crate) fn protocol_role_for_session_source(
         ConfigTeamRole::Lead => TeamRole::Lead,
         ConfigTeamRole::Worker => TeamRole::Worker,
     })
+}
+
+/// Disables an invalid root assignment in this session's config while keeping
+/// the configured profile pair available for a later explicit toggle.
+pub(crate) fn disable_for_startup(
+    config: &mut Config,
+    baseline_model: Option<&String>,
+    baseline_reasoning_effort: Option<&ReasoningEffort>,
+    overrides: ThreadSettingsOverrideFlags,
+    error: &ConstraintError,
+) {
+    let fallback_model = if overrides.model {
+        baseline_model.cloned()
+    } else {
+        config
+            .team_previous_model
+            .clone()
+            .or_else(|| baseline_model.cloned())
+    };
+    let fallback_reasoning_effort = if overrides.reasoning_effort {
+        baseline_reasoning_effort.cloned()
+    } else if config.team_previous_model.is_some() {
+        config.team_previous_reasoning_effort.clone()
+    } else {
+        baseline_reasoning_effort.cloned()
+    };
+    let reason = error.to_string();
+    let warning = format!(
+        "Team mode was disabled for this thread because its assignment is unavailable: {reason}"
+    );
+    let warning = if warning.chars().count() > MAX_TEAM_STARTUP_WARNING_CHARS {
+        warning
+            .chars()
+            .take(MAX_TEAM_STARTUP_WARNING_CHARS.saturating_sub(1))
+            .chain(std::iter::once('…'))
+            .collect()
+    } else {
+        warning
+    };
+    config.startup_warnings.push(warning);
+    config.team_mode = codex_protocol::protocol::TeamMode::Off;
+    config.team_state_persisted = true;
+    config.team_persisted_role = None;
+    config.team_previous_model = None;
+    config.team_previous_reasoning_effort = None;
+    config.model = fallback_model;
+    config.model_reasoning_effort = fallback_reasoning_effort;
 }
 
 /// Allows one Worker-owned child for an independent review when the team uses
@@ -347,10 +398,10 @@ pub(crate) async fn validate_profiles(
         if matches!(validation_scope, TeamValidationScope::Delegation)
             && effective_multi_agent_version == MultiAgentVersion::V2
             && role == "Worker"
-            && model_info.multi_agent_version != Some(MultiAgentVersion::V2)
+            && model_info.multi_agent_version == Some(MultiAgentVersion::Disabled)
         {
             return Err(invalid_team(format!(
-                "Worker model `{}` does not advertise MultiAgentV2 support; choose a V2-compatible Worker model or use the legacy multi-agent backend",
+                "Worker model `{}` is disabled for MultiAgentV2; choose a model that supports multi-agent delegation",
                 profile.model
             )));
         }

@@ -30,6 +30,11 @@ release or merge rules.
     Worker; model and effort overrides cannot promote or bypass that assignment.
   - Routing enforces the selected catalog model and effort. It does not provide
     a hard tool sandbox or attest that an external skill completed.
+  - Team admission follows ordinary multi-agent backend compatibility, so a
+    V2 Lead can use a V1 Worker; invalid active assignments fail open for root
+    startup/resume with a warning and per-thread `off` mode, while delegated
+    Workers and live toggles remain strict. A V1 Worker under a V2 Lead is a
+    leaf without collaboration tools; the Lead schedules nested review work.
 
 - Advisory crossroads and decision-history traversal:
   - Request-start provenance matches no longer block model flow or infer user
@@ -363,6 +368,11 @@ release or merge rules.
   mutating global config. Verify Lead routing, Worker routing for all delegated
   and review sessions, nested Worker depth handling, override rejection, and
   single-model restoration after `/team off`.
+- Verify V2 team admission accepts V1 Worker metadata, root startup/resume
+  warns and disables only the affected thread when an assignment is invalid,
+  restores saved model/effort unless explicit resume overrides are supplied,
+  and keeps delegated Worker startup and live toggles strict. Verify that a V1
+  Worker remains a collaboration-tool-free leaf under a V2 Lead.
 - Verify decision-provenance matches remain advisory retrieval candidates: they
   never gate normal model flow, infer approval, or turn historical options into
   current approval choices.
