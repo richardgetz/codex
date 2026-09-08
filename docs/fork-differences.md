@@ -94,6 +94,69 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   - `codex --disable enable_mcp_approvals`
 - `codex features list` marks Rick-owned features with `(rick)`.
 
+### Lead/Worker teams
+
+Team mode assigns one model and reasoning effort to the Lead and another to
+Workers. The Lead coordinates the task and accepts the results; delegated
+agents and review sessions use the Worker profile. Enable it for new sessions
+in `config.toml`, for example with Astra as Lead and Luna as Worker:
+
+```toml
+[team]
+enabled = true
+
+[team.lead]
+model = "gpt-6-astra"
+reasoning_effort = "high"
+
+[team.worker]
+model = "gpt-5.6-luna"
+reasoning_effort = "max"
+# Optional: maximum concurrently active direct Workers per Lead.
+max_concurrent = 10
+```
+
+- Team mode defaults to disabled and requires both complete profiles when
+  enabled. Model names and reasoning efforts must be supported by the selected
+  catalog. Set `enabled = false` to keep the profiles available for manual use.
+- `/team on`, `/team off`, and `/team status` enable, disable, and report the
+  current thread's assignment without changing global config defaults.
+  Turning team mode off restores the previous single model and effort.
+- The active assignment survives resume and fork. In-flight Workers keep their
+  assigned profile, and model or effort overrides cannot bypass role routing.
+  Team routing does not add a separate tool sandbox or verify external skill
+  completion.
+- `team.worker.max_concurrent` accepts a positive integer and is optional.
+  It limits active Workers directly launched by the Lead, including pending
+  starts. Completed or aborted Workers free capacity; follow-up work reacquires
+  it. The Lead receives guidance to balance useful parallelism and coordination
+  overhead: allowing ten Workers does not mean every task should launch ten.
+- Workers can launch their own Workers, including Luna launching Luna, when
+  their catalog metadata supports delegation. These descendants, such as a
+  Worker's review agents, do not count against the Lead's direct Worker cap.
+  Existing global agent-count, depth, and resource limits still apply; setting
+  `max_concurrent` does not raise or replace those limits.
+- A V2 Lead can use a V1 Worker, and compatible V1 Workers can use the selected
+  collaboration namespace for nested delegation. A model explicitly marked as
+  disabled for delegation remains blocked.
+- If an active team assignment cannot be admitted during root startup or
+  resume, the session warns and starts with team mode off, restoring its
+  previous single model and effort. Explicit resume overrides take precedence.
+  Worker starts and live toggles still reject invalid assignments, and malformed
+  persisted team snapshots still fail validation.
+- Parent session usage includes recursively attributable Worker and descendant
+  responses, including review work, using persisted response identities to
+  avoid double counting across live updates and resume. With
+  `[tui.status_token_usage].enabled = true`, `/status` shows API-equivalent
+  usage and estimated spend; the context-window counters still describe the
+  selected thread's own context. Inherited fork context is not charged again,
+  and unavailable complete history is reported as unavailable. See
+  [Local token usage and spend tracking](#local-token-usage-and-spend-tracking).
+
+App-server clients can switch modes through `thread/settings/update` and read
+the effective assignment in thread responses. See the
+[Lead/Worker API example](../codex-rs/app-server/README.md#example-configure-and-toggle-leadworker-routing).
+
 ### Session-owned temporary storage
 
 - Managed temporary storage is opt-in so existing use of the operating system's
