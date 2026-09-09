@@ -55,6 +55,7 @@ use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::InterruptAgentHandler;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
+use crate::tools::handlers::multi_agents_v2::SendMessageActionHandler;
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
@@ -1441,6 +1442,9 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 multi_agent_v2_handler(SendMessageHandlerV2, tool_namespace),
                 exposure,
             );
+            if turn_context.config.team_mode == codex_protocol::protocol::TeamMode::LeadWorker {
+                registry.add_with_exposure(SendMessageActionHandler, exposure);
+            }
             registry.register_trusted_with_exposure(
                 multi_agent_v2_handler(FollowupTaskHandlerV2, tool_namespace),
                 exposure,

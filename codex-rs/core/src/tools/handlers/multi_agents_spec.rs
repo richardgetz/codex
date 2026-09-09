@@ -193,25 +193,45 @@ pub fn create_send_message_tool() -> ToolSpec {
             ))
             .with_encrypted(),
         ),
-        (
-            "kind".to_string(),
-            JsonSchema::string_enum(
-                ["progress", "action"]
-                    .into_iter()
-                    .map(|value| json!(value))
-                    .collect(),
-                Some(
-                    "Progress is queued without waking a Lead; action wakes the target immediately."
-                        .to_string(),
-                ),
-            ),
-        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_message".to_string(),
-        description: "Send a message to an existing agent. By default, progress is queued without waking a Lead; set kind=action to wake the target immediately."
+        description: "Send a message to an existing agent. The message will be delivered promptly. Does not trigger a new turn."
             .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["target".to_string(), "message".to_string()]),
+            Some(false.into()),
+        ),
+        output_schema: None,
+    })
+}
+
+pub fn create_send_message_action_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "target".to_string(),
+            JsonSchema::string(Some(
+                "Relative or canonical task name to message (from spawn_agent).".to_string(),
+            )),
+        ),
+        (
+            "message".to_string(),
+            JsonSchema::string(Some(
+                "Message text to queue on the target agent.".to_string(),
+            ))
+            .with_encrypted(),
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "send_message_action".to_string(),
+        description:
+            "Send an actionable message to an existing agent and trigger a turn immediately."
+                .to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(
