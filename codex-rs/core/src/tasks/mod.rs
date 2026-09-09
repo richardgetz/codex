@@ -322,6 +322,7 @@ impl Session {
             ActiveTurnStartMode::CreateIfMissing,
             MailboxParentProvenance::Ignore,
             team_worker_lease,
+            /*require_team_lead_admission*/ false,
         )
         .await
     }
@@ -360,6 +361,7 @@ impl Session {
             ActiveTurnStartMode::CreateIfMissing,
             MailboxParentProvenance::Ignore,
             None,
+            /*require_team_lead_admission*/ false,
         )
         .await
     }
@@ -377,10 +379,20 @@ impl Session {
         active_turn_mode: ActiveTurnStartMode,
         mailbox_parent_provenance: MailboxParentProvenance,
         pre_reserved_team_worker_lease: Option<TeamWorkerLease>,
+        require_team_lead_admission: bool,
     ) -> CodexResult<()> {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
+        // The internal marker is meaningful only for the pending-work scheduler. Explicit user
+        // starts may drain the same mailbox, but must not be converted into guarded automatic
+        // turns or lose their admitted input if Team Off races setup.
+        let automatic_pending_work =
+            matches!(active_turn_mode, ActiveTurnStartMode::RequireExisting)
+                && matches!(
+                    &mailbox_parent_provenance,
+                    MailboxParentProvenance::Attribute
+                );
         let (provisional_turn_state, existing_task_turn_state) = {
             let active = self.active_turn.lock().await;
             match active_turn_mode {
@@ -455,7 +467,12 @@ impl Session {
                 }
             },
         };
-        let (pending_items, start_options) = self.input_queue.drain_mailbox_input_items().await;
+        let (pending_items, start_options, pending_team_lead_trigger) = self
+            .input_queue
+            .drain_mailbox_input_items_with_team_lead_marker()
+            .await;
+        let require_team_lead_admission =
+            require_team_lead_admission || (automatic_pending_work && pending_team_lead_trigger);
         if let MailboxParentProvenance::Attribute = mailbox_parent_provenance {
             if let Some(id) = start_options.parent_turn_id.clone() {
                 if let Some(initiating_agent_path) = pending_items.iter().find_map(|item| {
@@ -489,8 +506,35 @@ impl Session {
             let turn = active.get_or_insert_with(ActiveTurn::default);
             Arc::clone(&turn.turn_state)
         };
-        turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start.clone();
+        let mut input = input;
+        let mut initial_pending_input = initial_pending_input;
         let mut pending_items = pending_items;
+        // A Team Lead trigger is admitted under a short session-local guard that is also taken by
+        // `/team` assignment updates. If Team Off won the race before this point, discard only
+        // stale trigger mail and restore queue-only communication for a later explicit turn.
+        let team_lead_turn_admission = if require_team_lead_admission {
+            let guard = self.team_lead_turn_admission.lock().await;
+            if !self.is_team_lead().await {
+                let mut stale_input = self
+                    .input_queue
+                    .take_pending_input_for_turn_state(turn_state.as_ref())
+                    .await;
+                stale_input.extend(std::mem::take(&mut pending_items));
+                stale_input.extend(std::mem::take(&mut initial_pending_input));
+                stale_input.extend(std::mem::take(&mut input));
+                // Keep the admission guard through cleanup. Team On/completion paths use the
+                // same guard before enqueuing a fresh trigger, so they cannot race this stale
+                // wake's queue-only requeue and mailbox clear and leave a valid wake stranded.
+                self.input_queue.requeue_queue_only_mail(stale_input).await;
+                self.input_queue.clear_team_lead_trigger_mailbox().await;
+                self.clear_reserved_idle_turn(&turn_state).await;
+                return Ok(());
+            }
+            Some(guard)
+        } else {
+            None
+        };
+        turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start.clone();
         pending_items.extend(initial_pending_input);
         self.input_queue
             .extend_pending_input_for_turn_state(turn_state.as_ref(), pending_items)
@@ -504,6 +548,7 @@ impl Session {
                 .then(|| Arc::clone(&active_turn.turn_state))
         }) {
             drop(active);
+            drop(team_lead_turn_admission);
             self.preserve_unstarted_input(&turn_state, &target_turn_state, input)
                 .await;
             return Ok(());
@@ -516,6 +561,7 @@ impl Session {
                 || self.shutdown_requested()
             {
                 drop(active);
+                drop(team_lead_turn_admission);
                 self.requeue_pending_input_for_next_turn(&turn_state).await;
                 return Ok(());
             }
@@ -533,6 +579,7 @@ impl Session {
         if turn.task.is_some() {
             let target_turn_state = Arc::clone(&turn.turn_state);
             drop(active);
+            drop(team_lead_turn_admission);
             self.preserve_unstarted_input(&turn_state, &target_turn_state, input)
                 .await;
             return Ok(());
@@ -540,6 +587,7 @@ impl Session {
         if self.shutdown_requested() {
             *active = None;
             drop(active);
+            drop(team_lead_turn_admission);
             self.requeue_pending_input_for_next_turn(&turn_state).await;
             return Ok(());
         }
@@ -758,11 +806,35 @@ impl Session {
             return;
         }
 
-        let (input, mut start_options) =
-            self.input_queue.get_pending_input(&self.active_turn).await;
-        if !input.iter().any(
+        // Serialize mailbox drain and queue-only cleanup with Team assignment updates and Lead
+        // trigger insertion. Without this boundary, a marked trigger could arrive after the
+        // drain but before the idle sentinel is cleared and become stranded with no scheduler
+        // wake.
+        let team_lead_turn_admission = self.team_lead_turn_admission.lock().await;
+        let (input, mut start_options, team_lead_trigger) = self
+            .input_queue
+            .get_pending_input_with_team_lead_marker(&self.active_turn)
+            .await;
+        let has_trigger_turn = input.iter().any(
             |item| matches!(item, TurnInput::InterAgentCommunication(mail) if mail.trigger_turn),
-        ) {
+        );
+        let only_queue_only_mail = input.iter().all(|item| {
+            matches!(
+                item,
+                TurnInput::InterAgentCommunication(communication) if !communication.trigger_turn
+            )
+        });
+        if !has_trigger_turn && !self.has_outstanding_durable_sleep() && only_queue_only_mail {
+            // A trigger can be cleared by Team Off after the initial mailbox
+            // admission check but before this drain. Do not create an automatic
+            // turn from that stale reservation; restore any queue-only mail for
+            // a later explicit turn.
+            self.input_queue.requeue_queue_only_mail(input).await;
+            self.clear_reserved_idle_turn(&turn_state).await;
+            return;
+        }
+        drop(team_lead_turn_admission);
+        if !has_trigger_turn {
             // Queue-only mail wakes durable sleep without selecting a new task's settings.
             start_options.cyber_access_program = self
                 .reference_context_item()
@@ -813,11 +885,13 @@ impl Session {
                 ActiveTurnStartMode::RequireExisting,
                 MailboxParentProvenance::Attribute,
                 team_worker_lease,
+                team_lead_trigger,
             )
             .await;
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
+        self.cancel_lead_oversight().await;
         let mut aborted_turn = false;
         let mut active_turn_to_clear = None;
         let mut turn_context = None;
@@ -879,6 +953,11 @@ impl Session {
         let Some(mut active_turn) = active_turn else {
             return false;
         };
+
+        // Only the matching active turn may invalidate a parked Lead's oversight
+        // deadline. A stale Guardian abort request must not clear supervision for
+        // an unrelated turn (or an already-idle Lead).
+        self.cancel_lead_oversight().await;
 
         let task = active_turn.task.take();
         let turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
@@ -1182,6 +1261,7 @@ impl Session {
             }
         };
         if cleared_active_turn {
+            self.update_lead_idle_after_turn().await;
             self.emit_thread_idle_lifecycle_if_idle(idle_cause).await;
         }
         // Regular items were flushed before this terminal event was appended; buffering

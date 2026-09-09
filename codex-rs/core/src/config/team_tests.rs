@@ -1,4 +1,5 @@
 use super::team_profiles_from_snapshot;
+use super::team_profiles_from_snapshot_with_timeout;
 use codex_config::TeamModelProfile;
 use codex_config::TeamModelProfiles;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -34,6 +35,8 @@ fn team_snapshot_models_are_trimmed() {
                 model: "worker".to_string(),
                 reasoning_effort: ReasoningEffortConfig::High,
             },
+            lead_oversight_timeout_minutes:
+                codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
         }
     );
 }
@@ -53,4 +56,12 @@ fn team_snapshot_rejects_blank_models() {
             format!("thread team snapshot {expected} model must be a non-empty string")
         );
     }
+}
+
+#[test]
+fn team_snapshot_preserves_configured_oversight_timeout() {
+    let profiles = team_profiles_from_snapshot_with_timeout(&snapshot("lead", "worker"), 90)
+        .expect("valid snapshot")
+        .expect("profiles");
+    assert_eq!(profiles.lead_oversight_timeout_minutes, 90);
 }

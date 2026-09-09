@@ -1,5 +1,6 @@
 use super::continuous_loopback::ScratchpadLoopbackLimiter;
 use super::input_queue::InputQueue;
+use super::lead_idle::LeadIdleController;
 use super::mcp_refresh::McpRefresh;
 use super::step_settings::ModelInfoOverrides;
 use super::step_settings::StepSettings;
@@ -87,6 +88,14 @@ pub(crate) struct Session {
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     /// Tracks recent automatic scratchpad loopbacks for this loaded thread.
     pub(crate) scratchpad_loopback_limiter: std::sync::Mutex<ScratchpadLoopbackLimiter>,
+    /// Coordinates one event-driven oversight deadline while a Lead is parked.
+    pub(crate) lead_idle_controller: LeadIdleController,
+    /// Serializes Team Lead automatic-turn admission with `/team` assignment updates.
+    ///
+    /// The guard is held only across the final admission boundary. A turn that acquires it
+    /// while still assigned to Lead is allowed to finish admission before a concurrent Team Off
+    /// commit takes effect; a stale trigger is rejected while preserving queue-only mail.
+    pub(crate) team_lead_turn_admission: Mutex<()>,
     pub(crate) pending_user_message_admissions:
         crate::user_message_admission::PendingUserMessageAdmissions,
     pub(crate) async_hook_results: async_channel::Receiver<HookCompletedEvent>,
@@ -1867,6 +1876,8 @@ impl Session {
                 scratchpad_loopback_limiter: std::sync::Mutex::new(
                     ScratchpadLoopbackLimiter::default(),
                 ),
+                lead_idle_controller: LeadIdleController::default(),
+                team_lead_turn_admission: Mutex::new(()),
                 pending_user_message_admissions: Default::default(),
                 async_hook_results,
                 input_queue: InputQueue::new(),
@@ -1878,6 +1889,8 @@ impl Session {
                 forked_from_ordinal_exclusive,
                 next_internal_sub_id: AtomicU64::new(0),
             });
+            sess.lead_idle_controller
+                .set_session(Arc::downgrade(&sess));
             if let Some(network_policy_decider_session) = network_policy_decider_session {
                 let mut guard = network_policy_decider_session.write().await;
                 *guard = Arc::downgrade(&sess);

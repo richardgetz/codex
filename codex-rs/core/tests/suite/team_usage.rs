@@ -205,7 +205,7 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
     )
     .await;
 
-    let builder = test_codex()
+    let mut builder = test_codex()
         .with_model_info_override(LEAD_MODEL, move |model_info| {
             model_info.multi_agent_version = Some(lead_multi_agent_version);
         })
@@ -415,7 +415,7 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
     grandchild_thread.shutdown_and_wait().await?;
     child_thread.shutdown_and_wait().await?;
     test.codex.shutdown_and_wait().await?;
-    let resume_builder = test_codex()
+    let mut resume_builder = test_codex()
         .with_model_info_override(LEAD_MODEL, move |model_info| {
             model_info.multi_agent_version = Some(lead_multi_agent_version);
         })

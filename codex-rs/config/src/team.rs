@@ -3,6 +3,13 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+/// Default maximum idle interval before a Lead receives an oversight wake.
+pub const DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES: u64 = 30;
+/// Largest supported Lead oversight interval. Tokio timers represent far-future
+/// instants only within roughly thirty years, so this bound keeps all duration
+/// and Unix timestamp arithmetic representable while still allowing long work.
+pub const MAX_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES: u64 = 30 * 365 * 24 * 60;
+
 /// The two model assignments used by an opt-in Lead/Worker session.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TeamConfig {
@@ -47,6 +54,10 @@ pub struct TeamToml {
 pub struct TeamModelProfileToml {
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Minutes a Lead may remain idle while direct Workers are active before
+    /// an oversight wake is emitted. A missing value uses the 30-minute default.
+    #[schemars(range(min = 1, max = 15768000))]
+    pub oversight_timeout_minutes: Option<u64>,
 }
 
 /// A Worker model and optional direct-child concurrency ceiling read from config.toml.
@@ -80,10 +91,24 @@ impl TryFrom<TeamToml> for TeamConfig {
         let worker_max_concurrent = worker.as_ref().and_then(|worker| worker.max_concurrent);
         let profiles = match (lead, worker) {
             (None, None) => None,
-            (Some(lead), Some(worker)) => Some(TeamModelProfiles {
-                lead: TeamModelProfile::try_from(("lead", lead))?,
-                worker: TeamModelProfile::try_from(("worker", worker))?,
-            }),
+            (Some(lead), Some(worker)) => {
+                let oversight_timeout_minutes = lead
+                    .oversight_timeout_minutes
+                    .unwrap_or(DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES);
+                if oversight_timeout_minutes == 0 {
+                    return Err("team.lead.oversight_timeout_minutes must be at least 1".into());
+                }
+                if oversight_timeout_minutes > MAX_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES {
+                    return Err(format!(
+                        "team.lead.oversight_timeout_minutes must be at most {MAX_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES}"
+                    ));
+                }
+                Some(TeamModelProfiles {
+                    lead: TeamModelProfile::try_from(("lead", lead))?,
+                    worker: TeamModelProfile::try_from(("worker", worker))?,
+                    lead_oversight_timeout_minutes: oversight_timeout_minutes,
+                })
+            }
             (Some(_), None) => {
                 return Err("team.worker must be configured when team.lead is configured".into());
             }
@@ -108,6 +133,8 @@ impl TryFrom<TeamToml> for TeamConfig {
 pub struct TeamModelProfiles {
     pub lead: TeamModelProfile,
     pub worker: TeamModelProfile,
+    /// Effective Lead oversight interval in minutes.
+    pub lead_oversight_timeout_minutes: u64,
 }
 
 impl TryFrom<(&str, TeamModelProfileToml)> for TeamModelProfile {
@@ -143,6 +170,7 @@ impl TryFrom<(&str, TeamWorkerProfileToml)> for TeamModelProfile {
             TeamModelProfileToml {
                 model,
                 reasoning_effort,
+                oversight_timeout_minutes: None,
             },
         ))
     }

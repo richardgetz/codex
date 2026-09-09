@@ -17,6 +17,10 @@ use tokio::sync::watch;
 
 static PENDING_MAILBOX_MESSAGES: Gauge = Gauge::new("core.mailbox.pending");
 
+pub(crate) const TEAM_LEAD_PROGRESS_SUMMARY_MAX_BYTES: usize = 8 * 1024;
+const TEAM_LEAD_PROGRESS_MAX_ITEMS: usize = 32;
+const TEAM_LEAD_PROGRESS_ITEM_MAX_BYTES: usize = 512;
+
 /// Input consumed by a regular turn.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TurnInput {
@@ -85,12 +89,31 @@ pub(crate) struct TurnInputQueue {
 pub(crate) struct InputQueue {
     activity_tx: watch::Sender<InputQueueActivity>,
     mailbox_pending_mails: Mutex<VecDeque<PendingMailboxCommunication>>,
+    team_lead_progress: Mutex<TeamLeadProgressBuffer>,
 }
 
 struct PendingMailboxCommunication {
     communication: InterAgentCommunication,
     start_options: TurnStartOptions,
+    /// Marks synthetic deadline wakeups so cancellation can remove a wake that
+    /// raced with user input or another actionable event.
+    lead_oversight: bool,
+    /// Marks trigger mail admitted while this session was assigned to Team Lead. The marker lets
+    /// final automatic-turn admission reject a stale trigger after `/team off` while ordinary
+    /// non-team trigger mail keeps its existing behavior.
+    team_lead_trigger: bool,
     _diagnostics_guard: GaugeGuard,
+}
+
+#[derive(Default)]
+struct TeamLeadProgressBuffer {
+    entries: VecDeque<TeamLeadProgressEntry>,
+    bytes: usize,
+}
+
+struct TeamLeadProgressEntry {
+    author: String,
+    message: String,
 }
 
 impl InputQueue {
@@ -99,7 +122,74 @@ impl InputQueue {
         Self {
             activity_tx,
             mailbox_pending_mails: Mutex::new(VecDeque::new()),
+            team_lead_progress: Mutex::new(TeamLeadProgressBuffer::default()),
         }
+    }
+
+    /// Retains routine Worker progress without publishing mailbox activity. The bounded buffer is
+    /// summarized only when an actionable wake reaches the Lead.
+    pub(crate) async fn enqueue_team_lead_progress(&self, communication: InterAgentCommunication) {
+        let message = if communication.encrypted_content.is_some() {
+            "[encrypted routine progress]".to_string()
+        } else {
+            truncate_progress_message(&communication.content)
+        };
+        let entry = TeamLeadProgressEntry {
+            author: communication.author.to_string(),
+            message,
+        };
+        let entry_bytes = entry.author.len() + entry.message.len() + 4;
+        let mut progress = self.team_lead_progress.lock().await;
+        progress.bytes = progress.bytes.saturating_add(entry_bytes);
+        progress.entries.push_back(entry);
+        while progress.entries.len() > TEAM_LEAD_PROGRESS_MAX_ITEMS
+            || progress.bytes > TEAM_LEAD_PROGRESS_SUMMARY_MAX_BYTES
+        {
+            let Some(removed) = progress.entries.pop_front() else {
+                progress.bytes = 0;
+                break;
+            };
+            progress.bytes = progress
+                .bytes
+                .saturating_sub(removed.author.len() + removed.message.len() + 4);
+        }
+    }
+
+    /// Drains routine progress into a fixed-size summary for an actionable Lead wake.
+    pub(crate) async fn take_team_progress_summary(&self) -> Option<String> {
+        let mut progress = self.team_lead_progress.lock().await;
+        if progress.entries.is_empty() {
+            return None;
+        }
+        let entries = progress.entries.drain(..).collect::<Vec<_>>();
+        progress.bytes = 0;
+        let mut lines = Vec::new();
+        let mut summary_bytes = "Routine Worker progress summary (".len()
+            + entries.len().to_string().len()
+            + " retained updates):".len();
+        for entry in entries.into_iter().rev() {
+            let line = format!("\n- {}: {}", entry.author, entry.message);
+            if summary_bytes + line.len() > TEAM_LEAD_PROGRESS_SUMMARY_MAX_BYTES {
+                break;
+            }
+            summary_bytes += line.len();
+            lines.push(line);
+        }
+        lines.reverse();
+        let mut summary = format!(
+            "Routine Worker progress summary ({} retained updates):",
+            lines.len()
+        );
+        for line in lines {
+            summary.push_str(&line);
+        }
+        Some(summary)
+    }
+
+    pub(crate) async fn clear_team_lead_progress(&self) {
+        let mut progress = self.team_lead_progress.lock().await;
+        progress.entries.clear();
+        progress.bytes = 0;
     }
 
     pub(crate) async fn subscribe_activity(
@@ -130,15 +220,99 @@ impl InputQueue {
         communication: InterAgentCommunication,
         start_options: TurnStartOptions,
     ) {
+        self.enqueue_mailbox_communication_with_team_lead_marker(
+            communication,
+            start_options,
+            /*team_lead_trigger*/ false,
+        )
+        .await;
+    }
+
+    /// Enqueues trigger mail created while the target session was assigned to Team Lead. This
+    /// internal marker does not change wire behavior; it only protects the final scheduler
+    /// admission from a concurrent Team Off update.
+    pub(crate) async fn enqueue_team_lead_mailbox_communication(
+        &self,
+        communication: InterAgentCommunication,
+        start_options: TurnStartOptions,
+    ) {
+        self.enqueue_mailbox_communication_with_team_lead_marker(
+            communication,
+            start_options,
+            /*team_lead_trigger*/ true,
+        )
+        .await;
+    }
+
+    async fn enqueue_mailbox_communication_with_team_lead_marker(
+        &self,
+        communication: InterAgentCommunication,
+        start_options: TurnStartOptions,
+        team_lead_trigger: bool,
+    ) {
         self.mailbox_pending_mails
             .lock()
             .await
             .push_back(PendingMailboxCommunication {
                 communication,
                 start_options,
+                lead_oversight: false,
+                team_lead_trigger,
                 _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
             });
         self.activity_tx.send_replace(InputQueueActivity::Mailbox);
+    }
+
+    /// Enqueues a synthetic Lead oversight message. These entries are kept
+    /// distinct from ordinary mailbox traffic so a cancellation can remove a
+    /// stale deadline wake without touching actionable Worker or user mail.
+    pub(crate) async fn enqueue_lead_oversight_communication(
+        &self,
+        communication: InterAgentCommunication,
+        start_options: TurnStartOptions,
+    ) {
+        self.mailbox_pending_mails
+            .lock()
+            .await
+            .push_back(PendingMailboxCommunication {
+                communication,
+                start_options,
+                lead_oversight: true,
+                team_lead_trigger: true,
+                _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
+            });
+        self.activity_tx.send_replace(InputQueueActivity::Mailbox);
+    }
+
+    /// Drops synthetic Lead deadline messages that raced with cancellation.
+    pub(crate) async fn clear_lead_oversight_mailbox(&self) {
+        self.mailbox_pending_mails
+            .lock()
+            .await
+            .retain(|mail| !mail.lead_oversight);
+        // Wake an in-flight Lead `wait_agent` call after cancellation. The
+        // watch value is only a notification; no input is inserted into the
+        // turn, so a later wait still observes the real pending state.
+        self.activity_tx.send_replace(InputQueueActivity::Steer);
+    }
+
+    /// Drops automatic trigger mail when a Lead turns team mode off. Queue-only
+    /// communication remains available for an explicit subsequent turn.
+    pub(crate) async fn clear_trigger_turn_mailbox(&self) {
+        self.mailbox_pending_mails
+            .lock()
+            .await
+            .retain(|mail| !mail.communication.trigger_turn);
+    }
+
+    /// Drops only trigger mail that was admitted while this session owned the Team Lead role.
+    /// Ordinary trigger mail queued after Team Off remains available for its normal explicit
+    /// action semantics.
+    pub(crate) async fn clear_team_lead_trigger_mailbox(&self) {
+        self.mailbox_pending_mails
+            .lock()
+            .await
+            .retain(|mail| !(mail.team_lead_trigger && mail.communication.trigger_turn));
     }
 
     pub(crate) async fn has_pending_mailbox_items(&self) -> bool {
@@ -154,12 +328,26 @@ impl InputQueue {
     }
 
     pub(crate) async fn drain_mailbox_input_items(&self) -> (Vec<TurnInput>, TurnStartOptions) {
+        let (items, start_options, _) =
+            self.drain_mailbox_input_items_with_team_lead_marker().await;
+        (items, start_options)
+    }
+
+    /// Drains mailbox input and reports whether any trigger was admitted while this session was
+    /// assigned to Team Lead. The marker is consumed with the mail so the scheduler can enforce
+    /// the assignment at its final admission boundary even if Team Off races the drain.
+    pub(crate) async fn drain_mailbox_input_items_with_team_lead_marker(
+        &self,
+    ) -> (Vec<TurnInput>, TurnStartOptions, bool) {
         let pending_mails = self
             .mailbox_pending_mails
             .lock()
             .await
             .drain(..)
             .collect::<Vec<_>>();
+        let team_lead_trigger = pending_mails
+            .iter()
+            .any(|mail| mail.team_lead_trigger && mail.communication.trigger_turn);
         // A later follow-up supersedes the earlier choice, including an omitted choice.
         let mut start_options = pending_mails
             .iter()
@@ -189,7 +377,29 @@ impl InputQueue {
             .into_iter()
             .map(|mail| TurnInput::InterAgentCommunication(mail.communication))
             .collect();
-        (items, start_options)
+        (items, start_options, team_lead_trigger)
+    }
+
+    /// Restores queue-only mailbox mail after a stale automatic-trigger reservation is
+    /// invalidated. No activity notification is sent because queue-only mail is not itself a
+    /// reason to start a turn.
+    pub(crate) async fn requeue_queue_only_mail(&self, input: Vec<TurnInput>) {
+        let mut mailbox = self.mailbox_pending_mails.lock().await;
+        for item in input.into_iter().rev() {
+            let TurnInput::InterAgentCommunication(communication) = item else {
+                continue;
+            };
+            if communication.trigger_turn {
+                continue;
+            }
+            mailbox.push_front(PendingMailboxCommunication {
+                communication,
+                start_options: TurnStartOptions::default(),
+                lead_oversight: false,
+                team_lead_trigger: false,
+                _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
+            });
+        }
     }
 
     pub(crate) async fn turn_state_for_sub_id(
@@ -300,6 +510,18 @@ impl InputQueue {
         &self,
         active_turn: &Mutex<Option<ActiveTurn>>,
     ) -> (Vec<TurnInput>, TurnStartOptions) {
+        let (pending_input, start_options, _) = self
+            .get_pending_input_with_team_lead_marker(active_turn)
+            .await;
+        (pending_input, start_options)
+    }
+
+    /// Like [`Self::get_pending_input`], but preserves the internal Team Lead trigger marker for
+    /// the automatic-turn scheduler.
+    pub(crate) async fn get_pending_input_with_team_lead_marker(
+        &self,
+        active_turn: &Mutex<Option<ActiveTurn>>,
+    ) -> (Vec<TurnInput>, TurnStartOptions, bool) {
         let (pending_input, accepts_mailbox_delivery, active_turn_metadata) = {
             let mut active = active_turn.lock().await;
             match active.as_mut() {
@@ -326,9 +548,10 @@ impl InputQueue {
             }
         };
         if !accepts_mailbox_delivery {
-            return (pending_input, TurnStartOptions::default());
+            return (pending_input, TurnStartOptions::default(), false);
         }
-        let (mailbox_items, start_options) = self.drain_mailbox_input_items().await;
+        let (mailbox_items, start_options, team_lead_trigger) =
+            self.drain_mailbox_input_items_with_team_lead_marker().await;
         if let Some(active_turn_metadata) = active_turn_metadata
             && active_turn_metadata.root_turn_id().is_none()
             && let Some(root_turn_id) = start_options.root_turn_id.as_ref()
@@ -336,11 +559,11 @@ impl InputQueue {
             active_turn_metadata.set_root_turn_id(root_turn_id.clone());
         }
         if pending_input.is_empty() {
-            (mailbox_items, start_options)
+            (mailbox_items, start_options, team_lead_trigger)
         } else {
             let mut pending_input = pending_input;
             pending_input.extend(mailbox_items);
-            (pending_input, start_options)
+            (pending_input, start_options, team_lead_trigger)
         }
     }
 
@@ -382,6 +605,23 @@ impl InputQueue {
             ..turn_status
         }
     }
+}
+
+fn truncate_progress_message(message: &str) -> String {
+    if message.len() <= TEAM_LEAD_PROGRESS_ITEM_MAX_BYTES {
+        return message.to_string();
+    }
+    let mut truncated = String::new();
+    for character in message.chars() {
+        if truncated.len() + character.len_utf8() + '…'.len_utf8()
+            > TEAM_LEAD_PROGRESS_ITEM_MAX_BYTES
+        {
+            break;
+        }
+        truncated.push(character);
+    }
+    truncated.push('…');
+    truncated
 }
 
 impl TurnInputQueue {
@@ -716,5 +956,106 @@ mod tests {
             .enqueue_mailbox_communication(trigger_mail, Default::default())
             .await;
         assert!(input_queue.has_trigger_turn_mailbox_items().await);
+    }
+
+    #[tokio::test]
+    async fn routine_lead_progress_does_not_publish_mailbox_activity() {
+        let input_queue = InputQueue::new();
+        let (mut activity_rx, pending_activity) =
+            input_queue.subscribe_activity(/*turn_state*/ None).await;
+        assert_eq!(pending_activity, None);
+        input_queue
+            .enqueue_team_lead_progress(make_mail(
+                AgentPath::try_from("/root/worker").expect("agent path"),
+                AgentPath::root(),
+                "routine update",
+                /*trigger_turn*/ false,
+            ))
+            .await;
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), activity_rx.changed())
+                .await
+                .is_err()
+        );
+        assert!(!input_queue.has_pending_mailbox_items().await);
+    }
+
+    #[tokio::test]
+    async fn routine_lead_progress_is_bounded_and_flushed_as_summary() {
+        let input_queue = InputQueue::new();
+        for index in 0..(TEAM_LEAD_PROGRESS_MAX_ITEMS + 8) {
+            input_queue
+                .enqueue_team_lead_progress(make_mail(
+                    AgentPath::try_from("/root/worker").expect("agent path"),
+                    AgentPath::root(),
+                    &format!("update {index} {}", "x".repeat(600)),
+                    /*trigger_turn*/ false,
+                ))
+                .await;
+        }
+        let summary = input_queue
+            .take_team_progress_summary()
+            .await
+            .expect("progress summary");
+        assert!(summary.len() <= TEAM_LEAD_PROGRESS_SUMMARY_MAX_BYTES);
+        assert!(summary.contains("retained updates"));
+        assert!(summary.contains("update 39"));
+        assert!(input_queue.take_team_progress_summary().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn clearing_oversight_mail_preserves_non_waking_progress_summary() {
+        let input_queue = InputQueue::new();
+        let progress = make_mail(
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            AgentPath::root(),
+            "retained progress",
+            /*trigger_turn*/ false,
+        );
+        let deadline = make_mail(
+            AgentPath::root(),
+            AgentPath::root(),
+            "deadline wake",
+            /*trigger_turn*/ true,
+        );
+        input_queue
+            .enqueue_mailbox_communication(progress.clone(), Default::default())
+            .await;
+        input_queue
+            .enqueue_lead_oversight_communication(deadline, Default::default())
+            .await;
+
+        input_queue.clear_lead_oversight_mailbox().await;
+        let (items, _) = input_queue.drain_mailbox_input_items().await;
+        assert_eq!(items, vec![TurnInput::InterAgentCommunication(progress)]);
+    }
+
+    #[tokio::test]
+    async fn clearing_team_triggers_preserves_queue_only_mail() {
+        let input_queue = InputQueue::new();
+        let queued = make_mail(
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            AgentPath::root(),
+            "queued progress",
+            /*trigger_turn*/ false,
+        );
+        let trigger = make_mail(
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            AgentPath::root(),
+            "stale completion",
+            /*trigger_turn*/ true,
+        );
+        input_queue
+            .enqueue_mailbox_communication(queued.clone(), Default::default())
+            .await;
+        input_queue
+            .enqueue_mailbox_communication(trigger, Default::default())
+            .await;
+
+        input_queue.clear_trigger_turn_mailbox().await;
+
+        assert!(!input_queue.has_trigger_turn_mailbox_items().await);
+        let (items, _) = input_queue.drain_mailbox_input_items().await;
+        assert_eq!(items, vec![TurnInput::InterAgentCommunication(queued)]);
     }
 }

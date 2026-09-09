@@ -224,10 +224,14 @@ fn save_config_resolved_fields(
     agents.interrupt_message = Some(config.agent_interrupt_message_enabled);
 
     if config.team_state_persisted || config.effective_team_profiles().is_some() {
-        let profile_to_toml = |profile: &codex_config::TeamModelProfile| TeamModelProfileToml {
-            model: Some(profile.model.clone()),
-            reasoning_effort: Some(profile.reasoning_effort.clone()),
-        };
+        let profile_to_toml =
+            |profile: &codex_config::TeamModelProfile, oversight_timeout_minutes: Option<u64>| {
+                TeamModelProfileToml {
+                    model: Some(profile.model.clone()),
+                    reasoning_effort: Some(profile.reasoning_effort.clone()),
+                    oversight_timeout_minutes,
+                }
+            };
         let worker_profile_to_toml =
             |profile: &codex_config::TeamModelProfile| TeamWorkerProfileToml {
                 model: Some(profile.model.clone()),
@@ -237,7 +241,12 @@ fn save_config_resolved_fields(
         let profiles = config.effective_team_profiles();
         lock_config.team = Some(TeamToml {
             enabled: Some(config.team_mode == TeamMode::LeadWorker),
-            lead: profiles.map(|profiles| profile_to_toml(&profiles.lead)),
+            lead: profiles.map(|profiles| {
+                profile_to_toml(
+                    &profiles.lead,
+                    Some(profiles.lead_oversight_timeout_minutes),
+                )
+            }),
             worker: profiles.map(|profiles| worker_profile_to_toml(&profiles.worker)),
         });
     }

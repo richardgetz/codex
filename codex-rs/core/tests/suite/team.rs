@@ -71,6 +71,8 @@ const THIRD_DIRECT_CALL_ID: &str = "team-third-direct";
 const FIRST_DIRECT_GATE_CALL_ID: &str = "team-first-direct-gate";
 const ROOT_DIRECT_GATE_CALL_ID: &str = "team-root-direct-gate";
 
+#[path = "team_idle.rs"]
+mod team_idle;
 #[path = "team_usage.rs"]
 mod team_usage;
 #[path = "team_worker_limits.rs"]
@@ -88,6 +90,8 @@ fn team_config(mode: TeamMode, lead_model: &str, worker_model: &str) -> TeamConf
                 model: worker_model.to_string(),
                 reasoning_effort: ReasoningEffort::Low,
             },
+            lead_oversight_timeout_minutes:
+                codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
         }),
         worker_max_concurrent: None,
     }

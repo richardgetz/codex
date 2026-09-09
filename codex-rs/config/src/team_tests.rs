@@ -5,6 +5,7 @@ fn profile(model: &str, reasoning_effort: ReasoningEffort) -> TeamModelProfileTo
     TeamModelProfileToml {
         model: Some(model.to_string()),
         reasoning_effort: Some(reasoning_effort),
+        oversight_timeout_minutes: None,
     }
 }
 
@@ -97,6 +98,51 @@ fn team_config_rejects_zero_worker_concurrency() {
     .expect_err("zero Worker concurrency should be rejected");
 
     assert_eq!(error, "team.worker.max_concurrent must be at least 1");
+}
+
+#[test]
+fn team_config_defaults_and_validates_lead_oversight_timeout() {
+    let config = TeamConfig::try_from(TeamToml {
+        lead: Some(profile("gpt-lead", ReasoningEffort::High)),
+        worker: Some(worker_profile("gpt-worker", ReasoningEffort::Max, None)),
+        ..Default::default()
+    })
+    .expect("valid team config");
+    assert_eq!(
+        config
+            .profiles
+            .as_ref()
+            .map(|profiles| profiles.lead_oversight_timeout_minutes),
+        Some(DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES)
+    );
+
+    let mut lead = profile("gpt-lead", ReasoningEffort::High);
+    lead.oversight_timeout_minutes = Some(0);
+    let error = TeamConfig::try_from(TeamToml {
+        lead: Some(lead),
+        worker: Some(worker_profile("gpt-worker", ReasoningEffort::Max, None)),
+        ..Default::default()
+    })
+    .expect_err("zero Lead oversight timeout should be rejected");
+    assert_eq!(
+        error,
+        "team.lead.oversight_timeout_minutes must be at least 1"
+    );
+
+    let mut lead = profile("gpt-lead", ReasoningEffort::High);
+    lead.oversight_timeout_minutes = Some(MAX_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES + 1);
+    let error = TeamConfig::try_from(TeamToml {
+        lead: Some(lead),
+        worker: Some(worker_profile("gpt-worker", ReasoningEffort::Max, None)),
+        ..Default::default()
+    })
+    .expect_err("oversized Lead oversight timeout should be rejected");
+    assert_eq!(
+        error,
+        format!(
+            "team.lead.oversight_timeout_minutes must be at most {MAX_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES}"
+        )
+    );
 }
 
 #[test]

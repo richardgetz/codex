@@ -3,8 +3,10 @@ use crate::realtime_conversation::handle_close as handle_realtime_conversation_c
 use crate::realtime_conversation::handle_speech as handle_realtime_conversation_speech;
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
+use crate::session::lead_idle::lead_progress_communication;
 use async_channel::Receiver;
 use codex_otel::set_parent_from_w3c_trace_context;
+use codex_protocol::AgentPath;
 use codex_protocol::protocol::Submission;
 use tracing::Instrument;
 use tracing::debug_span;
@@ -234,6 +236,10 @@ async fn user_input_or_turn_inner_with_reasoning_effort(
     else {
         unreachable!();
     };
+    let team_disabled = thread_settings
+        .team
+        .as_ref()
+        .is_some_and(|team| team.mode == codex_protocol::protocol::TeamMode::Off);
     let emit_thread_settings_applied = thread_settings != ThreadSettingsOverrides::default();
     let updates = if emit_thread_settings_applied {
         thread_settings_update(thread_settings)
@@ -261,6 +267,9 @@ async fn user_input_or_turn_inner_with_reasoning_effort(
     };
     // new_turn_with_sub_id already emits an error event when settings are invalid.
     let current_context = current_context?;
+    // Cancel supervision only after the request has been admitted. Rejected
+    // user input must leave an idle Lead's existing deadline intact.
+    sess.cancel_lead_oversight().await;
     if emit_thread_settings_applied {
         sess.send_event_raw_without_materializing_rollout(Event {
             id: sub_id.clone(),
@@ -283,10 +292,30 @@ async fn user_input_or_turn_inner_with_reasoning_effort(
         .await
     {
         Ok(turn_id) => {
+            let lead_progress = if !items.is_empty() && sess.is_team_lead().await && !team_disabled
+            {
+                sess.take_lead_progress_summary().await
+            } else {
+                None
+            };
+            if let Some(summary) = lead_progress {
+                sess.input_queue
+                    .enqueue_mailbox_communication(
+                        lead_progress_communication(summary),
+                        Default::default(),
+                    )
+                    .await;
+            }
             current_context.session_telemetry.user_prompt(&items);
             Ok(UserMessageAdmission::Steered { turn_id })
         }
         Err(SteerInputError::NoActiveTurn(items)) => {
+            let lead_progress = if !items.is_empty() && sess.is_team_lead().await && !team_disabled
+            {
+                sess.take_lead_progress_summary().await
+            } else {
+                None
+            };
             if let Some(id) = parent_turn_id {
                 current_context.turn_metadata_state.set_parent_turn_id(id);
             }
@@ -305,6 +334,11 @@ async fn user_input_or_turn_inner_with_reasoning_effort(
                 .map(ResponseItemEnvelope::new)
                 .map(TurnInput::ResponseItem)
                 .collect::<Vec<_>>();
+            if let Some(summary) = lead_progress {
+                task_input.push(TurnInput::InterAgentCommunication(
+                    lead_progress_communication(summary),
+                ));
+            }
             if !items.is_empty() {
                 task_input.push(TurnInput::UserInput {
                     content: items,
@@ -376,12 +410,85 @@ pub async fn inter_agent_communication(
     communication: InterAgentCommunication,
     start_options: codex_protocol::turn_input::TurnStartOptions,
 ) {
+    inter_agent_communication_inner(sess, sub_id, communication, start_options, false).await;
+}
+
+async fn inter_agent_communication_inner(
+    sess: &Arc<Session>,
+    sub_id: String,
+    communication: InterAgentCommunication,
+    start_options: codex_protocol::turn_input::TurnStartOptions,
+    team_lead_trigger: bool,
+) {
     let trigger_turn = communication.trigger_turn;
-    sess.input_queue
-        .enqueue_mailbox_communication(communication, start_options)
-        .await;
+    let is_team_lead = sess.is_team_lead().await;
+    if trigger_turn && team_lead_trigger && !is_team_lead {
+        // Completion was admitted while this parent was a Lead, but Team mode was disabled
+        // before the operation reached this handler. Do not reclassify that stale wake as
+        // ordinary non-team trigger mail.
+        return;
+    }
+    if is_team_lead && !trigger_turn && !communication.author.is_root() {
+        // Serialize progress buffering with Team Off so cleanup cannot race an accepted update.
+        let _team_lead_turn_admission = sess.team_lead_turn_admission.lock().await;
+        if !sess.is_team_lead().await {
+            return;
+        }
+        sess.input_queue
+            .enqueue_team_lead_progress(communication)
+            .await;
+        crate::agent_communication::emit_agent_communication_receive(&sub_id);
+        return;
+    }
+    // Serialize every actionable mailbox insertion with `/team off`. The settings commit takes
+    // the same guard through its trigger cleanup, so a stale Lead completion cannot race an
+    // ordinary Off-mode action into being removed by stale-trigger cleanup (or vice versa).
+    let team_lead_turn_admission = if trigger_turn {
+        Some(sess.team_lead_turn_admission.lock().await)
+    } else {
+        None
+    };
+    if is_team_lead && trigger_turn {
+        sess.cancel_lead_oversight().await;
+        if let Some(summary) = sess.input_queue.take_team_progress_summary().await {
+            sess.input_queue
+                .enqueue_team_lead_mailbox_communication(
+                    InterAgentCommunication::new(
+                        AgentPath::root(),
+                        AgentPath::root(),
+                        Vec::new(),
+                        summary,
+                        true,
+                    ),
+                    start_options.clone(),
+                )
+                .await;
+        }
+        // Revalidate after cancellation/summary work. A concurrent `/team off`
+        // commit clears supervision and trigger mail; a stale completion must
+        // not enqueue a fresh automatic Lead turn afterward.
+        if !sess.is_team_lead().await {
+            return;
+        }
+    }
+    if is_team_lead && trigger_turn {
+        sess.input_queue
+            .enqueue_team_lead_mailbox_communication(communication, start_options)
+            .await;
+    } else {
+        sess.input_queue
+            .enqueue_mailbox_communication(communication, start_options)
+            .await;
+    }
     crate::agent_communication::emit_agent_communication_receive(&sub_id);
+    if is_team_lead && trigger_turn && !sess.is_team_lead().await {
+        // The Team Off commit can race the mailbox insertion. Remove a stale
+        // trigger before the scheduler observes it.
+        sess.input_queue.clear_team_lead_trigger_mailbox().await;
+        return;
+    }
     if trigger_turn || sess.has_outstanding_durable_sleep() {
+        drop(team_lead_turn_admission);
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
             .await;
     }
@@ -1493,6 +1600,20 @@ pub(super) async fn submission_loop(
                 } => {
                     inter_agent_communication(&sess, sub.id.clone(), communication, start_options)
                         .await;
+                    false
+                }
+                Op::TeamLeadCompletion {
+                    communication,
+                    start_options,
+                } => {
+                    inter_agent_communication_inner(
+                        &sess,
+                        sub.id.clone(),
+                        communication,
+                        start_options,
+                        true,
+                    )
+                    .await;
                     false
                 }
                 Op::ExecApproval {

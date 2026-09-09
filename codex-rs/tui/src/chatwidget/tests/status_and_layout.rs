@@ -2976,6 +2976,29 @@ async fn warning_event_adds_warning_history_cell() {
 }
 
 #[tokio::test]
+async fn lead_idle_and_deadline_warnings_render_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_warning(
+        &mut chat,
+        "Lead wait parked; next oversight deadline: 2030-01-01T00:00:00Z.",
+    );
+    handle_warning(
+        &mut chat,
+        "Lead oversight deadline reached; review 1 active Worker.",
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 2, "expected idle and deadline warning cells");
+    insta::assert_snapshot!(
+        lines_to_single_string(&cells.concat()),
+        @r###"
+⚠ Lead wait parked; next oversight deadline: 2030-01-01T00:00:00Z.
+⚠ Lead oversight deadline reached; review 1 active Worker.
+"###
+    );
+}
+
+#[tokio::test]
 async fn unsupported_code_mode_warning_renders_as_warning_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     handle_warning(

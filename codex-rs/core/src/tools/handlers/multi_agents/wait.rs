@@ -1,5 +1,8 @@
 use super::*;
 use crate::agent::status::is_final;
+use crate::session::InputQueueActivity;
+use crate::session::LeadIdleArmMode;
+use crate::session::format_lead_wait_message;
 use crate::session::session::Session;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v1;
@@ -9,6 +12,7 @@ use futures::FutureExt;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch::Receiver;
@@ -98,6 +102,38 @@ impl Handler {
             }
             ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
         };
+        let is_team_lead = session.is_team_lead().await;
+        let mut active_direct_workers = if is_team_lead {
+            Some(
+                session
+                    .services
+                    .agent_control
+                    .active_direct_worker_count(session.thread_id)
+                    .await,
+            )
+        } else {
+            None
+        };
+        let mut lead_deadline = None;
+        if is_team_lead && active_direct_workers.is_some_and(|count| count > 0) {
+            lead_deadline = session
+                .arm_lead_oversight(LeadIdleArmMode::ExplicitWait)
+                .await
+                .map(|(_, deadline)| deadline);
+            if lead_deadline.is_none() {
+                // A Worker can finish between the initial count and the arm call. Refresh before
+                // deciding whether this wait should park until a future action or completion.
+                active_direct_workers = Some(
+                    session
+                        .services
+                        .agent_control
+                        .active_direct_worker_count(session.thread_id)
+                        .await,
+                );
+            }
+        } else if is_team_lead {
+            session.cancel_lead_oversight().await;
+        }
 
         session
             .emit_turn_item_started(
@@ -116,6 +152,12 @@ impl Handler {
                 }),
             )
             .await;
+
+        if let (Some(active_workers), Some(deadline)) = (active_direct_workers, lead_deadline) {
+            session
+                .emit_lead_idle_event(format_lead_wait_message(active_workers, deadline.unix_secs))
+                .await;
+        }
 
         let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
         let mut initial_final_statuses = Vec::new();
@@ -156,8 +198,46 @@ impl Handler {
             }
         }
 
+        let turn_state = if is_team_lead {
+            session
+                .input_queue
+                .turn_state_for_sub_id(&session.active_turn, &turn.sub_id)
+                .await
+        } else {
+            None
+        };
+        let (mut activity_rx, pending_activity) = if is_team_lead {
+            let (activity_rx, pending_activity) = session
+                .input_queue
+                .subscribe_activity(turn_state.as_deref())
+                .await;
+            (Some(activity_rx), pending_activity)
+        } else {
+            (None, None)
+        };
+        let lead_wait_cancelled = (is_team_lead && !session.is_team_lead().await)
+            || if let Some(deadline) = lead_deadline {
+                !session
+                    .lead_oversight_deadline_is_current(deadline.instant)
+                    .await
+            } else {
+                false
+            };
+        let lead_wait_requires_assessment = is_team_lead
+            && active_direct_workers.is_some_and(|count| count > 0)
+            && lead_deadline.is_none()
+            && !lead_wait_cancelled;
         let statuses = if !initial_final_statuses.is_empty() {
             initial_final_statuses
+        } else if is_team_lead && active_direct_workers == Some(0) {
+            Vec::new()
+        } else if lead_wait_cancelled {
+            Vec::new()
+        } else if lead_wait_requires_assessment {
+            // The previous parked interval already fired. V1 has no dedicated
+            // review-required result field, so return immediately and let the
+            // Lead assess before issuing another wait call.
+            Vec::new()
         } else {
             let mut futures = FuturesUnordered::new();
             for (id, rx) in status_rxs.into_iter() {
@@ -165,30 +245,40 @@ impl Handler {
                 futures.push(wait_for_final_status(session, id, rx));
             }
             let mut results = Vec::new();
-            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-            loop {
-                match timeout_at(deadline, futures.next()).await {
-                    Ok(Some(Some(result))) => {
-                        results.push(result);
-                        break;
-                    }
-                    Ok(Some(None)) => continue,
-                    Ok(None) | Err(_) => break,
-                }
-            }
-            if !results.is_empty() {
+            if is_team_lead {
+                let activity_rx = activity_rx
+                    .as_mut()
+                    .expect("team Lead waits subscribe to activity");
+                let deadline = lead_deadline.map(|deadline| deadline.instant);
+                results =
+                    wait_for_lead_statuses(&mut futures, activity_rx, pending_activity, deadline)
+                        .await;
+            } else {
+                let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
                 loop {
-                    match futures.next().now_or_never() {
-                        Some(Some(Some(result))) => results.push(result),
-                        Some(Some(None)) => continue,
-                        Some(None) | None => break,
+                    match timeout_at(deadline, futures.next()).await {
+                        Ok(Some(Some(result))) => {
+                            results.push(result);
+                            break;
+                        }
+                        Ok(Some(None)) => continue,
+                        Ok(None) | Err(_) => break,
+                    }
+                }
+                if !results.is_empty() {
+                    loop {
+                        match futures.next().now_or_never() {
+                            Some(Some(Some(result))) => results.push(result),
+                            Some(Some(None)) => continue,
+                            Some(None) | None => break,
+                        }
                     }
                 }
             }
             results
         };
 
-        let timed_out = statuses.is_empty();
+        let timed_out = statuses.is_empty() && !(is_team_lead && active_direct_workers == Some(0));
         let statuses_by_id = statuses.clone().into_iter().collect::<HashMap<_, _>>();
         let result = WaitAgentResult {
             status: statuses
@@ -297,6 +387,68 @@ struct WaitArgs {
 pub(crate) struct WaitAgentResult {
     pub(crate) status: HashMap<String, AgentStatus>,
     pub(crate) timed_out: bool,
+}
+
+enum LeadWaitSignal<T> {
+    Activity,
+    Status(Option<T>),
+}
+
+/// Waits for one final Worker status, user/mailbox activity, or the shared Lead oversight
+/// deadline. When the deadline has already been consumed by an earlier wait in the same turn,
+/// `deadline` is `None`, so this remains parked until an actionable event rather than polling.
+async fn wait_for_lead_statuses<F>(
+    futures: &mut FuturesUnordered<F>,
+    activity_rx: &mut Receiver<InputQueueActivity>,
+    pending_activity: Option<InputQueueActivity>,
+    deadline: Option<Instant>,
+) -> Vec<(ThreadId, AgentStatus)>
+where
+    F: Future<Output = Option<(ThreadId, AgentStatus)>> + Send,
+{
+    if pending_activity.is_some() {
+        return Vec::new();
+    }
+
+    let mut results = Vec::new();
+    loop {
+        let signal = async {
+            tokio::select! {
+                activity = activity_rx.changed() => {
+                    let _ = activity;
+                    LeadWaitSignal::Activity
+                }
+                status = futures.next() => LeadWaitSignal::Status(status),
+            }
+        };
+        let signal = if let Some(deadline) = deadline {
+            match timeout_at(deadline, signal).await {
+                Ok(signal) => signal,
+                Err(_) => break,
+            }
+        } else {
+            signal.await
+        };
+        match signal {
+            LeadWaitSignal::Activity => break,
+            LeadWaitSignal::Status(Some(Some(result))) => {
+                results.push(result);
+                break;
+            }
+            LeadWaitSignal::Status(Some(None)) => continue,
+            LeadWaitSignal::Status(None) => break,
+        }
+    }
+    if !results.is_empty() {
+        loop {
+            match futures.next().now_or_never() {
+                Some(Some(Some(result))) => results.push(result),
+                Some(Some(None)) => continue,
+                Some(None) | None => break,
+            }
+        }
+    }
+    results
 }
 
 impl ToolOutput for WaitAgentResult {

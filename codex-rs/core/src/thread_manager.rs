@@ -135,6 +135,13 @@ fn capture_test_op(op: &Op) -> Option<Op> {
             communication: communication.clone(),
             start_options: start_options.clone(),
         }),
+        Op::TeamLeadCompletion {
+            communication,
+            start_options,
+        } => Some(Op::TeamLeadCompletion {
+            communication: communication.clone(),
+            start_options: start_options.clone(),
+        }),
         Op::Shutdown => Some(Op::Shutdown),
         _ => None,
     }

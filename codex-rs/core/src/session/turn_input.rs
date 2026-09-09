@@ -10,6 +10,7 @@
 
 use super::TurnInput;
 use super::automatic_continuation_allowed;
+use super::lead_idle::lead_progress_communication;
 use super::session::Session;
 use super::session::SessionConfiguration;
 use super::session::SessionSettingsUpdate;
@@ -276,7 +277,20 @@ async fn start_or_steer(
         .await
     {
         Ok(turn_id) => {
+            session.cancel_lead_oversight().await;
             settings.apply_steered(session, submission_id).await?;
+            if has_explicit_input
+                && session.is_team_lead().await
+                && let Some(summary) = session.take_lead_progress_summary().await
+            {
+                session
+                    .input_queue
+                    .enqueue_mailbox_communication(
+                        lead_progress_communication(summary),
+                        TurnStartOptions::default(),
+                    )
+                    .await;
+            }
             Ok(TurnInputSubmission::Steered { turn_id })
         }
         Err(NotSubmittedReason::NoActiveTurn) => {
@@ -286,6 +300,7 @@ async fn start_or_steer(
             else {
                 unreachable!("explicit user input can enter Plan mode");
             };
+            session.cancel_lead_oversight().await;
             if can_start_root_turn
                 && has_explicit_input
                 && turn_context
@@ -308,6 +323,14 @@ async fn start_or_steer(
                 turn_context.session_telemetry.user_prompt(content);
             }
             let mut task_input = merge_additional_context_input(session, additional_context).await;
+            if has_explicit_input
+                && session.is_team_lead().await
+                && let Some(summary) = session.take_lead_progress_summary().await
+            {
+                task_input.push(TurnInput::InterAgentCommunication(
+                    lead_progress_communication(summary),
+                ));
+            }
             if has_explicit_input {
                 task_input.push(pending_turn_input(input));
             }
@@ -336,8 +359,15 @@ async fn start_if_idle(
         responsesapi_client_metadata,
         ..
     } = request;
+    let cancels_lead_oversight = matches!(
+        &input,
+        SubmittedTurnInput::UserInput { content, .. } if !content.is_empty()
+    ) || matches!(
+        &input,
+        SubmittedTurnInput::ResponseItem(ResponseItem::FunctionCallOutput { call_id: None, .. })
+    );
     let can_start_root_turn = start.parent_turn_id.is_none() && start.root_turn_id.is_none();
-    if session.input_queue.has_trigger_turn_mailbox_items().await {
+    if kind != TurnStartKind::User && session.input_queue.has_trigger_turn_mailbox_items().await {
         return Ok(TurnInputSubmission::NotSubmitted {
             reason: NotSubmittedReason::PendingTriggerTurn,
         });
@@ -371,7 +401,7 @@ async fn start_if_idle(
         Arc::clone(&active_turn.turn_state)
     };
 
-    if session.input_queue.has_trigger_turn_mailbox_items().await {
+    if kind != TurnStartKind::User && session.input_queue.has_trigger_turn_mailbox_items().await {
         session.clear_reserved_idle_turn(&turn_state).await;
         session.maybe_start_turn_for_pending_work().await;
         return Ok(TurnInputSubmission::NotSubmitted {
@@ -402,6 +432,9 @@ async fn start_if_idle(
             return Err(error);
         }
     };
+    if cancels_lead_oversight {
+        session.cancel_lead_oversight().await;
+    }
     if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
         turn_context
             .turn_metadata_state
@@ -428,6 +461,13 @@ async fn start_if_idle(
             session.clear_connector_selection().await;
             if let SubmittedTurnInput::UserInput { content, .. } = &input {
                 turn_context.session_telemetry.user_prompt(content);
+            }
+            if session.is_team_lead().await
+                && let Some(summary) = session.take_lead_progress_summary().await
+            {
+                task_input.push(TurnInput::InterAgentCommunication(
+                    lead_progress_communication(summary),
+                ));
             }
             task_input.push(pending_turn_input(input));
         }
@@ -474,6 +514,10 @@ async fn steer(
         responsesapi_client_metadata,
         ..
     } = request;
+    let has_explicit_input = matches!(
+        &input,
+        SubmittedTurnInput::UserInput { content, .. } if !content.is_empty()
+    );
     if !matches!(&input, SubmittedTurnInput::UserInput { .. }) {
         return Err(CodexErr::InvalidRequest(
             "only user input can steer a turn".to_string(),
@@ -496,7 +540,21 @@ async fn steer(
         .await
     {
         Ok(turn_id) => {
+            if has_explicit_input {
+                session.cancel_lead_oversight().await;
+            }
             settings.apply_steered(session, submission_id).await?;
+            if session.is_team_lead().await
+                && let Some(summary) = session.take_lead_progress_summary().await
+            {
+                session
+                    .input_queue
+                    .enqueue_mailbox_communication(
+                        lead_progress_communication(summary),
+                        TurnStartOptions::default(),
+                    )
+                    .await;
+            }
             Ok(TurnInputSubmission::Steered { turn_id })
         }
         Err(reason) => Ok(TurnInputSubmission::NotSubmitted { reason }),

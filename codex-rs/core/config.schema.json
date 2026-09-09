@@ -4528,6 +4528,13 @@
         "model": {
           "type": "string"
         },
+        "oversight_timeout_minutes": {
+          "description": "Minutes a Lead may remain idle while direct Workers are active before an oversight wake is emitted. A missing value uses the 30-minute default.",
+          "format": "uint64",
+          "maximum": 15768000.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
         "reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
         }
