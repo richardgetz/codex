@@ -1,0 +1,26 @@
+intent:
+  id: "intent/2026-09-09/team-lead-idle#ec7ca5922b12"
+  change_type: feat
+  scope: team
+  summary: Keep an idle Lead out of inference until actionable Worker events or oversight.
+  decision: Park Leads behind event-driven mailbox and lifecycle admission, use a configurable thirty-minute oversight default, and retain bounded routine progress outside model context.
+  constraints:
+    - Preserve ordinary non-team behavior and explicit blocking hook semantics.
+    - Routine progress must neither wake a parked Lead nor extend its oversight deadline.
+    - Cancel stale team wakeups while preserving turns already admitted before mode changes.
+    - Bound progress summaries to eight KiB and preserve existing Worker and depth limits.
+    - Use PR CI for test execution as requested; local validation is compile and formatting only.
+  intent_priority: should
+  code_locations:
+    - codex-rs/config/src/team.rs
+    - codex-rs/core/src/session/lead_idle.rs
+    - codex-rs/core/src/session/input_queue.rs
+    - codex-rs/core/src/session/handlers.rs
+    - codex-rs/core/src/tasks/mod.rs
+    - codex-rs/core/src/tools/handlers/multi_agents/wait.rs
+    - codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs
+    - docs/fork-differences.md
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: Codex Lead and Worker team
+    model: gpt-6-astra
