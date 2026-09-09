@@ -227,6 +227,14 @@ async fn team_lead_ignores_routine_progress_until_worker_completion() -> Result<
             configure_team(config, TeamMode::LeadWorker);
         });
     let test = builder.build_with_auto_env(&server).await?;
+    let mut helper_builder = test_codex()
+        .with_model_info_override(INITIAL_MODEL, |model_info| {
+            model_info
+                .experimental_supported_tools
+                .push("test_sync_tool".to_string());
+        })
+        .with_model(INITIAL_MODEL);
+    let helper = helper_builder.build_with_auto_env(&server).await?;
 
     test.codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
@@ -296,14 +304,6 @@ async fn team_lead_ignores_routine_progress_until_worker_completion() -> Result<
         "the completion wake must wait for an actionable Worker result"
     );
 
-    let mut helper_builder = test_codex()
-        .with_model_info_override(INITIAL_MODEL, |model_info| {
-            model_info
-                .experimental_supported_tools
-                .push("test_sync_tool".to_string());
-        })
-        .with_model(INITIAL_MODEL);
-    let helper = helper_builder.build_with_auto_env(&server).await?;
     helper
         .codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
