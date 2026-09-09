@@ -9,6 +9,7 @@ fn lead_receives_worker_ceiling_guidance() {
     assert!(body.contains("Direct Worker concurrency ceiling: 3 concurrently active Workers"));
     assert!(body.contains("ceiling, not a target"));
     assert!(body.contains("Grandchildren are excluded"));
+    assert!(body.contains("send_message_action"));
 }
 
 #[test]

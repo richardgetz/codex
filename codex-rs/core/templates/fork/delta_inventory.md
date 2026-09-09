@@ -43,10 +43,13 @@ release or merge rules.
     be in the range `1..15768000` minutes (up to 30 years). A Lead parks
     without polling or automatic inference while direct Workers run; routine
     progress stays in a bounded (32-update,
-    8-KiB) summary and does not wake or grow Lead context. Explicit action,
-    handoff/completion, escalation/failure, user input, or the one oversight
-    deadline for the current parked interval wakes the Lead. Routine progress
-    never extends the current deadline; after a genuine Lead assessment, a new
+    8-KiB) summary and does not wake or grow Lead context. The standalone
+    `send_message_action` tool wakes the Lead for explicit action, while the
+    reserved `collaboration.send_message` surface keeps its pre-team schema
+    and queues routine progress. Handoff/completion, escalation/failure, user
+    input, or the one oversight deadline for the current parked interval wakes
+    the Lead. Routine progress never extends the current deadline; after a
+    genuine Lead assessment, a new
     parked interval may arm another configured deadline. Interrupt, shutdown,
     and `/team off` cancel it and invalidate stale callbacks. A deadline
     warning and next-deadline state are visible to clients, and no deadline is
@@ -425,14 +428,18 @@ release or merge rules.
 - Verify `[team.lead].oversight_timeout_minutes` defaults to 30 minutes,
   accepts only `1..15768000`, and rejects out-of-range values; Lead idle
   parking makes no inference or polling on routine progress, retains only the
-  bounded summary, wakes on explicit action/handoff/completion/escalation/
-  failure/user input, and emits one deadline wake without progress-based
+  bounded summary, wakes on standalone `send_message_action`, handoff,
+  completion, escalation/failure, or user input, and emits one deadline wake
+  without progress-based
   extension. Verify explicit `wait_agent` uses the same interval, a second
   interval arms only after a Lead assessment, cancellation,
   resume-without-workers, no-worker wait termination, and visible
   idle/deadline state. Verify Team Off serializes the final automatic-turn
   admission boundary, drops stale trigger mail while retaining queue-only
   communication, and permits already-admitted in-flight turns to finish.
+- Verify the reserved `collaboration.send_message` schema remains unchanged
+  (target/message only, with its pre-team description), while Team mode exposes
+  standalone `send_message_action` and routes it to an immediate Lead wake.
 - Verify recursive usage accounting sends context counters and the complete
   projection through separate notifications, deduplicates each source response
   exactly once, includes cold-resumed and archived descendants plus forwarded

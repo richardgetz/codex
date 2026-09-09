@@ -2961,6 +2961,31 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
 }
 
 #[tokio::test]
+async fn team_multi_agent_v2_exposes_standalone_action_message_tool() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+        update_config(turn, |config| {
+            config.team_mode = TeamMode::LeadWorker;
+        });
+    })
+    .await;
+
+    plan.assert_visible_contains(&["send_message_action"]);
+    plan.assert_registered_contains(&["send_message_action"]);
+    assert!(
+        !plan
+            .namespace_function_names(MULTI_AGENT_V2_NAMESPACE)
+            .iter()
+            .any(|name| name == "send_message_action"),
+        "the action message tool must stay outside the reserved collaboration namespace"
+    );
+    let ToolSpec::Function(tool) = plan.visible_spec("send_message_action") else {
+        panic!("expected standalone send_message_action function");
+    };
+    assert_eq!(tool.name, "send_message_action");
+}
+
+#[tokio::test]
 async fn multi_agent_v2_message_schemas_are_encrypted() {
     let plan = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);

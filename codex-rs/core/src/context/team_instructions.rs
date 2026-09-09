@@ -8,6 +8,8 @@ const WORKER_TEAM_INSTRUCTIONS: &str = "You are a Worker in an opt-in Lead/Worke
 ";
 const DISABLED_TEAM_INSTRUCTIONS: &str = "Lead/Worker team mode is disabled for this thread. Previous team role instructions no longer apply; use ordinary single-model behavior.
 ";
+const TEAM_ACTION_WAKE_INSTRUCTIONS: &str = "For Multi-Agent V2, use send_message for routine progress and send_message_action when the Lead needs immediate attention; legacy V1 uses multi_agents.send_input.
+";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TeamInstructions {
@@ -60,8 +62,13 @@ impl ContextualUserFragment for TeamInstructions {
             Some(TeamRole::Worker) => WORKER_TEAM_INSTRUCTIONS,
             None => DISABLED_TEAM_INSTRUCTIONS,
         };
+        let instructions = if self.role.is_some() {
+            format!("{instructions}{TEAM_ACTION_WAKE_INSTRUCTIONS}")
+        } else {
+            instructions.to_string()
+        };
         let Some(worker_max_concurrent) = self.worker_max_concurrent else {
-            return instructions.to_string();
+            return instructions;
         };
         format!(
             "{instructions}\nDirect Worker concurrency ceiling: {worker_max_concurrent} concurrently active Workers. This is a ceiling, not a target; choose practical parallelism that balances useful progress with coordination overhead. Grandchildren are excluded from this ceiling. Existing global agent-count, depth, and resource limits still apply.\n"

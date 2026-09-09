@@ -306,6 +306,10 @@ fn spawn_agent_tool_hides_model_controls_without_override_exposure() {
 #[test]
 fn send_message_tool_requires_message_and_has_no_output_schema() {
     let ToolSpec::Function(ResponsesApiTool {
+        name,
+        description,
+        strict,
+        defer_loading,
         parameters,
         output_schema,
         ..
@@ -313,6 +317,13 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
     else {
         panic!("send_message should be a function tool");
     };
+    assert_eq!(name, "send_message");
+    assert_eq!(
+        description,
+        "Send a message to an existing agent. The message will be delivered promptly. Does not trigger a new turn."
+    );
+    assert!(!strict);
+    assert_eq!(defer_loading, None);
     assert_eq!(
         parameters.schema_type,
         Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))
@@ -321,14 +332,10 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
         .properties
         .as_ref()
         .expect("send_message should use object params");
+    assert_eq!(properties.len(), 2);
     assert!(properties.contains_key("target"));
     assert!(properties.contains_key("message"));
-    assert_eq!(
-        properties
-            .get("kind")
-            .and_then(|schema| schema.enum_values.clone()),
-        Some(vec![json!("progress"), json!("action")])
-    );
+    assert!(!properties.contains_key("kind"));
     assert_eq!(
         properties
             .get("message")
@@ -346,6 +353,43 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
     assert_eq!(
         parameters.required.as_ref(),
         Some(&vec!["target".to_string(), "message".to_string()])
+    );
+    assert_eq!(output_schema, None);
+}
+
+#[test]
+fn send_message_action_tool_is_standalone_and_wakes_target() {
+    let ToolSpec::Function(ResponsesApiTool {
+        name,
+        description,
+        parameters,
+        output_schema,
+        ..
+    }) = create_send_message_action_tool()
+    else {
+        panic!("send_message_action should be a function tool");
+    };
+    assert_eq!(name, "send_message_action");
+    assert_eq!(
+        description,
+        "Send an actionable message to an existing agent and trigger a turn immediately."
+    );
+    let properties = parameters
+        .properties
+        .as_ref()
+        .expect("send_message_action should use object params");
+    assert_eq!(properties.len(), 2);
+    assert!(properties.contains_key("target"));
+    assert!(properties.contains_key("message"));
+    assert_eq!(
+        parameters.required.as_ref(),
+        Some(&vec!["target".to_string(), "message".to_string()])
+    );
+    assert_eq!(
+        properties
+            .get("message")
+            .and_then(|schema| schema.encrypted),
+        Some(true)
     );
     assert_eq!(output_schema, None);
 }

@@ -1,7 +1,8 @@
 //! Shared argument parsing and dispatch for the v2 agent messaging tools.
 //!
-//! `send_message` and `followup_task` share the same submission path and differ only in whether the
-//! resulting `InterAgentCommunication` should wake the target immediately.
+//! `send_message`, `send_message_action`, and `followup_task` share the same submission path and
+//! differ only in whether the resulting `InterAgentCommunication` should wake the target
+//! immediately.
 
 use super::analytics::ToolCallAnalytics;
 use super::*;
@@ -31,16 +32,6 @@ impl MessageDeliveryMode {
 pub(crate) struct SendMessageArgs {
     pub(crate) target: String,
     pub(crate) message: String,
-    #[serde(default)]
-    pub(crate) kind: SendMessageKind,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum SendMessageKind {
-    #[default]
-    Progress,
-    Action,
 }
 
 #[derive(Debug, Deserialize)]

@@ -4,15 +4,21 @@ use pretty_assertions::assert_eq;
 const IDLE_ROOT_PROMPT: &str = "park the lead while the worker runs";
 const IDLE_CHILD_TASK: &str = "send routine progress while working";
 const IDLE_PROGRESS_CALL_ID: &str = "team-idle-progress";
+const IDLE_ACTION_CALL_ID: &str = "team-idle-action";
+const IDLE_ACTION_GATE_CALL_ID: &str = "team-idle-action-gate";
 const IDLE_COMPLETION_GATE_CALL_ID: &str = "team-idle-completion-gate";
 const IDLE_HELPER_GATE_CALL_ID: &str = "team-idle-helper-gate";
+const IDLE_HELPER_ACTION_GATE_CALL_ID: &str = "team-idle-helper-action-gate";
 const IDLE_GATE_CALL_ID: &str = "team-idle-gate";
 const IDLE_SPAWN_CALL_ID: &str = "team-idle-spawn";
 const IDLE_WAIT_CALL_ID: &str = "team-idle-wait";
 const IDLE_ROOT_GATE_CALL_ID: &str = "team-idle-root-gate";
 const IDLE_BARRIER_ID: &str = "team-idle-root-parked";
 const IDLE_COMPLETION_BARRIER_ID: &str = "team-idle-completion-ready";
+const IDLE_ACTION_BARRIER_ID: &str = "team-idle-action-ready";
 const IDLE_HELPER_PROMPT: &str = "release the worker completion gate";
+const IDLE_HELPER_ACTION_PROMPT: &str = "hold the worker action completion gate";
+const IDLE_ACTION_MESSAGE: &str = "the Worker needs immediate Lead attention";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn team_lead_ignores_routine_progress_until_worker_completion() -> Result<()> {
@@ -27,7 +33,10 @@ async fn team_lead_ignores_routine_progress_until_worker_completion() -> Result<
     let progress_args = serde_json::to_string(&json!({
         "target": "/root",
         "message": "routine progress should stay parked",
-        "kind": "progress",
+    }))?;
+    let action_args = serde_json::to_string(&json!({
+        "target": "/root",
+        "message": IDLE_ACTION_MESSAGE,
     }))?;
     let gate_args = serde_json::to_string(&json!({
         "barrier": {
@@ -45,6 +54,13 @@ async fn team_lead_ignores_routine_progress_until_worker_completion() -> Result<
     let completion_gate_args = serde_json::to_string(&json!({
         "barrier": {
             "id": IDLE_COMPLETION_BARRIER_ID,
+            "participants": 2,
+            "timeout_ms": 10_000,
+        },
+    }))?;
+    let action_gate_args = serde_json::to_string(&json!({
+        "barrier": {
+            "id": IDLE_ACTION_BARRIER_ID,
             "participants": 2,
             "timeout_ms": 10_000,
         },
@@ -142,16 +158,35 @@ async fn team_lead_ignores_routine_progress_until_worker_completion() -> Result<
         ]),
     )
     .await;
-    let worker_completion = mount_sse_once_match(
+    let worker_action = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
             request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, IDLE_PROGRESS_CALL_ID)
                 && request_has_function_call_output(request, IDLE_COMPLETION_GATE_CALL_ID)
         },
         sse(vec![
             ev_response_created("team-idle-worker-4"),
-            ev_assistant_message("team-idle-worker-message", "worker finished"),
+            ev_function_call(IDLE_ACTION_CALL_ID, "send_message_action", &action_args),
+            ev_function_call(
+                IDLE_ACTION_GATE_CALL_ID,
+                "test_sync_tool",
+                &action_gate_args,
+            ),
             ev_completed("team-idle-worker-4"),
+        ]),
+    )
+    .await;
+    let worker_completion = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, IDLE_ACTION_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("team-idle-worker-5"),
+            ev_assistant_message("team-idle-worker-message", "worker finished"),
+            ev_completed("team-idle-worker-5"),
         ]),
     )
     .await;
@@ -184,6 +219,36 @@ async fn team_lead_ignores_routine_progress_until_worker_completion() -> Result<
         ]),
     )
     .await;
+    let helper_action_gate = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, INITIAL_MODEL)
+                && body_contains(request, IDLE_HELPER_ACTION_PROMPT)
+        },
+        sse(vec![
+            ev_response_created("team-idle-helper-action-1"),
+            ev_function_call(
+                IDLE_HELPER_ACTION_GATE_CALL_ID,
+                "test_sync_tool",
+                &action_gate_args,
+            ),
+            ev_completed("team-idle-helper-action-1"),
+        ]),
+    )
+    .await;
+    let helper_action_done = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, INITIAL_MODEL)
+                && request_has_function_call_output(request, IDLE_HELPER_ACTION_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("team-idle-helper-action-2"),
+            ev_assistant_message("team-idle-helper-action-message", "action gate released"),
+            ev_completed("team-idle-helper-action-2"),
+        ]),
+    )
+    .await;
     let root_after_completion = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
@@ -197,6 +262,23 @@ async fn team_lead_ignores_routine_progress_until_worker_completion() -> Result<
             ev_response_created("team-idle-root-3"),
             ev_assistant_message("team-idle-root-message", "review resumed"),
             ev_completed("team-idle-root-3"),
+        ]),
+    )
+    .await;
+    let root_after_action = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, IDLE_SPAWN_CALL_ID)
+                && request_has_function_call_output(request, IDLE_ROOT_GATE_CALL_ID)
+                && request_has_function_call_output(request, IDLE_WAIT_CALL_ID)
+                && body_contains(request, IDLE_ACTION_MESSAGE)
+                && !body_contains(request, "worker finished")
+        },
+        sse(vec![
+            ev_response_created("team-idle-root-action"),
+            ev_assistant_message("team-idle-root-action-message", "action wake observed"),
+            ev_completed("team-idle-root-action"),
         ]),
     )
     .await;
@@ -299,6 +381,7 @@ async fn team_lead_ignores_routine_progress_until_worker_completion() -> Result<
         lead_requests, 2,
         "routine progress must not wake the parked Lead"
     );
+    assert!(root_after_action.requests().is_empty());
     assert!(
         root_after_completion.requests().is_empty(),
         "the completion wake must wait for an actionable Worker result"
@@ -320,15 +403,16 @@ async fn team_lead_ignores_routine_progress_until_worker_completion() -> Result<
         "completion gate helper",
     )
     .await;
-    let _worker_completion_request = wait_for_captured_request(
-        &worker_completion,
+    let action_request = wait_for_captured_request(
+        &root_after_action,
         |request| {
-            response_request_has_model(request, WORKER_MODEL)
-                && response_request_has_function_call_output(request, IDLE_COMPLETION_GATE_CALL_ID)
+            response_request_has_model(request, LEAD_MODEL)
+                && request.body_contains_text(IDLE_ACTION_MESSAGE)
         },
-        "Worker completion after helper release",
+        "Lead action wake",
     )
     .await;
+    assert!(action_request.body_contains_text(IDLE_ACTION_MESSAGE));
     let _helper_completion_request = wait_for_captured_request(
         &helper_completion,
         |request| {
@@ -336,6 +420,56 @@ async fn team_lead_ignores_routine_progress_until_worker_completion() -> Result<
                 && response_request_has_function_call_output(request, IDLE_HELPER_GATE_CALL_ID)
         },
         "completion gate helper completion",
+    )
+    .await;
+    wait_for_event(&helper.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    helper
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: IDLE_HELPER_ACTION_PROMPT.to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let _helper_action_gate_request = wait_for_captured_request(
+        &helper_action_gate,
+        |request| {
+            response_request_has_model(request, INITIAL_MODEL)
+                && request.body_contains_text(IDLE_HELPER_ACTION_PROMPT)
+        },
+        "action gate helper",
+    )
+    .await;
+    let _worker_action_request = wait_for_captured_request(
+        &worker_action,
+        |request| {
+            response_request_has_model(request, WORKER_MODEL)
+                && response_request_has_function_call_output(request, IDLE_COMPLETION_GATE_CALL_ID)
+        },
+        "Worker action and completion gate",
+    )
+    .await;
+    let _helper_action_done_request = wait_for_captured_request(
+        &helper_action_done,
+        |request| {
+            response_request_has_model(request, INITIAL_MODEL)
+                && response_request_has_function_call_output(
+                    request,
+                    IDLE_HELPER_ACTION_GATE_CALL_ID,
+                )
+        },
+        "action gate helper completion",
+    )
+    .await;
+    let _worker_completion_request = wait_for_captured_request(
+        &worker_completion,
+        |request| {
+            response_request_has_model(request, WORKER_MODEL)
+                && response_request_has_function_call_output(request, IDLE_COMPLETION_GATE_CALL_ID)
+        },
+        "Worker completion after helper release",
     )
     .await;
     wait_for_event(&helper.codex, |event| {
@@ -365,8 +499,8 @@ async fn team_lead_ignores_routine_progress_until_worker_completion() -> Result<
         })
         .count();
     assert_eq!(
-        lead_requests, 3,
-        "Worker completion should wake the Lead once"
+        lead_requests, 4,
+        "explicit action and Worker completion should each wake the Lead once"
     );
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))

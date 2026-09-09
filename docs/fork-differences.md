@@ -153,11 +153,12 @@ max_concurrent = 10
   updates and 8 KiB) and does not wake the Lead or enter its model context.
   Calling `wait_agent` while those Workers are active enters the same parked
   interval and ignores shorter per-call timeouts; an action, user input, or the
-  oversight deadline ends that wait. An explicit `send_message` with
-  `kind = "action"`, a Worker handoff or completion, an escalation or failure,
-  or user input wakes or interrupts the parked Lead. `kind = "progress"` is
-  the default and remains non-waking for Worker-to-Lead updates;
-  `followup_task` remains an action for non-root targets. The legacy V1
+  oversight deadline ends that wait. The standalone `send_message_action`
+  function, exposed outside the collaboration namespace, sends an explicit
+  action wake. A Worker handoff or completion, an escalation or failure, or
+  user input wakes or interrupts the parked Lead. `send_message` remains the
+  non-waking routine-progress path; `followup_task` remains an action for
+  non-root targets. The legacy V1
   `multi_agents.send_input` surface keeps its existing explicit turn-input
   behavior and may wake a target; this idle contract does not reinterpret those
   task inputs as routine progress.
