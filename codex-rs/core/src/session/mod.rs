@@ -262,6 +262,9 @@ mod handlers;
 pub(crate) use handlers::thread_settings_applied_event;
 mod inject;
 mod input_queue;
+mod lead_idle;
+pub(crate) use lead_idle::LeadIdleArmMode;
+pub(crate) use lead_idle::format_lead_wait_message;
 mod mcp;
 mod mcp_prewarm;
 mod mcp_refresh;
@@ -304,6 +307,12 @@ use self::session::Session;
 use self::session::SessionConfiguration;
 use self::session::SessionSettingsCommit;
 pub(crate) use self::session::SessionSettingsUpdate;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LeadIdleRearm {
+    None,
+    AfterTeamEnable,
+}
 use self::thread_inbound_messages::start_thread_inbound_message_poller;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
@@ -2439,7 +2448,10 @@ impl Session {
         } else {
             None
         };
-        let Some(commit) = self.update_settings_if(updates, |_, _| true).await? else {
+        let Some(commit) = self
+            .update_settings_if(updates, LeadIdleRearm::AfterTeamEnable, |_, _| true)
+            .await?
+        else {
             unreachable!("unconditional settings updates must commit");
         };
         Ok(commit)
@@ -2455,8 +2467,26 @@ impl Session {
     async fn update_settings_if(
         &self,
         updates: SessionSettingsUpdate,
+        lead_idle_rearm: LeadIdleRearm,
         should_commit: impl FnOnce(&SessionConfiguration, &SessionConfiguration) -> bool + Send,
     ) -> ConstraintResult<Option<SessionSettingsCommit>> {
+        let disables_team = updates
+            .team
+            .as_ref()
+            .is_some_and(|team| team.mode == codex_protocol::protocol::TeamMode::Off);
+        let enables_team_lead = lead_idle_rearm == LeadIdleRearm::AfterTeamEnable
+            && updates
+                .team
+                .as_ref()
+                .is_some_and(|team| team.mode == codex_protocol::protocol::TeamMode::LeadWorker);
+        // Team Lead automatic-turn admission uses this same guard below. Serialize every team
+        // assignment update so a turn that has crossed the final admission boundary is allowed
+        // to proceed, while a stale trigger is rejected before it can start inference.
+        let _team_lead_turn_admission = if updates.team.is_some() {
+            Some(self.team_lead_turn_admission.lock().await)
+        } else {
+            None
+        };
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let (
             commit,
@@ -2536,6 +2566,36 @@ impl Session {
                 mcp_inputs_changed,
             )
         };
+        if disables_team {
+            // Keep Team Off cleanup under the same admission guard as Lead trigger insertion.
+            // This makes the assignment commit and stale-trigger removal one boundary: a
+            // completion that observes Lead either inserts before cleanup, or observes Off and
+            // drops its trigger without reintroducing it after cleanup.
+            self.cancel_lead_oversight().await;
+            self.clear_lead_progress().await;
+            self.input_queue.clear_team_lead_trigger_mailbox().await;
+        }
+        // The assignment commit and any Team Off cleanup are now published. Release the
+        // admission guard before running unrelated contributor/network work; a turn that
+        // acquired it before this commit has already crossed its authoritative admission
+        // boundary.
+        drop(_team_lead_turn_admission);
+        if enables_team_lead {
+            // `/team on` can be issued while the Lead is parked. Re-evaluate the idle state after
+            // publishing the assignment so a fresh oversight interval is armed when direct
+            // Workers are still active. The helper reacquires the admission guard and performs
+            // the authoritative role/turn checks, so a concurrent Team Off cannot leave a stale
+            // timer behind.
+            if let Some((active_workers, deadline)) =
+                self.rearm_lead_oversight_after_team_enable().await
+            {
+                self.emit_lead_idle_event(crate::session::lead_idle::format_lead_idle_message(
+                    active_workers,
+                    deadline.unix_secs,
+                ))
+                .await;
+            }
+        }
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         if permission_profile_changed {
             self.refresh_managed_network_proxy_for_current_permission_profile()
@@ -2972,10 +3032,6 @@ impl Session {
         }
         self.maybe_notify_overwatch_controllers(msg).await;
 
-        if !self.enabled(Feature::MultiAgentV2) {
-            return;
-        }
-
         let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,
             agent_path: Some(child_agent_path),
@@ -2984,6 +3040,19 @@ impl Session {
         else {
             return;
         };
+
+        // Team Workers still need to wake a Team Lead when the selected model advertises V2 but
+        // the global V2 feature flag is disabled. Ordinary non-team V2 sessions retain their
+        // existing feature gate below.
+        if !self.enabled(Feature::MultiAgentV2)
+            && !self
+                .services
+                .agent_control
+                .parent_is_team_lead(*parent_thread_id)
+                .await
+        {
+            return;
+        }
 
         let status = match turn_context.terminal_error.lock().await.take() {
             Some(error) => {
@@ -3131,26 +3200,42 @@ impl Session {
             .rollout_thread_trace
             .is_enabled()
             .then(|| message.clone());
+        let trigger_turn = self
+            .services
+            .agent_control
+            .parent_is_team_lead(parent_thread_id)
+            .await;
         let communication = InterAgentCommunication::new(
             child_agent_path.clone(),
             parent_agent_path,
             Vec::new(),
             message,
-            /*trigger_turn*/ false,
+            trigger_turn,
         );
         let context =
             AgentCommunicationContext::new(AgentCommunicationKind::Result, self.thread_id);
-        if let Err(err) = self
-            .services
-            .agent_control
-            .send_inter_agent_communication(
-                parent_thread_id,
-                communication,
-                context,
-                TurnStartOptions::default(),
-            )
-            .await
-        {
+        let delivery_result = if trigger_turn {
+            self.services
+                .agent_control
+                .send_team_lead_completion(
+                    parent_thread_id,
+                    communication,
+                    context,
+                    TurnStartOptions::default(),
+                )
+                .await
+        } else {
+            self.services
+                .agent_control
+                .send_inter_agent_communication(
+                    parent_thread_id,
+                    communication,
+                    context,
+                    TurnStartOptions::default(),
+                )
+                .await
+        };
+        if let Err(err) = delivery_result {
             debug!("failed to notify parent thread {parent_thread_id}: {err}");
             return;
         }

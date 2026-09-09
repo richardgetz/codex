@@ -24,8 +24,10 @@ release or merge rules.
   - `[team]` can define exactly one Lead and one Worker model/effort profile;
     profiles remain disabled for new sessions unless `team.enabled = true`.
   - `/team on`, `/team off`, and `/team status` switch and report the live
-    per-thread assignment without changing global config defaults. The active
-    snapshot survives resume and fork, while in-flight workers stay pinned.
+    per-thread assignment without changing global config defaults. Re-enabling
+    Team mode while a Lead is parked with direct Workers starts a fresh oversight
+    interval after the assignment is published. The active snapshot survives
+    resume and fork, while in-flight workers stay pinned.
   - Root sessions use Lead and delegated ThreadSpawn/review sessions use
     Worker; model and effort overrides cannot promote or bypass that assignment.
   - Routing enforces the selected catalog model and effort. It does not provide
@@ -37,6 +39,29 @@ release or merge rules.
     resource limits still apply independently; this setting does not raise or
     replace them. Leads receive bounded guidance that the setting is a ceiling
     rather than a target.
+  - `[team.lead].oversight_timeout_minutes` defaults to `30` minutes and must
+    be in the range `1..15768000` minutes (up to 30 years). A Lead parks
+    without polling or automatic inference while direct Workers run; routine
+    progress stays in a bounded (32-update,
+    8-KiB) summary and does not wake or grow Lead context. Explicit action,
+    handoff/completion, escalation/failure, user input, or the one oversight
+    deadline for the current parked interval wakes the Lead. Routine progress
+    never extends the current deadline; after a genuine Lead assessment, a new
+    parked interval may arm another configured deadline. Interrupt, shutdown,
+    and `/team off` cancel it and invalidate stale callbacks. A deadline
+    warning and next-deadline state are visible to clients, and no deadline is
+    armed when no direct Worker remains. Calling `wait_agent` while direct
+    Workers run enters the same interval and ignores shorter per-call
+    timeouts. Deadline state includes a readable RFC3339 UTC timestamp. A
+    configured blocking Stop hook remains actionable and may require a Lead
+    continuation before idle parking; successful lifecycle hooks do not create
+    a routine polling turn. `/team off` drops pending automatic Worker wakeups
+    while preserving queue-only mail. Automatic Lead trigger admission is
+    serialized with assignment changes: stale triggers are discarded after
+    Team Off, queue-only mail is retained, and already-admitted turns may
+    finish with their captured settings. The legacy V1 `multi_agents.send_input`
+    surface retains its explicit turn-input semantics and can wake a target;
+    those task inputs are not reclassified as routine progress.
   - Team admission follows ordinary multi-agent backend compatibility, so a
     V2 Lead can use a V1 Worker; invalid active assignments fail open for root
     startup/resume with a warning and per-thread `off` mode, while delegated
@@ -397,6 +422,17 @@ release or merge rules.
   agent-count, depth, and resource limits. Verify that it does not raise or
   replace those limits, and tells the Lead the value is a ceiling rather than a
   target.
+- Verify `[team.lead].oversight_timeout_minutes` defaults to 30 minutes,
+  accepts only `1..15768000`, and rejects out-of-range values; Lead idle
+  parking makes no inference or polling on routine progress, retains only the
+  bounded summary, wakes on explicit action/handoff/completion/escalation/
+  failure/user input, and emits one deadline wake without progress-based
+  extension. Verify explicit `wait_agent` uses the same interval, a second
+  interval arms only after a Lead assessment, cancellation,
+  resume-without-workers, no-worker wait termination, and visible
+  idle/deadline state. Verify Team Off serializes the final automatic-turn
+  admission boundary, drops stale trigger mail while retaining queue-only
+  communication, and permits already-admitted in-flight turns to finish.
 - Verify recursive usage accounting sends context counters and the complete
   projection through separate notifications, deduplicates each source response
   exactly once, includes cold-resumed and archived descendants plus forwarded

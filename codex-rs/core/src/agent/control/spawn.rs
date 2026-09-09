@@ -771,6 +771,7 @@ impl AgentControl {
                     communication,
                     context,
                     start_options,
+                    /*team_lead_completion*/ false,
                 )
                 .await
             }

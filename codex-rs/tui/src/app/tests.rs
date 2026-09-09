@@ -8781,6 +8781,8 @@ fn team_commands_update_only_the_active_thread_and_follow_server_snapshot() -> R
                             model: "gpt-5.6-luna".to_string(),
                             reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Max,
                         },
+                        lead_oversight_timeout_minutes:
+                            codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
                     }),
                     worker_max_concurrent: None,
                 };

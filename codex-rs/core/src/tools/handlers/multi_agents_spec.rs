@@ -193,11 +193,24 @@ pub fn create_send_message_tool() -> ToolSpec {
             ))
             .with_encrypted(),
         ),
+        (
+            "kind".to_string(),
+            JsonSchema::string_enum(
+                ["progress", "action"]
+                    .into_iter()
+                    .map(|value| json!(value))
+                    .collect(),
+                Some(
+                    "Progress is queued without waking a Lead; action wakes the target immediately."
+                        .to_string(),
+                ),
+            ),
+        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_message".to_string(),
-        description: "Send a message to an existing agent. The message will be delivered promptly. Does not trigger a new turn."
+        description: "Send a message to an existing agent. By default, progress is queued without waking a Lead; set kind=action to wake the target immediately."
             .to_string(),
         strict: false,
         defer_loading: None,

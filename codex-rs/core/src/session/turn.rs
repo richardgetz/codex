@@ -614,6 +614,13 @@ pub(crate) async fn run_turn(
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
+                    let lead_has_active_workers = sess.is_team_lead().await
+                        && sess
+                            .services
+                            .agent_control
+                            .active_direct_worker_count(sess.thread_id)
+                            .await
+                            > 0;
                     if let Some(scratchpad) = super::active_thread_scratchpad(
                         &turn_context.config.codex_home,
                         sess.thread_id,
@@ -622,6 +629,7 @@ pub(crate) async fn run_turn(
                         super::continuous_run_policy_enabled(scratchpad)
                             && super::scratchpad_has_continuous_work(scratchpad)
                             && automatic_continuation_is_allowed
+                            && !lead_has_active_workers
                     }) {
                         let (loopback_allowed, loopback_config) =
                             sess.try_record_scratchpad_loopback(Instant::now()).await;

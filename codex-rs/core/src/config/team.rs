@@ -1,4 +1,5 @@
 use super::Config;
+use codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES;
 use codex_config::TeamModelProfile;
 use codex_config::TeamModelProfiles;
 use codex_config::TeamRole as ConfigTeamRole;
@@ -31,7 +32,13 @@ impl Config {
         &mut self,
         settings: &ThreadTeamSettings,
     ) -> Result<(), String> {
-        if let Some(profiles) = team_profiles_from_snapshot(settings)? {
+        let oversight_timeout_minutes = self
+            .effective_team_profiles()
+            .map(|profiles| profiles.lead_oversight_timeout_minutes)
+            .unwrap_or(DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES);
+        if let Some(profiles) =
+            team_profiles_from_snapshot_with_timeout(settings, oversight_timeout_minutes)?
+        {
             self.team_runtime_profiles = Some(profiles);
         }
         self.team_state_persisted = true;
@@ -68,6 +75,13 @@ impl Config {
 /// Parses the complete assignment pair carried by a persisted protocol snapshot.
 pub(crate) fn team_profiles_from_snapshot(
     settings: &ThreadTeamSettings,
+) -> Result<Option<TeamModelProfiles>, String> {
+    team_profiles_from_snapshot_with_timeout(settings, DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES)
+}
+
+fn team_profiles_from_snapshot_with_timeout(
+    settings: &ThreadTeamSettings,
+    lead_oversight_timeout_minutes: u64,
 ) -> Result<Option<TeamModelProfiles>, String> {
     let assignments = (
         settings.lead_model.as_ref(),
@@ -110,6 +124,7 @@ pub(crate) fn team_profiles_from_snapshot(
             model: worker_model.to_string(),
             reasoning_effort: worker_reasoning_effort,
         },
+        lead_oversight_timeout_minutes,
     }))
 }
 

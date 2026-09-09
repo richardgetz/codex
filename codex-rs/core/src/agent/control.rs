@@ -242,6 +242,44 @@ impl AgentControl {
         agent_communication_context: AgentCommunicationContext,
         start_options: TurnStartOptions,
     ) -> CodexResult<String> {
+        self.send_inter_agent_communication_with_delivery_kind(
+            agent_id,
+            communication,
+            agent_communication_context,
+            start_options,
+            /*team_lead_completion*/ false,
+        )
+        .await
+    }
+
+    /// Delivers a terminal Worker result that was admitted while its parent owned the Lead role.
+    /// The process-local delivery kind lets the recipient discard a stale trigger if Team mode
+    /// is disabled before the queued operation reaches its session handler.
+    pub(crate) async fn send_team_lead_completion(
+        &self,
+        agent_id: ThreadId,
+        communication: InterAgentCommunication,
+        agent_communication_context: AgentCommunicationContext,
+        start_options: TurnStartOptions,
+    ) -> CodexResult<String> {
+        self.send_inter_agent_communication_with_delivery_kind(
+            agent_id,
+            communication,
+            agent_communication_context,
+            start_options,
+            /*team_lead_completion*/ true,
+        )
+        .await
+    }
+
+    async fn send_inter_agent_communication_with_delivery_kind(
+        &self,
+        agent_id: ThreadId,
+        communication: InterAgentCommunication,
+        agent_communication_context: AgentCommunicationContext,
+        start_options: TurnStartOptions,
+        team_lead_completion: bool,
+    ) -> CodexResult<String> {
         let state = self.upgrade()?;
         let _team_worker_lease = if communication.trigger_turn {
             let thread = state.get_thread(agent_id).await?;
@@ -259,6 +297,7 @@ impl AgentControl {
                 communication,
                 agent_communication_context,
                 start_options,
+                team_lead_completion,
             )
             .await;
         result
@@ -320,6 +359,7 @@ impl AgentControl {
         communication: InterAgentCommunication,
         context: AgentCommunicationContext,
         start_options: TurnStartOptions,
+        team_lead_completion: bool,
     ) -> CodexResult<String> {
         self.submit_inter_agent_communication(
             agent_id,
@@ -327,6 +367,7 @@ impl AgentControl {
             communication,
             context,
             start_options,
+            team_lead_completion,
         )
         .await
     }
@@ -338,6 +379,7 @@ impl AgentControl {
         communication: InterAgentCommunication,
         context: AgentCommunicationContext,
         start_options: TurnStartOptions,
+        team_lead_completion: bool,
     ) -> CodexResult<String> {
         let communication_for_log =
             crate::agent_communication::logging_enabled().then(|| communication.clone());
@@ -356,9 +398,16 @@ impl AgentControl {
                 state
                     .send_op(
                         agent_id,
-                        Op::InterAgentCommunication {
-                            communication,
-                            start_options,
+                        if team_lead_completion {
+                            Op::TeamLeadCompletion {
+                                communication,
+                                start_options,
+                            }
+                        } else {
+                            Op::InterAgentCommunication {
+                                communication,
+                                start_options,
+                            }
                         },
                         parent_turn_id,
                         root_turn_id,
@@ -424,6 +473,66 @@ impl AgentControl {
             return AgentStatus::NotFound;
         };
         thread.agent_status().await
+    }
+
+    /// Counts direct Worker children that can still perform work for a parent session.
+    /// Interrupted and terminal children do not keep a Lead parked.
+    pub(crate) async fn active_direct_worker_count(&self, parent_thread_id: ThreadId) -> usize {
+        let Ok(children) = self.open_thread_spawn_children(parent_thread_id).await else {
+            return 0;
+        };
+        let mut active = 0;
+        for (thread_id, _) in children {
+            if matches!(
+                self.get_status(thread_id).await,
+                AgentStatus::PendingInit | AgentStatus::Running
+            ) {
+                active += 1;
+            }
+        }
+        active
+    }
+
+    /// Subscribes to status changes for direct Workers that can still perform work. The boolean
+    /// reports a child that was already terminal or disappeared while the watchers were built.
+    pub(crate) async fn direct_worker_status_watchers(
+        &self,
+        parent_thread_id: ThreadId,
+    ) -> (Vec<watch::Receiver<AgentStatus>>, bool) {
+        let Ok(children) = self.open_thread_spawn_children(parent_thread_id).await else {
+            return (Vec::new(), true);
+        };
+        let mut watchers = Vec::new();
+        let mut status_changed = false;
+        for (thread_id, _) in children {
+            let status = self.get_status(thread_id).await;
+            if is_final(&status) || matches!(status, AgentStatus::Interrupted) {
+                status_changed = true;
+                continue;
+            }
+            match self.subscribe_status(thread_id).await {
+                Ok(receiver) => watchers.push(receiver),
+                Err(_) => status_changed = true,
+            }
+        }
+        (watchers, status_changed)
+    }
+
+    /// Returns whether a target thread currently has the Lead assignment. This is used by the
+    /// communication path to classify root-directed Worker progress without changing non-team
+    /// delivery semantics.
+    pub(crate) async fn parent_is_team_lead(&self, thread_id: ThreadId) -> bool {
+        let Ok(state) = self.upgrade() else {
+            return false;
+        };
+        let Ok(thread) = state.get_thread(thread_id).await else {
+            return false;
+        };
+        let config = thread.session.get_config().await;
+        let source = thread.session.session_source().await;
+        config.team_mode == codex_protocol::protocol::TeamMode::LeadWorker
+            && crate::session::team::effective_role_for_session_source(&config, &source)
+                == Some(codex_config::TeamRole::Lead)
     }
 
     pub(crate) fn register_session_root(
@@ -810,28 +919,67 @@ impl AgentControl {
                 ) else {
                     return;
                 };
+                let trigger_turn = control.parent_is_team_lead(parent_thread_id).await;
                 let communication = InterAgentCommunication::new(
                     child_agent_path,
                     parent_agent_path,
                     Vec::new(),
                     message,
-                    /*trigger_turn*/ false,
+                    trigger_turn,
                 );
                 let context =
                     AgentCommunicationContext::new(AgentCommunicationKind::Result, child_thread_id);
-                let _ = control
-                    .send_inter_agent_communication(
-                        parent_thread_id,
-                        communication,
-                        context,
-                        TurnStartOptions::default(),
-                    )
-                    .await;
+                let _ = if trigger_turn {
+                    control
+                        .send_team_lead_completion(
+                            parent_thread_id,
+                            communication,
+                            context,
+                            TurnStartOptions::default(),
+                        )
+                        .await
+                } else {
+                    control
+                        .send_inter_agent_communication(
+                            parent_thread_id,
+                            communication,
+                            context,
+                            TurnStartOptions::default(),
+                        )
+                        .await
+                };
                 return;
             }
             let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
                 return;
             };
+            if control.parent_is_team_lead(parent_thread_id).await {
+                // Legacy V1 workers report completion through a context fragment rather than an
+                // InterAgentCommunication. A parked Team Lead still needs an actionable wake for
+                // that terminal result, so route it through the same bounded wake path used by
+                // V2 completion and deadline events.
+                if !parent_thread.session.is_team_lead().await {
+                    return;
+                }
+                parent_thread
+                    .inject_fragment_without_turn(SubagentNotification::new(
+                        child_reference.as_str(),
+                        status.clone(),
+                    ))
+                    .await;
+                parent_thread.session.cancel_lead_oversight().await;
+                parent_thread
+                    .session
+                    .enqueue_lead_wakeup(&format!(
+                        "Worker {child_reference} completed with status {status:?}; review the result."
+                    ))
+                    .await;
+                parent_thread
+                    .session
+                    .maybe_start_turn_for_pending_work()
+                    .await;
+                return;
+            }
             parent_thread
                 .inject_fragment_without_turn(SubagentNotification::new(
                     child_reference.as_str(),

@@ -13,13 +13,14 @@ use crate::tools::context::FunctionToolOutput;
 pub(crate) enum MessageDeliveryMode {
     QueueOnly,
     TriggerTurn,
+    Action,
 }
 
 impl MessageDeliveryMode {
     fn trigger_turn(self) -> bool {
         match self {
             Self::QueueOnly => false,
-            Self::TriggerTurn => true,
+            Self::TriggerTurn | Self::Action => true,
         }
     }
 }
@@ -30,6 +31,16 @@ impl MessageDeliveryMode {
 pub(crate) struct SendMessageArgs {
     pub(crate) target: String,
     pub(crate) message: String,
+    #[serde(default)]
+    pub(crate) kind: SendMessageKind,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SendMessageKind {
+    #[default]
+    Progress,
+    Action,
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,12 +115,13 @@ pub(super) async fn handle_message_string_tool(
         mode.trigger_turn(),
     );
     let kind = match mode {
-        MessageDeliveryMode::QueueOnly => AgentCommunicationKind::Message,
+        MessageDeliveryMode::QueueOnly | MessageDeliveryMode::Action => {
+            AgentCommunicationKind::Message
+        }
         MessageDeliveryMode::TriggerTurn => AgentCommunicationKind::Followup,
     };
     let context = AgentCommunicationContext::new(kind, session.thread_id);
-    let parent_turn_id =
-        matches!(mode, MessageDeliveryMode::TriggerTurn).then(|| turn.sub_id.clone());
+    let parent_turn_id = mode.trigger_turn().then(|| turn.sub_id.clone());
     let result = session
         .services
         .agent_control

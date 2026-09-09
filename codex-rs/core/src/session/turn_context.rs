@@ -1097,7 +1097,10 @@ impl Session {
         should_start: impl FnOnce(&SessionConfiguration, &SessionConfiguration) -> bool + Send,
     ) -> CodexResult<Option<(Arc<TurnContext>, ThreadSettingsSnapshot)>> {
         let service_tier_for_turn = updates.service_tier_for_turn.clone();
-        let commit = match self.update_settings_if(updates, should_start).await {
+        let commit = match self
+            .update_settings_if(updates, super::LeadIdleRearm::None, should_start)
+            .await
+        {
             Ok(Some(commit)) => commit,
             Ok(None) => return Ok(None),
             Err(error) => {

@@ -108,6 +108,10 @@ enabled = true
 [team.lead]
 model = "gpt-6-astra"
 reasoning_effort = "high"
+# Optional: minutes before each parked Lead interval receives one oversight wake.
+# Valid range: 1..15768000 (30 years); 30 or more is recommended.
+oversight_timeout_minutes = 30
+# For longer-running work, for example: oversight_timeout_minutes = 60
 
 [team.worker]
 model = "gpt-5.6-luna"
@@ -121,7 +125,9 @@ max_concurrent = 10
   catalog. Set `enabled = false` to keep the profiles available for manual use.
 - `/team on`, `/team off`, and `/team status` enable, disable, and report the
   current thread's assignment without changing global config defaults.
-  Turning team mode off restores the previous single model and effort.
+  Turning team mode off restores the previous single model and effort. Re-enabling
+  Team mode while a Lead is parked with direct Workers starts a fresh oversight
+  interval after the assignment is published.
 - The active assignment survives resume and fork. In-flight Workers keep their
   assigned profile, and model or effort overrides cannot bypass role routing.
   Team routing does not add a separate tool sandbox or verify external skill
@@ -136,6 +142,50 @@ max_concurrent = 10
   Worker's review agents, do not count against the Lead's direct Worker cap.
   Existing global agent-count, depth, and resource limits still apply; setting
   `max_concurrent` does not raise or replace those limits.
+- `team.lead.oversight_timeout_minutes` is an optional positive integer in
+  minutes. It defaults to `30`; values of `30` or more are recommended for
+  ordinary work, while a smaller value is useful for an explicit test or a
+  short task. The setting belongs under `[team.lead]` and is independent of
+  the Worker concurrency ceiling.
+- When a Lead finishes a turn while direct Workers are still running, it parks
+  without polling and makes zero automatic inference requests. Queue-only
+  Worker progress is retained in a bounded in-memory summary (at most 32
+  updates and 8 KiB) and does not wake the Lead or enter its model context.
+  Calling `wait_agent` while those Workers are active enters the same parked
+  interval and ignores shorter per-call timeouts; an action, user input, or the
+  oversight deadline ends that wait. An explicit `send_message` with
+  `kind = "action"`, a Worker handoff or completion, an escalation or failure,
+  or user input wakes or interrupts the parked Lead. `kind = "progress"` is
+  the default and remains non-waking for Worker-to-Lead updates;
+  `followup_task` remains an action for non-root targets. The legacy V1
+  `multi_agents.send_input` surface keeps its existing explicit turn-input
+  behavior and may wake a target; this idle contract does not reinterpret those
+  task inputs as routine progress.
+- Configured Stop hooks that explicitly block completion remain actionable and
+  can require a Lead continuation before it parks. Once those blocks are
+  resolved, ordinary successful Stop/after-agent hooks do not create an
+  automatic polling turn.
+- Each parked interval has one oversight deadline measured from the Lead's
+  parked turn; routine progress never extends it. If direct Workers are still
+  active when it expires, Codex emits a visible idle/deadline warning and
+  starts one actionable Lead review turn. After that Lead assessment completes,
+  a new parked interval may arm a fresh deadline, so long-running work remains
+  periodically supervised without an immediate rearm loop. If no Workers
+  remain, no synthetic turn starts. Interrupt, shutdown, `/team off`, and a new
+  action cancel the current deadline and invalidate stale callbacks; `/team off`
+  also drops pending automatic Worker wakeups while preserving queue-only mail.
+  Automatic Lead trigger admission is serialized with assignment changes: a
+  trigger that has not crossed that boundary is discarded after Team Off, while
+  a turn already admitted may finish under its captured turn settings.
+  A resumed thread with no live direct Workers ends the parked state instead of
+  waiting indefinitely; active assignments and existing resume/fork behavior
+  remain unchanged.
+- A Team Lead's `wait_agent` call returns immediately when no direct Workers
+  remain, preventing a watchdog-style wait loop. Other sessions retain the
+  existing mailbox and wait behavior.
+- Deadline warnings include an RFC3339 UTC timestamp. The
+  `team.lead.oversight_timeout_minutes` value must be in the range
+  `1..15768000` minutes (up to 30 years) so timer arithmetic remains bounded.
 - A V2 Lead can use a V1 Worker, and compatible V1 Workers can use the selected
   collaboration namespace for nested delegation. A model explicitly marked as
   disabled for delegation remains blocked.

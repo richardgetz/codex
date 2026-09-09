@@ -325,6 +325,12 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
     assert!(properties.contains_key("message"));
     assert_eq!(
         properties
+            .get("kind")
+            .and_then(|schema| schema.enum_values.clone()),
+        Some(vec![json!("progress"), json!("action")])
+    );
+    assert_eq!(
+        properties
             .get("message")
             .and_then(|schema| schema.encrypted),
         Some(true)

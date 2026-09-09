@@ -786,6 +786,13 @@ pub enum Op {
         start_options: TurnStartOptions,
     },
 
+    /// Internal completion delivery that was admitted while the recipient owned the Lead role.
+    /// The session drops it if Team mode is disabled before asynchronous delivery completes.
+    TeamLeadCompletion {
+        communication: InterAgentCommunication,
+        start_options: TurnStartOptions,
+    },
+
     /// Approve a command execution
     ExecApproval {
         /// The id of the submission we are approving
@@ -1119,6 +1126,7 @@ impl Op {
             Self::ThreadSettings { .. } => "thread_settings",
             Self::TurnSettings { .. } => "turn_settings",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
+            Self::TeamLeadCompletion { .. } => "team_lead_completion",
             Self::ExecApproval { .. } => "exec_approval",
             Self::PatchApproval { .. } => "patch_approval",
             Self::ResolveElicitation { .. } => "resolve_elicitation",
