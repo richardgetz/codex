@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-09/team-reserved-schema"
+  change_type: fix
+  scope: team
+  summary: Restore provider compatibility for team collaboration tools.
+  decision: Keep the reserved send_message schema unchanged and expose explicit action wakes through a separate standalone team tool.
+  constraints:
+    - Preserve bounded non-waking routine progress and actionable Lead wakeups.
+    - Keep the standalone action tool limited to enabled teams.
+    - Delegate implementation to Luna and leave test execution to PR CI.
+  intent_priority: should
+  code_locations:
+    - codex-rs/core/src/tools/handlers/multi_agents_spec.rs
+    - codex-rs/core/src/tools/handlers/multi_agents_v2/send_message.rs
+    - codex-rs/core/src/tools/spec_plan.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: Codex Lead and Worker team
+    model: gpt-6-astra
