@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-09-10/team-live-controls#64075d3"
+  change_type: feat
+  scope: team
+  summary: Make ongoing team work measurable and controllable without changing global defaults.
+  decision: Show exact additive live usage independently of history completeness, recover transient baseline reads, allow early dynamic lookup handoff, synchronize service tier and usage recovery across descendants, and provide session-only team model selectors.
+  constraints:
+    - Deduplicate exact response usage and distinguish incomplete history from complete zero usage.
+    - Dynamic handoff is opt-in and must avoid routine duplicate investigation.
+    - Model selections must not change global defaults or replace existing Worker assignments.
+    - In-flight requests retain their captured settings.
+    - Usage recovery is opt-in, cancellation-aware, mechanical, and respects remaining-usage floors.
+    - Keep the requested features together in one pull request targeting stable.
+  intent_priority: should
+  code_locations:
+    - codex-rs/tui/src/usage_rollup.rs
+    - codex-rs/tui/src/chatwidget/team.rs
+    - codex-rs/core/src/context/team_instructions.rs
+    - codex-rs/core/src/agent/control/service_tier.rs
+    - codex-rs/core/src/session/usage_policy.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: Codex Lead and Luna Worker team
+    model: gpt-6-astra
