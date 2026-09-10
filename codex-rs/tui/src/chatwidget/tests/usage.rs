@@ -76,6 +76,15 @@ async fn continue_command_submits_usage_check_wakeup() {
     assert_eq!(op_rx.try_recv().expect("continue op"), Op::ContinueUsage);
 }
 
+#[tokio::test]
+async fn pause_command_submits_session_activity_pause() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Pause);
+
+    assert_eq!(op_rx.try_recv().expect("pause op"), Op::PauseActivity);
+}
+
 fn reset_credit(id: &str, expires_at: Option<i64>) -> RateLimitResetCredit {
     RateLimitResetCredit {
         id: id.to_string(),

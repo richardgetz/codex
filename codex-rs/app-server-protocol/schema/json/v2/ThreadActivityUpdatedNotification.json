@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadActivity": {
+      "description": "High-level execution activity for a loaded thread.",
+      "enum": [
+        "idle",
+        "working",
+        "waiting"
+      ],
+      "type": "string"
+    },
+    "ThreadActivityWaitReason": {
+      "description": "Why a thread is waiting instead of actively executing.",
+      "enum": [
+        "approval",
+        "userInput",
+        "usageLimit",
+        "agents"
+      ],
+      "type": "string"
+    },
+    "ThreadPauseState": {
+      "description": "Process-local manual pause state for a loaded thread.",
+      "enum": [
+        "running",
+        "pausing",
+        "paused"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "Ephemeral activity and manual-pause notification for a loaded thread.",
+  "properties": {
+    "activity": {
+      "$ref": "#/definitions/ThreadActivity"
+    },
+    "inFlightOperations": {
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "pauseState": {
+      "$ref": "#/definitions/ThreadPauseState"
+    },
+    "rootThreadId": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "waitReason": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadActivityWaitReason"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "activity",
+    "inFlightOperations",
+    "pauseState",
+    "rootThreadId",
+    "threadId"
+  ],
+  "title": "ThreadActivityUpdatedNotification",
+  "type": "object"
+}

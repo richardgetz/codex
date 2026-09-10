@@ -394,7 +394,12 @@ mod interaction;
 mod session_tmp_command;
 mod team;
 pub(crate) use self::team::TeamCommand;
+pub(crate) use self::team::lead_balance_label;
 pub(crate) use self::team::role_label;
+mod team_activity;
+pub(crate) use self::team_activity::TeamActivityStatus;
+pub(crate) use self::team_activity::TeamPauseState;
+pub(crate) use self::team_activity::TeamRoleActivity;
 mod skills;
 mod slash_dispatch;
 use self::skills::collect_tool_mentions;
@@ -608,6 +613,8 @@ pub(crate) struct ChatWidget {
     pending_team_command: Option<TeamCommand>,
     /// Effective per-thread policy for reset-aware usage continuation.
     thread_usage_policy: ThreadUsagePolicy,
+    /// Root-scoped Lead/Worker activity shown in status surfaces.
+    team_activity_status: Option<TeamActivityStatus>,
     has_chatgpt_account: bool,
     has_codex_backend_auth: bool,
     model_catalog: Arc<ModelCatalog>,

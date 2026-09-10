@@ -279,6 +279,7 @@ async fn wait_for_usage_recovery(
     sess.set_usage_resume_waiting(true);
     let _wait_guard = UsageResumeWaitGuard(sess);
     loop {
+        sess.wait_for_activity_resume(cancellation_token).await?;
         let (policy, _) = sess.usage_policy_and_rate_limits().await;
         if cancellation_token.is_cancelled() {
             return Err(CodexErr::TurnAborted);
@@ -332,11 +333,18 @@ async fn wait_for_usage_recovery(
             .services
             .time_provider
             .sleep(sess.thread_id, sleep_duration);
+        let activity_notify = sess.services.agent_control.root_activity_resume_notify();
+        let activity_change = activity_notify.notified();
         let mut manually_requested = false;
         tokio::select! {
             _ = cancellation_token.cancelled() => return Err(CodexErr::TurnAborted),
             _ = sess.wait_for_usage_resume_check() => {
                 manually_requested = true;
+            }
+            _ = activity_change => {
+                // `/pause` and `/continue` share the same edge notification. A pause waits here
+                // until a matching continue; a continue proceeds to the normal account check.
+                sess.wait_for_activity_resume(cancellation_token).await?;
             }
             result = sleep => {
                 if let Err(err) = result {

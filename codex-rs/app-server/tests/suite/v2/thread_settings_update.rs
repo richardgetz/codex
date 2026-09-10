@@ -322,6 +322,7 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
         role: Some(TeamRole::Lead),
         lead_model: Some("gpt-6-astra".to_string()),
         lead_reasoning_effort: Some(ReasoningEffort::High),
+        lead_balance: Some(codex_config::DEFAULT_TEAM_LEAD_BALANCE),
         worker_model: Some("gpt-5.6-luna".to_string()),
         worker_reasoning_effort: Some(ReasoningEffort::Max),
         previous_model: None,
@@ -349,6 +350,7 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
         role: Some(TeamRole::Lead),
         lead_model: Some("gpt-6-astra".to_string()),
         lead_reasoning_effort: Some(ReasoningEffort::High),
+        lead_balance: Some(codex_config::DEFAULT_TEAM_LEAD_BALANCE),
         worker_model: Some("gpt-5.6-luna".to_string()),
         worker_reasoning_effort: Some(ReasoningEffort::Max),
         previous_model: Some("mock-model".to_string()),
@@ -367,17 +369,19 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
                 role: Some(TeamRole::Lead),
                 model: Some("gpt-5.6-sol".to_string()),
                 reasoning_effort: Some(ReasoningEffort::Low),
+                lead_balance: Some(4),
             }),
             ..Default::default()
         },
     )
     .await?;
     let profiled = read_thread_settings_updated(&mut mcp).await?;
-    let profiled_team = ThreadTeamSettings {
+    let mut profiled_team = ThreadTeamSettings {
         mode: TeamMode::LeadWorker,
         role: Some(TeamRole::Lead),
         lead_model: Some("gpt-5.6-sol".to_string()),
         lead_reasoning_effort: Some(ReasoningEffort::Low),
+        lead_balance: Some(4),
         worker_model: Some("gpt-5.6-luna".to_string()),
         worker_reasoning_effort: Some(ReasoningEffort::Max),
         previous_model: Some("mock-model".to_string()),
@@ -386,6 +390,28 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
     assert_eq!(profiled.thread_settings.model, "gpt-5.6-sol");
     assert_eq!(profiled.thread_settings.effort, Some(ReasoningEffort::Low));
     assert_eq!(profiled.thread_settings.team, Some(profiled_team.clone()));
+
+    // Lead balance is a sparse session patch: it preserves the selected model,
+    // effort, Worker profile, and Team mode while changing only Lead oversight.
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread_id.clone(),
+            team: Some(ThreadTeamSettingsUpdate {
+                mode: TeamMode::LeadWorker,
+                role: Some(TeamRole::Lead),
+                lead_balance: Some(5),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let balanced = read_thread_settings_updated(&mut mcp).await?;
+    profiled_team.lead_balance = Some(5);
+    assert_eq!(balanced.thread_settings.model, "gpt-5.6-sol");
+    assert_eq!(balanced.thread_settings.effort, Some(ReasoningEffort::Low));
+    assert_eq!(balanced.thread_settings.team, Some(profiled_team.clone()));
 
     let unsubscribe_id = mcp
         .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
@@ -434,6 +460,7 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
             role: Some(TeamRole::Lead),
             lead_model: Some("gpt-5.6-sol".to_string()),
             lead_reasoning_effort: Some(ReasoningEffort::Low),
+            lead_balance: Some(5),
             worker_model: Some("gpt-5.6-luna".to_string()),
             worker_reasoning_effort: Some(ReasoningEffort::Max),
             previous_model: None,

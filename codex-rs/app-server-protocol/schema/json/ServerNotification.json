@@ -4414,6 +4414,65 @@
       ],
       "type": "string"
     },
+    "ThreadActivity": {
+      "description": "High-level execution activity for a loaded thread.",
+      "enum": [
+        "idle",
+        "working",
+        "waiting"
+      ],
+      "type": "string"
+    },
+    "ThreadActivityUpdatedNotification": {
+      "description": "Ephemeral activity and manual-pause notification for a loaded thread.",
+      "properties": {
+        "activity": {
+          "$ref": "#/definitions/ThreadActivity"
+        },
+        "inFlightOperations": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "pauseState": {
+          "$ref": "#/definitions/ThreadPauseState"
+        },
+        "rootThreadId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "waitReason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadActivityWaitReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "activity",
+        "inFlightOperations",
+        "pauseState",
+        "rootThreadId",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadActivityWaitReason": {
+      "description": "Why a thread is waiting instead of actively executing.",
+      "enum": [
+        "approval",
+        "userInput",
+        "usageLimit",
+        "agents"
+      ],
+      "type": "string"
+    },
     "ThreadArchivedNotification": {
       "properties": {
         "threadId": {
@@ -5413,6 +5472,15 @@
       ],
       "type": "object"
     },
+    "ThreadPauseState": {
+      "description": "Process-local manual pause state for a loaded thread.",
+      "enum": [
+        "running",
+        "pausing",
+        "paused"
+      ],
+      "type": "string"
+    },
     "ThreadProjectUpdatedNotification": {
       "properties": {
         "projectId": {
@@ -6209,6 +6277,15 @@
     "ThreadTeamSettings": {
       "description": "Effective team state returned in thread settings.",
       "properties": {
+        "leadBalance": {
+          "format": "uint8",
+          "maximum": 5.0,
+          "minimum": 1.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "leadModel": {
           "type": [
             "string",
@@ -7652,6 +7729,26 @@
         "params"
       ],
       "title": "Thread/settings/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/activity/updated"
+          ],
+          "title": "Thread/activity/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadActivityUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/activity/updatedNotification",
       "type": "object"
     },
     {

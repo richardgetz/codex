@@ -102,6 +102,17 @@ impl ToolOrchestrator {
                 .as_ref()
                 .map(ActiveNetworkApproval::execution_proxy),
         };
+        // Count only the actual tool execution as activity. Approval and network-policy waits
+        // remain quiescent, while this atomic admission check prevents a paused session from
+        // starting a side-effectful handler after the pause request is accepted.
+        let _activity_operation = match tool_ctx
+            .session
+            .begin_activity_operation(&tool_ctx.cancellation_token)
+            .await
+        {
+            Ok(guard) => guard,
+            Err(err) => return (Err(ToolError::Codex(err)), None),
+        };
         let run_result = tool
             .run(req, &attempt_with_network_approval, &attempt_tool_ctx)
             .await;
@@ -303,6 +314,13 @@ impl ToolOrchestrator {
         };
 
         let initial_attempt_start = Instant::now();
+        if let Err(err) = tool_ctx
+            .session
+            .wait_for_activity_resume(&tool_ctx.cancellation_token)
+            .await
+        {
+            return Err(ToolError::Codex(err));
+        }
         let (first_result, first_deferred_network_approval) =
             Self::run_attempt(tool, req, tool_ctx, &initial_attempt, network_approval_spec).await;
         let initial_duration = initial_attempt_start.elapsed();
@@ -478,6 +496,13 @@ impl ToolOrchestrator {
 
                 // Second attempt.
                 let network_approval_spec = tool.network_approval_spec(req, tool_ctx);
+                if let Err(err) = tool_ctx
+                    .session
+                    .wait_for_activity_resume(&tool_ctx.cancellation_token)
+                    .await
+                {
+                    return Err(ToolError::Codex(err));
+                }
                 let escalated_attempt_start = Instant::now();
                 let (retry_result, retry_deferred_network_approval) =
                     Self::run_attempt(tool, req, tool_ctx, &retry_attempt, network_approval_spec)

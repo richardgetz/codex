@@ -22,6 +22,7 @@ use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
 use crate::tools::lifecycle::notify_tool_aborted;
 use crate::tools::registry::AnyToolResult;
+use crate::tools::registry::ToolActivityKind;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
@@ -118,6 +119,13 @@ impl ToolCallRuntime {
         let router = &self.tool_router;
         let supports_parallel = router.tool_supports_parallel(&call);
         let tool_runtime = router.tool_runtime(&call.tool_name);
+        let activity_operation_kind = tool_runtime
+            .as_ref()
+            .map(|runtime| runtime.activity_operation_kind())
+            // A runtime absent from the plan can only be recovered by the registry as a
+            // configured MCP placeholder. Its approval flow must remain quiescent until the
+            // actual MCP request admits its own execution guard.
+            .unwrap_or(ToolActivityKind::Quiescent);
         let wait_for_runtime_cancellation = router.tool_waits_for_runtime_cancellation(&call);
         let router = Arc::clone(router);
         let session = Arc::clone(&self.session);
@@ -150,6 +158,12 @@ impl ToolCallRuntime {
 
         let mut dispatch_handle: AbortOnDropHandle<Result<AnyToolResult, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
+                if let Err(err) = session
+                    .wait_for_activity_resume(&invocation_cancellation_token)
+                    .await
+                {
+                    return Err(FunctionCallError::Fatal(err.to_string()));
+                }
                 if let Some(tool_runtime) = tool_runtime
                     && let Some(readiness) = tool_runtime.wait_until_ready(&session)
                 {
@@ -161,8 +175,25 @@ impl ToolCallRuntime {
                 } else {
                     Either::Right(lock.write().await)
                 };
-                // Admission through the parallel-execution gate marks the end
-                // of dispatch waiting and the start of handler execution.
+                // Readiness and the parallel gate can await while a pause request is accepted.
+                // Recheck at the final dispatch boundary so no handler starts after the pause.
+                if let Err(err) = session
+                    .wait_for_activity_resume(&invocation_cancellation_token)
+                    .await
+                {
+                    return Err(FunctionCallError::Fatal(err.to_string()));
+                }
+                let _activity_operation = match activity_operation_kind {
+                    ToolActivityKind::Execution => Some(
+                        session
+                            .begin_activity_operation(&invocation_cancellation_token)
+                            .await
+                            .map_err(|err| FunctionCallError::Fatal(err.to_string()))?,
+                    ),
+                    ToolActivityKind::Quiescent => None,
+                };
+                // Admission through both the parallel-execution gate and the activity gate marks
+                // the end of dispatch waiting and the start of handler execution.
                 if let Some(execution_started_at) = execution_started_at {
                     let _ = execution_started_at.set(Instant::now());
                 }
@@ -582,6 +613,133 @@ mod tests {
     }
 
     impl CoreToolRuntime for ImmediateHandler {}
+
+    struct ActivityGateHandler {
+        tool_name: codex_tools::ToolName,
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    impl ToolExecutor<ToolInvocation> for ActivityGateHandler {
+        fn tool_name(&self) -> codex_tools::ToolName {
+            self.tool_name.clone()
+        }
+
+        fn spec(&self) -> codex_tools::ToolSpec {
+            codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+                name: self.tool_name.name.clone(),
+                description: "Activity gate test tool.".to_string(),
+                strict: false,
+                defer_loading: None,
+                parameters: codex_tools::JsonSchema::default(),
+                output_schema: None,
+            })
+        }
+
+        fn handle<'a>(&'a self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+        where
+            ToolInvocation: 'a,
+        {
+            let started = Arc::clone(&self.started);
+            let release = Arc::clone(&self.release);
+            Box::pin(async move {
+                started.notify_one();
+                release.notified().await;
+                Ok(
+                    Box::new(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
+                        as Box<dyn crate::tools::context::ToolOutput>,
+                )
+            })
+        }
+    }
+
+    impl CoreToolRuntime for ActivityGateHandler {}
+
+    #[tokio::test]
+    async fn tool_dispatch_waits_for_activity_resume_and_reports_execution() -> anyhow::Result<()> {
+        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let tool_name = codex_tools::ToolName::plain("activity_gate");
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let handler = Arc::new(ActivityGateHandler {
+            tool_name: tool_name.clone(),
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        }) as Arc<dyn CoreToolRuntime>;
+        let step_context = StepContext::for_test(Arc::clone(&turn_context));
+        let router = Arc::new(ToolRouter::from_parts(
+            ToolRegistry::from_tools([handler]),
+            Vec::new(),
+            ToolMode::Direct,
+            BTreeMap::new(),
+            /*tool_namespaces_info*/ None,
+            &[],
+        ));
+        let step_context = step_context.with_tool_router_for_test(router);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let runtime = ToolCallRuntime::new(
+            Arc::clone(&session),
+            Arc::clone(&step_context),
+            Arc::clone(&step_context.tool_router),
+            tracker,
+        );
+        session
+            .services
+            .agent_control
+            .pause_activity_for_subtree()
+            .await;
+
+        let call = ToolCall {
+            tool_name,
+            call_id: "activity-gate-call".to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+            encrypted_function_args: None,
+        };
+        let cancellation_token = CancellationToken::new();
+        let dispatch = tokio::spawn(runtime.handle_tool_call(call, cancellation_token));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), started.notified())
+                .await
+                .is_err(),
+            "a paused thread must not start a tool handler"
+        );
+
+        session
+            .services
+            .agent_control
+            .continue_activity_for_subtree()
+            .await;
+        tokio::time::timeout(Duration::from_secs(1), started.notified())
+            .await
+            .expect("continuing should admit the waiting tool");
+        let state = session.activity_state().await;
+        assert_eq!(state.in_flight_operations, 1);
+        assert_eq!(
+            state.activity,
+            codex_protocol::protocol::ThreadActivity::Working
+        );
+
+        release.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), dispatch)
+            .await
+            .expect("tool should finish after the execution gate is released")??;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if session.activity_state().await.in_flight_operations == 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("activity guard should drain after tool completion");
+
+        Ok(())
+    }
 
     struct CancellationCleanupHandler {
         tool_name: codex_tools::ToolName,

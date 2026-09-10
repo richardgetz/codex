@@ -196,6 +196,10 @@ impl Session {
             self.cancel_lead_oversight().await;
             return None;
         }
+        if self.is_activity_paused() {
+            self.cancel_lead_oversight().await;
+            return None;
+        }
         if mode == LeadIdleArmMode::CompletedLeadTurn && self.active_turn.lock().await.is_some() {
             self.cancel_lead_oversight().await;
             return None;
@@ -290,6 +294,7 @@ impl Session {
     pub(crate) async fn handle_lead_oversight_deadline(self: &Arc<Self>, generation: u64) {
         if !self.lead_idle_controller.claim_deadline(generation).await
             || !self.is_team_lead().await
+            || self.is_activity_paused()
             || self.shutdown_requested()
             || self.is_interrupted()
         {
@@ -373,7 +378,7 @@ impl Session {
         // actionable mailbox insertion. This prevents a deadline wake from being cleared or
         // stranded between the mailbox drain and idle-sentinel cleanup.
         let _team_lead_turn_admission = self.team_lead_turn_admission.lock().await;
-        if !self.is_team_lead().await {
+        if !self.is_team_lead().await || self.is_activity_paused() {
             return false;
         }
         let state = self.lead_idle_controller.state.lock().await;

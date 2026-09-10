@@ -1221,6 +1221,11 @@ impl ChatWidget {
                     self.open_usage_menu();
                 }
             }
+            SlashCommand::Pause => {
+                if !self.submit_op(AppCommand::pause_activity()) {
+                    self.add_error_message("Could not submit session pause request.".to_string());
+                }
+            }
             SlashCommand::Continue => {
                 self.submit_op(AppCommand::continue_usage());
             }
@@ -1575,6 +1580,9 @@ impl ChatWidget {
             }
             SlashCommand::Continue => {
                 self.add_error_message("Usage: /continue".to_string());
+            }
+            SlashCommand::Pause => {
+                self.add_error_message("Usage: /pause".to_string());
             }
             SlashCommand::Spend => {
                 self.add_spend_output(trimmed);
@@ -2283,6 +2291,7 @@ impl ChatWidget {
             | SlashCommand::Voice
             | SlashCommand::Pwd
             | SlashCommand::Usage
+            | SlashCommand::Pause
             | SlashCommand::Continue
             | SlashCommand::DebugConfig
             | SlashCommand::Ps

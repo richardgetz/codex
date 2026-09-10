@@ -15,6 +15,7 @@ pub(crate) struct TeamPolicyState {
     role: Option<TeamRole>,
     worker_max_concurrent: Option<usize>,
     dynamic_handoff: bool,
+    lead_balance: u8,
     multi_agent_mode: Option<MultiAgentMode>,
     multi_agent_usage_hint_hash: Option<WorldStateHash>,
 }
@@ -27,10 +28,16 @@ pub(crate) struct TeamPolicySnapshot {
     worker_max_concurrent: Option<usize>,
     #[serde(default)]
     dynamic_handoff: bool,
+    #[serde(default = "default_lead_balance")]
+    lead_balance: u8,
     #[serde(default)]
     multi_agent_mode: Option<MultiAgentMode>,
     #[serde(default)]
     multi_agent_usage_hint_hash: Option<WorldStateHash>,
+}
+
+fn default_lead_balance() -> u8 {
+    codex_config::DEFAULT_TEAM_LEAD_BALANCE
 }
 
 impl TeamPolicyState {
@@ -41,6 +48,7 @@ impl TeamPolicyState {
                 .then_some(worker_max_concurrent)
                 .flatten(),
             dynamic_handoff: false,
+            lead_balance: default_lead_balance(),
             multi_agent_mode: None,
             multi_agent_usage_hint_hash: None,
         }
@@ -51,6 +59,7 @@ impl TeamPolicyState {
             role: None,
             worker_max_concurrent: None,
             dynamic_handoff: false,
+            lead_balance: default_lead_balance(),
             multi_agent_mode: None,
             multi_agent_usage_hint_hash: None,
         }
@@ -67,6 +76,11 @@ impl TeamPolicyState {
         self.dynamic_handoff = dynamic_handoff;
         self
     }
+
+    pub(crate) fn with_lead_balance(mut self, lead_balance: u8) -> Self {
+        self.lead_balance = lead_balance;
+        self
+    }
 }
 
 impl WorldStateSection for TeamPolicyState {
@@ -78,6 +92,7 @@ impl WorldStateSection for TeamPolicyState {
             role: self.role,
             worker_max_concurrent: self.worker_max_concurrent,
             dynamic_handoff: self.dynamic_handoff,
+            lead_balance: self.lead_balance,
             multi_agent_mode: self.multi_agent_mode.clone(),
             multi_agent_usage_hint_hash: self.multi_agent_usage_hint_hash.clone(),
         }
@@ -103,6 +118,8 @@ impl WorldStateSection for TeamPolicyState {
             if previous.role == self.role
                 && previous.worker_max_concurrent == self.worker_max_concurrent
                 && previous.dynamic_handoff == self.dynamic_handoff
+                && (self.role != Some(TeamRole::Lead)
+                    || previous.lead_balance == self.lead_balance)
                 && previous.multi_agent_mode == self.multi_agent_mode
                 && previous.multi_agent_usage_hint_hash == self.multi_agent_usage_hint_hash
         ) {
@@ -111,7 +128,8 @@ impl WorldStateSection for TeamPolicyState {
         match self.role {
             Some(role) => Some(Box::new(
                 TeamInstructions::new(role, self.worker_max_concurrent)
-                    .with_dynamic_handoff(self.dynamic_handoff),
+                    .with_dynamic_handoff(self.dynamic_handoff)
+                    .with_lead_balance(self.lead_balance),
             )),
             None if matches!(
                 previous,

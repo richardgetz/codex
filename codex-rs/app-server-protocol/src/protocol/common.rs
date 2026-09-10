@@ -658,6 +658,24 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadUsageResumeResponse,
     },
+    #[experimental("thread/activity/pause")]
+    ThreadActivityPause => "thread/activity/pause" {
+        params: v2::ThreadActivityPauseParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadActivityPauseResponse,
+    },
+    #[experimental("thread/activity/continue")]
+    ThreadActivityContinue => "thread/activity/continue" {
+        params: v2::ThreadActivityContinueParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadActivityContinueResponse,
+    },
+    #[experimental("thread/activity/read")]
+    ThreadActivityRead => "thread/activity/read" {
+        params: v2::ThreadActivityReadParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadActivityReadResponse,
+    },
     ThreadControlRead => "thread/control/read" {
         params: v2::ThreadControlReadParams,
         serialization: thread_id(params.thread_id),
@@ -1927,6 +1945,8 @@ server_notification_definitions! {
     EnvironmentDisconnected => "thread/environment/disconnected" (v2::EnvironmentConnectionNotification),
     #[experimental("thread/settings/updated")]
     ThreadSettingsUpdated => "thread/settings/updated" (v2::ThreadSettingsUpdatedNotification),
+    #[experimental("thread/activity/updated")]
+    ThreadActivityUpdated => "thread/activity/updated" (v2::ThreadActivityUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     ThreadTokenUsageProjectionUpdated => "thread/tokenUsageProjection/updated" (v2::ThreadTokenUsageProjectionUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),

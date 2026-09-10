@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/team_activity_tests.rs
+expression: "render_bottom_first_row(&chat, 80)"
+---
+• Lead: working · Workers: 1 working, 1 waiting

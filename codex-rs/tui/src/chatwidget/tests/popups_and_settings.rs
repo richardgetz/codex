@@ -3254,6 +3254,7 @@ async fn team_profile_model_selection_popup_snapshot() {
         role: Some(codex_app_server_protocol::TeamRole::Lead),
         lead_model: Some("gpt-5.2".to_string()),
         lead_reasoning_effort: Some(ReasoningEffortConfig::Medium),
+        lead_balance: Some(3),
         worker_model: Some("gpt-5.6-luna".to_string()),
         worker_reasoning_effort: Some(ReasoningEffortConfig::Low),
         previous_model: None,
@@ -3275,6 +3276,7 @@ async fn team_profile_model_picker_emits_session_update_only() {
         role: Some(codex_app_server_protocol::TeamRole::Lead),
         lead_model: Some("gpt-5.2".to_string()),
         lead_reasoning_effort: Some(ReasoningEffortConfig::Medium),
+        lead_balance: Some(3),
         worker_model: Some("gpt-5.6-luna".to_string()),
         worker_reasoning_effort: Some(ReasoningEffortConfig::Low),
         previous_model: None,
@@ -3313,6 +3315,56 @@ async fn team_profile_model_picker_emits_session_update_only() {
         event,
         AppEvent::UpdateModel(_) | AppEvent::PersistModelSelection { .. }
     )));
+}
+
+#[tokio::test]
+async fn team_balance_picker_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.team_settings = Some(codex_app_server_protocol::ThreadTeamSettings {
+        mode: codex_app_server_protocol::TeamMode::LeadWorker,
+        role: Some(codex_app_server_protocol::TeamRole::Lead),
+        lead_model: None,
+        lead_reasoning_effort: None,
+        lead_balance: Some(3),
+        worker_model: None,
+        worker_reasoning_effort: None,
+        previous_model: None,
+        previous_reasoning_effort: None,
+    });
+    chat.open_team_balance_popup();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("team_balance_picker", popup);
+}
+
+#[tokio::test]
+async fn team_balance_picker_emits_session_update_only() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.team_settings = Some(codex_app_server_protocol::ThreadTeamSettings {
+        mode: codex_app_server_protocol::TeamMode::Off,
+        role: Some(codex_app_server_protocol::TeamRole::Lead),
+        lead_model: None,
+        lead_reasoning_effort: None,
+        lead_balance: Some(3),
+        worker_model: None,
+        worker_reasoning_effort: None,
+        previous_model: None,
+        previous_reasoning_effort: None,
+    });
+    chat.open_team_balance_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(AppEvent::TeamCommand {
+            thread_id: event_thread_id,
+            command: TeamCommand::ConfigureBalance { balance: 3 },
+        }) if event_thread_id == thread_id
+    ));
 }
 
 fn apply_model_list_response(chat: &mut ChatWidget, presets: Vec<ModelPreset>) {

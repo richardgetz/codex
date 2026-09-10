@@ -176,6 +176,9 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<Option<String>> {
+    // A manually paused turn retains its task and input. Wait before hooks or
+    // context work so `/continue` resumes this turn in place.
+    sess.wait_for_activity_resume(&cancellation_token).await?;
     // Record results from hooks that finished after the previous turn before this turn's user prompt.
     drain_async_hook_results(&sess, &turn_context, /*before_user_prompt*/ true).await;
 
@@ -347,6 +350,7 @@ pub(crate) async fn run_turn(
 
     let mut next_step_context = Some(first_step_context);
     loop {
+        sess.wait_for_activity_resume(&cancellation_token).await?;
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
@@ -460,6 +464,8 @@ pub(crate) async fn run_turn(
             } else {
                 UsageLimitRetryMode::AutomaticContinuation
             };
+            sess.wait_for_activity_resume(&cancellation_token).await?;
+
             run_sampling_request(
                 Arc::clone(&sess),
                 Arc::clone(&step_context),
@@ -2554,6 +2560,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnStarted(_)
         | EventMsg::ThreadSettingsApplied(_)
+        | EventMsg::ThreadActivityUpdated(_)
         | EventMsg::TurnComplete(_)
         | EventMsg::TokenCount(_)
         | EventMsg::UserMessage(_)
@@ -2977,6 +2984,10 @@ async fn try_run_sampling_request(
         .features
         .enabled(Feature::ConcurrentReasoningSummaries)
         && turn_context.provider.info().is_openai();
+    // Count only the model stream as execution activity. Tool approval, user input, usage waits,
+    // and agent waits are drained after the stream closes and remain quiescent until their own
+    // operation is admitted.
+    let _activity_operation = sess.begin_activity_operation(&cancellation_token).await?;
     let mut stream = client_session
         .stream(
             prompt,
@@ -3511,6 +3522,9 @@ async fn try_run_sampling_request(
         }
     };
     drop(sampling_timing_guard);
+    // The tool futures below may wait for approval or a manual resume. Do not report those waits
+    // as active model work once the response stream has ended.
+    drop(_activity_operation);
 
     flush_assistant_text_segments_all(
         &sess,

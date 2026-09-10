@@ -54,6 +54,12 @@ pub(crate) struct StatusIndicatorWidget {
     header: String,
     details: Option<String>,
     details_max_lines: usize,
+    /// Whether the elapsed-time/interrupt segment should be rendered.
+    ///
+    /// Team activity can keep a status row visible while the local Lead is
+    /// parked. In that case an elapsed time and interrupt affordance would
+    /// falsely imply that this widget owns an active local turn.
+    show_elapsed: bool,
     /// Optional suffix rendered after the elapsed/interrupt segment.
     inline_message: Option<String>,
     /// Hook activity may move below the status row when it cannot fit in full.
@@ -93,6 +99,7 @@ impl StatusIndicatorWidget {
             header: String::from("Working"),
             details: None,
             details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
+            show_elapsed: true,
             inline_message: None,
             hook_status_message: None,
             show_interrupt_hint: true,
@@ -146,6 +153,14 @@ impl StatusIndicatorWidget {
         self.hook_status_message = message;
     }
 
+    pub(crate) fn set_elapsed_visible(&mut self, visible: bool) {
+        self.show_elapsed = visible;
+    }
+
+    pub(crate) fn set_animations_enabled(&mut self, enabled: bool) {
+        self.animations_enabled = enabled;
+    }
+
     pub(crate) fn header(&self) -> &str {
         &self.header
     }
@@ -162,6 +177,16 @@ impl StatusIndicatorWidget {
     #[cfg(test)]
     pub(crate) fn interrupt_hint_visible(&self) -> bool {
         self.show_interrupt_hint
+    }
+
+    #[cfg(test)]
+    pub(crate) fn elapsed_visible(&self) -> bool {
+        self.show_elapsed
+    }
+
+    #[cfg(test)]
+    pub(crate) fn animations_enabled(&self) -> bool {
+        self.animations_enabled
     }
 
     pub(crate) fn set_interrupt_binding(&mut self, binding: Option<ShortcutHint>) {
@@ -230,19 +255,21 @@ impl StatusIndicator<'_> {
             spans.push(" ".into());
         }
         spans.extend(shimmer_text(&row.header, motion_mode));
-        if !spans.is_empty() {
-            spans.push(" ".into());
-        }
-        if row.show_interrupt_hint
-            && let Some(interrupt_binding) = row.interrupt_binding
-        {
-            spans.extend(vec![
-                format!("({pretty_elapsed} • ").dim(),
-                interrupt_binding.into(),
-                " to interrupt)".dim(),
-            ]);
-        } else {
-            spans.push(format!("({pretty_elapsed})").dim());
+        if row.show_elapsed {
+            if !spans.is_empty() {
+                spans.push(" ".into());
+            }
+            if row.show_interrupt_hint
+                && let Some(interrupt_binding) = row.interrupt_binding
+            {
+                spans.extend(vec![
+                    format!("({pretty_elapsed} • ").dim(),
+                    interrupt_binding.into(),
+                    " to interrupt)".dim(),
+                ]);
+            } else {
+                spans.push(format!("({pretty_elapsed})").dim());
+            }
         }
         if let Some(message) = &row.inline_message {
             // Keep optional context after elapsed/interrupt text so that core

@@ -1,6 +1,9 @@
 use super::Config;
+use codex_config::DEFAULT_TEAM_LEAD_BALANCE;
 use codex_config::DEFAULT_TEAM_LEAD_DYNAMIC_HANDOFF;
 use codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES;
+use codex_config::MAX_TEAM_LEAD_BALANCE;
+use codex_config::MIN_TEAM_LEAD_BALANCE;
 use codex_config::TeamModelProfile;
 use codex_config::TeamModelProfiles;
 use codex_config::TeamRole as ConfigTeamRole;
@@ -64,6 +67,7 @@ impl Config {
             role: self.team_persisted_role.or(role),
             lead_model: profiles.map(|profiles| profiles.lead.model.clone()),
             lead_reasoning_effort: profiles.map(|profiles| profiles.lead.reasoning_effort.clone()),
+            lead_balance: profiles.map(|profiles| profiles.lead_balance),
             worker_model: profiles.map(|profiles| profiles.worker.model.clone()),
             worker_reasoning_effort: profiles
                 .map(|profiles| profiles.worker.reasoning_effort.clone()),
@@ -88,10 +92,17 @@ fn team_profiles_from_snapshot_with_timeout(
     let lead_dynamic_handoff = settings
         .dynamic_handoff
         .unwrap_or(DEFAULT_TEAM_LEAD_DYNAMIC_HANDOFF);
+    let lead_balance = settings.lead_balance.unwrap_or(DEFAULT_TEAM_LEAD_BALANCE);
+    if !(MIN_TEAM_LEAD_BALANCE..=MAX_TEAM_LEAD_BALANCE).contains(&lead_balance) {
+        return Err(format!(
+            "thread team snapshot Lead balance must be between {MIN_TEAM_LEAD_BALANCE} and {MAX_TEAM_LEAD_BALANCE}"
+        ));
+    }
     team_profiles_from_snapshot_with_options(
         settings,
         lead_oversight_timeout_minutes,
         lead_dynamic_handoff,
+        lead_balance,
     )
 }
 
@@ -99,6 +110,7 @@ fn team_profiles_from_snapshot_with_options(
     settings: &ThreadTeamSettings,
     lead_oversight_timeout_minutes: u64,
     lead_dynamic_handoff: bool,
+    lead_balance: u8,
 ) -> Result<Option<TeamModelProfiles>, String> {
     let assignments = (
         settings.lead_model.as_ref(),
@@ -142,6 +154,7 @@ fn team_profiles_from_snapshot_with_options(
             reasoning_effort: worker_reasoning_effort,
         },
         lead_dynamic_handoff,
+        lead_balance,
         lead_oversight_timeout_minutes,
     }))
 }

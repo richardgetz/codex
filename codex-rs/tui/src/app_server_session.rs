@@ -64,6 +64,10 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::SwitchAccountParams;
 use codex_app_server_protocol::SwitchAccountResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadActivityContinueParams;
+use codex_app_server_protocol::ThreadActivityContinueResponse;
+use codex_app_server_protocol::ThreadActivityPauseParams;
+use codex_app_server_protocol::ThreadActivityPauseResponse;
 use codex_app_server_protocol::ThreadAgentsPruneParams;
 use codex_app_server_protocol::ThreadAgentsPruneResponse;
 use codex_app_server_protocol::ThreadApproveGuardianDeniedActionParams;
@@ -1232,6 +1236,36 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/usage/resume failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_activity_pause(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed::<ThreadActivityPauseResponse>(ClientRequest::ThreadActivityPause {
+                request_id,
+                params: ThreadActivityPauseParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/activity/pause failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_activity_continue(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed::<ThreadActivityContinueResponse>(
+                ClientRequest::ThreadActivityContinue {
+                    request_id,
+                    params: ThreadActivityContinueParams {
+                        thread_id: thread_id.to_string(),
+                    },
+                },
+            )
+            .await
+            .wrap_err("thread/activity/continue failed in TUI")?;
         Ok(())
     }
 

@@ -1266,6 +1266,19 @@ impl MessageProcessor {
                     .thread_usage_resume(&request_id, params)
                     .await
             }
+            ClientRequest::ThreadActivityPause { params, .. } => {
+                self.turn_processor
+                    .thread_activity_pause(&request_id, params)
+                    .await
+            }
+            ClientRequest::ThreadActivityContinue { params, .. } => {
+                self.turn_processor
+                    .thread_activity_continue(&request_id, params)
+                    .await
+            }
+            ClientRequest::ThreadActivityRead { params, .. } => {
+                self.turn_processor.thread_activity_read(params).await
+            }
             ClientRequest::ThreadMemoryModeSet { params, .. } => {
                 self.thread_processor.thread_memory_mode_set(params).await
             }

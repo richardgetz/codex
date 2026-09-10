@@ -43,6 +43,10 @@ impl SessionTask for RegularTask {
         input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
+        // Manual `/pause` retains this same task and turn. Wait before emitting
+        // turn-start lifecycle or opening a model session so resume never needs
+        // to synthesize a duplicate model turn.
+        sess.wait_for_activity_resume(&cancellation_token).await?;
         let run_turn_span = trace_span!("run_turn");
         // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
         // not wait on startup prewarm resolution.

@@ -94,6 +94,7 @@ mod server_diagnostics;
 mod session_end;
 mod skills_list;
 mod sleep;
+mod thread_activity;
 mod thread_archive;
 mod thread_control;
 mod thread_delete;

@@ -6,6 +6,7 @@ use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::chatwidget::TeamCommand;
 use crate::chatwidget::cyber_model_approval_reviewer;
+use crate::chatwidget::lead_balance_label;
 use crate::chatwidget::role_label;
 use crate::session_state::ThreadSessionState;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
@@ -39,6 +40,15 @@ impl App {
                 return;
             }
             self.chat_widget.open_team_model_popup(role);
+            return;
+        }
+        if matches!(&command, TeamCommand::SelectBalance) {
+            if self.chat_widget.team_settings().is_none() {
+                self.chat_widget
+                    .add_error_message("Team mode is not configured for this session.".to_string());
+                return;
+            }
+            self.chat_widget.open_team_balance_popup();
             return;
         }
 
@@ -80,7 +90,10 @@ impl App {
             self.chat_widget.show_team_status();
             return;
         }
-        if matches!(command, TeamCommand::ConfigureProfile { .. }) {
+        if matches!(
+            &command,
+            TeamCommand::ConfigureProfile { .. } | TeamCommand::ConfigureBalance { .. }
+        ) {
             self.chat_widget.clear_model_popup_target();
         }
         match app_server.thread_settings_update(params).await {
@@ -89,6 +102,10 @@ impl App {
                     TeamCommand::ConfigureProfile { role, .. } => {
                         format!("Updating this session's {} profile…", role_label(*role))
                     }
+                    TeamCommand::ConfigureBalance { balance } => format!(
+                        "Updating this session's Lead usage/confidence balance to {balance} ({})…",
+                        lead_balance_label(*balance)
+                    ),
                     _ => format!("Switching this session to Lead/Worker team mode {mode_label}…"),
                 };
                 self.chat_widget.set_pending_team_command(command);
@@ -337,7 +354,9 @@ fn team_settings_update_params(
             mode: TeamMode::Off,
             ..Default::default()
         },
-        TeamCommand::Status | TeamCommand::SelectProfile { .. } => return None,
+        TeamCommand::Status | TeamCommand::SelectProfile { .. } | TeamCommand::SelectBalance => {
+            return None;
+        }
         TeamCommand::ConfigureProfile {
             role,
             model,
@@ -347,6 +366,13 @@ fn team_settings_update_params(
             role: Some(role),
             model: Some(model),
             reasoning_effort: Some(effort),
+            lead_balance: None,
+        },
+        TeamCommand::ConfigureBalance { balance } => ThreadTeamSettingsUpdate {
+            mode: current_mode,
+            role: Some(codex_app_server_protocol::TeamRole::Lead),
+            lead_balance: Some(balance),
+            ..Default::default()
         },
     };
     Some(ThreadSettingsUpdateParams {

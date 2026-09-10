@@ -2,12 +2,43 @@
 
 use super::ChatWidget;
 use crate::app_event::AppEvent;
+use crate::bottom_pane::SelectionItem;
+use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use codex_app_server_protocol::TeamMode;
 use codex_app_server_protocol::TeamRole;
 use codex_app_server_protocol::ThreadTeamSettings;
 
 pub(crate) const TEAM_USAGE: &str =
-    "Usage: /team [on|off|status|lead [<model> <effort>]|worker [<model> <effort>]]";
+    "Usage: /team [on|off|status|balance [1..5]|lead [<model> <effort>]|worker [<model> <effort>]]";
+
+const LEAD_BALANCE_OPTIONS: [(u8, &str, &str); 5] = [
+    (
+        1,
+        "Maximum savings",
+        "Use the fewest practical optional Lead oversight checkpoints and reuse existing evidence.",
+    ),
+    (
+        2,
+        "Usage efficient",
+        "Use targeted Lead oversight where it can prevent likely rework.",
+    ),
+    (
+        3,
+        "Current behavior (default)",
+        "Keep today's discretionary Lead oversight behavior unchanged.",
+    ),
+    (
+        4,
+        "Confidence focused",
+        "Independently check important assumptions and risky decisions.",
+    ),
+    (
+        5,
+        "Maximum confidence",
+        "Examine plausible failure modes and cross-check consequential results.",
+    ),
+];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TeamCommand {
@@ -22,6 +53,10 @@ pub(crate) enum TeamCommand {
         model: String,
         effort: codex_protocol::openai_models::ReasoningEffort,
     },
+    SelectBalance,
+    ConfigureBalance {
+        balance: u8,
+    },
 }
 
 pub(crate) fn parse_team_command(args: &str) -> Result<TeamCommand, &'static str> {
@@ -31,6 +66,16 @@ pub(crate) fn parse_team_command(args: &str) -> Result<TeamCommand, &'static str
         "" | "status" if parts.next().is_none() => Ok(TeamCommand::Status),
         "on" if parts.next().is_none() => Ok(TeamCommand::On),
         "off" if parts.next().is_none() => Ok(TeamCommand::Off),
+        "balance" => match parts.next() {
+            None => Ok(TeamCommand::SelectBalance),
+            Some(balance) if parts.next().is_none() => balance
+                .parse::<u8>()
+                .ok()
+                .filter(|balance| (1..=5).contains(balance))
+                .map(|balance| TeamCommand::ConfigureBalance { balance })
+                .ok_or(TEAM_USAGE),
+            Some(_) => Err(TEAM_USAGE),
+        },
         "lead" | "worker" => {
             let role = if command.eq_ignore_ascii_case("lead") {
                 TeamRole::Lead
@@ -131,6 +176,55 @@ impl ChatWidget {
         self.add_info_message(format_team_status(self.team_settings.as_ref()), None);
     }
 
+    pub(crate) fn open_team_balance_popup(&mut self) {
+        let Some(thread_id) = self.thread_id() else {
+            self.add_error_message(
+                "Session is still starting; choose a Lead balance in a moment.".to_string(),
+            );
+            return;
+        };
+        let Some(team) = self.team_settings.as_ref() else {
+            self.add_error_message("Team mode is not configured for this session.".to_string());
+            return;
+        };
+        if team.role == Some(TeamRole::Worker) {
+            self.add_error_message(
+                "Lead usage/confidence balance can only be changed from a Lead session."
+                    .to_string(),
+            );
+            return;
+        }
+        let current_balance = team
+            .lead_balance
+            .unwrap_or(codex_config::DEFAULT_TEAM_LEAD_BALANCE);
+        let items = LEAD_BALANCE_OPTIONS
+            .into_iter()
+            .map(|(balance, label, description)| SelectionItem {
+                name: label.to_string(),
+                description: Some(description.to_string()),
+                is_current: current_balance == balance,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::TeamCommand {
+                        thread_id,
+                        command: TeamCommand::ConfigureBalance { balance },
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            })
+            .collect();
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Lead usage/confidence balance".to_string()),
+            subtitle: Some(
+                "Tune Lead oversight; Worker effort and required checks stay unchanged."
+                    .to_string(),
+            ),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
     pub(crate) fn set_team_settings(&mut self, team_settings: Option<ThreadTeamSettings>) {
         self.team_settings = team_settings;
         self.request_redraw();
@@ -150,12 +244,19 @@ impl ChatWidget {
         match command {
             TeamCommand::On => team.mode == TeamMode::LeadWorker,
             TeamCommand::Off => team.mode == TeamMode::Off,
-            TeamCommand::Status | TeamCommand::SelectProfile { .. } => false,
+            TeamCommand::Status
+            | TeamCommand::SelectProfile { .. }
+            | TeamCommand::SelectBalance => false,
             TeamCommand::ConfigureProfile {
                 role,
                 model,
                 effort,
             } => team_profile_matches(team, *role, model, effort),
+            TeamCommand::ConfigureBalance { balance } => {
+                team.lead_balance
+                    .unwrap_or(codex_config::DEFAULT_TEAM_LEAD_BALANCE)
+                    == *balance
+            }
         }
     }
 
@@ -181,7 +282,9 @@ impl ChatWidget {
         let expected_mode = match command {
             TeamCommand::On => TeamMode::LeadWorker,
             TeamCommand::Off => TeamMode::Off,
-            TeamCommand::Status | TeamCommand::SelectProfile { .. } => {
+            TeamCommand::Status
+            | TeamCommand::SelectProfile { .. }
+            | TeamCommand::SelectBalance => {
                 self.pending_team_command = None;
                 return;
             }
@@ -191,6 +294,17 @@ impl ChatWidget {
                 effort,
             } => {
                 if team_profile_matches(team, role, &model, &effort) {
+                    self.add_info_message(format_team_status(Some(team)), None);
+                    self.pending_team_command = None;
+                }
+                return;
+            }
+            TeamCommand::ConfigureBalance { balance } => {
+                if team
+                    .lead_balance
+                    .unwrap_or(codex_config::DEFAULT_TEAM_LEAD_BALANCE)
+                    == balance
+                {
                     self.add_info_message(format_team_status(Some(team)), None);
                     self.pending_team_command = None;
                 }
@@ -249,7 +363,23 @@ pub(crate) fn format_team_status(team: Option<&ThreadTeamSettings>) -> String {
     ) {
         lines.push(profile);
     }
+    if let Some(balance) = team
+        .lead_balance
+        .filter(|balance| *balance != codex_config::DEFAULT_TEAM_LEAD_BALANCE)
+    {
+        lines.push(format!(
+            "Lead usage/confidence balance: {balance} ({})",
+            lead_balance_label(balance)
+        ));
+    }
     lines.join("\n")
+}
+
+pub(crate) fn lead_balance_label(balance: u8) -> &'static str {
+    LEAD_BALANCE_OPTIONS
+        .iter()
+        .find_map(|(option, label, _)| (*option == balance).then_some(*label))
+        .unwrap_or("Unknown")
 }
 
 pub(crate) fn role_label(role: TeamRole) -> &'static str {

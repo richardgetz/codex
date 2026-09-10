@@ -2,6 +2,7 @@ use std::io;
 
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
+use codex_config::DEFAULT_TEAM_LEAD_BALANCE;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -147,6 +148,18 @@ fn config_lock_for_comparison(
         && lead.dynamic_handoff == Some(false)
     {
         lead.dynamic_handoff = None;
+    }
+    // Lead balance was added after the original team lock shape. Treat an
+    // explicit current-behavior default as the same effective setting as a
+    // legacy omission so old locks continue to replay cleanly.
+    if let Some(lead) = lockfile
+        .config
+        .team
+        .as_mut()
+        .and_then(|team| team.lead.as_mut())
+        && lead.balance == Some(DEFAULT_TEAM_LEAD_BALANCE)
+    {
+        lead.balance = None;
     }
     if options.allow_codex_version_mismatch {
         lockfile.codex_version.clear();

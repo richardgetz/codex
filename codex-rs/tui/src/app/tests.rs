@@ -6070,6 +6070,7 @@ async fn make_test_app() -> App {
         thread_event_listener_tasks: HashMap::new(),
         agent_navigation: AgentNavigationState::default(),
         agents_overview: Default::default(),
+        team_activity: Default::default(),
         side_threads: HashMap::new(),
         abandoned_side_threads: HashSet::new(),
         active_thread_id: None,
@@ -6176,6 +6177,7 @@ async fn make_test_app_with_channels() -> (
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
             agents_overview: Default::default(),
+            team_activity: Default::default(),
             side_threads: HashMap::new(),
             abandoned_side_threads: HashSet::new(),
             active_thread_id: None,
@@ -8782,6 +8784,7 @@ fn team_commands_update_only_the_active_thread_and_follow_server_snapshot() -> R
                             reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Max,
                         },
                         lead_dynamic_handoff: false,
+                        lead_balance: codex_config::DEFAULT_TEAM_LEAD_BALANCE,
                         lead_oversight_timeout_minutes:
                             codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
                     }),

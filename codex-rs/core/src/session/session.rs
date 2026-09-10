@@ -47,6 +47,7 @@ use codex_utils_git_discovery::GitRootDiscovery;
 use std::path::Path;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -93,6 +94,8 @@ pub(crate) struct Session {
     pub(crate) usage_resume_check_notify: Notify,
     /// True only while a turn is parked waiting for a usage-limit check.
     pub(crate) usage_resume_waiting: AtomicBool,
+    /// Number of model/tool operations currently in flight for activity reporting.
+    pub(crate) activity_in_flight: AtomicU32,
     /// Tracks recent automatic scratchpad loopbacks for this loaded thread.
     pub(crate) scratchpad_loopback_limiter: std::sync::Mutex<ScratchpadLoopbackLimiter>,
     /// Coordinates one event-driven oversight deadline while a Lead is parked.
@@ -1909,6 +1912,7 @@ impl Session {
                 active_turn: Mutex::new(None),
                 usage_resume_check_notify: Notify::new(),
                 usage_resume_waiting: AtomicBool::new(false),
+                activity_in_flight: AtomicU32::new(0),
                 scratchpad_loopback_limiter: std::sync::Mutex::new(
                     ScratchpadLoopbackLimiter::default(),
                 ),

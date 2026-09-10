@@ -5,6 +5,7 @@ fn profile(model: &str, reasoning_effort: ReasoningEffort) -> TeamModelProfileTo
     TeamModelProfileToml {
         model: Some(model.to_string()),
         reasoning_effort: Some(reasoning_effort),
+        balance: None,
         dynamic_handoff: None,
         oversight_timeout_minutes: None,
     }
@@ -99,6 +100,35 @@ fn team_config_rejects_zero_worker_concurrency() {
     .expect_err("zero Worker concurrency should be rejected");
 
     assert_eq!(error, "team.worker.max_concurrent must be at least 1");
+}
+
+#[test]
+fn team_config_defaults_and_validates_lead_balance() {
+    let config = TeamConfig::try_from(TeamToml {
+        lead: Some(profile("gpt-lead", ReasoningEffort::High)),
+        worker: Some(worker_profile("gpt-worker", ReasoningEffort::Max, None)),
+        ..Default::default()
+    })
+    .expect("valid team config");
+    assert_eq!(
+        config
+            .profiles
+            .as_ref()
+            .map(|profiles| profiles.lead_balance),
+        Some(DEFAULT_TEAM_LEAD_BALANCE)
+    );
+
+    for balance in [0, 6] {
+        let mut lead = profile("gpt-lead", ReasoningEffort::High);
+        lead.balance = Some(balance);
+        let error = TeamConfig::try_from(TeamToml {
+            lead: Some(lead),
+            worker: Some(worker_profile("gpt-worker", ReasoningEffort::Max, None)),
+            ..Default::default()
+        })
+        .expect_err("out-of-range Lead balance should be rejected");
+        assert_eq!(error, "team.lead.balance must be between 1 and 5");
+    }
 }
 
 #[test]

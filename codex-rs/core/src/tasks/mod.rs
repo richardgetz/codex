@@ -768,6 +768,9 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
+        if self.is_activity_paused() {
+            return;
+        }
         let (turn_state, team_worker_lease) = loop {
             if !self.input_queue.has_pending_mailbox_items().await
                 || (!self.input_queue.has_trigger_turn_mailbox_items().await

@@ -1,5 +1,6 @@
 use super::*;
 use crate::extensions::send_thread_warning;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadQueueChangedNotification;
 use codex_extension_api::ThreadIdleCause;
 use codex_protocol::config_types::MultiAgentMode;
@@ -176,7 +177,7 @@ pub(super) async fn ensure_conversation_listener(
     if let Err(error) = ensure_listener_task_running(
         listener_task_context.clone(),
         conversation_id,
-        conversation,
+        Arc::clone(&conversation),
         thread_state,
     )
     .await
@@ -186,6 +187,17 @@ pub(super) async fn ensure_conversation_listener(
             .unsubscribe_connection_from_thread(conversation_id, connection_id)
             .await;
         return Err(error);
+    }
+    // Activity state is process-local and ephemeral. Send a live snapshot to a newly attached
+    // connection so reconnects do not depend on receiving a future delta.
+    for activity in conversation.activity_snapshot().await {
+        listener_task_context
+            .outgoing
+            .send_server_notification_to_connections(
+                std::slice::from_ref(&connection_id),
+                ServerNotification::ThreadActivityUpdated(activity.into()),
+            )
+            .await;
     }
     Ok(EnsureConversationListenerResult::Attached)
 }

@@ -596,6 +596,11 @@ pub struct ThreadTeamSettings {
     pub lead_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lead_reasoning_effort: Option<ReasoningEffortConfig>,
+    /// Discretionary Lead oversight balance, from 1 (maximum savings) through 5 (maximum confidence).
+    /// Missing values retain the historical current-behavior default.
+    #[schemars(range(min = 1, max = 5))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_balance: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -613,7 +618,8 @@ pub struct ThreadTeamSettings {
 
 /// Client-requested team transition or profile patch.
 ///
-/// `role`, `model`, and `reasoning_effort` identify a single profile to update.
+/// `role` identifies a single profile to update; `model`, `reasoning_effort`,
+/// or Lead-only `lead_balance` supplies the sparse change.
 /// They are intentionally sparse so a settings update can change one role
 /// without allowing a client to forge the other role or the restoration state.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
@@ -625,6 +631,10 @@ pub struct ThreadTeamSettingsUpdate {
     pub model: Option<String>,
     #[serde(default)]
     pub reasoning_effort: Option<ReasoningEffortConfig>,
+    /// Sparse Lead-only oversight balance update, validated to the range 1..=5.
+    #[schemars(range(min = 1, max = 5))]
+    #[serde(default)]
+    pub lead_balance: Option<u8>,
 }
 
 /// Thread-settings overrides that can be applied before user input or on their
@@ -721,6 +731,14 @@ pub enum Op {
     /// Wake an active reset-aware usage wait and request an immediate account
     /// usage check. This never starts a new model turn by itself.
     ContinueUsage,
+
+    /// Pause execution for the root thread and all loaded ThreadSpawn descendants.
+    /// In-flight side-effectful operations finish at their normal cooperative boundary.
+    PauseActivity,
+
+    /// Resume a manually paused agent tree and release retained usage or mailbox work.
+    /// This never creates a synthetic model turn by itself.
+    ContinueActivity,
 
     /// Terminate all running background terminal processes for this thread.
     /// Use this when callers intentionally want to stop long-lived background shells.
@@ -1131,6 +1149,8 @@ impl Op {
         match self {
             Self::Interrupt => "interrupt",
             Self::ContinueUsage => "continue_usage",
+            Self::PauseActivity => "pause_activity",
+            Self::ContinueActivity => "continue_activity",
             Self::CleanBackgroundTerminals => "clean_background_terminals",
             Self::RealtimeConversationStart(_) => "realtime_conversation_start",
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",
@@ -1620,6 +1640,9 @@ pub enum EventMsg {
     /// Persistent thread-settings overrides from the correlated submission have
     /// been applied to the session configuration.
     ThreadSettingsApplied(ThreadSettingsAppliedEvent),
+
+    /// Ephemeral execution activity and process-local manual-pause state.
+    ThreadActivityUpdated(ThreadActivityUpdatedEvent),
 
     /// Agent has completed all actions.
     /// v1 wire format uses `task_complete`; accept `turn_complete` for v2 interop.
@@ -2466,6 +2489,53 @@ pub struct ThreadSettingsSnapshot {
     /// Effective Lead/Worker model policy, when configured for this thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<ThreadTeamSettings>,
+}
+
+/// High-level execution activity for a loaded thread.
+///
+/// Waiting includes approval, user-input, usage-limit, and agent coordination waits. A paused
+/// thread can therefore remain idle or waiting while its retained turn is held for `/continue`.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadActivity {
+    Idle,
+    Working,
+    Waiting,
+}
+
+/// Why a thread is waiting instead of actively executing.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadActivityWaitReason {
+    Approval,
+    UserInput,
+    UsageLimit,
+    Agents,
+}
+
+/// Process-local manual pause state for a thread.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadPauseState {
+    Running,
+    Pausing,
+    Paused,
+}
+
+/// Ephemeral activity and manual-pause state published for a loaded thread.
+///
+/// These events are intentionally not persisted in rollout history. A client that reconnects
+/// should query the live thread state rather than infer a stale pause from history.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct ThreadActivityUpdatedEvent {
+    pub thread_id: ThreadId,
+    pub root_thread_id: ThreadId,
+    pub activity: ThreadActivity,
+    pub pause_state: ThreadPauseState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub wait_reason: Option<ThreadActivityWaitReason>,
+    pub in_flight_operations: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]

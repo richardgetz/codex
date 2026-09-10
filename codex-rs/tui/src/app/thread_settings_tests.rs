@@ -39,6 +39,32 @@ fn team_commands_build_sparse_thread_settings_updates() {
         team_settings_update_params(thread_id, TeamCommand::Status, TeamMode::Off),
         None
     );
+    assert_eq!(
+        team_settings_update_params(thread_id, TeamCommand::SelectBalance, TeamMode::Off),
+        None
+    );
+}
+
+#[test]
+fn balance_command_keeps_the_current_mode_and_targets_only_the_lead() {
+    let thread_id = ThreadId::new();
+    assert_eq!(
+        team_settings_update_params(
+            thread_id,
+            TeamCommand::ConfigureBalance { balance: 4 },
+            TeamMode::Off,
+        ),
+        Some(ThreadSettingsUpdateParams {
+            thread_id: thread_id.to_string(),
+            team: Some(ThreadTeamSettingsUpdate {
+                mode: TeamMode::Off,
+                role: Some(TeamRole::Lead),
+                lead_balance: Some(4),
+                ..Default::default()
+            }),
+            ..ThreadSettingsUpdateParams::default()
+        })
+    );
 }
 
 #[test]
@@ -61,6 +87,7 @@ fn profile_commands_keep_the_current_mode_in_sparse_updates() {
                 role: Some(TeamRole::Lead),
                 model: Some("gpt-5.6-sol".to_string()),
                 reasoning_effort: Some(ReasoningEffort::High),
+                lead_balance: None,
             }),
             ..ThreadSettingsUpdateParams::default()
         })

@@ -65,6 +65,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::Mutex;
+use tokio::sync::Notify;
 use tokio::sync::watch;
 use tracing::warn;
 use uuid::Uuid;
@@ -75,6 +76,7 @@ use self::residency::V2Residency;
 pub(crate) use self::worker_limit::TeamWorkerLease;
 use self::worker_limit::TeamWorkerLimiter;
 
+mod activity;
 mod execution;
 mod legacy;
 mod residency;
@@ -152,6 +154,14 @@ pub(crate) struct AgentControl {
     root_usage_auto_resume_update: Arc<Mutex<()>>,
     /// Serializes settings events sent while the root usage toggle changes.
     root_usage_auto_resume_propagation: Arc<Mutex<()>>,
+    /// Root-scoped process-local manual pause switch shared by every loaded descendant.
+    root_activity_paused: Arc<std::sync::atomic::AtomicBool>,
+    /// Serializes manual pause publication with child startup reconciliation.
+    root_activity_pause_update: Arc<Mutex<()>>,
+    /// Serializes descendant activity state propagation and preserves toggle order.
+    root_activity_pause_propagation: Arc<Mutex<()>>,
+    /// Wakes retained turns when the root activity pause is released.
+    root_activity_resume_notify: Arc<Notify>,
     /// Serializes root tier commits with descendant synchronization.
     root_service_tier_update: Arc<Mutex<()>>,
     /// Serializes settings events sent while a root routing tier changes, preserving toggle order.
@@ -188,6 +198,10 @@ impl AgentControl {
             root_usage_auto_resume: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             root_usage_auto_resume_update: Arc::new(Mutex::new(())),
             root_usage_auto_resume_propagation: Arc::new(Mutex::new(())),
+            root_activity_paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            root_activity_pause_update: Arc::new(Mutex::new(())),
+            root_activity_pause_propagation: Arc::new(Mutex::new(())),
+            root_activity_resume_notify: Arc::new(Notify::new()),
             root_service_tier_update: Arc::new(Mutex::new(())),
             root_service_tier_propagation: Arc::new(Mutex::new(())),
         };
@@ -307,7 +321,8 @@ impl AgentControl {
         } else {
             None
         };
-        let result = self
+
+        self
             .send_inter_agent_communication_after_capacity_check(
                 agent_id,
                 &state,
@@ -316,8 +331,7 @@ impl AgentControl {
                 start_options,
                 team_lead_completion,
             )
-            .await;
-        result
+            .await
     }
 
     pub(crate) async fn emit_sub_agent_activity(

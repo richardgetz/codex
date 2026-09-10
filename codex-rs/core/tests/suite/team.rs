@@ -71,6 +71,8 @@ const THIRD_DIRECT_CALL_ID: &str = "team-third-direct";
 const FIRST_DIRECT_GATE_CALL_ID: &str = "team-first-direct-gate";
 const ROOT_DIRECT_GATE_CALL_ID: &str = "team-root-direct-gate";
 
+#[path = "team_activity.rs"]
+mod team_activity;
 #[path = "team_idle.rs"]
 mod team_idle;
 #[path = "team_usage.rs"]
@@ -91,6 +93,7 @@ fn team_config(mode: TeamMode, lead_model: &str, worker_model: &str) -> TeamConf
                 reasoning_effort: ReasoningEffort::Low,
             },
             lead_dynamic_handoff: false,
+            lead_balance: codex_config::DEFAULT_TEAM_LEAD_BALANCE,
             lead_oversight_timeout_minutes:
                 codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
         }),
@@ -1337,6 +1340,7 @@ async fn team_snapshot_survives_cold_resume_and_profile_change() -> Result<()> {
                 role: Some(TeamRole::Lead),
                 model: Some(WORKER_MODEL.to_string()),
                 reasoning_effort: Some(ReasoningEffort::Low),
+                lead_balance: Some(4),
             }),
             ..Default::default()
         },
@@ -1350,6 +1354,7 @@ async fn team_snapshot_survives_cold_resume_and_profile_change() -> Result<()> {
             changed_snapshot.reasoning_effort,
             changed_team.lead_model.as_deref(),
             changed_team.lead_reasoning_effort.clone(),
+            changed_team.lead_balance,
             changed_team.worker_model.as_deref(),
         ),
         (
@@ -1357,6 +1362,7 @@ async fn team_snapshot_survives_cold_resume_and_profile_change() -> Result<()> {
             Some(ReasoningEffort::Low),
             Some(WORKER_MODEL),
             Some(ReasoningEffort::Low),
+            Some(4),
             Some(WORKER_MODEL),
         )
     );
@@ -1378,6 +1384,7 @@ async fn team_snapshot_survives_cold_resume_and_profile_change() -> Result<()> {
             team.role,
             team.lead_model.as_deref(),
             team.lead_reasoning_effort.clone(),
+            team.lead_balance,
             team.worker_model.as_deref(),
         ),
         (
@@ -1385,6 +1392,7 @@ async fn team_snapshot_survives_cold_resume_and_profile_change() -> Result<()> {
             Some(TeamRole::Lead),
             Some(WORKER_MODEL),
             Some(ReasoningEffort::Low),
+            Some(4),
             Some(WORKER_MODEL),
         )
     );
@@ -1407,8 +1415,20 @@ async fn team_snapshot_survives_cold_resume_and_profile_change() -> Result<()> {
         resumed.config.team,
         team_config(TeamMode::LeadWorker, "gpt-5.5", "gpt-5.4")
     );
-    assert_request_assignment(&initial_response.single_request(), LEAD_MODEL, "max");
-    assert_request_assignment(&resumed_response.single_request(), WORKER_MODEL, "low");
+    let initial_request = initial_response.single_request();
+    let resumed_request = resumed_response.single_request();
+    assert_request_assignment(&initial_request, LEAD_MODEL, "max");
+    assert!(
+        !team_instruction_fragments(&initial_request)
+            .iter()
+            .any(|fragment| fragment.contains("Lead usage/confidence balance"))
+    );
+    assert_request_assignment(&resumed_request, WORKER_MODEL, "low");
+    assert!(
+        team_instruction_fragments(&resumed_request)
+            .iter()
+            .any(|fragment| fragment.contains("Confidence focused"))
+    );
     Ok(())
 }
 

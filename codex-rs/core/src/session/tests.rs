@@ -115,6 +115,7 @@ use codex_utils_path_uri::PathUri;
 use core_test_support::test_codex::local_selections;
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use tracing::Span;
 
@@ -7675,6 +7676,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         active_turn: Mutex::new(None),
         usage_resume_check_notify: Notify::new(),
         usage_resume_waiting: AtomicBool::new(false),
+        activity_in_flight: AtomicU32::new(0),
         scratchpad_loopback_limiter: std::sync::Mutex::new(Default::default()),
         lead_idle_controller: super::lead_idle::LeadIdleController::default(),
         team_lead_turn_admission: Mutex::new(()),
@@ -10099,6 +10101,7 @@ where
         active_turn: Mutex::new(None),
         usage_resume_check_notify: Notify::new(),
         usage_resume_waiting: AtomicBool::new(false),
+        activity_in_flight: AtomicU32::new(0),
         scratchpad_loopback_limiter: std::sync::Mutex::new(Default::default()),
         lead_idle_controller: super::lead_idle::LeadIdleController::default(),
         team_lead_turn_admission: Mutex::new(()),

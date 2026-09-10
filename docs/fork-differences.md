@@ -108,6 +108,8 @@ enabled = true
 [team.lead]
 model = "gpt-6-astra"
 reasoning_effort = "high"
+# Optional Lead-only balance for discretionary oversight (1..5; default 3).
+balance = 2
 # Optional: minutes before each parked Lead interval receives one oversight wake.
 # Valid range: 1..15768000 (30 years); 30 or more is recommended.
 oversight_timeout_minutes = 30
@@ -133,6 +135,17 @@ max_concurrent = 10
   catalog entry. These profile edits remain in the current thread snapshot,
   preserve Team Off until `/team on`, survive resume/fork, and affect Workers
   spawned afterward. In-flight Workers retain the profile captured at spawn.
+  `/team balance` opens a five-choice Lead usage/confidence picker; typed
+  `/team balance 1` through `/team balance 5` select a value directly. The
+  balance is Lead-only discretionary oversight: level 1 uses the fewest
+  practical optional checkpoints, level 2 targets checks that can prevent
+  likely rework, level 3 keeps today's behavior, and levels 4-5 increase
+  independent checks and failure-mode cross-checks. It persists in the thread
+  snapshot and does not change Team On/Off, Worker scope, completeness,
+  required checks, approvals, configured efforts, or global config defaults.
+  This is advisory and makes no hard token-savings or correctness guarantee.
+  It remains independent of `dynamic_handoff`, leaves
+  `oversight_timeout_minutes` unchanged, and adds no polling loop.
   Turning team mode off restores the previous single model and effort. Re-enabling
   Team mode while a Lead is parked with direct Workers starts a fresh oversight
   interval after the assignment is published.
@@ -351,9 +364,13 @@ set a 10% floor on an existing thread:
 - An opted-in automatic turn that reaches `minimumRemainingPercent` remains
   parked and uses the same reset-aware scheduler. It resumes only after a
   fresh usage snapshot clears the floor. Explicit user turns remain allowed.
-  Use `/continue` to wake an existing wait immediately; it never starts a new
-  model turn or bypasses the floor. The command reports when usage is still
-  exhausted or the account check is unavailable.
+  The native `/continue` and `thread/activity/continue` commands resolve a
+  viewed Worker to its Lead root, release that activity tree, and wake an
+  existing usage wait immediately; they never start a new model turn or bypass
+  the floor. The command reports when usage is still exhausted or the account
+  check is unavailable. The usage-only `thread/usage/resume` request remains
+  wake-only for the requested thread's loaded usage subtree and does not release
+  a manual activity pause.
 - On a settings update, omitted policy fields preserve their existing values.
   Send `"autoResume": false` to disable reset retry, or
   `"minimumRemainingPercent": null` to clear the floor. Wait for
@@ -361,15 +378,50 @@ set a 10% floor on an existing thread:
 - The policy persists across resume and is inherited by copied, reference,
   paginated, and Last-N forks, as well as spawned subthreads. A cold resume
   restores the policy and the configured interval, but an active reset wait
-  exists only in the running process and is not restored after restart. A root
-  `/continue` checks the root and its loaded ThreadSpawn descendants; a Worker
-  `/continue` checks that Worker and its loaded descendants. Completed,
-  cancelled, and manually stopped work is never revived.
+  exists only in the running process and is not restored after restart.
+  Completed, cancelled, and manually stopped work is never revived.
+- A hard API-equivalent dollar cap is not enforced because ordinary provider
+  responses do not expose authoritative billing limits; local `/status` and
+  `/spend` API-equivalent cost estimates remain informational.
 
-These controls use provider usage percentages. They do not enforce a dollar
-spending cap: the local `/status` and `/spend` API-equivalent cost estimates
-remain informational because ordinary provider responses do not expose
-authoritative billing limits. See the [app-server API](../codex-rs/app-server/README.md)
+### Session-scoped cooperative pause and continue
+
+The native TUI and app-server v2 expose a process-local pause for the current
+Lead tree. `/pause` and the `thread/activity/pause` request resolve a viewed
+Worker to its Lead root, then pause that root and every currently loaded
+ThreadSpawn descendant. A child that starts while the pause is active adopts
+the root state before it can admit model or tool work. The pause is manual and
+overrides usage-reset wakeups and Lead oversight deadlines; it does not cancel
+the retained turn, revive completed or cancelled work, or affect another root
+session.
+
+Pause is cooperative. A model or side-effectful tool call already in flight may
+finish, and its state is reported as `pausing` until it reaches a boundary.
+Commands or remote jobs already launched by that tool are not suspended or
+replayed. Waiting for approval, user input, usage, or another agent is
+quiescent and reports `paused` immediately. `/continue` and
+`thread/activity/continue` release the same retained work and request an
+existing usage wait to check now; they do not create a synthetic model turn.
+
+Clients can read a live tree snapshot with `thread/activity/read` and subscribe
+to the ephemeral `thread/activity/updated` notification. Each state carries
+`activity` (`idle`, `working`, or `waiting`), `pauseState` (`running`,
+`pausing`, or `paused`), an optional wait reason, and the count of admitted
+in-flight operations. Activity state is process-local and is not restored from
+rollout history after a cold resume.
+
+In the native TUI, this event stream drives one compact row for the selected
+Lead tree: `Lead: idle|working|waiting · Workers: N working[, M waiting]`.
+Worker counts include unfinished loaded direct and nested descendants under
+that root; in the normal row, `N` and `M` count working and waiting Workers
+respectively. Completed, closed, and unrelated roots are excluded. The same
+projection feeds the terminal title, so the title and row agree. A Lead or
+Worker that is actually working animates; approval, user-input, usage-limit,
+and agent waits stay static. `Pausing` animates while in-flight operations
+remain and reports their aggregate count; the static row is
+`Paused · Lead + N workers · /continue to resume`, with `N` equal to the total
+unfinished working and waiting Workers. The row honors reduced-motion settings
+and updates from activity events rather than polling. See the [app-server API](../codex-rs/app-server/README.md)
 for connection and thread lifecycle details.
 
 ### GPT-Live voice in the native TUI
