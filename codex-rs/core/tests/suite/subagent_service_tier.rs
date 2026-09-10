@@ -237,10 +237,22 @@ async fn root_service_tier_change_updates_existing_subagent(
         },
     )
     .await?;
+    let expected_child_service_tier = updated_service_tier
+        .map(str::to_string)
+        .or_else(|| Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()));
+    let propagated_settings = wait_for_event_match(&child, |event| match event {
+        EventMsg::ThreadSettingsApplied(event) => Some(event.thread_settings.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        propagated_settings.service_tier, expected_child_service_tier,
+        "root routing changes should publish the child settings snapshot"
+    );
     assert_eq!(
         child.config_snapshot().await.service_tier,
-        original_child_service_tier,
-        "the root routing policy must not rewrite child-owned settings"
+        expected_child_service_tier,
+        "the root routing policy should keep loaded child settings in sync"
     );
 
     child

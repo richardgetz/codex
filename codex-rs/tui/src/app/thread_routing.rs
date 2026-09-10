@@ -9,7 +9,9 @@ use super::*;
 use crate::app_event::ThreadTitleDestination;
 use crate::chatwidget::ThreadInputStateRestoreMode;
 use crate::session_resume::read_session_model;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadStartedNotification;
+use codex_app_server_protocol::ThreadUsagePolicyParams;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::WarningNotification;
@@ -439,7 +441,7 @@ impl App {
 
     pub(super) fn thread_id_for_active_op(&self, op: &AppCommand) -> Option<ThreadId> {
         match op {
-            AppCommand::Interrupt => self.current_displayed_thread_id(),
+            AppCommand::Interrupt | AppCommand::ContinueUsage => self.current_displayed_thread_id(),
             _ => self.active_thread_id,
         }
     }
@@ -664,6 +666,22 @@ impl App {
                     }
                 });
                 Ok(true)
+            }
+            AppCommand::ContinueUsage => {
+                app_server.thread_usage_resume(thread_id).await?;
+                Ok(true)
+            }
+            AppCommand::SetUsageAutoResume { enabled } => {
+                app_server
+                    .thread_settings_update(ThreadSettingsUpdateParams {
+                        thread_id: thread_id.to_string(),
+                        usage_policy: Some(ThreadUsagePolicyParams {
+                            auto_resume: Some(*enabled),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    })
+                    .await
             }
             AppCommand::UserTurn {
                 items,

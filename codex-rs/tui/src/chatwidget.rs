@@ -106,6 +106,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillMetadata;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::TeamRole;
 use codex_app_server_protocol::ThreadGoal as AppThreadGoal;
 use codex_app_server_protocol::ThreadGoalStatus as AppThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
@@ -113,6 +114,7 @@ use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadTeamSettings;
 use codex_app_server_protocol::ThreadTokenUsage;
+use codex_app_server_protocol::ThreadUsagePolicy;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -392,6 +394,7 @@ mod interaction;
 mod session_tmp_command;
 mod team;
 pub(crate) use self::team::TeamCommand;
+pub(crate) use self::team::role_label;
 mod skills;
 mod slash_dispatch;
 use self::skills::collect_tool_mentions;
@@ -563,6 +566,12 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ModelPopupTarget {
+    Conversation,
+    Team { thread_id: ThreadId, role: TeamRole },
+}
+
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
 /// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
@@ -597,10 +606,13 @@ pub(crate) struct ChatWidget {
     /// Team mode requested by the user until the server confirms it in a
     /// thread settings snapshot.
     pending_team_command: Option<TeamCommand>,
+    /// Effective per-thread policy for reset-aware usage continuation.
+    thread_usage_policy: ThreadUsagePolicy,
     has_chatgpt_account: bool,
     has_codex_backend_auth: bool,
     model_catalog: Arc<ModelCatalog>,
     model_popup_request_id: Option<uuid::Uuid>,
+    model_popup_target: ModelPopupTarget,
     model_popup_model_ids: Vec<String>,
     session_telemetry: SessionTelemetry,
     session_header: SessionHeader,

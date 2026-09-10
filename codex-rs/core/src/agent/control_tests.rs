@@ -34,6 +34,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::MemoryAccessPolicy;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::error::CodexErrorDetails;
@@ -353,6 +354,24 @@ async fn wait_for_recorded_user_message(thread: &CodexThread, needle: &str) {
     .expect("timed out waiting for user message recording");
 }
 
+async fn wait_for_thread_settings_event(thread: &CodexThread) -> ThreadSettingsSnapshot {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let event = thread
+                .next_event()
+                .await
+                .expect("event stream should stay open");
+            if let EventMsg::ThreadSettingsApplied(event) = event.msg
+                && event.thread_id == Some(thread.id())
+            {
+                return event.thread_settings;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for service tier settings event")
+}
+
 fn history_contains_assistant_inter_agent_communication<'a>(
     history_items: impl IntoIterator<Item = &'a ResponseItem>,
     expected: &InterAgentCommunication,
@@ -455,36 +474,75 @@ async fn start_unregistered_thread_spawn_child(
     parent_thread_id: ThreadId,
     depth: i32,
 ) -> (ThreadId, Arc<CodexThread>) {
-    let child_thread = harness
-        .manager
-        .start_thread(crate::thread_manager::StartThreadOptions {
-            config: harness.config.clone(),
-            allow_provider_model_fallback: false,
-            initial_history: InitialHistory::New,
-            history_mode: None,
-            session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth,
-                agent_path: None,
-                agent_nickname: None,
-                agent_role: Some("explorer".to_string()),
-            })),
-            thread_source: Some(ThreadSource::Subagent),
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Some(vec![TurnEnvironmentSelection {
-                environment_id: "local".to_string(),
-                cwd: PathUri::from_abs_path(&harness.config.cwd),
-                workspace_roots: vec![PathUri::from_abs_path(&harness.config.cwd)],
-                config: EnvironmentConfigState::FromThread,
-            }]),
-            thread_extension_init: Default::default(),
-            client_mcp_extensions: Default::default(),
-            reserved_thread_id: None,
-        })
-        .await
-        .expect("unregistered child spawn should succeed");
+    start_unregistered_thread_spawn_child_with_control(harness, parent_thread_id, depth, None).await
+}
+
+async fn start_unregistered_thread_spawn_child_with_control(
+    harness: &AgentControlHarness,
+    parent_thread_id: ThreadId,
+    depth: i32,
+    agent_control: Option<AgentControl>,
+) -> (ThreadId, Arc<CodexThread>) {
+    let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        depth,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: Some("explorer".to_string()),
+    });
+    let environments = Some(vec![TurnEnvironmentSelection {
+        environment_id: "local".to_string(),
+        cwd: PathUri::from_abs_path(&harness.config.cwd),
+        workspace_roots: vec![PathUri::from_abs_path(&harness.config.cwd)],
+        config: EnvironmentConfigState::FromThread,
+    }]);
+    let child_thread = match agent_control {
+        Some(agent_control) => {
+            harness
+                .manager
+                .start_thread_with_agent_control_for_tests(
+                    crate::thread_manager::StartThreadOptions {
+                        config: harness.config.clone(),
+                        allow_provider_model_fallback: false,
+                        initial_history: InitialHistory::New,
+                        history_mode: None,
+                        session_source: Some(session_source),
+                        thread_source: Some(ThreadSource::Subagent),
+                        dynamic_tools: Vec::new(),
+                        metrics_service_name: None,
+                        parent_trace: None,
+                        environments,
+                        thread_extension_init: Default::default(),
+                        client_mcp_extensions: Default::default(),
+                        reserved_thread_id: None,
+                    },
+                    agent_control,
+                    parent_thread_id,
+                )
+                .await
+        }
+        None => {
+            harness
+                .manager
+                .start_thread(crate::thread_manager::StartThreadOptions {
+                    config: harness.config.clone(),
+                    allow_provider_model_fallback: false,
+                    initial_history: InitialHistory::New,
+                    history_mode: None,
+                    session_source: Some(session_source),
+                    thread_source: Some(ThreadSource::Subagent),
+                    dynamic_tools: Vec::new(),
+                    metrics_service_name: None,
+                    parent_trace: None,
+                    environments,
+                    thread_extension_init: Default::default(),
+                    client_mcp_extensions: Default::default(),
+                    reserved_thread_id: None,
+                })
+                .await
+        }
+    }
+    .expect("unregistered child spawn should succeed");
     let child_thread_id = child_thread.thread_id;
     assert!(
         harness
@@ -497,6 +555,273 @@ async fn start_unregistered_thread_spawn_child(
     wait_for_live_thread_spawn_children(&harness.control, parent_thread_id, &[child_thread_id])
         .await;
     (child_thread_id, child_thread.thread)
+}
+
+#[tokio::test]
+async fn root_service_tier_propagates_to_loaded_nested_subagents() {
+    let harness = AgentControlHarness::new().await;
+    let (root_thread_id, root_thread) = harness.start_thread().await;
+    let root_control = root_thread.session.services.agent_control.clone();
+    let (child_thread_id, child_thread) =
+        start_unregistered_thread_spawn_child(&harness, root_thread_id, 1).await;
+    let (grandchild_thread_id, grandchild_thread) =
+        start_unregistered_thread_spawn_child(&harness, child_thread_id, 2).await;
+
+    let captured_child_turn = child_thread.session.new_default_turn().await;
+    let captured_child_service_tier = captured_child_turn.config.service_tier.clone();
+    assert_eq!(
+        child_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .service_tier,
+        None
+    );
+    assert_eq!(
+        grandchild_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .service_tier,
+        None
+    );
+
+    root_control.set_root_service_tier(Some("priority".to_string()));
+    root_control.propagate_root_service_tier().await;
+
+    assert_eq!(
+        child_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .service_tier
+            .as_deref(),
+        Some("priority"),
+        "propagation should update the child snapshot before notification delivery"
+    );
+
+    let child_settings_event = wait_for_thread_settings_event(&child_thread).await;
+    let grandchild_settings_event = wait_for_thread_settings_event(&grandchild_thread).await;
+    assert_eq!(
+        child_settings_event.service_tier.as_deref(),
+        Some("priority")
+    );
+    assert_eq!(
+        grandchild_settings_event.service_tier.as_deref(),
+        Some("priority")
+    );
+    assert_eq!(
+        child_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .service_tier
+            .as_deref(),
+        Some("priority")
+    );
+    assert_eq!(
+        grandchild_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .service_tier
+            .as_deref(),
+        Some("priority")
+    );
+    assert_eq!(
+        captured_child_turn.config.service_tier, captured_child_service_tier,
+        "an already-created turn keeps its captured service tier"
+    );
+
+    root_control.set_root_service_tier(Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()));
+    root_control.propagate_root_service_tier().await;
+    let child_settings_event = wait_for_thread_settings_event(&child_thread).await;
+    let grandchild_settings_event = wait_for_thread_settings_event(&grandchild_thread).await;
+    assert_eq!(
+        child_settings_event.service_tier.as_deref(),
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE)
+    );
+    assert_eq!(
+        grandchild_settings_event.service_tier.as_deref(),
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE)
+    );
+
+    let report = harness
+        .manager
+        .shutdown_all_threads_bounded(Duration::from_secs(5))
+        .await;
+    assert_eq!(report.submit_failed, Vec::<ThreadId>::new());
+    assert_eq!(report.timed_out, Vec::<ThreadId>::new());
+    assert!(
+        harness
+            .manager
+            .get_thread(grandchild_thread_id)
+            .await
+            .is_err(),
+        "nested child should be shut down with the tree"
+    );
+}
+
+#[tokio::test]
+async fn root_usage_auto_resume_propagates_and_nudges_loaded_subtree() {
+    let harness = AgentControlHarness::new().await;
+    let (root_thread_id, root_thread) = harness.start_thread().await;
+    let root_control = root_thread.session.services.agent_control.clone();
+    root_control.set_root_usage_auto_resume(false);
+    let (child_thread_id, child_thread) =
+        start_unregistered_thread_spawn_child(&harness, root_thread_id, 1).await;
+    let (grandchild_thread_id, grandchild_thread) =
+        start_unregistered_thread_spawn_child(&harness, child_thread_id, 2).await;
+
+    assert!(
+        !child_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .usage_policy
+            .auto_resume
+    );
+    assert!(
+        !grandchild_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .usage_policy
+            .auto_resume
+    );
+
+    root_control.set_root_usage_auto_resume(true);
+    root_control.propagate_root_usage_auto_resume().await;
+
+    assert!(
+        child_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .usage_policy
+            .auto_resume
+    );
+    assert!(
+        grandchild_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .usage_policy
+            .auto_resume
+    );
+    assert!(
+        wait_for_thread_settings_event(&child_thread)
+            .await
+            .usage_policy
+            .auto_resume
+    );
+    assert!(
+        wait_for_thread_settings_event(&grandchild_thread)
+            .await
+            .usage_policy
+            .auto_resume
+    );
+
+    // Children created after the live root toggle inherit the latest setting, even when their
+    // parent was already running before the toggle.
+    let (future_thread_id, future_thread) = start_unregistered_thread_spawn_child_with_control(
+        &harness,
+        grandchild_thread_id,
+        3,
+        Some(root_control.clone()),
+    )
+    .await;
+    assert!(
+        future_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .usage_policy
+            .auto_resume
+    );
+
+    // A root `/continue` request reaches the root and every loaded descendant. Each parked
+    // session still coalesces repeated requests into one Notify permit.
+    child_thread.session.set_usage_resume_waiting(true);
+    assert_eq!(
+        root_control
+            .request_usage_resume_for_subtree(root_thread_id)
+            .await,
+        1
+    );
+    assert_eq!(
+        root_control
+            .request_usage_resume_for_subtree(root_thread_id)
+            .await,
+        1
+    );
+    timeout(
+        Duration::from_secs(1),
+        child_thread.session.wait_for_usage_resume_check(),
+    )
+    .await
+    .expect("usage nudge should wake the child");
+    assert!(
+        timeout(
+            Duration::from_millis(50),
+            child_thread.session.wait_for_usage_resume_check(),
+        )
+        .await
+        .is_err(),
+        "repeated nudges should not queue a second permit"
+    );
+    child_thread.session.set_usage_resume_waiting(false);
+
+    root_control.set_root_usage_auto_resume(false);
+    root_control.propagate_root_usage_auto_resume().await;
+    assert!(
+        !child_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .usage_policy
+            .auto_resume
+    );
+    assert!(
+        !grandchild_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .usage_policy
+            .auto_resume
+    );
+    assert!(
+        !future_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .usage_policy
+            .auto_resume
+    );
+
+    let (_post_off_thread_id, post_off_thread) =
+        start_unregistered_thread_spawn_child_with_control(
+            &harness,
+            future_thread_id,
+            4,
+            Some(root_control.clone()),
+        )
+        .await;
+    assert!(
+        !post_off_thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .usage_policy
+            .auto_resume
+    );
+
+    let report = harness
+        .manager
+        .shutdown_all_threads_bounded(Duration::from_secs(5))
+        .await;
+    assert_eq!(report.submit_failed, Vec::<ThreadId>::new());
+    assert_eq!(report.timed_out, Vec::<ThreadId>::new());
 }
 
 async fn assert_thread_not_loaded(manager: &ThreadManager, thread_id: ThreadId) {

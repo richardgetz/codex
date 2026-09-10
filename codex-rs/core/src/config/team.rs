@@ -1,4 +1,5 @@
 use super::Config;
+use codex_config::DEFAULT_TEAM_LEAD_DYNAMIC_HANDOFF;
 use codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES;
 use codex_config::TeamModelProfile;
 use codex_config::TeamModelProfiles;
@@ -66,6 +67,7 @@ impl Config {
             worker_model: profiles.map(|profiles| profiles.worker.model.clone()),
             worker_reasoning_effort: profiles
                 .map(|profiles| profiles.worker.reasoning_effort.clone()),
+            dynamic_handoff: profiles.map(|profiles| profiles.lead_dynamic_handoff),
             previous_model: self.team_previous_model.clone(),
             previous_reasoning_effort: self.team_previous_reasoning_effort.clone(),
         })
@@ -82,6 +84,21 @@ pub(crate) fn team_profiles_from_snapshot(
 fn team_profiles_from_snapshot_with_timeout(
     settings: &ThreadTeamSettings,
     lead_oversight_timeout_minutes: u64,
+) -> Result<Option<TeamModelProfiles>, String> {
+    let lead_dynamic_handoff = settings
+        .dynamic_handoff
+        .unwrap_or(DEFAULT_TEAM_LEAD_DYNAMIC_HANDOFF);
+    team_profiles_from_snapshot_with_options(
+        settings,
+        lead_oversight_timeout_minutes,
+        lead_dynamic_handoff,
+    )
+}
+
+fn team_profiles_from_snapshot_with_options(
+    settings: &ThreadTeamSettings,
+    lead_oversight_timeout_minutes: u64,
+    lead_dynamic_handoff: bool,
 ) -> Result<Option<TeamModelProfiles>, String> {
     let assignments = (
         settings.lead_model.as_ref(),
@@ -124,6 +141,7 @@ fn team_profiles_from_snapshot_with_timeout(
             model: worker_model.to_string(),
             reasoning_effort: worker_reasoning_effort,
         },
+        lead_dynamic_handoff,
         lead_oversight_timeout_minutes,
     }))
 }

@@ -84,6 +84,27 @@ pub async fn interrupt(sess: &Arc<Session>) {
     sess.interrupt_task().await;
 }
 
+pub async fn continue_usage(sess: &Arc<Session>, sub_id: String) {
+    let waiting = sess
+        .services
+        .agent_control
+        .request_usage_resume_for_subtree(sess.thread_id())
+        .await;
+    let waiting = waiting > 0;
+    let message = if waiting {
+        "Requested an immediate usage check for the paused work."
+    } else {
+        "No usage-paused work is waiting for a usage check."
+    };
+    sess.send_event_raw_without_materializing_rollout(Event {
+        id: sub_id,
+        msg: EventMsg::Warning(WarningEvent {
+            message: message.to_string(),
+        }),
+    })
+    .await;
+}
+
 pub async fn clean_background_terminals(sess: &Arc<Session>) {
     sess.close_unified_exec_processes().await;
 }
@@ -1482,6 +1503,10 @@ pub(super) async fn submission_loop(
             match sub.op {
                 Op::Interrupt => {
                     interrupt(&sess).await;
+                    false
+                }
+                Op::ContinueUsage => {
+                    continue_usage(&sess, sub.id.clone()).await;
                     false
                 }
                 Op::CleanBackgroundTerminals => {

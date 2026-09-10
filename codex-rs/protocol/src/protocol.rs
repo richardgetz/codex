@@ -600,17 +600,31 @@ pub struct ThreadTeamSettings {
     pub worker_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_reasoning_effort: Option<ReasoningEffortConfig>,
+    /// Whether the Lead should delegate substantial lookup work to a Worker.
+    /// This field was added after the original team snapshot shape, so missing
+    /// values retain the disabled default when older rollouts are resumed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic_handoff: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_reasoning_effort: Option<ReasoningEffortConfig>,
 }
 
-/// Client-requested team transition. Assignment and restoration fields are
-/// thread-owned and are never accepted from a settings override.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+/// Client-requested team transition or profile patch.
+///
+/// `role`, `model`, and `reasoning_effort` identify a single profile to update.
+/// They are intentionally sparse so a settings update can change one role
+/// without allowing a client to forge the other role or the restoration state.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ThreadTeamSettingsUpdate {
     pub mode: TeamMode,
+    #[serde(default)]
+    pub role: Option<TeamRole>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffortConfig>,
 }
 
 /// Thread-settings overrides that can be applied before user input or on their
@@ -703,6 +717,10 @@ pub enum Op {
     /// Abort current task without terminating background terminal processes.
     /// This server sends [`EventMsg::TurnAborted`] in response.
     Interrupt,
+
+    /// Wake an active reset-aware usage wait and request an immediate account
+    /// usage check. This never starts a new model turn by itself.
+    ContinueUsage,
 
     /// Terminate all running background terminal processes for this thread.
     /// Use this when callers intentionally want to stop long-lived background shells.
@@ -1112,6 +1130,7 @@ impl Op {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Interrupt => "interrupt",
+            Self::ContinueUsage => "continue_usage",
             Self::CleanBackgroundTerminals => "clean_background_terminals",
             Self::RealtimeConversationStart(_) => "realtime_conversation_start",
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",

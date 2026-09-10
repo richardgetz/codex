@@ -173,8 +173,12 @@ pub(crate) fn world_state_policy(
     role_for_session_source(source)?;
     if config.team_mode == codex_protocol::protocol::TeamMode::LeadWorker {
         let worker_max_concurrent = config.team.worker_max_concurrent;
-        protocol_role_for_session_source(config, source)
-            .map(|role| TeamPolicyState::new(role, worker_max_concurrent))
+        let dynamic_handoff = config
+            .effective_team_profiles()
+            .is_some_and(|profiles| profiles.lead_dynamic_handoff);
+        protocol_role_for_session_source(config, source).map(|role| {
+            TeamPolicyState::new(role, worker_max_concurrent).with_dynamic_handoff(dynamic_handoff)
+        })
     } else if config.team_state_persisted {
         Some(TeamPolicyState::disabled())
     } else {
@@ -212,6 +216,52 @@ fn invalid_team(candidate: impl Into<String>) -> ConstraintError {
     }
 }
 
+pub(crate) fn team_update_changes_profile(update: &ThreadTeamSettingsUpdate) -> bool {
+    update.role.is_some() || update.model.is_some() || update.reasoning_effort.is_some()
+}
+
+/// Applies a sparse profile patch to a cloned config before it is validated or
+/// committed. The selected role must be explicit so a client cannot accidentally
+/// overwrite the active assignment or the other role's profile.
+pub(crate) fn apply_team_profile_update(
+    config: &mut Config,
+    update: &ThreadTeamSettingsUpdate,
+) -> ConstraintResult<()> {
+    if !team_update_changes_profile(update) {
+        return Ok(());
+    }
+    let role = update
+        .role
+        .ok_or_else(|| invalid_team("profile role is required when updating a team profile"))?;
+    if update.model.is_none() && update.reasoning_effort.is_none() {
+        return Err(invalid_team(
+            "a team profile update must include a model or reasoning effort",
+        ));
+    }
+    let mut profiles = config
+        .effective_team_profiles()
+        .cloned()
+        .ok_or_else(|| invalid_team("configured Lead and Worker profiles"))?;
+    let profile = match role {
+        TeamRole::Lead => &mut profiles.lead,
+        TeamRole::Worker => &mut profiles.worker,
+    };
+    if let Some(model) = update.model.as_ref() {
+        let model = model.trim();
+        if model.is_empty() {
+            return Err(invalid_team(format!(
+                "{role:?} model must be a non-empty string"
+            )));
+        }
+        profile.model = model.to_string();
+    }
+    if let Some(reasoning_effort) = update.reasoning_effort.clone() {
+        profile.reasoning_effort = reasoning_effort;
+    }
+    config.team_runtime_profiles = Some(profiles);
+    Ok(())
+}
+
 pub(crate) fn restore_team_snapshot(
     config: &mut Config,
     snapshot: &ThreadTeamSettings,
@@ -219,9 +269,9 @@ pub(crate) fn restore_team_snapshot(
     config.restore_team_snapshot(snapshot).map_err(invalid_team)
 }
 
-/// Applies a client mode-only update to the session configuration and returns
-/// the canonical step-settings patch. Trusted snapshots are restored by the
-/// session configuration layer before this transition is evaluated.
+/// Applies a client team update to the session configuration and returns the
+/// canonical step-settings patch. Trusted snapshots are restored by the session
+/// configuration layer before this transition is evaluated.
 pub(crate) fn apply_team_update(
     next_configuration: &mut SessionConfiguration,
     current_configuration: &SessionConfiguration,
@@ -237,6 +287,7 @@ pub(crate) fn apply_team_update(
         return Err(invalid_team("Worker sessions cannot disable team mode"));
     }
     let config = std::sync::Arc::make_mut(&mut next_configuration.original_config_do_not_use);
+    apply_team_profile_update(config, &team_update)?;
     match team_update.mode {
         codex_protocol::protocol::TeamMode::Off => {
             let saved_model = config.team_previous_model.clone();

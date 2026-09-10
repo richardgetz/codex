@@ -1,6 +1,7 @@
 ---
 source: tui/src/status/tests.rs
-expression: "format!(\"complete:\\n{complete}\\n\\nunavailable:\\n{unavailable}\\n\\nknown_empty:\\n{known_empty}\")"
+assertion_line: 1925
+expression: "format!(\"complete:\\n{complete}\\n\\nlive:\\n{live}\\n\\nunavailable:\\n{unavailable}\\n\\nknown_empty:\\n{known_empty}\")"
 ---
 complete:
 /status
@@ -18,6 +19,30 @@ complete:
 │  Session:       019cff70-2599-75e2-af72-b958ce5dc1cc                     │
 │                                                                          │
 │  Token usage:   300K total  (300K input + 0 output)                      │
+│  Limits:        data not available yet                                   │
+│                                                                          │
+│  Token usage:   300K API-equivalent tokens  ~$0.30                       │
+│    Input:       300K total, 0 cached, 300K billable  ~$0.30              │
+│    Output:      0 total, 0 reasoning  ~$0.0000                           │
+╰──────────────────────────────────────────────────────────────────────────╯
+
+live:
+/status
+
+╭──────────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.153.4)                                              │
+│                                                                          │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date            │
+│ information on rate limits and credits                                   │
+│                                                                          │
+│  Model:         gpt-5.4 (reasoning none, summaries auto)                 │
+│  Directory: [[workspace]]                                                │
+│  Permissions:   Custom (workspace with network access, Ask for approval) │
+│  Agents.md:     <none>                                                   │
+│  Session:       019cff70-2599-75e2-af72-b958ce5dc1cc                     │
+│                                                                          │
+│  Token usage:   300K total  (300K input + 0 output)                      │
+│  Usage tree:    live responses; persisted history may be incomplete      │
 │  Limits:        data not available yet                                   │
 │                                                                          │
 │  Token usage:   300K API-equivalent tokens  ~$0.30                       │

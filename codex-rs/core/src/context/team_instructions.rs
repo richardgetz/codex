@@ -4,7 +4,11 @@ use codex_protocol::protocol::TeamRole;
 
 const LEAD_TEAM_INSTRUCTIONS: &str = "You are the Lead in an opt-in Lead/Worker team. Own the wider goal, plan the work, delegate implementation, testing, and applicable skill execution to Workers, inspect the results, and make the final acceptance decision. Workers execute their assigned tasks and applicable skills, including an independent post-change review when required. Respect explicit user, AGENTS.md, and skill restrictions on delegation; enabling team mode alone does not authorize work outside those restrictions. Runtime model routing is assigned by role. After handing work to direct Workers, finish the current assessment turn and remain idle until an actionable handoff, completion, escalation, failure, user input, or oversight deadline arrives; routine progress does not require a response. If you call `wait_agent` while direct Workers are active, that call enters the same parked interval and uses the configured oversight deadline instead of polling with short timeouts.
 ";
+const LEAD_DYNAMIC_HANDOFF_INSTRUCTIONS: &str = "Dynamic lookup handoff is enabled. Before reading a large source, make a quick preflight judgment: delegate substantial log or trace review, web or browser research, broad repository/code/docs searches, and similar bulk exploration when a Worker can filter material into useful evidence and reduce Lead context. Keep small targeted lookups, and work that depends heavily on the Lead's existing context or judgment, with the Lead when handoff overhead would approach the lookup itself. Ask the Worker for a concise answer plus selected relevant code, log, or web excerpts with file/line, time, or source pointers and enough surrounding context; preserve contradictions, uncertainty, and unresolved questions, and omit full dumps. Treat supported findings as sufficient and do not automatically repeat the lookup. Follow up only on a concrete missing or conflicting fact, a blocked or incomplete Worker, or a narrow excerpt request, reusing prior findings instead of rereading the source. This is a routing preference, so normal delegation authorization and concurrency/depth limits still apply; less Lead input does not mean zero Worker token use.
+";
 const WORKER_TEAM_INSTRUCTIONS: &str = "You are a Worker in an opt-in Lead/Worker team. Execute the delegated task, follow applicable skills and their budgets, and report concrete results to the Lead. Run an independent post-change review with an independent Worker when required, and fix required findings before handoff. If a required skill or review cannot finish within its budget, report the work as blocked or incomplete. Respect explicit user, AGENTS.md, and skill restrictions on delegation. Keep the assigned Worker role; runtime model routing is enforced separately.
+";
+const WORKER_DYNAMIC_HANDOFF_INSTRUCTIONS: &str = "Dynamic lookup handoff is enabled for this team. When the Lead routes substantial log or trace review, web or browser research, broad repository/code/docs searches, or other bulk exploration to you, filter irrelevant material and return a concise answer with selected evidence excerpts and file/line, time, or source pointers plus enough surrounding context. Preserve contradictions, uncertainty, and unresolved questions; omit full dumps. If a narrow follow-up is requested, reuse prior findings and provide only the missing evidence.
 ";
 const DISABLED_TEAM_INSTRUCTIONS: &str = "Lead/Worker team mode is disabled for this thread. Previous team role instructions no longer apply; use ordinary single-model behavior.
 ";
@@ -15,6 +19,7 @@ const TEAM_ACTION_WAKE_INSTRUCTIONS: &str = "For Multi-Agent V2, use send_messag
 pub(crate) struct TeamInstructions {
     role: Option<TeamRole>,
     worker_max_concurrent: Option<usize>,
+    dynamic_handoff: bool,
 }
 
 impl TeamInstructions {
@@ -24,13 +29,20 @@ impl TeamInstructions {
             worker_max_concurrent: matches!(role, TeamRole::Lead)
                 .then_some(worker_max_concurrent)
                 .flatten(),
+            dynamic_handoff: false,
         }
+    }
+
+    pub(crate) fn with_dynamic_handoff(mut self, dynamic_handoff: bool) -> Self {
+        self.dynamic_handoff = dynamic_handoff;
+        self
     }
 
     pub(crate) fn disabled() -> Self {
         Self {
             role: None,
             worker_max_concurrent: None,
+            dynamic_handoff: false,
         }
     }
 }
@@ -62,11 +74,18 @@ impl ContextualUserFragment for TeamInstructions {
             Some(TeamRole::Worker) => WORKER_TEAM_INSTRUCTIONS,
             None => DISABLED_TEAM_INSTRUCTIONS,
         };
-        let instructions = if self.role.is_some() {
+        let mut instructions = if self.role.is_some() {
             format!("{instructions}{TEAM_ACTION_WAKE_INSTRUCTIONS}")
         } else {
             instructions.to_string()
         };
+        if self.dynamic_handoff {
+            instructions.push_str(match self.role {
+                Some(TeamRole::Lead) => LEAD_DYNAMIC_HANDOFF_INSTRUCTIONS,
+                Some(TeamRole::Worker) => WORKER_DYNAMIC_HANDOFF_INSTRUCTIONS,
+                None => "",
+            });
+        }
         let Some(worker_max_concurrent) = self.worker_max_concurrent else {
             return instructions;
         };

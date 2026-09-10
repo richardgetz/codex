@@ -2052,6 +2052,7 @@ fn config_toml_deserializes_model_availability_nux() {
             status_line: None,
             status_line_use_colors: true,
             status_token_usage: Default::default(),
+            usage_auto_resume: Default::default(),
             terminal_title: None,
             theme: None,
             pet: None,
@@ -5069,6 +5070,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             status_line: None,
             status_line_use_colors: true,
             status_token_usage: Default::default(),
+            usage_auto_resume: Default::default(),
             terminal_title: None,
             theme: None,
             pet: None,
@@ -13029,6 +13031,41 @@ max_concurrent = 4
         .await?;
 
     assert_eq!(config.team.worker_max_concurrent, Some(4));
+    Ok(())
+}
+
+#[tokio::test]
+async fn team_lead_dynamic_handoff_is_loaded_from_lead_profile() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[team]
+enabled = true
+
+[team.lead]
+model = "gpt-lead"
+reasoning_effort = "high"
+dynamic_handoff = true
+
+[team.worker]
+model = "gpt-worker"
+reasoning_effort = "max"
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(
+        config
+            .team
+            .profiles
+            .as_ref()
+            .is_some_and(|profiles| profiles.lead_dynamic_handoff)
+    );
     Ok(())
 }
 

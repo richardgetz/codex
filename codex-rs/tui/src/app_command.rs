@@ -30,6 +30,10 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) enum AppCommand {
     Interrupt,
+    ContinueUsage,
+    SetUsageAutoResume {
+        enabled: bool,
+    },
     CleanBackgroundTerminals,
     RealtimeConversationStart {
         transport: Option<ThreadRealtimeStartTransport>,
@@ -127,6 +131,14 @@ pub(crate) enum AppCommand {
 impl AppCommand {
     pub(crate) fn interrupt() -> Self {
         Self::Interrupt
+    }
+
+    pub(crate) fn continue_usage() -> Self {
+        Self::ContinueUsage
+    }
+
+    pub(crate) fn set_usage_auto_resume(enabled: bool) -> Self {
+        Self::SetUsageAutoResume { enabled }
     }
 
     pub(crate) fn clean_background_terminals() -> Self {
@@ -333,6 +345,7 @@ impl From<&AppCommand> for AppCommand {
 impl From<Op> for AppCommand {
     fn from(value: Op) -> Self {
         match value {
+            Op::ContinueUsage => AppCommand::ContinueUsage,
             Op::ReloadUserConfig => AppCommand::ReloadUserConfig,
             Op::ConsolidateOrchestratorMemory => AppCommand::ConsolidateOrchestratorMemory,
             Op::OrchestratorMemoryForget { needle } => {

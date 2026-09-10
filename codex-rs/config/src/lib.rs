@@ -206,6 +206,7 @@ pub use state::ConfigLayerStack;
 pub use state::ConfigLoadOptions;
 pub use state::LoaderOverrides;
 pub use strict_config::config_error_from_ignored_toml_fields;
+pub use team::DEFAULT_TEAM_LEAD_DYNAMIC_HANDOFF;
 pub use team::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES;
 pub use team::MAX_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES;
 pub use team::TeamConfig;

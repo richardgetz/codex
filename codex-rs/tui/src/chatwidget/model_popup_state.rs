@@ -5,6 +5,10 @@ use super::model_popups::MODEL_SELECTION_VIEW_ID;
 use super::*;
 
 impl ChatWidget {
+    pub(crate) fn clear_model_popup_target(&mut self) {
+        self.model_popup_target = ModelPopupTarget::Conversation;
+    }
+
     fn model_popup_view_id(&self) -> Option<&'static str> {
         [MODEL_SELECTION_VIEW_ID, ALL_MODELS_SELECTION_VIEW_ID]
             .into_iter()

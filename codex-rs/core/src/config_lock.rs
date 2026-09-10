@@ -136,6 +136,18 @@ fn config_lock_for_comparison(
     {
         lockfile.config.decision_provenance = None;
     }
+    // `team.lead.dynamic_handoff` is opt-in and historically absent from
+    // lockfiles. Treat an explicit false value as the same effective setting
+    // as the legacy omission so old locks continue to replay cleanly.
+    if let Some(lead) = lockfile
+        .config
+        .team
+        .as_mut()
+        .and_then(|team| team.lead.as_mut())
+        && lead.dynamic_handoff == Some(false)
+    {
+        lead.dynamic_handoff = None;
+    }
     if options.allow_codex_version_mismatch {
         lockfile.codex_version.clear();
     }

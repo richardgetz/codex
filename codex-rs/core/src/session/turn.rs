@@ -50,6 +50,7 @@ use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_provenance;
+use crate::session::wait_for_usage_limit_floor;
 use crate::session::wait_for_usage_limit_reset;
 use crate::skills::emit_explicit_skill_invocations;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -378,6 +379,11 @@ pub(crate) async fn run_turn(
         if !has_explicit_user_input {
             let (usage_policy, rate_limits) = sess.usage_policy_and_rate_limits().await;
             if !automatic_continuation_allowed(usage_policy, &rate_limits) {
+                if usage_policy.auto_resume
+                    && wait_for_usage_limit_floor(&sess, &turn_context, &cancellation_token).await?
+                {
+                    continue;
+                }
                 if let Some(minimum_remaining_percent) = usage_policy.minimum_remaining_percent {
                     sess.send_event(
                         &turn_context,
@@ -557,6 +563,12 @@ pub(crate) async fn run_turn(
                     && let Some(minimum_remaining_percent) = usage_policy.minimum_remaining_percent
                     && !automatic_continuation_is_allowed
                 {
+                    if usage_policy.auto_resume
+                        && wait_for_usage_limit_floor(&sess, &turn_context, &cancellation_token)
+                            .await?
+                    {
+                        continue;
+                    }
                     last_agent_message = sampling_request_last_agent_message;
                     sess.send_event(
                         &turn_context,

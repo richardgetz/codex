@@ -652,6 +652,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadSettingsUpdateResponse,
     },
+    #[experimental("thread/usage/resume")]
+    ThreadUsageResume => "thread/usage/resume" {
+        params: v2::ThreadUsageResumeParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadUsageResumeResponse,
+    },
     ThreadControlRead => "thread/control/read" {
         params: v2::ThreadControlReadParams,
         serialization: thread_id(params.thread_id),
@@ -3345,6 +3351,26 @@ mod tests {
                 }
             }),
             serde_json::to_value(&response)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_usage_resume() -> Result<()> {
+        let request = ClientRequest::ThreadUsageResume {
+            request_id: RequestId::Integer(1),
+            params: v2::ThreadUsageResumeParams {
+                thread_id: "thr_123".to_string(),
+            },
+        };
+        assert_eq!(request.id(), &RequestId::Integer(1));
+        assert_eq!(
+            json!({
+                "method": "thread/usage/resume",
+                "id": 1,
+                "params": { "threadId": "thr_123" },
+            }),
+            serde_json::to_value(&request)?,
         );
         Ok(())
     }

@@ -225,12 +225,13 @@ fn save_config_resolved_fields(
 
     if config.team_state_persisted || config.effective_team_profiles().is_some() {
         let profile_to_toml =
-            |profile: &codex_config::TeamModelProfile, oversight_timeout_minutes: Option<u64>| {
-                TeamModelProfileToml {
-                    model: Some(profile.model.clone()),
-                    reasoning_effort: Some(profile.reasoning_effort.clone()),
-                    oversight_timeout_minutes,
-                }
+            |profile: &codex_config::TeamModelProfile,
+             dynamic_handoff: Option<bool>,
+             oversight_timeout_minutes: Option<u64>| TeamModelProfileToml {
+                model: Some(profile.model.clone()),
+                reasoning_effort: Some(profile.reasoning_effort.clone()),
+                dynamic_handoff,
+                oversight_timeout_minutes,
             };
         let worker_profile_to_toml =
             |profile: &codex_config::TeamModelProfile| TeamWorkerProfileToml {
@@ -244,6 +245,7 @@ fn save_config_resolved_fields(
             lead: profiles.map(|profiles| {
                 profile_to_toml(
                     &profiles.lead,
+                    Some(profiles.lead_dynamic_handoff),
                     Some(profiles.lead_oversight_timeout_minutes),
                 )
             }),
@@ -650,6 +652,52 @@ codex_version = "{}"
 
         validate_config_lock_replay(&expected, &actual, ConfigLockReplayOptions::default())
             .expect("explicit false and missing provenance settings should be equivalent");
+    }
+
+    #[test]
+    fn lock_validation_accepts_legacy_missing_dynamic_handoff_setting() {
+        let expected: ConfigLockfileToml = toml::from_str(&format!(
+            r#"
+version = 1
+codex_version = "{}"
+
+[config.team]
+enabled = true
+
+[config.team.lead]
+model = "gpt-lead"
+reasoning_effort = "high"
+
+[config.team.worker]
+model = "gpt-worker"
+reasoning_effort = "high"
+"#,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .expect("legacy lock without dynamic handoff should deserialize");
+        let actual: ConfigLockfileToml = toml::from_str(&format!(
+            r#"
+version = 1
+codex_version = "{}"
+
+[config.team]
+enabled = true
+
+[config.team.lead]
+model = "gpt-lead"
+reasoning_effort = "high"
+dynamic_handoff = false
+
+[config.team.worker]
+model = "gpt-worker"
+reasoning_effort = "high"
+"#,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .expect("lock with explicit false dynamic handoff should deserialize");
+
+        validate_config_lock_replay(&expected, &actual, ConfigLockReplayOptions::default())
+            .expect("legacy missing and explicit false dynamic handoff should be equivalent");
     }
 
     #[tokio::test]

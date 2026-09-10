@@ -564,6 +564,8 @@ impl AgentControl {
                 if let Some(parent_thread_id) = owner_thread_id {
                     self.validate_loaded_v2_child(&reloaded_thread.thread, parent_thread_id)?;
                 }
+                self.reconcile_spawned_usage_auto_resume(&reloaded_thread.thread.session)
+                    .await;
                 self.state.clear_evicted_environments(thread_id);
                 residency_slot.commit(reloaded_thread.thread_id);
                 state.notify_thread_created(reloaded_thread.thread_id);
@@ -752,6 +754,13 @@ impl AgentControl {
             notification_source.as_ref(),
         )
         .await;
+        if matches!(
+            notification_source.as_ref(),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }))
+        ) {
+            self.reconcile_spawned_usage_auto_resume(&new_thread.thread.session)
+                .await;
+        }
 
         let start_options = TurnStartOptions {
             parent_turn_id: options.parent_turn_id,
@@ -1299,6 +1308,8 @@ impl AgentControl {
             Some(&notification_source),
         )
         .await;
+        self.reconcile_spawned_usage_auto_resume(&resumed_thread.thread.session)
+            .await;
 
         Ok((resumed_thread.thread_id, multi_agent_version))
     }

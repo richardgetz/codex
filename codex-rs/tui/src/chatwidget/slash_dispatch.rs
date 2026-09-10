@@ -1221,6 +1221,9 @@ impl ChatWidget {
                     self.open_usage_menu();
                 }
             }
+            SlashCommand::Continue => {
+                self.submit_op(AppCommand::continue_usage());
+            }
             SlashCommand::Ide => {
                 self.handle_ide_command();
             }
@@ -1524,7 +1527,44 @@ impl ChatWidget {
                 self.add_error_message("Usage: /pwd".to_string());
             }
             SlashCommand::Usage => {
-                if self.ensure_usage_command_available() {
+                let mut args = trimmed.split_whitespace();
+                if args
+                    .next()
+                    .is_some_and(|command| command.eq_ignore_ascii_case("auto-resume"))
+                {
+                    match (args.next(), args.next()) {
+                        (Some(value), None)
+                            if value.eq_ignore_ascii_case("on")
+                                || value.eq_ignore_ascii_case("off") =>
+                        {
+                            if self.ensure_usage_command_available() {
+                                self.submit_op(AppCommand::set_usage_auto_resume(
+                                    value.eq_ignore_ascii_case("on"),
+                                ));
+                            }
+                        }
+                        (Some(value), None) if value.eq_ignore_ascii_case("status") => {
+                            if self.ensure_usage_command_available() {
+                                let state = if self.thread_usage_policy.auto_resume {
+                                    "on"
+                                } else {
+                                    "off"
+                                };
+                                let interval =
+                                    self.config.tui_usage_auto_resume.check_interval_minutes;
+                                self.add_info_message(
+                                    format!(
+                                        "Usage auto-resume is {state}; account checks use a {interval}-minute fallback interval."
+                                    ),
+                                    /*hint*/ None,
+                                );
+                            }
+                        }
+                        _ => self.add_error_message(
+                            "Usage: /usage auto-resume [on|off|status]".to_string(),
+                        ),
+                    }
+                } else if self.ensure_usage_command_available() {
                     match tokens::TokenActivityView::parse(trimmed) {
                         Some(view) => self.add_token_activity_output(view),
                         None => self.add_error_message(
@@ -1532,6 +1572,9 @@ impl ChatWidget {
                         ),
                     }
                 }
+            }
+            SlashCommand::Continue => {
+                self.add_error_message("Usage: /continue".to_string());
             }
             SlashCommand::Spend => {
                 self.add_spend_output(trimmed);
@@ -2240,6 +2283,7 @@ impl ChatWidget {
             | SlashCommand::Voice
             | SlashCommand::Pwd
             | SlashCommand::Usage
+            | SlashCommand::Continue
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

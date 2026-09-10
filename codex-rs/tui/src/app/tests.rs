@@ -8781,6 +8781,7 @@ fn team_commands_update_only_the_active_thread_and_follow_server_snapshot() -> R
                             model: "gpt-5.6-luna".to_string(),
                             reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Max,
                         },
+                        lead_dynamic_handoff: false,
                         lead_oversight_timeout_minutes:
                             codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
                     }),
@@ -9294,8 +9295,10 @@ async fn thread_setting_update_params_sync_model_and_default_reasoning() {
 }
 
 #[tokio::test]
-async fn inactive_thread_settings_notification_updates_cached_collaboration_mode() {
+async fn inactive_thread_settings_notification_updates_cached_and_viewed_service_tier() {
     let mut app = make_test_app().await;
+    app.chat_widget
+        .set_feature_enabled(Feature::FastMode, /*enabled*/ true);
     let primary_thread_id = ThreadId::new();
     let inactive_thread_id = ThreadId::new();
     let primary_session = test_thread_session(primary_thread_id, test_path_buf("/tmp/main"));
@@ -9329,7 +9332,7 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
         ),
     );
 
-    let notification = ThreadSettingsUpdatedNotification {
+    let mut notification = ThreadSettingsUpdatedNotification {
         thread_id: inactive_thread_id.to_string(),
         thread_settings: ThreadSettings {
             cwd: test_absolute_path("/tmp/thread-settings"),
@@ -9343,7 +9346,7 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
             ),
             model: "gpt-plan".to_string(),
             model_provider: "openai".to_string(),
-            service_tier: None,
+            service_tier: Some(ServiceTier::Fast.request_value().to_string()),
             effort: collaboration_mode.settings.reasoning_effort.clone(),
             summary: None,
             collaboration_mode: collaboration_mode.clone(),
@@ -9361,7 +9364,7 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
     app.handle_app_server_event(
         &app_server,
         codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
-            ServerNotification::ThreadSettingsUpdated(notification),
+            ServerNotification::ThreadSettingsUpdated(notification.clone()),
         )),
     )
     .await;
@@ -9382,9 +9385,18 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
         cached_session.collaboration_mode.as_deref(),
         Some(&collaboration_mode)
     );
+    assert_eq!(
+        cached_session.service_tier.as_deref(),
+        Some(ServiceTier::Fast.request_value())
+    );
 
     app.active_thread_id = None;
-    app.chat_widget.handle_thread_session(cached_session);
+    app.chat_widget
+        .handle_thread_session(cached_session.clone());
+    assert_eq!(
+        app.chat_widget.current_service_tier(),
+        Some(ServiceTier::Fast.request_value())
+    );
     assert_eq!(
         app.chat_widget.active_collaboration_mode_kind(),
         ModeKind::Plan
@@ -9402,6 +9414,29 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
         app.chat_widget.config_ref().personality,
         Some(Personality::Pragmatic)
     );
+
+    notification.thread_settings.service_tier = Some("default".to_string());
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+            ServerNotification::ThreadSettingsUpdated(notification),
+        )),
+    )
+    .await;
+
+    let cached_session = app
+        .thread_event_channels
+        .get(&inactive_thread_id)
+        .expect("inactive thread channel")
+        .store
+        .lock()
+        .await
+        .session
+        .clone()
+        .expect("inactive session should remain cached");
+    assert_eq!(cached_session.service_tier.as_deref(), Some("default"));
+    app.chat_widget.handle_thread_session(cached_session);
+    assert_eq!(app.chat_widget.current_service_tier(), Some("default"));
     assert_eq!(app.thread_id_for_active_op(&AppCommand::compact()), None);
 }
 

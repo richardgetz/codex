@@ -3244,6 +3244,77 @@ async fn model_selection_popup_snapshot() {
     assert_chatwidget_snapshot!("model_selection_popup", popup);
 }
 
+#[tokio::test]
+async fn team_profile_model_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.team_settings = Some(codex_app_server_protocol::ThreadTeamSettings {
+        mode: codex_app_server_protocol::TeamMode::Off,
+        role: Some(codex_app_server_protocol::TeamRole::Lead),
+        lead_model: Some("gpt-5.2".to_string()),
+        lead_reasoning_effort: Some(ReasoningEffortConfig::Medium),
+        worker_model: Some("gpt-5.6-luna".to_string()),
+        worker_reasoning_effort: Some(ReasoningEffortConfig::Low),
+        previous_model: None,
+        previous_reasoning_effort: None,
+    });
+    chat.open_team_model_popup(codex_app_server_protocol::TeamRole::Lead);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("team_profile_model_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn team_profile_model_picker_emits_session_update_only() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.team_settings = Some(codex_app_server_protocol::ThreadTeamSettings {
+        mode: codex_app_server_protocol::TeamMode::Off,
+        role: Some(codex_app_server_protocol::TeamRole::Lead),
+        lead_model: Some("gpt-5.2".to_string()),
+        lead_reasoning_effort: Some(ReasoningEffortConfig::Medium),
+        worker_model: Some("gpt-5.6-luna".to_string()),
+        worker_reasoning_effort: Some(ReasoningEffortConfig::Low),
+        previous_model: None,
+        previous_reasoning_effort: None,
+    });
+    let mut preset = get_available_model(&chat, "gpt-5.4");
+    preset.show_in_picker = true;
+    preset.supported_reasoning_efforts = vec![ReasoningEffortPreset {
+        effort: ReasoningEffortConfig::High,
+        description: "High reasoning".to_string(),
+    }];
+    preset.default_reasoning_effort = ReasoningEffortConfig::High;
+    chat.open_team_model_popup(codex_app_server_protocol::TeamRole::Lead);
+    while rx.try_recv().is_ok() {}
+    chat.open_model_popup_with_presets(vec![preset]);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let selected = assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenReasoningPopup { model }) => model
+    );
+    chat.open_reasoning_popup(selected);
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AppEvent::TeamCommand {
+            thread_id: event_thread_id,
+            command: TeamCommand::ConfigureProfile {
+                role: codex_app_server_protocol::TeamRole::Lead,
+                model,
+                effort: ReasoningEffortConfig::High,
+            },
+        } if *event_thread_id == thread_id && model == "gpt-5.4"
+    )));
+    assert!(events.iter().all(|event| !matches!(
+        event,
+        AppEvent::UpdateModel(_) | AppEvent::PersistModelSelection { .. }
+    )));
+}
+
 fn apply_model_list_response(chat: &mut ChatWidget, presets: Vec<ModelPreset>) {
     let request_id = chat.model_popup_request_id.expect("pending model request");
     assert!(chat.on_models_loaded(request_id, Ok(presets)));

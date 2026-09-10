@@ -24898,10 +24898,36 @@
         "type": "object"
       },
       "ThreadTeamSettingsUpdate": {
-        "description": "Team mode accepted by `thread/settings/update`.",
+        "description": "Team mode or profile patch accepted by `thread/settings/update`.\n\nWhen `role`, `model`, and `reasoning_effort` are supplied, the selected profile is changed for this thread only. The server preserves the other profile and the role assignment captured by the thread snapshot.",
         "properties": {
           "mode": {
             "$ref": "#/definitions/v2/TeamMode"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reasoningEffort": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "role": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/TeamRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [

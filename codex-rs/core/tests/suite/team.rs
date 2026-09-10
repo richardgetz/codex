@@ -90,6 +90,7 @@ fn team_config(mode: TeamMode, lead_model: &str, worker_model: &str) -> TeamConf
                 model: worker_model.to_string(),
                 reasoning_effort: ReasoningEffort::Low,
             },
+            lead_dynamic_handoff: false,
             lead_oversight_timeout_minutes:
                 codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
         }),
@@ -104,7 +105,10 @@ fn configure_team(config: &mut Config, mode: TeamMode) {
 
 fn team_mode_update(mode: TeamMode) -> ThreadSettingsOverrides {
     ThreadSettingsOverrides {
-        team: Some(ThreadTeamSettingsUpdate { mode }),
+        team: Some(ThreadTeamSettingsUpdate {
+            mode,
+            ..Default::default()
+        }),
         ..Default::default()
     }
 }
@@ -277,7 +281,12 @@ async fn team_toggle_pins_lead_and_restores_original_model() -> Result<()> {
             .collect(),
     )
     .await;
-    let expected_config = team_config(TeamMode::Off, LEAD_MODEL, WORKER_MODEL);
+    let mut expected_config = team_config(TeamMode::Off, LEAD_MODEL, WORKER_MODEL);
+    expected_config
+        .profiles
+        .as_mut()
+        .expect("team profiles")
+        .lead_dynamic_handoff = true;
     let mut builder = test_codex()
         .with_model_info_override(INITIAL_MODEL, |model_info| {
             model_info.comp_hash = Some(TEAM_TOGGLE_COMP_HASH.to_string());
@@ -377,6 +386,7 @@ async fn team_toggle_pins_lead_and_restores_original_model() -> Result<()> {
     let active_fragments = team_instruction_fragments(&requests[0]);
     assert_eq!(active_fragments.len(), 1);
     assert!(active_fragments[0].contains("You are the Lead"));
+    assert!(active_fragments[0].contains("Dynamic lookup handoff is enabled"));
     assert_eq!(
         team_instruction_fragments(&requests[1]),
         active_fragments,
@@ -386,6 +396,7 @@ async fn team_toggle_pins_lead_and_restores_original_model() -> Result<()> {
     assert_eq!(disabled_fragments.len(), active_fragments.len() + 1);
     let disabled_fragment = disabled_fragments.last().expect("disabled team fragment");
     assert!(disabled_fragment.to_ascii_lowercase().contains("disabled"));
+    assert!(!disabled_fragment.contains("Dynamic lookup handoff"));
     assert_ne!(
         disabled_fragment,
         active_fragments.last().expect("active team fragment")
@@ -817,6 +828,12 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides(
                 .disable(Feature::MultiAgentV2)
                 .expect("MultiAgentV2 feature");
             configure_team(config, TeamMode::LeadWorker);
+            config
+                .team
+                .profiles
+                .as_mut()
+                .expect("team profiles")
+                .lead_dynamic_handoff = true;
             config.team.worker_max_concurrent = Some(1);
             let role_path = config.codex_home.join("team-reviewer.toml");
             std::fs::write(
@@ -917,6 +934,16 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides(
     assert_request_assignment(&root_request, LEAD_MODEL, "max");
     assert_request_assignment(&child_request, WORKER_MODEL, "low");
     assert_request_assignment(&grandchild_request, WORKER_MODEL, "low");
+    assert!(
+        team_instruction_fragments(&root_request)
+            .iter()
+            .any(|fragment| fragment.contains("quick preflight judgment"))
+    );
+    assert!(
+        team_instruction_fragments(&child_request)
+            .iter()
+            .any(|fragment| fragment.contains("filter irrelevant material"))
+    );
     child_completion_request.function_call_output(CHILD_SPAWN_CALL_ID);
 
     let child_thread_id = child_request.body_json()["client_metadata"]["thread_id"]
@@ -1302,6 +1329,37 @@ async fn team_snapshot_survives_cold_resume_and_profile_change() -> Result<()> {
         TeamMode::LeadWorker,
         TeamRole::Lead,
     );
+    submit_thread_settings(
+        &initial.codex,
+        ThreadSettingsOverrides {
+            team: Some(ThreadTeamSettingsUpdate {
+                mode: TeamMode::LeadWorker,
+                role: Some(TeamRole::Lead),
+                model: Some(WORKER_MODEL.to_string()),
+                reasoning_effort: Some(ReasoningEffort::Low),
+            }),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let changed_snapshot = initial.codex.config_snapshot().await;
+    let changed_team = changed_snapshot.team.as_ref().expect("team snapshot");
+    assert_eq!(
+        (
+            changed_snapshot.model,
+            changed_snapshot.reasoning_effort,
+            changed_team.lead_model.as_deref(),
+            changed_team.lead_reasoning_effort.clone(),
+            changed_team.worker_model.as_deref(),
+        ),
+        (
+            WORKER_MODEL.to_string(),
+            Some(ReasoningEffort::Low),
+            Some(WORKER_MODEL),
+            Some(ReasoningEffort::Low),
+            Some(WORKER_MODEL),
+        )
+    );
 
     let mut resume_builder = test_codex().with_config(|config| {
         config.model = Some("gpt-5.2".to_string());
@@ -1311,20 +1369,22 @@ async fn team_snapshot_survives_cold_resume_and_profile_change() -> Result<()> {
     });
     let resumed = resume_builder.restart(&server, &initial).await?;
     let snapshot = resumed.codex.config_snapshot().await;
-    assert_eq!(snapshot.model, LEAD_MODEL);
-    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Max));
+    assert_eq!(snapshot.model, WORKER_MODEL);
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Low));
     let team = snapshot.team.as_ref().expect("team snapshot");
     assert_eq!(
         (
             team.mode,
             team.role,
             team.lead_model.as_deref(),
+            team.lead_reasoning_effort.clone(),
             team.worker_model.as_deref(),
         ),
         (
             TeamMode::LeadWorker,
             Some(TeamRole::Lead),
-            Some(LEAD_MODEL),
+            Some(WORKER_MODEL),
+            Some(ReasoningEffort::Low),
             Some(WORKER_MODEL),
         )
     );
@@ -1348,7 +1408,7 @@ async fn team_snapshot_survives_cold_resume_and_profile_change() -> Result<()> {
         team_config(TeamMode::LeadWorker, "gpt-5.5", "gpt-5.4")
     );
     assert_request_assignment(&initial_response.single_request(), LEAD_MODEL, "max");
-    assert_request_assignment(&resumed_response.single_request(), LEAD_MODEL, "max");
+    assert_request_assignment(&resumed_response.single_request(), WORKER_MODEL, "low");
     Ok(())
 }
 

@@ -25,6 +25,7 @@ use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
 use codex_app_server_protocol::ThreadUsagePolicy;
 use codex_app_server_protocol::ThreadUsagePolicyParams;
+use codex_app_server_protocol::ThreadUsageResumeResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -275,6 +276,34 @@ async fn thread_settings_update_usage_policy_preserves_omitted_nested_fields() -
 }
 
 #[tokio::test]
+async fn thread_usage_resume_is_wake_only() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let thread = start_thread(&mut mcp).await?.thread;
+
+    let request_id = mcp
+        .send_raw_request(
+            "thread/usage/resume",
+            Some(json!({ "threadId": thread.id })),
+        )
+        .await?;
+    let response: ThreadUsageResumeResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(response, ThreadUsageResumeResponse {});
+    assert!(
+        received_response_bodies(&server).await?.is_empty(),
+        "usage resume must not enqueue a model turn"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defaults() -> Result<()>
 {
     let server = responses::start_mock_server().await;
@@ -308,6 +337,7 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
             thread_id: thread_id.clone(),
             team: Some(ThreadTeamSettingsUpdate {
                 mode: TeamMode::LeadWorker,
+                ..Default::default()
             }),
             ..Default::default()
         },
@@ -328,6 +358,35 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
     assert_eq!(enabled.thread_settings.effort, Some(ReasoningEffort::High));
     assert_eq!(enabled.thread_settings.team, Some(enabled_team.clone()));
 
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread_id.clone(),
+            team: Some(ThreadTeamSettingsUpdate {
+                mode: TeamMode::LeadWorker,
+                role: Some(TeamRole::Lead),
+                model: Some("gpt-5.6-sol".to_string()),
+                reasoning_effort: Some(ReasoningEffort::Low),
+            }),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let profiled = read_thread_settings_updated(&mut mcp).await?;
+    let profiled_team = ThreadTeamSettings {
+        mode: TeamMode::LeadWorker,
+        role: Some(TeamRole::Lead),
+        lead_model: Some("gpt-5.6-sol".to_string()),
+        lead_reasoning_effort: Some(ReasoningEffort::Low),
+        worker_model: Some("gpt-5.6-luna".to_string()),
+        worker_reasoning_effort: Some(ReasoningEffort::Max),
+        previous_model: Some("mock-model".to_string()),
+        previous_reasoning_effort: None,
+    };
+    assert_eq!(profiled.thread_settings.model, "gpt-5.6-sol");
+    assert_eq!(profiled.thread_settings.effort, Some(ReasoningEffort::Low));
+    assert_eq!(profiled.thread_settings.team, Some(profiled_team.clone()));
+
     let unsubscribe_id = mcp
         .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
             thread_id: thread_id.clone(),
@@ -344,9 +403,9 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
         .await?;
     let resumed: ThreadResumeResponse =
         timeout(DEFAULT_TIMEOUT, mcp.read_response(resume_id)).await??;
-    assert_eq!(resumed.model, "gpt-6-astra");
-    assert_eq!(resumed.reasoning_effort, Some(ReasoningEffort::High));
-    assert_eq!(resumed.team, Some(enabled_team));
+    assert_eq!(resumed.model, "gpt-5.6-sol");
+    assert_eq!(resumed.reasoning_effort, Some(ReasoningEffort::Low));
+    assert_eq!(resumed.team, Some(profiled_team));
 
     let fresh = start_thread(&mut mcp).await?;
     assert_eq!(fresh.model, "mock-model");
@@ -359,6 +418,7 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
             thread_id,
             team: Some(ThreadTeamSettingsUpdate {
                 mode: TeamMode::Off,
+                ..Default::default()
             }),
             ..Default::default()
         },
@@ -367,7 +427,19 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
     let disabled = read_thread_settings_updated(&mut mcp).await?;
     assert_eq!(disabled.thread_settings.model, "mock-model");
     assert_eq!(disabled.thread_settings.effort, None);
-    assert_eq!(disabled.thread_settings.team, Some(default_team));
+    assert_eq!(
+        disabled.thread_settings.team,
+        Some(ThreadTeamSettings {
+            mode: TeamMode::Off,
+            role: Some(TeamRole::Lead),
+            lead_model: Some("gpt-5.6-sol".to_string()),
+            lead_reasoning_effort: Some(ReasoningEffort::Low),
+            worker_model: Some("gpt-5.6-luna".to_string()),
+            worker_reasoning_effort: Some(ReasoningEffort::Max),
+            previous_model: None,
+            previous_reasoning_effort: None,
+        })
+    );
     Ok(())
 }
 

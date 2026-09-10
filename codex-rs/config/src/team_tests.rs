@@ -5,6 +5,7 @@ fn profile(model: &str, reasoning_effort: ReasoningEffort) -> TeamModelProfileTo
     TeamModelProfileToml {
         model: Some(model.to_string()),
         reasoning_effort: Some(reasoning_effort),
+        dynamic_handoff: None,
         oversight_timeout_minutes: None,
     }
 }
@@ -142,6 +143,38 @@ fn team_config_defaults_and_validates_lead_oversight_timeout() {
         format!(
             "team.lead.oversight_timeout_minutes must be at most {MAX_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES}"
         )
+    );
+}
+
+#[test]
+fn team_config_defaults_and_loads_lead_dynamic_handoff() {
+    let config = TeamConfig::try_from(TeamToml {
+        lead: Some(TeamModelProfileToml {
+            dynamic_handoff: Some(true),
+            ..profile("gpt-lead", ReasoningEffort::High)
+        }),
+        worker: Some(worker_profile("gpt-worker", ReasoningEffort::Max, None)),
+        ..Default::default()
+    })
+    .expect("valid team config");
+    assert!(
+        config
+            .profiles
+            .as_ref()
+            .is_some_and(|profiles| profiles.lead_dynamic_handoff)
+    );
+
+    let config = TeamConfig::try_from(TeamToml {
+        lead: Some(profile("gpt-lead", ReasoningEffort::High)),
+        worker: Some(worker_profile("gpt-worker", ReasoningEffort::Max, None)),
+        ..Default::default()
+    })
+    .expect("valid team config");
+    assert!(
+        config
+            .profiles
+            .as_ref()
+            .is_some_and(|profiles| !profiles.lead_dynamic_handoff)
     );
 }
 

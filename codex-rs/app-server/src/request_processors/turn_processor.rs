@@ -205,6 +205,16 @@ impl TurnRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_usage_resume(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadUsageResumeParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_usage_resume_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn turn_settings_update(
         &self,
         request_id: &ConnectionRequestId,
@@ -905,6 +915,26 @@ impl TurnRequestProcessor {
             snapshot.as_ref().and_then(|snapshot| {
                 snapshot.team.clone().map(|mut team_snapshot| {
                     team_snapshot.mode = team_update.mode;
+                    if let Some(role) = team_update.role {
+                        match role {
+                            codex_protocol::protocol::TeamRole::Lead => {
+                                if let Some(model) = team_update.model.as_ref() {
+                                    team_snapshot.lead_model = Some(model.clone());
+                                }
+                                if let Some(effort) = team_update.reasoning_effort.clone() {
+                                    team_snapshot.lead_reasoning_effort = Some(effort);
+                                }
+                            }
+                            codex_protocol::protocol::TeamRole::Worker => {
+                                if let Some(model) = team_update.model.as_ref() {
+                                    team_snapshot.worker_model = Some(model.clone());
+                                }
+                                if let Some(effort) = team_update.reasoning_effort.clone() {
+                                    team_snapshot.worker_reasoning_effort = Some(effort);
+                                }
+                            }
+                        }
+                    }
                     team_snapshot
                 })
             })
@@ -1022,6 +1052,18 @@ impl TurnRequestProcessor {
         }
 
         Ok(ThreadSettingsUpdateResponse {})
+    }
+
+    async fn thread_usage_resume_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadUsageResumeParams,
+    ) -> Result<ThreadUsageResumeResponse, JSONRPCErrorError> {
+        let (_, thread) = self.load_thread(&params.thread_id).await?;
+        self.submit_core_op(request_id, thread.as_ref(), Op::ContinueUsage)
+            .await
+            .map_err(|err| internal_error(format!("failed to request usage check: {err}")))?;
+        Ok(ThreadUsageResumeResponse {})
     }
 
     async fn thread_inject_items_response_inner(

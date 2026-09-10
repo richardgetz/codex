@@ -2008,6 +2008,58 @@ pub struct ModelAvailabilityNuxConfig {
 /// Fallback resize-reflow row cap when Codex cannot identify a terminal-specific scrollback size.
 pub const DEFAULT_TERMINAL_RESIZE_REFLOW_FALLBACK_MAX_ROWS: usize = 1_000;
 
+/// Bounds for the account usage refresh interval used by automatic resume.
+///
+/// The interval is deliberately measured in minutes so a sleeping process does
+/// not wake in a tight loop while a provider's weekly window remains exhausted.
+pub const DEFAULT_USAGE_AUTO_RESUME_CHECK_INTERVAL_MINUTES: u64 = 60;
+pub const MIN_USAGE_AUTO_RESUME_CHECK_INTERVAL_MINUTES: u64 = 1;
+pub const MAX_USAGE_AUTO_RESUME_CHECK_INTERVAL_MINUTES: u64 = 10_080;
+
+/// TUI and session defaults for checking whether a resettable provider usage
+/// window has recovered. Automatic resume remains opt-in through `enabled`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiUsageAutoResume {
+    /// Enable automatic continuation for newly created threads.
+    /// Defaults to `false`; existing per-thread settings remain authoritative.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Maximum minutes between account usage checks. A known provider reset is
+    /// checked sooner when it falls inside this interval.
+    #[serde(default = "default_usage_auto_resume_check_interval_minutes")]
+    #[schemars(range(min = 1, max = 10080))]
+    pub check_interval_minutes: u64,
+}
+
+const fn default_usage_auto_resume_check_interval_minutes() -> u64 {
+    DEFAULT_USAGE_AUTO_RESUME_CHECK_INTERVAL_MINUTES
+}
+
+impl Default for TuiUsageAutoResume {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            check_interval_minutes: DEFAULT_USAGE_AUTO_RESUME_CHECK_INTERVAL_MINUTES,
+        }
+    }
+}
+
+impl TuiUsageAutoResume {
+    pub fn validate(&self) -> Result<(), String> {
+        if !(MIN_USAGE_AUTO_RESUME_CHECK_INTERVAL_MINUTES
+            ..=MAX_USAGE_AUTO_RESUME_CHECK_INTERVAL_MINUTES)
+            .contains(&self.check_interval_minutes)
+        {
+            return Err(format!(
+                "tui.usage_auto_resume.check_interval_minutes must be between {MIN_USAGE_AUTO_RESUME_CHECK_INTERVAL_MINUTES} and {MAX_USAGE_AUTO_RESUME_CHECK_INTERVAL_MINUTES} minutes"
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -2073,6 +2125,10 @@ pub struct Tui {
     /// support models with custom pricing.
     #[serde(default)]
     pub status_token_usage: TuiStatusTokenUsage,
+
+    /// Defaults for reset-aware usage-limit continuation.
+    #[serde(default)]
+    pub usage_auto_resume: TuiUsageAutoResume,
 
     /// Ordered list of terminal title item identifiers.
     ///

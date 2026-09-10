@@ -4525,6 +4525,10 @@
       "additionalProperties": false,
       "description": "A model and reasoning effort read from config.toml.",
       "properties": {
+        "dynamic_handoff": {
+          "description": "Whether the Lead should make a quick preflight and delegate substantial lookup work to a Worker when filtering bulk material can reduce Lead context.",
+          "type": "boolean"
+        },
         "model": {
           "type": "string"
         },
@@ -5127,6 +5131,18 @@
           "default": null,
           "description": "Syntax highlighting theme name (kebab-case).\n\nWhen set, overrides automatic light/dark theme detection. Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.",
           "type": "string"
+        },
+        "usage_auto_resume": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiUsageAutoResume"
+            }
+          ],
+          "default": {
+            "check_interval_minutes": 60,
+            "enabled": false
+          },
+          "description": "Defaults for reset-aware usage-limit continuation."
         },
         "vim_mode_default": {
           "default": false,
@@ -6148,6 +6164,26 @@
         "input_usd_per_1m",
         "output_usd_per_1m"
       ],
+      "type": "object"
+    },
+    "TuiUsageAutoResume": {
+      "additionalProperties": false,
+      "description": "TUI and session defaults for checking whether a resettable provider usage window has recovered. Automatic resume remains opt-in through `enabled`.",
+      "properties": {
+        "check_interval_minutes": {
+          "default": 60,
+          "description": "Minutes between account usage checks when no authoritative reset is available, or when a reset timestamp has proved stale.",
+          "format": "uint64",
+          "maximum": 10080.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable automatic continuation for newly created threads. Defaults to `false`; existing per-thread settings remain authoritative.",
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "TuiVimNormalKeymap": {

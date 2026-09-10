@@ -140,6 +140,8 @@ use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::ThreadUsageResumeParams;
+use codex_app_server_protocol::ThreadUsageResumeResponse;
 use codex_app_server_protocol::ThreadUserPreferencesMemoryMigrateParams;
 use codex_app_server_protocol::ThreadUserPreferencesMemoryMigrateResponse;
 use codex_app_server_protocol::ThreadUserPreferencesMemoryPolicySetParams;
@@ -1218,6 +1220,21 @@ impl AppServerSession {
             Err(err) => Err(err).wrap_err("thread/settings/update failed in TUI"),
         }
     }
+
+    pub(crate) async fn thread_usage_resume(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed::<ThreadUsageResumeResponse>(ClientRequest::ThreadUsageResume {
+                request_id,
+                params: ThreadUsageResumeParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/usage/resume failed in TUI")?;
+        Ok(())
+    }
+
     pub(crate) async fn thread_inject_items(
         &mut self,
         thread_id: ThreadId,

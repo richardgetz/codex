@@ -35,3 +35,26 @@ fn worker_role_does_not_include_lead_ceiling_guidance() {
             .contains("Direct Worker concurrency ceiling")
     );
 }
+
+#[test]
+fn dynamic_handoff_updates_lead_and_worker_guidance() {
+    let default_lead = TeamPolicyState::new(TeamRole::Lead, None);
+    let default_snapshot = default_lead.snapshot();
+    let enabled_lead = TeamPolicyState::new(TeamRole::Lead, None).with_dynamic_handoff(true);
+    let fragment = enabled_lead
+        .render_diff(PreviousSectionState::Known(&default_snapshot))
+        .expect("dynamic handoff should update Lead instructions");
+    assert!(fragment.body().contains("quick preflight judgment"));
+
+    let enabled_worker = TeamPolicyState::new(TeamRole::Worker, None).with_dynamic_handoff(true);
+    let fragment = enabled_worker
+        .render_diff(PreviousSectionState::Absent)
+        .expect("dynamic handoff should render Worker instructions");
+    assert!(fragment.body().contains("filter irrelevant material"));
+
+    let disabled = TeamPolicyState::disabled();
+    let fragment = disabled
+        .render_diff(PreviousSectionState::Known(&enabled_lead.snapshot()))
+        .expect("disabling team policy should replace retained instructions");
+    assert!(!fragment.body().contains("Dynamic lookup handoff"));
+}

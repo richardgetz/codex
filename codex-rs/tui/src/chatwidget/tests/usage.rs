@@ -30,6 +30,52 @@ fn detailed_reset_credits(
     }
 }
 
+#[tokio::test]
+async fn usage_auto_resume_toggle_submits_thread_policy_update() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Usage,
+        "auto-resume on".to_string(),
+        Vec::new(),
+    );
+    assert_eq!(
+        op_rx.try_recv().expect("auto-resume toggle op"),
+        Op::SetUsageAutoResume { enabled: true }
+    );
+}
+
+#[tokio::test]
+async fn usage_auto_resume_status_renders_interval_notice() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+    chat.thread_usage_policy.auto_resume = true;
+    chat.config.tui_usage_auto_resume.check_interval_minutes = 45;
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Usage,
+        "auto-resume status".to_string(),
+        Vec::new(),
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    assert_chatwidget_snapshot!(
+        "usage_auto_resume_status",
+        lines_to_single_string(&cells[0])
+    );
+}
+
+#[tokio::test]
+async fn continue_command_submits_usage_check_wakeup() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Continue);
+
+    assert_eq!(op_rx.try_recv().expect("continue op"), Op::ContinueUsage);
+}
+
 fn reset_credit(id: &str, expires_at: Option<i64>) -> RateLimitResetCredit {
     RateLimitResetCredit {
         id: id.to_string(),

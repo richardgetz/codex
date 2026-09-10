@@ -35,6 +35,7 @@ fn team_snapshot_models_are_trimmed() {
                 model: "worker".to_string(),
                 reasoning_effort: ReasoningEffortConfig::High,
             },
+            lead_dynamic_handoff: false,
             lead_oversight_timeout_minutes:
                 codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
         }
@@ -64,4 +65,15 @@ fn team_snapshot_preserves_configured_oversight_timeout() {
         .expect("valid snapshot")
         .expect("profiles");
     assert_eq!(profiles.lead_oversight_timeout_minutes, 90);
+}
+
+#[test]
+fn team_snapshot_preserves_dynamic_handoff_setting() {
+    let mut settings = snapshot("lead", "worker");
+    settings.dynamic_handoff = Some(true);
+    let profiles = team_profiles_from_snapshot_with_timeout(&settings, 90)
+        .expect("valid snapshot")
+        .expect("profiles");
+
+    assert!(profiles.lead_dynamic_handoff);
 }

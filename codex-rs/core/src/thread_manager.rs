@@ -128,6 +128,7 @@ pub(crate) type ThreadIdGenerator = Arc<dyn Fn() -> ThreadId + Send + Sync>;
 fn capture_test_op(op: &Op) -> Option<Op> {
     match op {
         Op::Interrupt => Some(Op::Interrupt),
+        Op::ContinueUsage => Some(Op::ContinueUsage),
         Op::InterAgentCommunication {
             communication,
             start_options,
@@ -1429,6 +1430,19 @@ impl ThreadManager {
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.state.auth_manager), agent_control);
         request.user_shell_override = Some(user_shell_override);
+        Box::pin(self.state.spawn_thread(request)).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn start_thread_with_agent_control_for_tests(
+        &self,
+        options: StartThreadOptions,
+        agent_control: AgentControl,
+        parent_thread_id: ThreadId,
+    ) -> CodexResult<NewThread> {
+        let mut request =
+            ThreadSpawnRequest::new(options, Arc::clone(&self.state.auth_manager), agent_control);
+        request.parent_thread_id = Some(parent_thread_id);
         Box::pin(self.state.spawn_thread(request)).await
     }
 

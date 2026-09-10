@@ -383,7 +383,9 @@ async fn start_if_idle(
     }
     if kind == TurnStartKind::Automatic {
         let (usage_policy, rate_limits) = session.usage_policy_and_rate_limits().await;
-        if !automatic_continuation_allowed(usage_policy, &rate_limits) {
+        if !automatic_continuation_allowed(usage_policy, &rate_limits)
+            && !(usage_policy.auto_resume && usage_policy.minimum_remaining_percent.is_some())
+        {
             return Ok(TurnInputSubmission::NotSubmitted {
                 reason: NotSubmittedReason::UsageLimitFloor,
             });

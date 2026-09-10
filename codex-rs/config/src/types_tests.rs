@@ -3,6 +3,49 @@ use pretty_assertions::assert_eq;
 use std::time::Duration;
 
 #[test]
+fn usage_auto_resume_defaults_and_validates_interval() {
+    assert_eq!(
+        TuiUsageAutoResume::default(),
+        TuiUsageAutoResume {
+            enabled: false,
+            check_interval_minutes: DEFAULT_USAGE_AUTO_RESUME_CHECK_INTERVAL_MINUTES,
+        }
+    );
+    assert!(
+        TuiUsageAutoResume {
+            enabled: true,
+            check_interval_minutes: MIN_USAGE_AUTO_RESUME_CHECK_INTERVAL_MINUTES,
+        }
+        .validate()
+        .is_ok()
+    );
+    assert!(
+        TuiUsageAutoResume {
+            enabled: true,
+            check_interval_minutes: MAX_USAGE_AUTO_RESUME_CHECK_INTERVAL_MINUTES,
+        }
+        .validate()
+        .is_ok()
+    );
+    assert!(
+        TuiUsageAutoResume {
+            enabled: false,
+            check_interval_minutes: 0,
+        }
+        .validate()
+        .is_err()
+    );
+    assert!(
+        TuiUsageAutoResume {
+            enabled: false,
+            check_interval_minutes: MAX_USAGE_AUTO_RESUME_CHECK_INTERVAL_MINUTES + 1,
+        }
+        .validate()
+        .is_err()
+    );
+}
+
+#[test]
 fn deserialize_skill_config_with_name_selector() {
     let cfg: SkillConfig = toml::from_str(
         r#"

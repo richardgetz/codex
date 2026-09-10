@@ -11,9 +11,32 @@ fn parses_team_commands_case_insensitively() {
 }
 
 #[test]
+fn parses_team_profile_commands() {
+    assert_eq!(
+        parse_team_command("lead"),
+        Ok(TeamCommand::SelectProfile {
+            role: TeamRole::Lead
+        })
+    );
+    assert_eq!(
+        parse_team_command("WORKER gpt-5.6-sol high"),
+        Ok(TeamCommand::ConfigureProfile {
+            role: TeamRole::Worker,
+            model: "gpt-5.6-sol".to_string(),
+            effort: ReasoningEffort::High,
+        })
+    );
+}
+
+#[test]
 fn rejects_extra_team_arguments() {
     assert_eq!(parse_team_command("on now"), Err(TEAM_USAGE));
     assert_eq!(parse_team_command("maybe"), Err(TEAM_USAGE));
+    assert_eq!(parse_team_command("lead gpt-5.6-sol"), Err(TEAM_USAGE));
+    assert_eq!(
+        parse_team_command("worker gpt-5.6-sol high now"),
+        Err(TEAM_USAGE)
+    );
 }
 
 #[test]

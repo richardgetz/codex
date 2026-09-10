@@ -60,16 +60,19 @@ use std::sync::RwLock;
 
 const CHATGPT_USAGE_URL: &str = "https://chatgpt.com/codex/settings/usage";
 
-/// Describes whether the status card has a complete recursive usage projection.
+/// Describes how much recursive usage the status card can currently show.
 ///
 /// The legacy state keeps the existing direct-thread behavior for callers that do not participate
 /// in the app-owned rollup. `Unavailable` deliberately remains distinct from `Complete(&[])`: a
 /// known-empty fork must render zero recursive usage instead of falling back to inherited direct
-/// counters, while an incomplete tree should tell the user why only direct usage is shown.
+/// counters. `Live` contains exact response records observed during the current session while the
+/// persisted projection is still being rebuilt; it can be incomplete but is still useful for
+/// additive totals and model attribution.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum UsageRollupStatus<'a> {
     Legacy,
     Unavailable,
+    Live(&'a [UsageRollupSource]),
     Complete(&'a [UsageRollupSource]),
 }
 
@@ -149,6 +152,7 @@ struct StatusHistoryCell {
     forked_from: Option<String>,
     token_usage: StatusTokenUsageData,
     token_usage_cost: Option<StatusTokenUsageCostData>,
+    usage_rollup_live: bool,
     usage_rollup_unavailable: bool,
     rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
     thread_usage: StatusThreadUsage,
@@ -447,7 +451,7 @@ impl StatusHistoryCell {
                 usage_by_model_and_service_tier_and_context_length,
             ),
             UsageRollupStatus::Unavailable => None,
-            UsageRollupStatus::Complete(usage_sources) => {
+            UsageRollupStatus::Live(usage_sources) | UsageRollupStatus::Complete(usage_sources) => {
                 compose_status_token_usage_cost_for_sources(
                     &config.tui_status_token_usage,
                     usage_sources,
@@ -456,6 +460,7 @@ impl StatusHistoryCell {
         };
         let usage_rollup_unavailable =
             matches!(usage_rollup_status, UsageRollupStatus::Unavailable);
+        let usage_rollup_live = matches!(usage_rollup_status, UsageRollupStatus::Live(_));
         let rate_limits = if rate_limits.len() <= 1 {
             compose_rate_limit_data(rate_limits.first(), now)
         } else {
@@ -484,6 +489,7 @@ impl StatusHistoryCell {
                 forked_from,
                 token_usage,
                 token_usage_cost,
+                usage_rollup_live,
                 usage_rollup_unavailable,
                 agents_summary,
                 rate_limit_state: rate_limit_state.clone(),
@@ -897,7 +903,7 @@ impl HistoryCell for StatusHistoryCell {
         if self.token_usage.context_window.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
         }
-        if self.usage_rollup_unavailable {
+        if self.usage_rollup_live || self.usage_rollup_unavailable {
             push_label(&mut labels, &mut seen, "Usage tree");
         }
         self.collect_rate_limit_labels(&rate_limit_state, &mut seen, &mut labels);
@@ -1000,7 +1006,12 @@ impl HistoryCell for StatusHistoryCell {
             lines.push(formatter.line("Context window", spans));
         }
 
-        if self.usage_rollup_unavailable {
+        if self.usage_rollup_live {
+            lines.push(formatter.line(
+                "Usage tree",
+                vec![Span::from("live responses; persisted history may be incomplete").dim()],
+            ));
+        } else if self.usage_rollup_unavailable {
             lines.push(formatter.line(
                 "Usage tree",
                 vec![Span::from("data not available yet; showing direct thread").dim()],

@@ -76,6 +76,7 @@ use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::TuiPetAnchor;
 use codex_config::types::TuiStatusTokenUsage;
+use codex_config::types::TuiUsageAutoResume;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::UserPreferencesMemoryBucketPolicy;
 use codex_config::types::UserPreferencesMemoryConfig;
@@ -1058,6 +1059,9 @@ pub struct Config {
 
     /// Opt-in API-equivalent token usage and cost details for `/status`.
     pub tui_status_token_usage: TuiStatusTokenUsage,
+
+    /// Defaults for reset-aware usage-limit continuation and account refreshes.
+    pub tui_usage_auto_resume: TuiUsageAutoResume,
 
     /// Ordered list of terminal title item identifiers for the TUI.
     ///
@@ -4881,6 +4885,14 @@ impl Config {
         )
         .map_err(std::io::Error::from)?;
         let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
+        let tui_usage_auto_resume = cfg
+            .tui
+            .as_ref()
+            .map(|tui| tui.usage_auto_resume.clone())
+            .unwrap_or_default();
+        tui_usage_auto_resume
+            .validate()
+            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
         let config = Self {
             model,
             service_tier,
@@ -5185,6 +5197,7 @@ impl Config {
                 .as_ref()
                 .map(|t| t.status_token_usage.clone())
                 .unwrap_or_default(),
+            tui_usage_auto_resume,
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
             tui_pet: cfg.tui.as_ref().and_then(|t| t.pet.clone()),
