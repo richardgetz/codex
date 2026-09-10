@@ -210,13 +210,21 @@ impl ChatWidget {
                     .map(|thread_id| self.usage_rollup.lock().snapshot_for(thread_id))
             })
             .flatten();
-        let recursive_snapshot = recursive_snapshot
-            .as_ref()
-            .filter(|snapshot| snapshot.complete);
+        let recursive_snapshot = recursive_snapshot.as_ref().filter(|snapshot| {
+            // Exact response completions are merged as soon as they arrive. They may precede
+            // the asynchronous persisted projection (or follow a transient unavailable read),
+            // so keep those known amounts visible while retaining the completeness bit for the
+            // eventual baseline.
+            snapshot.complete || !snapshot.sources.is_empty()
+        });
         let (total_usage, usage_rollup_status) = match recursive_snapshot {
             Some(snapshot) => (
                 &snapshot.total_usage,
-                crate::status::UsageRollupStatus::Complete(snapshot.sources.as_slice()),
+                if snapshot.complete {
+                    crate::status::UsageRollupStatus::Complete(snapshot.sources.as_slice())
+                } else {
+                    crate::status::UsageRollupStatus::Live(snapshot.sources.as_slice())
+                },
             ),
             None if self.config.tui_status_token_usage.enabled && self.thread_id.is_some() => {
                 (direct_usage, crate::status::UsageRollupStatus::Unavailable)

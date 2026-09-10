@@ -21,10 +21,42 @@ pub(crate) fn team_settings_from_core(
 
 /// Builds the sparse core update accepted by `thread/settings/update`.
 ///
-/// Assignment and restoration fields belong to trusted persisted snapshots. They are deliberately
-/// left empty here so a client can select only the mode and cannot forge a role or model history.
+/// A client may patch one model profile for the current thread. Restoration
+/// fields and the other profile remain owned by the trusted persisted snapshot.
 pub(crate) fn team_settings_update_to_core(
     update: ThreadTeamSettingsUpdate,
 ) -> CoreThreadTeamSettingsUpdate {
-    CoreThreadTeamSettingsUpdate { mode: update.mode }
+    CoreThreadTeamSettingsUpdate {
+        mode: update.mode,
+        role: update.role,
+        model: update.model,
+        reasoning_effort: update.reasoning_effort,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_app_server_protocol::TeamMode;
+    use codex_app_server_protocol::TeamRole;
+    use codex_protocol::openai_models::ReasoningEffort;
+
+    #[test]
+    fn preserves_sparse_profile_patch_fields() {
+        let update = ThreadTeamSettingsUpdate {
+            mode: TeamMode::Off,
+            role: Some(TeamRole::Worker),
+            model: Some("gpt-5.6-sol".to_string()),
+            reasoning_effort: Some(ReasoningEffort::High),
+        };
+        assert_eq!(
+            team_settings_update_to_core(update),
+            CoreThreadTeamSettingsUpdate {
+                mode: codex_protocol::protocol::TeamMode::Off,
+                role: Some(codex_protocol::protocol::TeamRole::Worker),
+                model: Some("gpt-5.6-sol".to_string()),
+                reasoning_effort: Some(ReasoningEffort::High),
+            }
+        );
+    }
 }

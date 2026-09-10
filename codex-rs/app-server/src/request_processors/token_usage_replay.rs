@@ -9,7 +9,9 @@
 //! the time the `TokenCount` was persisted so the notification still targets the
 //! corresponding rebuilt turn.
 
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadHistoryBuilder;
@@ -21,12 +23,21 @@ use codex_app_server_protocol::TurnStatus;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_protocol::ThreadId;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TokenUsageProjection;
 use codex_rollout::RolloutItem;
 
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::thread_state::ThreadStateManager;
+use crate::thread_state::TokenUsageProjectionDelivery;
+
+/// The initial projection can race a just-started child while its metadata and rollout become
+/// readable. Retry a small, bounded number of times so that transient startup ordering does not
+/// turn an otherwise complete baseline into a permanent unavailable result until resume.
+const TOKEN_USAGE_PROJECTION_RETRY_DELAYS: [Duration; 2] =
+    [Duration::from_millis(50), Duration::from_millis(250)];
 
 /// Sends the restored context-window counters to the connection that attached to a thread.
 ///
@@ -59,8 +70,9 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
 }
 
 /// Sends a complete recursive billing baseline without delaying thread admission or mixing it
-/// with context-window counters. Projection failures are represented as `None`, allowing clients
-/// to distinguish an unavailable read from a complete empty baseline.
+/// with context-window counters. A bounded retry handles transient startup races; persistent
+/// projection failures are represented as `None`, allowing clients to distinguish an unavailable
+/// read from a complete empty baseline.
 pub(super) async fn send_thread_token_usage_projection_to_connection(
     outgoing: &Arc<OutgoingMessageSender>,
     connection_id: ConnectionId,
@@ -75,10 +87,12 @@ pub(super) async fn send_thread_token_usage_projection_to_connection(
         .await;
     let generation = delivery.begin();
     tokio::spawn(async move {
-        let usage_projection = thread_manager
-            .token_usage_projection(thread_id)
+        let usage_projection =
+            load_token_usage_projection_with_retries(&delivery, generation, || {
+                let thread_manager = Arc::clone(&thread_manager);
+                async move { thread_manager.token_usage_projection(thread_id).await }
+            })
             .await
-            .ok()
             .map(Into::into);
         let _send_lock = delivery.send_lock().lock().await;
         if !delivery.is_current(generation) {
@@ -95,6 +109,46 @@ pub(super) async fn send_thread_token_usage_projection_to_connection(
             )
             .await;
     });
+}
+
+/// Reads a projection immediately, then retries transient read failures with bounded backoff.
+///
+/// The caller owns the delivery generation. Checking it before and after each delay lets a newer
+/// lifecycle replay cancel this attempt without allowing a stale result to reach the client.
+async fn load_token_usage_projection_with_retries<Load, LoadFuture>(
+    delivery: &TokenUsageProjectionDelivery,
+    generation: u64,
+    mut load: Load,
+) -> Option<TokenUsageProjection>
+where
+    Load: FnMut() -> LoadFuture + Send,
+    LoadFuture: Future<Output = CodexResult<TokenUsageProjection>> + Send,
+{
+    for attempt in 0..=TOKEN_USAGE_PROJECTION_RETRY_DELAYS.len() {
+        if !delivery.is_current(generation) {
+            return None;
+        }
+        if attempt > 0 {
+            tokio::time::sleep(TOKEN_USAGE_PROJECTION_RETRY_DELAYS[attempt - 1]).await;
+            if !delivery.is_current(generation) {
+                return None;
+            }
+        }
+
+        match load().await {
+            Ok(projection) => return Some(projection),
+            Err(error) => {
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    max_attempts = TOKEN_USAGE_PROJECTION_RETRY_DELAYS.len() + 1,
+                    %error,
+                    "token usage projection read failed"
+                );
+            }
+        }
+    }
+
+    None
 }
 
 pub(super) fn restored_token_usage_turn_id(
@@ -155,10 +209,14 @@ fn latest_token_usage_turn_id(turns: &[Turn]) -> String {
 mod tests {
     use super::*;
     use codex_app_server_protocol::build_turns_from_rollout_items;
+    use codex_protocol::error::CodexErr;
     use codex_protocol::protocol::AgentMessageEvent;
     use codex_protocol::protocol::TokenCountEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use pretty_assertions::assert_eq;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use tokio::sync::Notify;
 
     #[test]
     fn replay_attribution_uses_already_loaded_history() {
@@ -203,6 +261,81 @@ mod tests {
             latest_token_usage_turn_id_from_rollout_items(&rollout_items, turns.as_slice()),
             Some(turns[2].id.clone())
         );
+    }
+
+    #[tokio::test]
+    async fn projection_retry_recovers_after_transient_startup_read() {
+        let delivery = TokenUsageProjectionDelivery::default();
+        let generation = delivery.begin();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_load = Arc::clone(&attempts);
+
+        let projection =
+            load_token_usage_projection_with_retries(&delivery, generation, move || {
+                let attempt = attempts_for_load.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if attempt == 0 {
+                        Err(CodexErr::Fatal(
+                            "child metadata is not readable yet".to_string(),
+                        ))
+                    } else {
+                        Ok(TokenUsageProjection::default())
+                    }
+                }
+            })
+            .await;
+
+        assert_eq!(projection, Some(TokenUsageProjection::default()));
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn projection_retry_preserves_unavailable_after_bounded_failures() {
+        let delivery = TokenUsageProjectionDelivery::default();
+        let generation = delivery.begin();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_load = Arc::clone(&attempts);
+
+        let projection =
+            load_token_usage_projection_with_retries(&delivery, generation, move || {
+                attempts_for_load.fetch_add(1, Ordering::SeqCst);
+                async { Err(CodexErr::Fatal("thread history is unreadable".to_string())) }
+            })
+            .await;
+
+        assert_eq!(projection, None);
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            TOKEN_USAGE_PROJECTION_RETRY_DELAYS.len() + 1
+        );
+    }
+
+    #[tokio::test]
+    async fn projection_retry_stops_when_generation_is_superseded() {
+        let delivery = Arc::new(TokenUsageProjectionDelivery::default());
+        let generation = delivery.begin();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_load = Arc::clone(&attempts);
+        let first_attempt = Arc::new(Notify::new());
+        let first_attempt_for_load = Arc::clone(&first_attempt);
+        let delivery_for_task = Arc::clone(&delivery);
+        let task = tokio::spawn(async move {
+            load_token_usage_projection_with_retries(&delivery_for_task, generation, move || {
+                attempts_for_load.fetch_add(1, Ordering::SeqCst);
+                first_attempt_for_load.notify_one();
+                async { Err(CodexErr::Fatal("child is still starting".to_string())) }
+            })
+            .await
+        });
+
+        first_attempt.notified().await;
+        delivery.begin();
+
+        assert_eq!(
+            task.await.expect("projection retry task should finish"),
+            None
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 
     fn token_usage_history() -> Vec<RolloutItem> {

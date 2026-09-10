@@ -122,6 +122,20 @@ pub struct ThreadUsagePolicyParams {
     pub minimum_remaining_percent: Option<Option<u8>>,
 }
 
+/// Request an immediate account-usage check for a thread parked by the
+/// reset-aware continuation scheduler. This does not start a new model turn.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUsageResumeParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUsageResumeResponse {}
+
 impl From<ThreadUsagePolicyParams> for ThreadUsagePolicy {
     fn from(value: ThreadUsagePolicyParams) -> Self {
         Self {
@@ -322,12 +336,22 @@ pub struct ThreadStartResponse {
     pub multi_agent_mode: MultiAgentMode,
 }
 
-/// Team mode accepted by `thread/settings/update`.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+/// Team mode or profile patch accepted by `thread/settings/update`.
+///
+/// When `role`, `model`, and `reasoning_effort` are supplied, the selected
+/// profile is changed for this thread only. The server preserves the other
+/// profile and the role assignment captured by the thread snapshot.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct ThreadTeamSettingsUpdate {
     pub mode: TeamMode,
+    #[ts(optional = nullable)]
+    pub role: Option<TeamRole>,
+    #[ts(optional = nullable)]
+    pub model: Option<String>,
+    #[ts(optional = nullable)]
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl ThreadStartResponse {

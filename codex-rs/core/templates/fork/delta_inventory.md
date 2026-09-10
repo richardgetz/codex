@@ -24,14 +24,33 @@ release or merge rules.
   - `[team]` can define exactly one Lead and one Worker model/effort profile;
     profiles remain disabled for new sessions unless `team.enabled = true`.
   - `/team on`, `/team off`, and `/team status` switch and report the live
-    per-thread assignment without changing global config defaults. Re-enabling
+    per-thread assignment without changing global config defaults. `/team lead`
+    and `/team worker` open the existing model/effort picker; typed forms accept
+    an exact catalog model and effort. Profile changes patch only the current
+    thread snapshot, leave Team Off unchanged, survive resume/fork, and apply
+    to Workers spawned afterward while in-flight Workers stay pinned. Re-enabling
     Team mode while a Lead is parked with direct Workers starts a fresh oversight
-    interval after the assignment is published. The active snapshot survives
-    resume and fork, while in-flight workers stay pinned.
+    interval after the assignment is published.
   - Root sessions use Lead and delegated ThreadSpawn/review sessions use
     Worker; model and effort overrides cannot promote or bypass that assignment.
   - Routing enforces the selected catalog model and effort. It does not provide
     a hard tool sandbox or attest that an external skill completed.
+  - `[team.lead].dynamic_handoff` defaults to `false`. When true, the Lead
+    preflights before bulk log/trace, web/browser, or broad code/docs/repo
+    lookup and routes only work where Worker filtering reduces Lead context;
+    small or Lead-context-heavy lookups stay direct. Worker reports include
+    concise answers, selected evidence excerpts, and file/line/time/source
+    pointers, preserve uncertainty, and avoid full dumps. The Lead does not
+    repeat supported findings automatically; follow-up is limited to concrete
+    gaps or conflicts, blocked or incomplete Workers, or narrow excerpt
+    requests, reusing prior findings. The choice persists in thread team
+    snapshots; legacy snapshots default to false. This guidance is advisory,
+    retains normal delegation limits, and Worker processing still consumes
+    tokens.
+  - Root Fast/service-tier changes propagate to loaded direct and nested
+    ThreadSpawn Workers' settings snapshots and client notifications. In-flight
+    turns keep their captured request tier, while later and newly spawned turns
+    use the root selection.
   - `[team.worker].max_concurrent` optionally sets a positive, atomic ceiling
     for active direct Workers per Lead across V1 and V2. Pending starts reserve
     capacity, followups reacquire it, completed or aborted Workers release it,
@@ -101,8 +120,18 @@ release or merge rules.
     including remaining percentage and reset time for 5-hour, weekly, and
     other known windows.
   - Resettable provider limits can be retried after reset with cancellation
-    awareness and a bounded retry count. Workspace or credit-cap failures are
-    not automatically retried.
+    awareness and a bounded retry count. The opted-in scheduler refreshes the
+    authenticated account at most once per configured mechanical interval
+    (default 60 minutes), checking sooner when a known reset falls inside that
+    interval. Workspace or credit-cap failures are not automatically retried.
+  - `[tui.usage_auto_resume]` provides an opt-in default for new root sessions
+    and a validated 1-minute-to-7-day fallback interval. `/usage auto-resume
+    on|off|status` changes or reports the displayed thread policy; a root
+    change propagates to loaded ThreadSpawn descendants and future children,
+    while a Worker change remains scoped to that Worker. `/continue` wakes an
+    existing usage wait in the selected thread subtree without creating a
+    model turn. Floor-paused automatic work uses the same scheduler; completed,
+    cancelled, and manually stopped work is never revived.
   - The policy is preserved through resume, copied/reference/paginated forks,
     Last-N forks, and spawned subthreads. The persisted policy survives a cold
     resume, but an in-flight reset wait is process-local.
@@ -122,6 +151,10 @@ release or merge rules.
     threads, and one-shot Review responses remain attributable across cold
     resume and live completion notifications. Fork context records do not count
     as the fork's own spend, and legacy aggregate daily history is preserved.
+    Exact live completions are additive while the persisted projection is
+    pending or unavailable, with deduplicated model breakdowns shown before the
+    complete baseline arrives. Initial projection reads use bounded startup
+    retries; persistent unreadable history remains explicitly unavailable.
 
 ## Introduced In 0.124.0-rick.2 (Recent)
 
@@ -417,7 +450,18 @@ release or merge rules.
   remains disabled by default, and `/team` state survives resume/fork without
   mutating global config. Verify Lead routing, Worker routing for all delegated
   and review sessions, nested Worker depth handling, override rejection, and
-  single-model restoration after `/team off`.
+  single-model restoration after `/team off`. Verify `/team lead` and
+  `/team worker` reuse the model/effort picker, typed commands accept only
+  supported catalog pairs, Team Off remains unchanged during profile edits,
+  updated profiles apply to newly spawned Workers, and in-flight Workers stay
+  pinned to their captured profile.
+- Verify `[team.lead].dynamic_handoff` defaults to `false`, is accepted under
+  `[team.lead]`, injects bounded role-specific Lead/Worker guidance when true,
+  keeps small or Lead-context-heavy lookups direct, requests concise selected
+  evidence with pointers and uncertainty, and avoids routine duplicate
+  lookups. Verify the setting persists through resume/fork snapshots, legacy
+  snapshots default to `false`, and existing delegation authorization,
+  concurrency, depth, and tool behavior remain unchanged.
 - Verify optional `[team.worker].max_concurrent` accepts only positive values,
   is rejected under `[team.lead]`, atomically limits pending starts and active
   followups across both backends, releases on completion/abort/shutdown, leaves
@@ -444,7 +488,16 @@ release or merge rules.
   projection through separate notifications, deduplicates each source response
   exactly once, includes cold-resumed and archived descendants plus forwarded
   Review usage, preserves parent/fork ownership and direct context totals, and
-  leaves legacy aggregate daily history unchanged.
+  leaves legacy aggregate daily history unchanged. Verify exact live responses
+  remain visible as additive partial usage while a projection is pending or
+  unavailable, then merge into the complete baseline without double counting;
+  a complete zero baseline must remain distinct from an unavailable read, and
+  transient startup reads recover through bounded retries without rescanning on
+  every response.
+- Verify root Fast/service-tier changes update loaded direct and nested
+  ThreadSpawn settings snapshots and notifications, while already captured
+  in-flight turns retain their request tier and later/new turns use the root
+  selection.
 - Verify V2 team admission accepts V1 Worker metadata, root startup/resume
   warns and disables only the affected thread when an assignment is invalid,
   restores saved model/effort unless explicit resume overrides are supplied,
@@ -502,4 +555,6 @@ release or merge rules.
 - Verify per-thread `usagePolicy` remains disabled by default, persists through
   resume and all fork modes, exposes bounded provider-window status to models,
   and only auto-resumes resettable provider limits while respecting the
-  configured continuation floor.
+  configured continuation floor. Verify the TUI default and interval bounds,
+  known-reset scheduling, hourly fallback account refresh, floor-paused work,
+  `/continue` wake/report behavior, and cancellation/manual-stop preservation.

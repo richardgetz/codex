@@ -402,10 +402,13 @@ impl UsageRollup {
             }
         }
         // Empty source nodes still matter for preserving parent edges, but should not replace a
-        // direct token snapshot in the status card with an all-zero recursive result.
+        // direct token snapshot in the status card with an all-zero recursive result. A source
+        // with a response identity is still meaningful when the provider reports zero usage:
+        // it proves an exact response was observed and lets the live status leave the unavailable
+        // state before a persisted projection arrives.
         let sources = sources
             .into_values()
-            .filter(|source| !source.usage.is_zero())
+            .filter(|source| !source.usage.is_zero() || !source.response_ids.is_empty())
             .collect::<Vec<_>>();
         let total_usage = sources
             .iter()

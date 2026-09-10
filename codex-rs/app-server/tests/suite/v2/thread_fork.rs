@@ -435,6 +435,7 @@ async fn assert_thread_fork_preserves_team_settings(
                     thread_id: thread.id.clone(),
                     team: Some(ThreadTeamSettingsUpdate {
                         mode: TeamMode::LeadWorker,
+                        ..Default::default()
                     }),
                     ..Default::default()
                 })
@@ -469,7 +470,10 @@ async fn assert_thread_fork_preserves_team_settings(
         let update_id = mcp
             .send_thread_settings_update_request(ThreadSettingsUpdateParams {
                 thread_id: thread.id.clone(),
-                team: Some(ThreadTeamSettingsUpdate { mode: source_mode }),
+                team: Some(ThreadTeamSettingsUpdate {
+                    mode: source_mode,
+                    ..Default::default()
+                }),
                 ..Default::default()
             })
             .await?;

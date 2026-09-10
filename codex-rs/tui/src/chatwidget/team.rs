@@ -6,25 +6,109 @@ use codex_app_server_protocol::TeamMode;
 use codex_app_server_protocol::TeamRole;
 use codex_app_server_protocol::ThreadTeamSettings;
 
-pub(crate) const TEAM_USAGE: &str = "Usage: /team [on|off|status]";
+pub(crate) const TEAM_USAGE: &str =
+    "Usage: /team [on|off|status|lead [<model> <effort>]|worker [<model> <effort>]]";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TeamCommand {
     On,
     Off,
     Status,
+    SelectProfile {
+        role: TeamRole,
+    },
+    ConfigureProfile {
+        role: TeamRole,
+        model: String,
+        effort: codex_protocol::openai_models::ReasoningEffort,
+    },
 }
 
 pub(crate) fn parse_team_command(args: &str) -> Result<TeamCommand, &'static str> {
-    match args.trim().to_ascii_lowercase().as_str() {
-        "" | "status" => Ok(TeamCommand::Status),
-        "on" => Ok(TeamCommand::On),
-        "off" => Ok(TeamCommand::Off),
+    let mut parts = args.split_whitespace();
+    let command = parts.next().unwrap_or_default();
+    match command.to_ascii_lowercase().as_str() {
+        "" | "status" if parts.next().is_none() => Ok(TeamCommand::Status),
+        "on" if parts.next().is_none() => Ok(TeamCommand::On),
+        "off" if parts.next().is_none() => Ok(TeamCommand::Off),
+        "lead" | "worker" => {
+            let role = if command.eq_ignore_ascii_case("lead") {
+                TeamRole::Lead
+            } else {
+                TeamRole::Worker
+            };
+            let Some(model) = parts.next() else {
+                return parts
+                    .next()
+                    .is_none()
+                    .then_some(TeamCommand::SelectProfile { role })
+                    .ok_or(TEAM_USAGE);
+            };
+            let Some(effort) = parts.next() else {
+                return Err(TEAM_USAGE);
+            };
+            if parts.next().is_some() || model.trim().is_empty() {
+                return Err(TEAM_USAGE);
+            }
+            let effort = effort.parse().map_err(|_| TEAM_USAGE)?;
+            Ok(TeamCommand::ConfigureProfile {
+                role,
+                model: model.to_string(),
+                effort,
+            })
+        }
         _ => Err(TEAM_USAGE),
     }
 }
 
 impl ChatWidget {
+    pub(crate) fn validate_team_profile_command(
+        &self,
+        role: TeamRole,
+        model: &str,
+        effort: &codex_protocol::openai_models::ReasoningEffort,
+    ) -> Result<(), String> {
+        let Some(preset) = self
+            .model_catalog
+            .try_list_models()
+            .map_err(|_| "model catalog is unavailable; try again shortly".to_string())?
+            .into_iter()
+            .find(|preset| preset.model == model)
+        else {
+            return Err(format!(
+                "{} model `{model}` is not available in the current model catalog",
+                role_label(role)
+            ));
+        };
+        if preset.model.starts_with("codex-auto-") {
+            return Err(format!(
+                "{} profiles require a concrete model; `{model}` is an automatic model",
+                role_label(role)
+            ));
+        }
+        let supported = if preset.supported_reasoning_efforts.is_empty() {
+            std::iter::once(&preset.default_reasoning_effort).collect::<Vec<_>>()
+        } else {
+            preset
+                .supported_reasoning_efforts
+                .iter()
+                .map(|option| &option.effort)
+                .collect::<Vec<_>>()
+        };
+        if !supported.contains(&effort) {
+            let supported = supported
+                .iter()
+                .map(|effort| effort.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(format!(
+                "{} effort `{effort}` is unsupported by model `{model}` (supported: {supported})",
+                role_label(role)
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn dispatch_team_command(&mut self, args: &str) {
         let command = match parse_team_command(args) {
             Ok(command) => command,
@@ -56,7 +140,7 @@ impl ChatWidget {
         self.team_settings.as_ref()
     }
 
-    pub(crate) fn team_command_is_already_applied(&self, command: TeamCommand) -> bool {
+    pub(crate) fn team_command_is_already_applied(&self, command: &TeamCommand) -> bool {
         if self.pending_team_command.is_some() {
             return false;
         }
@@ -66,7 +150,12 @@ impl ChatWidget {
         match command {
             TeamCommand::On => team.mode == TeamMode::LeadWorker,
             TeamCommand::Off => team.mode == TeamMode::Off,
-            TeamCommand::Status => false,
+            TeamCommand::Status | TeamCommand::SelectProfile { .. } => false,
+            TeamCommand::ConfigureProfile {
+                role,
+                model,
+                effort,
+            } => team_profile_matches(team, *role, model, effort),
         }
     }
 
@@ -83,7 +172,7 @@ impl ChatWidget {
     /// A settings notification can carry `team: None` while a thread is still being
     /// hydrated, so leave the request pending until a concrete team snapshot arrives.
     pub(crate) fn confirm_pending_team_command(&mut self) {
-        let Some(command) = self.pending_team_command else {
+        let Some(command) = self.pending_team_command.clone() else {
             return;
         };
         let Some(team) = self.team_settings.as_ref() else {
@@ -92,14 +181,43 @@ impl ChatWidget {
         let expected_mode = match command {
             TeamCommand::On => TeamMode::LeadWorker,
             TeamCommand::Off => TeamMode::Off,
-            TeamCommand::Status => {
+            TeamCommand::Status | TeamCommand::SelectProfile { .. } => {
                 self.pending_team_command = None;
+                return;
+            }
+            TeamCommand::ConfigureProfile {
+                role,
+                model,
+                effort,
+            } => {
+                if team_profile_matches(team, role, &model, &effort) {
+                    self.add_info_message(format_team_status(Some(team)), None);
+                    self.pending_team_command = None;
+                }
                 return;
             }
         };
         if team.mode == expected_mode {
             self.add_info_message(format_team_status(Some(team)), None);
             self.pending_team_command = None;
+        }
+    }
+}
+
+fn team_profile_matches(
+    team: &ThreadTeamSettings,
+    role: TeamRole,
+    model: &str,
+    effort: &codex_protocol::openai_models::ReasoningEffort,
+) -> bool {
+    match role {
+        TeamRole::Lead => {
+            team.lead_model.as_deref() == Some(model)
+                && team.lead_reasoning_effort.as_ref() == Some(effort)
+        }
+        TeamRole::Worker => {
+            team.worker_model.as_deref() == Some(model)
+                && team.worker_reasoning_effort.as_ref() == Some(effort)
         }
     }
 }
@@ -134,7 +252,7 @@ pub(crate) fn format_team_status(team: Option<&ThreadTeamSettings>) -> String {
     lines.join("\n")
 }
 
-fn role_label(role: TeamRole) -> &'static str {
+pub(crate) fn role_label(role: TeamRole) -> &'static str {
     match role {
         TeamRole::Lead => "Lead",
         TeamRole::Worker => "Worker",

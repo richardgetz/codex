@@ -35,6 +35,22 @@ fn raw_response(
     response_id: &str,
     tokens: i64,
 ) -> ServerNotification {
+    raw_response_with_model(
+        thread_id,
+        Some(parent_thread_id),
+        response_id,
+        tokens,
+        "gpt-5.4",
+    )
+}
+
+fn raw_response_with_model(
+    thread_id: ThreadId,
+    parent_thread_id: Option<ThreadId>,
+    response_id: &str,
+    tokens: i64,
+    model: &str,
+) -> ServerNotification {
     ServerNotification::RawResponseCompleted(RawResponseCompletedNotification {
         thread_id: thread_id.to_string(),
         turn_id: format!("turn-{response_id}"),
@@ -42,10 +58,10 @@ fn raw_response(
         usage: Some(usage(tokens)),
         usage_metadata: None,
         source_thread_id: Some(thread_id.to_string()),
-        parent_thread_id: Some(parent_thread_id.to_string()),
+        parent_thread_id: parent_thread_id.map(|thread_id| thread_id.to_string()),
         completed_at: None,
         attribution: Some(ThreadTokenUsageAttribution {
-            model: Some("gpt-5.4".to_string()),
+            model: Some(model.to_string()),
             model_provider: Some("openai".to_string()),
             service_tier: None,
             context_length: Some("short".to_string()),
@@ -137,6 +153,15 @@ fn projection_notification(
         ThreadTokenUsageProjectionUpdatedNotification {
             thread_id: thread_id.to_string(),
             usage_projection: Some(projection),
+        },
+    )
+}
+
+fn unavailable_projection_notification(thread_id: ThreadId) -> ServerNotification {
+    ServerNotification::ThreadTokenUsageProjectionUpdated(
+        ThreadTokenUsageProjectionUpdatedNotification {
+            thread_id: thread_id.to_string(),
+            usage_projection: None,
         },
     )
 }
@@ -279,6 +304,70 @@ async fn background_descendant_usage_survives_routing_and_widget_switch() -> Res
         }),
         Some(30)
     );
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_usage_is_visible_before_projection_and_deduplicates_replays() -> Result<()> {
+    let (mut app, _app_event_rx, _op_rx) = super::make_test_app_with_channels().await;
+    app.config.tui_status_token_usage.enabled = true;
+    let root_thread_id = ThreadId::new();
+    let worker_thread_id = ThreadId::new();
+    app.primary_thread_id = Some(root_thread_id);
+    app.chat_widget.set_thread_id_for_test(root_thread_id);
+    app.ensure_thread_channel(root_thread_id);
+    app.ensure_thread_channel(worker_thread_id);
+
+    let app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let root_response =
+        raw_response_with_model(root_thread_id, None, "root-live-response", 11, "gpt-5.4");
+    let worker_response = raw_response_with_model(
+        worker_thread_id,
+        Some(root_thread_id),
+        "worker-live-response",
+        13,
+        "gpt-5.3",
+    );
+    for notification in [root_response.clone(), worker_response.clone()] {
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(Box::new(notification)),
+        )
+        .await;
+    }
+
+    app.handle_app_server_event(
+        &app_server,
+        AppServerEvent::ServerNotification(Box::new(unavailable_projection_notification(
+            root_thread_id,
+        ))),
+    )
+    .await;
+
+    let live_snapshot = app.usage_rollup.lock().snapshot_for(root_thread_id);
+    assert!(!live_snapshot.complete);
+    assert_eq!(live_snapshot.total_usage.total_tokens, 24);
+    assert_eq!(live_snapshot.sources.len(), 2);
+    let live_models = live_snapshot
+        .sources
+        .iter()
+        .filter_map(|source| source.model.as_deref())
+        .collect::<Vec<_>>();
+    assert!(live_models.contains(&"gpt-5.3"));
+    assert!(live_models.contains(&"gpt-5.4"));
+
+    for notification in [root_response, worker_response] {
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(Box::new(notification)),
+        )
+        .await;
+    }
+    let replayed_snapshot = app.usage_rollup.lock().snapshot_for(root_thread_id);
+    assert_eq!(replayed_snapshot.total_usage.total_tokens, 24);
+    assert_eq!(replayed_snapshot.sources.len(), 2);
+
     app_server.shutdown().await?;
     Ok(())
 }

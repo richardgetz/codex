@@ -4078,6 +4078,14 @@
       ],
       "type": "string"
     },
+    "TeamRole": {
+      "description": "Role and assignments captured with a thread's durable team setting.",
+      "enum": [
+        "lead",
+        "worker"
+      ],
+      "type": "string"
+    },
     "TextElement": {
       "properties": {
         "byteRange": {
@@ -5435,10 +5443,36 @@
       "type": "string"
     },
     "ThreadTeamSettingsUpdate": {
-      "description": "Team mode accepted by `thread/settings/update`.",
+      "description": "Team mode or profile patch accepted by `thread/settings/update`.\n\nWhen `role`, `model`, and `reasoning_effort` are supplied, the selected profile is changed for this thread only. The server preserves the other profile and the role assignment captured by the thread snapshot.",
       "properties": {
         "mode": {
           "$ref": "#/definitions/TeamMode"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasoningEffort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TeamRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

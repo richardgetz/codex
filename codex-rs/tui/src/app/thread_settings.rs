@@ -6,6 +6,7 @@ use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::chatwidget::TeamCommand;
 use crate::chatwidget::cyber_model_approval_reviewer;
+use crate::chatwidget::role_label;
 use crate::session_state::ThreadSessionState;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
@@ -31,13 +32,40 @@ impl App {
             return;
         }
 
-        let Some(params) = team_settings_update_params(thread_id, command) else {
+        if let TeamCommand::SelectProfile { role } = command.clone() {
+            if self.chat_widget.team_settings().is_none() {
+                self.chat_widget
+                    .add_error_message("Team mode is not configured for this session.".to_string());
+                return;
+            }
+            self.chat_widget.open_team_model_popup(role);
+            return;
+        }
+
+        let current_mode = self
+            .chat_widget
+            .team_settings()
+            .map_or(TeamMode::Off, |settings| settings.mode);
+        let Some(params) = team_settings_update_params(thread_id, command.clone(), current_mode)
+        else {
             self.chat_widget.show_team_status();
             return;
         };
         if self.chat_widget.team_settings().is_none() {
             self.chat_widget
                 .add_error_message("Team mode is not configured for this session.".to_string());
+            return;
+        }
+        if let TeamCommand::ConfigureProfile {
+            role,
+            model,
+            effort,
+        } = &command
+            && let Err(error) = self
+                .chat_widget
+                .validate_team_profile_command(*role, model, effort)
+        {
+            self.chat_widget.add_error_message(error);
             return;
         }
         let Some(mode) = params.team.as_ref().map(|team| team.mode) else {
@@ -48,17 +76,23 @@ impl App {
             TeamMode::Off => "off",
             TeamMode::LeadWorker => "on",
         };
-        if self.chat_widget.team_command_is_already_applied(command) {
+        if self.chat_widget.team_command_is_already_applied(&command) {
             self.chat_widget.show_team_status();
             return;
         }
+        if matches!(command, TeamCommand::ConfigureProfile { .. }) {
+            self.chat_widget.clear_model_popup_target();
+        }
         match app_server.thread_settings_update(params).await {
             Ok(true) => {
+                let message = match &command {
+                    TeamCommand::ConfigureProfile { role, .. } => {
+                        format!("Updating this session's {} profile…", role_label(*role))
+                    }
+                    _ => format!("Switching this session to Lead/Worker team mode {mode_label}…"),
+                };
                 self.chat_widget.set_pending_team_command(command);
-                self.chat_widget.add_info_message(
-                    format!("Switching this session to Lead/Worker team mode {mode_label}…"),
-                    /*hint*/ None,
-                );
+                self.chat_widget.add_info_message(message, /*hint*/ None);
             }
             Ok(false) => {
                 self.chat_widget.clear_pending_team_command();
@@ -292,15 +326,32 @@ impl App {
 fn team_settings_update_params(
     thread_id: ThreadId,
     command: TeamCommand,
+    current_mode: TeamMode,
 ) -> Option<ThreadSettingsUpdateParams> {
-    let mode = match command {
-        TeamCommand::On => TeamMode::LeadWorker,
-        TeamCommand::Off => TeamMode::Off,
-        TeamCommand::Status => return None,
+    let profile = match command {
+        TeamCommand::On => ThreadTeamSettingsUpdate {
+            mode: TeamMode::LeadWorker,
+            ..Default::default()
+        },
+        TeamCommand::Off => ThreadTeamSettingsUpdate {
+            mode: TeamMode::Off,
+            ..Default::default()
+        },
+        TeamCommand::Status | TeamCommand::SelectProfile { .. } => return None,
+        TeamCommand::ConfigureProfile {
+            role,
+            model,
+            effort,
+        } => ThreadTeamSettingsUpdate {
+            mode: current_mode,
+            role: Some(role),
+            model: Some(model),
+            reasoning_effort: Some(effort),
+        },
     };
     Some(ThreadSettingsUpdateParams {
         thread_id: thread_id.to_string(),
-        team: Some(ThreadTeamSettingsUpdate { mode }),
+        team: Some(profile),
         ..ThreadSettingsUpdateParams::default()
     })
 }

@@ -1845,6 +1845,28 @@ async fn status_snapshot_shows_recursive_workers_and_unavailable_tree() {
     let complete =
         sanitize_directory(render_lines(&complete.display_lines(/*width*/ 120))).join("\n");
 
+    let (live, _) = new_status_output_with_rate_limits_handle_with_sources(
+        &config,
+        /*runtime_model_provider_base_url*/ None,
+        /*remote_connection*/ None,
+        /*account_display*/ None,
+        /*token_info*/ None,
+        &total_usage,
+        &Some(root_thread_id),
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ &[],
+        None,
+        now,
+        "gpt-5.4",
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+        UsageRollupStatus::Live(&sources),
+        "<none>".to_string(),
+        /*refreshing_rate_limits*/ false,
+    );
+    let live = sanitize_directory(render_lines(&live.display_lines(/*width*/ 120))).join("\n");
+
     let direct_usage = TokenUsage {
         input_tokens: 42,
         total_tokens: 42,
@@ -1903,7 +1925,7 @@ async fn status_snapshot_shows_recursive_workers_and_unavailable_tree() {
     assert_snapshot!(
         "status_recursive_usage_states",
         format!(
-            "complete:\n{complete}\n\nunavailable:\n{unavailable}\n\nknown_empty:\n{known_empty}"
+            "complete:\n{complete}\n\nlive:\n{live}\n\nunavailable:\n{unavailable}\n\nknown_empty:\n{known_empty}"
         )
     );
 }

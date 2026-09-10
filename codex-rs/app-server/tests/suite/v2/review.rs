@@ -398,6 +398,7 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
             thread_id: thread_id.clone(),
             team: Some(ThreadTeamSettingsUpdate {
                 mode: TeamMode::LeadWorker,
+                ..Default::default()
             }),
             ..Default::default()
         })
@@ -509,6 +510,7 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
             thread_id: thread_id.clone(),
             team: Some(ThreadTeamSettingsUpdate {
                 mode: TeamMode::Off,
+                ..Default::default()
             }),
             ..Default::default()
         })

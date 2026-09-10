@@ -46,8 +46,11 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_git_discovery::GitRootDiscovery;
 use std::path::Path;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
+use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
 use tokio::sync::SemaphorePermit;
@@ -86,6 +89,10 @@ pub(crate) struct Session {
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) realtime_history: Option<Mutex<crate::realtime_history::RealtimeHistoryState>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    /// Wakes an active usage-limit wait when the user requests `/continue`.
+    pub(crate) usage_resume_check_notify: Notify,
+    /// True only while a turn is parked waiting for a usage-limit check.
+    pub(crate) usage_resume_waiting: AtomicBool,
     /// Tracks recent automatic scratchpad loopbacks for this loaded thread.
     pub(crate) scratchpad_loopback_limiter: std::sync::Mutex<ScratchpadLoopbackLimiter>,
     /// Coordinates one event-driven oversight deadline while a Lead is parked.
@@ -650,7 +657,7 @@ impl SessionConfiguration {
             super::team::apply_team_update(
                 &mut next_configuration,
                 self,
-                *team_update,
+                team_update.clone(),
                 &mut step_settings_update,
             )?;
         }
@@ -869,6 +876,31 @@ impl Session {
         self.thread_id
     }
 
+    /// Requests an immediate account usage check for an active usage wait.
+    ///
+    /// Returns `true` only when this thread is currently parked by the
+    /// reset-aware continuation scheduler. A request made while a model turn
+    /// is running or after a manual cancellation is intentionally ignored.
+    pub(crate) fn request_usage_resume_check(&self) -> bool {
+        if !self.usage_resume_waiting.load(Ordering::Acquire) {
+            return false;
+        }
+        // `notify_one` retains a permit when the scheduler is between setting
+        // its waiting flag and registering the `notified()` future, so a manual
+        // `/continue` cannot be lost at that boundary. There is at most one
+        // usage wait per session, and repeated nudges intentionally coalesce.
+        self.usage_resume_check_notify.notify_one();
+        true
+    }
+
+    pub(crate) fn set_usage_resume_waiting(&self, waiting: bool) {
+        self.usage_resume_waiting.store(waiting, Ordering::Release);
+    }
+
+    pub(crate) async fn wait_for_usage_resume_check(&self) {
+        self.usage_resume_check_notify.notified().await;
+    }
+
     /// Returns the identity shared by the root thread and all descendant threads.
     pub(crate) fn session_id(&self) -> SessionId {
         self.services.agent_control.session_id()
@@ -1033,6 +1065,8 @@ impl Session {
             .or_else(|| initial_history.get_resumed_parent_thread_id());
         session_configuration.parent_thread_id = parent_thread_id;
         if parent_thread_id.is_none() {
+            agent_control
+                .set_root_usage_auto_resume(session_configuration.usage_policy.auto_resume);
             agent_control.set_root_service_tier(
                 session_configuration
                     .step_settings
@@ -1873,6 +1907,8 @@ impl Session {
                     && services.live_thread.is_some())
                 .then(|| Mutex::new(Default::default())),
                 active_turn: Mutex::new(None),
+                usage_resume_check_notify: Notify::new(),
+                usage_resume_waiting: AtomicBool::new(false),
                 scratchpad_loopback_limiter: std::sync::Mutex::new(
                     ScratchpadLoopbackLimiter::default(),
                 ),

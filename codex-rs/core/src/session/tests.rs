@@ -114,6 +114,7 @@ use codex_utils_output_truncation::approx_token_count;
 use codex_utils_path_uri::PathUri;
 use core_test_support::test_codex::local_selections;
 use std::collections::BTreeMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use tracing::Span;
 
@@ -408,6 +409,24 @@ async fn default_turn_context_assigns_missing_response_item_ids() {
             .id()
             .is_some_and(|item_id| item_id.starts_with("msg_"))
     );
+}
+
+#[tokio::test]
+async fn usage_resume_check_wakeup_is_coalesced_and_only_active_while_waiting() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+
+    assert!(!session.request_usage_resume_check());
+    session.set_usage_resume_waiting(true);
+    assert!(session.request_usage_resume_check());
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        session.wait_for_usage_resume_check(),
+    )
+    .await
+    .expect("usage resume wakeup should be delivered");
+    session.set_usage_resume_waiting(false);
+    assert!(!session.request_usage_resume_check());
 }
 
 fn assistant_message(text: &str) -> ResponseItem {
@@ -7654,6 +7673,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         conversation: Arc::new(RealtimeConversationManager::new()),
         realtime_history: None,
         active_turn: Mutex::new(None),
+        usage_resume_check_notify: Notify::new(),
+        usage_resume_waiting: AtomicBool::new(false),
         scratchpad_loopback_limiter: std::sync::Mutex::new(Default::default()),
         lead_idle_controller: super::lead_idle::LeadIdleController::default(),
         team_lead_turn_admission: Mutex::new(()),
@@ -10076,6 +10097,8 @@ where
         conversation: Arc::new(RealtimeConversationManager::new()),
         realtime_history: None,
         active_turn: Mutex::new(None),
+        usage_resume_check_notify: Notify::new(),
+        usage_resume_waiting: AtomicBool::new(false),
         scratchpad_loopback_limiter: std::sync::Mutex::new(Default::default()),
         lead_idle_controller: super::lead_idle::LeadIdleController::default(),
         team_lead_turn_admission: Mutex::new(()),

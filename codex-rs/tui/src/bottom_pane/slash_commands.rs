@@ -362,6 +362,7 @@ mod tests {
                 SlashCommand::Spend,
                 SlashCommand::Pwd,
                 SlashCommand::Usage,
+                SlashCommand::Continue,
             ]
         );
     }

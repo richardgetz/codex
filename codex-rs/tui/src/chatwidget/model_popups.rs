@@ -3,6 +3,7 @@
 //! These surfaces are tightly related because changing one often redirects
 //! into another, especially while Plan mode is active.
 
+use super::role_label as team_role_label;
 use super::*;
 
 const ULTRA_REASONING_CONCURRENCY_WARNING_THRESHOLD: usize = 8;
@@ -13,6 +14,24 @@ impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
+        self.model_popup_target = ModelPopupTarget::Conversation;
+        self.open_model_popup_for_target();
+    }
+
+    /// Open the same model and effort picker used by `/model`, targeting one
+    /// session-local team profile instead of the conversation model.
+    pub(crate) fn open_team_model_popup(&mut self, role: TeamRole) {
+        let Some(thread_id) = self.thread_id else {
+            self.add_error_message(
+                "Session is still starting; choose a team profile in a moment.".to_string(),
+            );
+            return;
+        };
+        self.model_popup_target = ModelPopupTarget::Team { thread_id, role };
+        self.open_model_popup_for_target();
+    }
+
+    fn open_model_popup_for_target(&mut self) {
         if !self.is_session_configured() {
             self.add_info_message(
                 "Model selection is disabled until startup completes.".to_string(),
@@ -36,6 +55,49 @@ impl ChatWidget {
         self.open_model_popup_with_presets(presets);
         // Show cached choices immediately and update any still-present picker when the reply arrives.
         self.app_event_tx.send(AppEvent::FetchModels { request_id });
+    }
+
+    fn model_popup_current_model(&self) -> String {
+        let team_model = match self.model_popup_target {
+            ModelPopupTarget::Team {
+                role: TeamRole::Lead,
+                ..
+            } => self
+                .team_settings
+                .as_ref()
+                .and_then(|settings| settings.lead_model.as_deref()),
+            ModelPopupTarget::Team {
+                role: TeamRole::Worker,
+                ..
+            } => self
+                .team_settings
+                .as_ref()
+                .and_then(|settings| settings.worker_model.as_deref()),
+            ModelPopupTarget::Conversation => None,
+        };
+        team_model
+            .filter(|model| !model.trim().is_empty())
+            .map_or_else(|| self.current_model().to_string(), str::to_string)
+    }
+
+    fn model_popup_current_effort(&self) -> Option<ReasoningEffortConfig> {
+        match self.model_popup_target {
+            ModelPopupTarget::Team {
+                role: TeamRole::Lead,
+                ..
+            } => self
+                .team_settings
+                .as_ref()
+                .and_then(|settings| settings.lead_reasoning_effort.clone()),
+            ModelPopupTarget::Team {
+                role: TeamRole::Worker,
+                ..
+            } => self
+                .team_settings
+                .as_ref()
+                .and_then(|settings| settings.worker_reasoning_effort.clone()),
+            ModelPopupTarget::Conversation => None,
+        }
     }
 
     fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
@@ -78,15 +140,20 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
+        let target = self.model_popup_target;
         let presets: Vec<ModelPreset> = presets
             .into_iter()
             .filter(|preset| preset.show_in_picker)
+            .filter(|preset| {
+                !matches!(target, ModelPopupTarget::Team { .. })
+                    || !Self::is_auto_model(&preset.model)
+            })
             .collect();
 
-        let current_model = self.current_model();
+        let current_model = self.model_popup_current_model();
         let current_label = presets
             .iter()
-            .find(|preset| preset.model.as_str() == current_model)
+            .find(|preset| preset.model == current_model)
             .map(|preset| preset.model.to_string())
             .unwrap_or_else(|| self.model_display_name().to_string());
 
@@ -134,7 +201,7 @@ impl ChatWidget {
                 SelectionItem {
                     name: model.clone(),
                     description,
-                    is_current: model.as_str() == current_model,
+                    is_current: model == current_model,
                     is_default: preset.is_default,
                     actions,
                     dismiss_on_select: !requires_advanced_selection,
@@ -164,10 +231,16 @@ impl ChatWidget {
             });
         }
 
-        let header = self.model_menu_header(
-            "Select Model",
-            "Pick a quick auto mode or browse all models.",
-        );
+        let header = match target {
+            ModelPopupTarget::Conversation => self.model_menu_header(
+                "Select Model",
+                "Pick a quick auto mode or browse all models.",
+            ),
+            ModelPopupTarget::Team { role, .. } => self.model_menu_header(
+                &format!("Select Team {} Model", team_role_label(role)),
+                "Choose the session-only model assignment for this team role.",
+            ),
+        };
         self.show_model_selection_view(SelectionViewParams {
             view_id: Some(MODEL_SELECTION_VIEW_ID),
             footer_hint: Some(standard_popup_hint_line()),
@@ -219,7 +292,7 @@ impl ChatWidget {
         for preset in presets.into_iter() {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
-            let is_current = preset.model.as_str() == self.current_model();
+            let is_current = preset.model == self.model_popup_current_model();
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -240,10 +313,16 @@ impl ChatWidget {
             });
         }
 
-        let header = self.model_menu_header(
-            "Select Model and Effort",
-            "Access legacy models by running codex -m <model_name> or in your config.toml",
-        );
+        let header = match self.model_popup_target {
+            ModelPopupTarget::Conversation => self.model_menu_header(
+                "Select Model and Effort",
+                "Access legacy models by running codex -m <model_name> or in your config.toml",
+            ),
+            ModelPopupTarget::Team { role, .. } => self.model_menu_header(
+                &format!("Select Team {} Model and Effort", team_role_label(role)),
+                "This assignment applies to this session and future Workers only.",
+            ),
+        };
         self.show_model_selection_view(SelectionViewParams {
             view_id: Some(view_id),
             footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
@@ -262,6 +341,26 @@ impl ChatWidget {
         let warning = effort_for_action
             .as_ref()
             .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
+        if let ModelPopupTarget::Team { thread_id, role } = self.model_popup_target {
+            return vec![Box::new(move |tx| {
+                let Some(effort) = effort_for_action.clone() else {
+                    return;
+                };
+                tx.send(AppEvent::TeamCommand {
+                    thread_id,
+                    command: TeamCommand::ConfigureProfile {
+                        role,
+                        model: model_for_action.clone(),
+                        effort,
+                    },
+                });
+                if let Some(warning) = warning.clone() {
+                    tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_warning_event(warning),
+                    )));
+                }
+            })];
+        }
         vec![Box::new(move |tx| {
             if effort_for_action == Some(ReasoningEffortConfig::Ultra) {
                 tx.send(AppEvent::ApplyAdvancedReasoning {
@@ -294,7 +393,8 @@ impl ChatWidget {
         selected_model: &str,
         selected_effort: Option<ReasoningEffortConfig>,
     ) -> bool {
-        if !self.collaboration_modes_enabled()
+        if !matches!(self.model_popup_target, ModelPopupTarget::Conversation)
+            || !self.collaboration_modes_enabled()
             || self.active_mode_kind() != ModeKind::Plan
             || selected_model != self.current_model()
         {
@@ -459,8 +559,11 @@ impl ChatWidget {
         if choices.len() == 1 && advanced_choices.is_empty() {
             let selected_effort = choices.first().cloned();
             let selected_model = preset.model;
-            if self
-                .should_prompt_plan_mode_reasoning_scope(&selected_model, selected_effort.clone())
+            if !matches!(self.model_popup_target, ModelPopupTarget::Team { .. })
+                && self.should_prompt_plan_mode_reasoning_scope(
+                    &selected_model,
+                    selected_effort.clone(),
+                )
             {
                 self.app_event_tx
                     .send(AppEvent::OpenPlanReasoningScopePrompt {
@@ -478,15 +581,16 @@ impl ChatWidget {
             .then(|| default_effort.clone());
 
         let model_slug = preset.model.to_string();
-        let is_current_model = self.current_model() == preset.model.as_str();
+        let is_current_model = self.model_popup_current_model() == preset.model;
         let highlight_choice = if is_current_model {
-            if in_plan_mode {
-                self.config
+            match self.model_popup_target {
+                ModelPopupTarget::Team { .. } => self.model_popup_current_effort(),
+                ModelPopupTarget::Conversation if in_plan_mode => self
+                    .config
                     .plan_mode_reasoning_effort
                     .clone()
-                    .or_else(|| self.effective_reasoning_effort())
-            } else {
-                self.effective_reasoning_effort()
+                    .or_else(|| self.effective_reasoning_effort()),
+                ModelPopupTarget::Conversation => self.effective_reasoning_effort(),
             }
         } else {
             default_choice.clone().or_else(|| choices.first().cloned())
@@ -606,10 +710,12 @@ impl ChatWidget {
         }
 
         let model_slug = preset.model.to_string();
-        let is_current_model = self.current_model() == preset.model.as_str();
-        let highlight_choice = is_current_model
-            .then(|| self.effective_reasoning_effort())
-            .flatten();
+        let is_current_model = self.model_popup_current_model() == preset.model;
+        let highlight_choice = is_current_model.then(|| match self.model_popup_target {
+            ModelPopupTarget::Team { .. } => self.model_popup_current_effort(),
+            ModelPopupTarget::Conversation => self.effective_reasoning_effort(),
+        });
+        let highlight_choice = highlight_choice.flatten();
         let mut items = Vec::new();
         for effort in choices {
             let description = match &effort {
@@ -723,6 +829,20 @@ impl ChatWidget {
     }
 
     fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+        if let ModelPopupTarget::Team { thread_id, role } = self.model_popup_target {
+            let Some(effort) = effort else {
+                return;
+            };
+            self.app_event_tx.send(AppEvent::TeamCommand {
+                thread_id,
+                command: TeamCommand::ConfigureProfile {
+                    role,
+                    model,
+                    effort,
+                },
+            });
+            return;
+        }
         self.apply_model_and_effort_without_persist(model.clone(), effort.clone());
         self.app_event_tx
             .send(AppEvent::PersistModelSelection { model, effort });

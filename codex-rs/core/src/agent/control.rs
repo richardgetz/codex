@@ -64,6 +64,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
+use tokio::sync::Mutex;
 use tokio::sync::watch;
 use tracing::warn;
 use uuid::Uuid;
@@ -79,6 +80,7 @@ mod legacy;
 mod residency;
 mod service_tier;
 mod spawn;
+mod usage_policy;
 mod user_authorization;
 mod worker_limit;
 
@@ -144,6 +146,16 @@ pub(crate) struct AgentControl {
     rollout_budget: Arc<RolloutBudget>,
     /// The user-selected root routing tier, shared by the entire agent tree.
     root_service_tier: Arc<ArcSwapOption<String>>,
+    /// The root-selected automatic usage-resume switch, shared by the entire agent tree.
+    root_usage_auto_resume: Arc<std::sync::atomic::AtomicBool>,
+    /// Serializes root usage-toggle commits with descendant synchronization.
+    root_usage_auto_resume_update: Arc<Mutex<()>>,
+    /// Serializes settings events sent while the root usage toggle changes.
+    root_usage_auto_resume_propagation: Arc<Mutex<()>>,
+    /// Serializes root tier commits with descendant synchronization.
+    root_service_tier_update: Arc<Mutex<()>>,
+    /// Serializes settings events sent while a root routing tier changes, preserving toggle order.
+    root_service_tier_propagation: Arc<Mutex<()>>,
 }
 
 impl Default for AgentControl {
@@ -173,6 +185,11 @@ impl AgentControl {
             team_worker_limiter: Arc::default(),
             rollout_budget: Arc::default(),
             root_service_tier: Arc::new(ArcSwapOption::from(None)),
+            root_usage_auto_resume: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            root_usage_auto_resume_update: Arc::new(Mutex::new(())),
+            root_usage_auto_resume_propagation: Arc::new(Mutex::new(())),
+            root_service_tier_update: Arc::new(Mutex::new(())),
+            root_service_tier_propagation: Arc::new(Mutex::new(())),
         };
         if let Some(rollout_budget) = rollout_budget {
             control.rollout_budget.configure(rollout_budget);

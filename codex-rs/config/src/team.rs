@@ -5,6 +5,8 @@ use serde::Serialize;
 
 /// Default maximum idle interval before a Lead receives an oversight wake.
 pub const DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES: u64 = 30;
+/// Whether Lead lookup work is delegated to Workers by default.
+pub const DEFAULT_TEAM_LEAD_DYNAMIC_HANDOFF: bool = false;
 /// Largest supported Lead oversight interval. Tokio timers represent far-future
 /// instants only within roughly thirty years, so this bound keeps all duration
 /// and Unix timestamp arithmetic representable while still allowing long work.
@@ -54,6 +56,9 @@ pub struct TeamToml {
 pub struct TeamModelProfileToml {
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Whether the Lead should make a quick preflight and delegate substantial lookup work to a
+    /// Worker when filtering bulk material can reduce Lead context.
+    pub dynamic_handoff: Option<bool>,
     /// Minutes a Lead may remain idle while direct Workers are active before
     /// an oversight wake is emitted. A missing value uses the 30-minute default.
     #[schemars(range(min = 1, max = 15768000))]
@@ -92,6 +97,9 @@ impl TryFrom<TeamToml> for TeamConfig {
         let profiles = match (lead, worker) {
             (None, None) => None,
             (Some(lead), Some(worker)) => {
+                let dynamic_handoff = lead
+                    .dynamic_handoff
+                    .unwrap_or(DEFAULT_TEAM_LEAD_DYNAMIC_HANDOFF);
                 let oversight_timeout_minutes = lead
                     .oversight_timeout_minutes
                     .unwrap_or(DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES);
@@ -106,6 +114,7 @@ impl TryFrom<TeamToml> for TeamConfig {
                 Some(TeamModelProfiles {
                     lead: TeamModelProfile::try_from(("lead", lead))?,
                     worker: TeamModelProfile::try_from(("worker", worker))?,
+                    lead_dynamic_handoff: dynamic_handoff,
                     lead_oversight_timeout_minutes: oversight_timeout_minutes,
                 })
             }
@@ -133,6 +142,8 @@ impl TryFrom<TeamToml> for TeamConfig {
 pub struct TeamModelProfiles {
     pub lead: TeamModelProfile,
     pub worker: TeamModelProfile,
+    /// Whether the Lead should preflight and delegate substantial lookup work to Workers.
+    pub lead_dynamic_handoff: bool,
     /// Effective Lead oversight interval in minutes.
     pub lead_oversight_timeout_minutes: u64,
 }
@@ -170,6 +181,7 @@ impl TryFrom<(&str, TeamWorkerProfileToml)> for TeamModelProfile {
             TeamModelProfileToml {
                 model,
                 reasoning_effort,
+                dynamic_handoff: None,
                 oversight_timeout_minutes: None,
             },
         ))

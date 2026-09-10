@@ -160,3 +160,77 @@ fn workspace_limits_are_not_auto_resumed() {
 
     assert!(reset_is_not_automatic(&error, &[]));
 }
+
+#[test]
+fn usage_snapshot_recovery_requires_capacity_and_resettable_limits() {
+    let policy = ThreadUsagePolicy {
+        auto_resume: true,
+        minimum_remaining_percent: Some(10),
+    };
+
+    assert!(usage_snapshot_recovered(
+        policy,
+        std::slice::from_ref(&rate_limits(80.0, Some(95.0)))
+    ));
+    assert!(!usage_snapshot_recovered(
+        policy,
+        std::slice::from_ref(&rate_limits(100.0, Some(95.0)))
+    ));
+    assert!(!usage_snapshot_recovered(policy, &[]));
+
+    let mut credit_cap = rate_limits(80.0, Some(95.0));
+    credit_cap.spend_control_reached = Some(true);
+    assert!(!usage_snapshot_recovered(
+        policy,
+        std::slice::from_ref(&credit_cap)
+    ));
+}
+
+#[test]
+fn usage_resume_checks_immediately_after_a_past_reset() {
+    let now = Utc.timestamp_opt(1_700_000_100, 0).single().unwrap();
+    assert_eq!(
+        usage_resume_sleep_duration(
+            Some(Utc.timestamp_opt(1_700_000_000, 0).single().unwrap()),
+            now,
+            Duration::from_secs(60 * 60),
+        ),
+        Duration::ZERO
+    );
+}
+
+#[test]
+fn usage_resume_checks_at_the_configured_interval_before_a_distant_reset() {
+    let now = Utc.timestamp_opt(1_700_000_000, 0).single().unwrap();
+    let interval = Duration::from_secs(60 * 60);
+    assert_eq!(
+        usage_resume_sleep_duration(
+            Some(
+                Utc.timestamp_opt(1_700_000_000 + 7 * 24 * 60 * 60, 0)
+                    .single()
+                    .unwrap()
+            ),
+            now,
+            interval,
+        ),
+        interval
+    );
+}
+
+#[test]
+fn usage_resume_checks_at_the_reset_when_it_is_sooner_than_the_interval() {
+    let now = Utc.timestamp_opt(1_700_000_000, 0).single().unwrap();
+    let interval = Duration::from_secs(60 * 60);
+    assert_eq!(
+        usage_resume_sleep_duration(
+            Some(
+                Utc.timestamp_opt(1_700_000_000 + 15 * 60, 0)
+                    .single()
+                    .unwrap()
+            ),
+            now,
+            interval,
+        ),
+        Duration::from_secs(15 * 60)
+    );
+}

@@ -325,6 +325,7 @@ use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
 pub(crate) use self::usage_policy::MAX_USAGE_LIMIT_RETRIES;
 pub(crate) use self::usage_policy::automatic_continuation_allowed;
+pub(crate) use self::usage_policy::wait_for_usage_limit_floor;
 pub(crate) use self::usage_policy::wait_for_usage_limit_reset;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
@@ -1025,6 +1026,12 @@ impl Session {
             fast_mode_enabled,
         )
         .filter(|service_tier| service_tier_supported_by_model(service_tier, &model_info));
+        let usage_auto_resume = match &session_source {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }) => {
+                agent_control.root_usage_auto_resume()
+            }
+            _ => config.tui_usage_auto_resume.enabled,
+        };
         let session_configuration = SessionConfiguration {
             provider: create_model_provider(
                 config.model_provider.clone(),
@@ -1059,7 +1066,10 @@ impl Session {
                 config.memories.generate_memories,
             ),
             user_preferences_memory_policy: config.user_preferences_memory.bucket_policy.clone(),
-            usage_policy: Default::default(),
+            usage_policy: ThreadUsagePolicy {
+                auto_resume: usage_auto_resume,
+                ..Default::default()
+            },
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
             app_server_client_name: None,
@@ -2414,23 +2424,35 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<SessionSettingsCommit> {
-        if updates
-            .team
-            .as_ref()
-            .is_some_and(|team| team.mode == codex_protocol::protocol::TeamMode::LeadWorker)
+        if let Some(team_update) = updates.team.as_ref()
+            && (team_update.mode == codex_protocol::protocol::TeamMode::LeadWorker
+                || team::team_update_changes_profile(team_update))
         {
             let config = {
                 let state = self.state.lock().await;
                 Arc::clone(&state.session_configuration.original_config_do_not_use)
             };
+            let config = if team::team_update_changes_profile(team_update) {
+                let mut candidate = (*config).clone();
+                team::apply_team_profile_update(&mut candidate, team_update)?;
+                Arc::new(candidate)
+            } else {
+                config
+            };
             let selected_multi_agent_version = self
                 .multi_agent_version()
                 .or_else(|| config.multi_agent_version_override());
+            let validation_scope =
+                if team_update.mode == codex_protocol::protocol::TeamMode::LeadWorker {
+                    team::TeamValidationScope::Delegation
+                } else {
+                    team::TeamValidationScope::RoutingOnly
+                };
             team::validate_profiles(
                 &config,
                 &self.services.models_manager,
                 selected_multi_agent_version,
-                team::TeamValidationScope::Delegation,
+                validation_scope,
             )
             .await?;
         }
@@ -2479,6 +2501,27 @@ impl Session {
                 .team
                 .as_ref()
                 .is_some_and(|team| team.mode == codex_protocol::protocol::TeamMode::LeadWorker);
+        let _root_service_tier_update = if updates.step_settings.service_tier.is_some() {
+            Some(
+                self.services
+                    .agent_control
+                    .lock_root_service_tier_update()
+                    .await,
+            )
+        } else {
+            None
+        };
+        let _root_usage_auto_resume_update =
+            if updates.usage_policy.is_some() || updates.usage_policy_update.is_some() {
+                Some(
+                    self.services
+                        .agent_control
+                        .lock_root_usage_auto_resume_update()
+                        .await,
+                )
+            } else {
+                None
+            };
         // Team Lead automatic-turn admission uses this same guard below. Serialize every team
         // assignment update so a turn that has crossed the final admission boundary is allowed
         // to proceed, while a stale trigger is rejected before it can start inference.
@@ -2495,6 +2538,9 @@ impl Session {
             new_config,
             permission_profile_changed,
             mcp_inputs_changed,
+            root_service_tier_changed,
+            usage_policy_changed,
+            root_usage_auto_resume_changed,
         ) = {
             let mut state = self.state.lock().await;
             let updated = match self.apply_session_settings(&state.session_configuration, &updates)
@@ -2516,6 +2562,12 @@ impl Session {
                 previous_permission_profile != updated_permission_profile;
             let mcp_inputs_changed =
                 self.mcp_inputs_differ(&state.session_configuration, &updated, &updates);
+            let usage_policy_changed =
+                state.session_configuration.usage_policy != updated.usage_policy;
+            let root_usage_auto_resume_changed = updated.parent_thread_id.is_none()
+                && state.session_configuration.usage_policy.auto_resume
+                    != updated.usage_policy.auto_resume;
+            let root_usage_auto_resume = updated.usage_policy.auto_resume;
             let root_service_tier_changed = updated.parent_thread_id.is_none()
                 && state.session_configuration.step_settings.service_tier
                     != updated.step_settings.service_tier;
@@ -2549,6 +2601,11 @@ impl Session {
                         .clone(),
                 );
             }
+            if root_usage_auto_resume_changed {
+                self.services
+                    .agent_control
+                    .set_root_usage_auto_resume(root_usage_auto_resume);
+            }
             let new_config = notify_config_contributors
                 .then(|| self.build_effective_session_config(&state.session_configuration));
             let commit = SessionSettingsCommit {
@@ -2564,8 +2621,31 @@ impl Session {
                 new_config,
                 permission_profile_changed,
                 mcp_inputs_changed,
+                root_service_tier_changed,
+                usage_policy_changed,
+                root_usage_auto_resume_changed,
             )
         };
+        if usage_policy_changed {
+            // Wake a parked usage wait so disabling auto-resume (or changing its
+            // floor) takes effect immediately. The request is ignored when no
+            // wait is active, so it cannot queue a stale wake for a later turn.
+            self.request_usage_resume_check();
+        }
+        if root_service_tier_changed {
+            self.services
+                .agent_control
+                .propagate_root_service_tier()
+                .await;
+        }
+        if root_usage_auto_resume_changed {
+            self.services
+                .agent_control
+                .propagate_root_usage_auto_resume()
+                .await;
+        }
+        drop(_root_service_tier_update);
+        drop(_root_usage_auto_resume_update);
         if disables_team {
             // Keep Team Off cleanup under the same admission guard as Lead trigger insertion.
             // This makes the assignment commit and stale-trigger removal one boundary: a
@@ -2619,6 +2699,70 @@ impl Session {
         state
             .session_configuration
             .thread_settings_snapshot(&self.services.turn_environments.selections())
+    }
+
+    /// Applies the root-selected service tier to a live thread-spawn child.
+    ///
+    /// This updates only the child session's defaults. A turn that has already
+    /// captured its `TurnContext` keeps its existing tier; the next turn reads
+    /// the newly published value. The returned snapshot is suitable for the
+    /// child settings notification sent to app-server clients.
+    pub(crate) async fn apply_root_service_tier(
+        &self,
+        service_tier: Option<String>,
+    ) -> Option<ThreadSettingsSnapshot> {
+        let mut state = self.state.lock().await;
+        if !matches!(
+            &state.session_configuration.session_source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        ) {
+            return None;
+        }
+        let current = &state.session_configuration;
+        if current.step_settings.service_tier.as_ref() == service_tier.as_ref()
+            && current.original_config_do_not_use.service_tier.as_ref() == service_tier.as_ref()
+        {
+            return None;
+        }
+
+        let mut configuration = current.clone();
+        Arc::make_mut(&mut configuration.step_settings).service_tier = service_tier.clone();
+        let mut config = (*configuration.original_config_do_not_use).clone();
+        config.service_tier = service_tier;
+        configuration.original_config_do_not_use = Arc::new(config);
+        let snapshot =
+            configuration.thread_settings_snapshot(&self.services.turn_environments.selections());
+        state.session_configuration = configuration;
+        Some(snapshot)
+    }
+
+    /// Applies the root-selected automatic usage-resume switch to a live thread-spawn child.
+    ///
+    /// This preserves a child's configured continuation floor. A parked usage wait is notified
+    /// when the switch changes so disabling recovery takes effect without waiting for its timer.
+    pub(crate) async fn apply_root_usage_auto_resume(
+        &self,
+        enabled: bool,
+    ) -> Option<ThreadSettingsSnapshot> {
+        let mut state = self.state.lock().await;
+        if !matches!(
+            &state.session_configuration.session_source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        ) {
+            return None;
+        }
+        if state.session_configuration.usage_policy.auto_resume == enabled {
+            return None;
+        }
+
+        let mut configuration = state.session_configuration.clone();
+        configuration.usage_policy.auto_resume = enabled;
+        let snapshot =
+            configuration.thread_settings_snapshot(&self.services.turn_environments.selections());
+        state.session_configuration = configuration;
+        drop(state);
+        self.request_usage_resume_check();
+        Some(snapshot)
     }
 
     pub(crate) async fn restorable_thread_settings(&self) -> CodexThreadSettingsOverrides {

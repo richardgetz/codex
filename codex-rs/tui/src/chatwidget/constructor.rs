@@ -41,6 +41,7 @@ impl ChatWidget {
         config.model = model.clone();
         let usage_rollup = usage_rollup::SharedUsageRollup::new(config.codex_home.as_path());
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
+        let usage_auto_resume_enabled = config.tui_usage_auto_resume.enabled;
         let placeholder = PLACEHOLDER.to_string();
         let side_placeholder = SIDE_PLACEHOLDER.to_string();
 
@@ -129,10 +130,15 @@ impl ChatWidget {
             active_collaboration_mask,
             team_settings: None,
             pending_team_command: None,
+            thread_usage_policy: codex_app_server_protocol::ThreadUsagePolicy {
+                auto_resume: usage_auto_resume_enabled,
+                ..Default::default()
+            },
             has_chatgpt_account,
             has_codex_backend_auth,
             model_catalog,
             model_popup_request_id: None,
+            model_popup_target: ModelPopupTarget::Conversation,
             model_popup_model_ids: Vec::new(),
             session_telemetry,
             session_header: SessionHeader::new(header_model),

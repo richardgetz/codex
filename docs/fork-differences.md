@@ -112,6 +112,9 @@ reasoning_effort = "high"
 # Valid range: 1..15768000 (30 years); 30 or more is recommended.
 oversight_timeout_minutes = 30
 # For longer-running work, for example: oversight_timeout_minutes = 60
+# Optional: preflight substantial lookup work and let a Worker filter bulk
+# material before returning selected evidence. Defaults to false.
+dynamic_handoff = true
 
 [team.worker]
 model = "gpt-5.6-luna"
@@ -125,6 +128,11 @@ max_concurrent = 10
   catalog. Set `enabled = false` to keep the profiles available for manual use.
 - `/team on`, `/team off`, and `/team status` enable, disable, and report the
   current thread's assignment without changing global config defaults.
+  `/team lead` and `/team worker` open the same model and effort picker used by
+  `/model`; typed forms such as `/team lead gpt-5.6-sol high` select an exact
+  catalog entry. These profile edits remain in the current thread snapshot,
+  preserve Team Off until `/team on`, survive resume/fork, and affect Workers
+  spawned afterward. In-flight Workers retain the profile captured at spawn.
   Turning team mode off restores the previous single model and effort. Re-enabling
   Team mode while a Lead is parked with direct Workers starts a fresh oversight
   interval after the assignment is published.
@@ -132,6 +140,25 @@ max_concurrent = 10
   assigned profile, and model or effort overrides cannot bypass role routing.
   Team routing does not add a separate tool sandbox or verify external skill
   completion.
+- `team.lead.dynamic_handoff` defaults to `false`. When enabled, the Lead makes
+  a quick preflight before reading a large source and delegates substantial log
+  or trace review, web or browser research, broad repository/code/docs search,
+  and similar bulk exploration when a Worker can filter irrelevant material
+  into a concise answer. Small targeted lookups and work that depends heavily
+  on the Lead's existing context stay direct when handoff overhead would
+  approach the lookup itself. Workers return selected code, log, or web
+  excerpts with file/line, time, or source pointers and enough context,
+  preserving contradictions and uncertainty without full dumps. The Lead does
+  not repeat a supported lookup automatically; it follows up only for concrete
+  missing or conflicting evidence, a blocked or incomplete Worker, or a narrow
+  excerpt request, reusing prior findings. This reduces Lead input but still
+  consumes Worker tokens. The choice is retained in the thread's team snapshot
+  across resume and fork; older snapshots default to `false`.
+- Root Fast/service-tier changes are published to loaded direct and nested
+  ThreadSpawn Workers, including their thread settings snapshots and client
+  notifications. A turn that has already captured its request keeps its
+  current tier; later Worker turns and newly spawned Workers use the root
+  selection.
 - `team.worker.max_concurrent` accepts a positive integer and is optional.
   It limits active Workers directly launched by the Lead, including pending
   starts. Completed or aborted Workers free capacity; follow-up work reacquires
@@ -197,11 +224,15 @@ max_concurrent = 10
   persisted team snapshots still fail validation.
 - Parent session usage includes recursively attributable Worker and descendant
   responses, including review work, using persisted response identities to
-  avoid double counting across live updates and resume. With
+  avoid double counting across live updates and resume. Exact live responses
+  appear additively in `/status` while the persisted projection is pending or
+  temporarily unavailable, then merge into the complete baseline when it
+  arrives. Initial projection reads retry briefly to cover startup ordering;
+  persistent unreadable history stays explicitly unavailable. With
   `[tui.status_token_usage].enabled = true`, `/status` shows API-equivalent
   usage and estimated spend; the context-window counters still describe the
   selected thread's own context. Inherited fork context is not charged again,
-  and unavailable complete history is reported as unavailable. See
+  and the unavailable state is retained only when no exact usage is known. See
   [Local token usage and spend tracking](#local-token-usage-and-spend-tracking).
 
 App-server clients can switch modes through `thread/settings/update` and read
@@ -269,7 +300,24 @@ can be stale and does not guarantee available capacity.
 Configure the policy through app-server v2's `usagePolicy` field on
 `thread/start`, `thread/resume`, `thread/fork`, or `thread/settings/update`.
 Automatic resume defaults to `false`, and the remaining-usage floor defaults to
-`null` (disabled). Configure these per-thread settings through the API.
+`null` (disabled). The native TUI also exposes `/usage auto-resume on|off|status`
+for the displayed thread. On the root thread, changing this setting propagates
+to loaded ThreadSpawn descendants and is inherited by children created later;
+changing it while viewing a Worker updates that Worker only. New root sessions,
+including TUI sessions, inherit the optional config default:
+
+```toml
+[tui.usage_auto_resume]
+enabled = true
+# Maximum interval between account checks; a nearer known reset is checked sooner.
+check_interval_minutes = 60
+```
+
+The interval must be between 1 minute and 7 days. A known reset timestamp is
+checked sooner when it falls inside the interval; otherwise the account is
+refreshed at this interval. The setting seeds new sessions and does not turn on
+automatic resume by itself. The process must remain running for an in-flight
+wait to resume after a reset.
 
 For example, an initialized app-server client can enable automatic resume and
 set a 10% floor on an existing thread:
@@ -296,20 +344,27 @@ set a 10% floor on an existing thread:
   not a guarantee that an in-flight request cannot consume the remaining budget.
 - `autoResume: true` lets a request that hits a resettable provider usage limit
   wait until the reported reset time and retry, with at most three usage-limit
-  retries per sampling request. The wait can be cancelled and rechecks live
-  policy changes. Workspace usage caps and depleted credits are not retried
-  automatically, and a retry requires an available reset timestamp.
-- The floor and reset retry are separate controls. Reaching the floor stops
-  automatic work; it does not itself schedule a wake-up at reset. An automatic
-  continuation retry must still pass the floor check after its reset wait.
+  retries per sampling request. If no usable reset time is available, the
+  account usage endpoint is checked at the configured fallback interval. The
+  wait can be cancelled and rechecks live policy changes. Workspace usage caps
+  and depleted credits are not retried automatically.
+- An opted-in automatic turn that reaches `minimumRemainingPercent` remains
+  parked and uses the same reset-aware scheduler. It resumes only after a
+  fresh usage snapshot clears the floor. Explicit user turns remain allowed.
+  Use `/continue` to wake an existing wait immediately; it never starts a new
+  model turn or bypasses the floor. The command reports when usage is still
+  exhausted or the account check is unavailable.
 - On a settings update, omitted policy fields preserve their existing values.
   Send `"autoResume": false` to disable reset retry, or
   `"minimumRemainingPercent": null` to clear the floor. Wait for
   `thread/settings/updated` before sending a dependent partial update.
 - The policy persists across resume and is inherited by copied, reference,
   paginated, and Last-N forks, as well as spawned subthreads. A cold resume
-  restores the policy, but an active reset wait exists only in the running
-  process and is not restored after restart.
+  restores the policy and the configured interval, but an active reset wait
+  exists only in the running process and is not restored after restart. A root
+  `/continue` checks the root and its loaded ThreadSpawn descendants; a Worker
+  `/continue` checks that Worker and its loaded descendants. Completed,
+  cancelled, and manually stopped work is never revived.
 
 These controls use provider usage percentages. They do not enforce a dollar
 spending cap: the local `/status` and `/spend` API-equivalent cost estimates

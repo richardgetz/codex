@@ -30,6 +30,10 @@ impl ChatWidget {
             self.review.recent_auto_review_denials = RecentAutoReviewDenials::default();
             self.clear_thread_usage_state();
             self.clear_pending_team_command();
+            self.thread_usage_policy = ThreadUsagePolicy {
+                auto_resume: self.config.tui_usage_auto_resume.enabled,
+                ..Default::default()
+            };
         }
         self.turn_lifecycle.reset_thread();
         self.clear_safety_buffering();
