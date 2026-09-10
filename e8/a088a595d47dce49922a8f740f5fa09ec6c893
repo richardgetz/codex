@@ -1,0 +1,25 @@
+intent:
+  id: "intent/2026-09-10/team-pause-activity#e8a088a595d4"
+  change_type: feat
+  scope: team
+  summary: Make team activity visible and let users pause work and tune Lead oversight without changing existing defaults.
+  decision: Project structured execution and pause state into the TUI, pause the session tree cooperatively at operation boundaries, and expose a Lead-only five-position oversight preference with session overrides and configuration defaults.
+  constraints:
+    - Worker activity must remain visible while the Lead is idle without generating inference or polling.
+    - Manual pause must gate new agent operations, preserve retained work, and never replay side effects.
+    - Continue must respect usage limits and never revive cancelled or completed work.
+    - Already-started external processes are not suspended by an agent pause.
+    - Lead balance 3 or omission preserves current behavior; other levels affect only discretionary Lead oversight.
+    - Worker effort, completeness, required checks and approvals remain unchanged.
+    - Dynamic handoff remains independent and slash selections do not mutate global defaults.
+  intent_priority: should
+  code_locations:
+    - codex-rs/core/src/session/activity.rs
+    - codex-rs/core/src/agent/control/activity.rs
+    - codex-rs/tui/src/app/team_activity.rs
+    - codex-rs/tui/src/chatwidget/team.rs
+    - codex-rs/core/src/context/team_instructions.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: Codex Lead and Luna Worker team
+    model: gpt-6-astra
