@@ -394,6 +394,10 @@ impl App {
         tui: &mut tui::Tui,
         size: ratatui::layout::Size,
     ) -> Result<()> {
+        // A display-only Worker waiting grace can expire without another app-server event. Keep
+        // the projection and terminal-title/status surfaces current on every already-scheduled
+        // draw, while `sync_team_activity_status` re-arms only the next one-shot deadline.
+        self.sync_team_activity_status();
         let should_rebuild_transcript = self.handle_draw_size_change(
             size,
             tui.terminal.last_known_screen_size,

@@ -8789,6 +8789,7 @@ fn team_commands_update_only_the_active_thread_and_follow_server_snapshot() -> R
                             codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
                     }),
                     worker_max_concurrent: None,
+                    lead_show_idle_notifications: false,
                 };
                 app.config.team = configured_team.clone();
                 app.config.team_mode = TeamMode::Off;

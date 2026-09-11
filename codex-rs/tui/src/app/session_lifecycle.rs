@@ -714,6 +714,8 @@ impl App {
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
+        self.team_activity.clear();
+        self.chat_widget.set_team_activity(None);
         self.last_subagent_backfill_attempt = None;
         self.primary_session_configured = None;
         self.pending_primary_events.clear();
@@ -1001,6 +1003,26 @@ impl App {
                     had_read_error = true;
                     tracing::warn!(thread_id = %thread_id, %err, "failed to read loaded thread");
                 }
+            }
+        }
+
+        // Activity notifications carry only the root id. Preserve parent edges from the existing
+        // thread records so the TUI can classify direct Workers and nested Subagents locally. Keep
+        // the records in the retained overview cache so projection refreshes remain bounded to
+        // this selected loaded tree instead of losing metadata on the next redraw.
+        let loaded_subagent_ids: HashSet<_> =
+            find_loaded_subagent_threads_for_primary(threads.clone(), primary_thread_id)
+                .into_iter()
+                .map(|thread| thread.thread_id)
+                .collect();
+        for thread in &threads {
+            let Ok(thread_id) = ThreadId::from_string(&thread.id) else {
+                continue;
+            };
+            if loaded_subagent_ids.contains(&thread_id) {
+                self.agents_overview
+                    .threads
+                    .insert(thread_id, Some(thread.clone()));
             }
         }
 

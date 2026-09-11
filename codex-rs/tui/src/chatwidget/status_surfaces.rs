@@ -942,7 +942,7 @@ impl ChatWidget {
             return "Starting".to_string();
         }
         if let Some(team_activity) = self.team_activity_status {
-            return team_activity.header();
+            return team_activity.title();
         }
 
         match self.status_state.terminal_title_status_kind {
