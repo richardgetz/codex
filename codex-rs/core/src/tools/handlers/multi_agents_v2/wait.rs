@@ -51,6 +51,7 @@ impl Handler {
             turn,
             payload,
             call_id,
+            cancellation_token,
             ..
         } = invocation;
         let arguments = function_arguments(payload)?;
@@ -154,7 +155,9 @@ impl Handler {
             )
             .await;
 
-        if let (Some(active_workers), Some(deadline)) = (active_workers, lead_deadline) {
+        if let (Some(active_workers), Some(deadline)) = (active_workers, lead_deadline)
+            && session.lead_idle_notifications_enabled().await
+        {
             session
                 .emit_lead_idle_event(format_lead_wait_message(active_workers, deadline.unix_secs))
                 .await;
@@ -167,31 +170,44 @@ impl Handler {
             } else {
                 false
             };
-        let outcome = if is_team_lead && !lead_has_active_workers {
-            WaitOutcome::NoActiveWorkers
-        } else if worker_status_changed {
-            WaitOutcome::WorkerStatusChanged
-        } else if lead_wait_cancelled {
-            WaitOutcome::Steered
-        } else if lead_wait_requires_assessment {
-            WaitOutcome::LeadReviewRequired
-        } else if let Some(deadline) = lead_deadline {
-            wait_for_activity_or_worker_status(
-                &mut activity_rx,
-                pending_activity,
-                deadline.instant,
-                worker_status_watchers,
-            )
-            .await
-        } else {
-            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-            wait_for_activity_or_worker_status(
-                &mut activity_rx,
-                pending_activity,
-                deadline,
-                worker_status_watchers,
-            )
-            .await
+        let wait_outcome = async {
+            if is_team_lead && !lead_has_active_workers {
+                WaitOutcome::NoActiveWorkers
+            } else if worker_status_changed {
+                WaitOutcome::WorkerStatusChanged
+            } else if lead_wait_cancelled {
+                WaitOutcome::Steered
+            } else if lead_wait_requires_assessment {
+                WaitOutcome::LeadReviewRequired
+            } else if let Some(deadline) = lead_deadline {
+                wait_for_activity_or_worker_status(
+                    &mut activity_rx,
+                    pending_activity,
+                    deadline.instant,
+                    worker_status_watchers,
+                )
+                .await
+            } else {
+                let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+                wait_for_activity_or_worker_status(
+                    &mut activity_rx,
+                    pending_activity,
+                    deadline,
+                    worker_status_watchers,
+                )
+                .await
+            }
+        };
+        tokio::pin!(wait_outcome);
+        let handoff = session.maybe_handoff_dependency_free_wait(
+            &turn.sub_id,
+            pending_activity.is_some(),
+            &cancellation_token,
+        );
+        tokio::pin!(handoff);
+        let outcome = tokio::select! {
+            _ = &mut handoff => wait_outcome.await,
+            outcome = &mut wait_outcome => outcome,
         };
         let result = WaitAgentResult::from_outcome(outcome, requested_timeout_ms, timeout_ms);
 

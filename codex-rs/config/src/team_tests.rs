@@ -7,6 +7,7 @@ fn profile(model: &str, reasoning_effort: ReasoningEffort) -> TeamModelProfileTo
         reasoning_effort: Some(reasoning_effort),
         balance: None,
         dynamic_handoff: None,
+        show_idle_notifications: None,
         oversight_timeout_minutes: None,
     }
 }
@@ -206,6 +207,28 @@ fn team_config_defaults_and_loads_lead_dynamic_handoff() {
             .as_ref()
             .is_some_and(|profiles| !profiles.lead_dynamic_handoff)
     );
+}
+
+#[test]
+fn team_config_defaults_and_loads_lead_idle_notifications() {
+    let config = TeamConfig::try_from(TeamToml {
+        lead: Some(TeamModelProfileToml {
+            show_idle_notifications: Some(true),
+            ..profile("gpt-lead", ReasoningEffort::High)
+        }),
+        worker: Some(worker_profile("gpt-worker", ReasoningEffort::Max, None)),
+        ..Default::default()
+    })
+    .expect("valid team config");
+    assert!(config.lead_show_idle_notifications);
+
+    let config = TeamConfig::try_from(TeamToml {
+        lead: Some(profile("gpt-lead", ReasoningEffort::High)),
+        worker: Some(worker_profile("gpt-worker", ReasoningEffort::Max, None)),
+        ..Default::default()
+    })
+    .expect("valid team config");
+    assert!(!config.lead_show_idle_notifications);
 }
 
 #[test]

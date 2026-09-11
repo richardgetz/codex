@@ -1,5 +1,7 @@
 ---
 source: tui/src/chatwidget/tests/team_activity_tests.rs
-expression: "render_bottom_first_row(&chat, 80)"
+assertion_line: 36
+expression: "render_bottom_rows(&chat, 80)"
 ---
-• Lead: idle · Workers: 2 working
+• Lead: idle · Team: 2 working
+  Workers: 2 · Subagents: 0

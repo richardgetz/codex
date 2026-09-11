@@ -161,6 +161,18 @@ fn config_lock_for_comparison(
     {
         lead.balance = None;
     }
+    // Passive Lead idle notifications are opt-in and historically absent from
+    // lockfiles. Treat an explicit false value as the same effective setting
+    // as the legacy omission so old locks continue to replay cleanly.
+    if let Some(lead) = lockfile
+        .config
+        .team
+        .as_mut()
+        .and_then(|team| team.lead.as_mut())
+        && lead.show_idle_notifications == Some(false)
+    {
+        lead.show_idle_notifications = None;
+    }
     if options.allow_codex_version_mismatch {
         lockfile.codex_version.clear();
     }

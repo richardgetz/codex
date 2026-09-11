@@ -9,6 +9,8 @@ pub const DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES: u64 = 30;
 pub const DEFAULT_TEAM_LEAD_DYNAMIC_HANDOFF: bool = false;
 /// Default balance between discretionary Lead oversight usage and confidence.
 pub const DEFAULT_TEAM_LEAD_BALANCE: u8 = 3;
+/// Whether passive Lead idle and parked-wait notifications are shown by default.
+pub const DEFAULT_TEAM_LEAD_SHOW_IDLE_NOTIFICATIONS: bool = false;
 /// Smallest supported Lead oversight balance.
 pub const MIN_TEAM_LEAD_BALANCE: u8 = 1;
 /// Largest supported Lead oversight balance.
@@ -27,6 +29,11 @@ pub struct TeamConfig {
     pub profiles: Option<TeamModelProfiles>,
     /// Maximum number of concurrently active direct Workers for a Lead session.
     pub worker_max_concurrent: Option<usize>,
+    /// Whether passive Lead idle and parked-wait notifications are emitted.
+    ///
+    /// This is a global debugging preference; it is not part of a thread's
+    /// persisted team assignment snapshot.
+    pub lead_show_idle_notifications: bool,
 }
 
 /// The only roles recognized by the v1 team model policy.
@@ -68,6 +75,8 @@ pub struct TeamModelProfileToml {
     /// Whether the Lead should make a quick preflight and delegate substantial lookup work to a
     /// Worker when filtering bulk material can reduce Lead context.
     pub dynamic_handoff: Option<bool>,
+    /// Whether passive Lead idle and parked-wait notifications should be shown.
+    pub show_idle_notifications: Option<bool>,
     /// Minutes a Lead may remain idle while direct Workers are active before
     /// an oversight wake is emitted. A missing value uses the 30-minute default.
     #[schemars(range(min = 1, max = 15768000))]
@@ -95,6 +104,10 @@ impl TryFrom<TeamToml> for TeamConfig {
             lead,
             worker,
         } = value;
+        let lead_show_idle_notifications = lead
+            .as_ref()
+            .and_then(|lead| lead.show_idle_notifications)
+            .unwrap_or(DEFAULT_TEAM_LEAD_SHOW_IDLE_NOTIFICATIONS);
         if worker
             .as_ref()
             .and_then(|worker| worker.max_concurrent)
@@ -147,6 +160,7 @@ impl TryFrom<TeamToml> for TeamConfig {
             enabled,
             profiles,
             worker_max_concurrent,
+            lead_show_idle_notifications,
         })
     }
 }
@@ -199,6 +213,7 @@ impl TryFrom<(&str, TeamWorkerProfileToml)> for TeamModelProfile {
                 reasoning_effort,
                 balance: None,
                 dynamic_handoff: None,
+                show_idle_notifications: None,
                 oversight_timeout_minutes: None,
             },
         ))

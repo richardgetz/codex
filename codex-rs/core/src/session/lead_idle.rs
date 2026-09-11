@@ -263,6 +263,14 @@ impl Session {
         self.input_queue.take_team_progress_summary().await
     }
 
+    /// Returns whether passive Lead idle and parked-wait notifications are enabled.
+    ///
+    /// This is a global debugging preference from `[team.lead]`; actionable oversight deadline
+    /// warnings remain visible regardless of this setting.
+    pub(crate) async fn lead_idle_notifications_enabled(&self) -> bool {
+        self.get_config().await.team.lead_show_idle_notifications
+    }
+
     /// Drops buffered routine progress when team mode is disabled so stale updates do not leak
     /// into a later re-enabled Lead assignment.
     pub(crate) async fn clear_lead_progress(&self) {
@@ -282,6 +290,7 @@ impl Session {
         if let Some((active_workers, deadline)) = self
             .arm_lead_oversight(LeadIdleArmMode::CompletedLeadTurn)
             .await
+            && self.lead_idle_notifications_enabled().await
         {
             self.emit_lead_idle_event(format_lead_idle_message(active_workers, deadline.unix_secs))
                 .await;
@@ -432,7 +441,7 @@ impl Session {
     }
 }
 
-fn truncate_message(message: &str) -> String {
+pub(crate) fn truncate_message(message: &str) -> String {
     if message.len() <= MAX_OVERSIGHT_MESSAGE_BYTES {
         return message.to_string();
     }

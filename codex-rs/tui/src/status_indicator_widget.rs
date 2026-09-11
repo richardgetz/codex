@@ -21,6 +21,8 @@ use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app_event_sender::AppEventSender;
+use crate::chatwidget::TeamActivityStatus;
+use crate::chatwidget::TeamPauseState;
 use crate::key_hint;
 use crate::key_hint::ShortcutHint;
 use crate::line_truncation::line_width;
@@ -64,6 +66,8 @@ pub(crate) struct StatusIndicatorWidget {
     inline_message: Option<String>,
     /// Hook activity may move below the status row when it cannot fit in full.
     hook_status_message: Option<String>,
+    /// Structured Lead/Worker activity rendered as two adaptive columns.
+    team_activity: Option<TeamActivityStatus>,
     show_interrupt_hint: bool,
     interrupt_binding: Option<ShortcutHint>,
 
@@ -102,6 +106,7 @@ impl StatusIndicatorWidget {
             show_elapsed: true,
             inline_message: None,
             hook_status_message: None,
+            team_activity: None,
             show_interrupt_hint: true,
             interrupt_binding: Some(key_hint::plain(KeyCode::Esc).into()),
             app_event_tx,
@@ -151,6 +156,10 @@ impl StatusIndicatorWidget {
 
     pub(crate) fn update_hook_status_message(&mut self, message: Option<String>) {
         self.hook_status_message = message;
+    }
+
+    pub(crate) fn set_team_activity(&mut self, status: Option<TeamActivityStatus>) {
+        self.team_activity = status;
     }
 
     pub(crate) fn set_elapsed_visible(&mut self, visible: bool) {
@@ -241,9 +250,86 @@ impl StatusIndicator<'_> {
     fn lines(&self, width: u16) -> Vec<Line<'static>> {
         let row = self.row;
         let now = Instant::now();
+        let motion_mode = MotionMode::from_animations_enabled(row.animations_enabled);
         let elapsed_duration = self.timer.elapsed_at(now);
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
-        let motion_mode = MotionMode::from_animations_enabled(row.animations_enabled);
+
+        if let Some(team_activity) = row.team_activity {
+            let mut lines = team_activity
+                .lines(width)
+                .into_iter()
+                .enumerate()
+                .map(|(index, text)| {
+                    let mut spans = Vec::new();
+                    if matches!(
+                        team_activity.pause_state,
+                        TeamPauseState::Running | TeamPauseState::Pausing
+                    ) && index == 0
+                    {
+                        if let Some(indicator) = activity_indicator(
+                            Some(self.timer.last_resume_at),
+                            motion_mode,
+                            ReducedMotionIndicator::Hidden,
+                        ) {
+                            spans.push(indicator);
+                            spans.push(" ".into());
+                        } else {
+                            // Keep the two columns aligned when reduced motion hides the
+                            // spinner; the second row reserves this same two-column prefix.
+                            spans.push("  ".into());
+                        }
+                    } else if team_activity.pause_state == TeamPauseState::Running {
+                        // Reserve the spinner prefix on the continuation row so Team and
+                        // Subagents begin in one stable column.
+                        spans.push("  ".into());
+                    }
+                    spans.extend(shimmer_text(&text, motion_mode));
+                    if index == 0 && row.show_elapsed {
+                        if !spans.is_empty() {
+                            spans.push(" ".into());
+                        }
+                        if row.show_interrupt_hint
+                            && let Some(interrupt_binding) = row.interrupt_binding
+                        {
+                            spans.extend(vec![
+                                format!("({pretty_elapsed} • ").dim(),
+                                interrupt_binding.into(),
+                                " to interrupt)".dim(),
+                            ]);
+                        } else {
+                            spans.push(format!("({pretty_elapsed})").dim());
+                        }
+                    }
+                    if index == 0
+                        && let Some(message) = &row.inline_message
+                    {
+                        spans.push(" · ".dim());
+                        spans.push(message.clone().dim());
+                    }
+                    truncate_line_with_ellipsis_if_overflow(Line::from(spans), usize::from(width))
+                })
+                .collect::<Vec<_>>();
+            if lines.is_empty() {
+                lines.push(Line::default());
+            }
+            let mut hook_overflow = None;
+            if let Some(message) = &row.hook_status_message {
+                if let Some(first) = lines.first_mut()
+                    && line_width(first) + display_width(" · ") + display_width(message)
+                        <= usize::from(width)
+                {
+                    first.spans.extend([" · ".dim(), message.clone().dim()]);
+                } else {
+                    hook_overflow = Some(truncate_line_with_ellipsis_if_overflow(
+                        Line::from(vec![DETAILS_PREFIX.dim(), message.clone().dim()]),
+                        usize::from(width),
+                    ));
+                }
+            }
+            lines.extend(hook_overflow);
+            lines.extend(row.wrapped_details_lines(width));
+            return lines;
+        }
 
         let mut spans = Vec::with_capacity(5);
         if let Some(indicator) = activity_indicator(
@@ -434,6 +520,50 @@ mod tests {
             .collect::<String>();
 
         assert!(line.starts_with("Working (0s • esc to interrupt)"));
+    }
+
+    #[test]
+    fn team_activity_keeps_elapsed_inline_hook_and_details_surfaces() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut widget = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ false,
+        );
+        widget.set_team_activity(Some(TeamActivityStatus {
+            lead: crate::chatwidget::TeamRoleActivity::Working,
+            workers_working: 1,
+            workers_waiting: 0,
+            direct_workers: 1,
+            subagents: 0,
+            worker_max_concurrent: None,
+            pause_state: TeamPauseState::Running,
+            in_flight_operations: 1,
+        }));
+        widget.update_inline_message(Some("exec: 1 process".to_string()));
+        widget.update_hook_status_message(Some("hook: checking".to_string()));
+        widget.update_details(
+            Some("turn details".to_string()),
+            StatusDetailsCapitalization::Preserve,
+            STATUS_DETAILS_DEFAULT_MAX_LINES,
+        );
+        let mut timer = StatusTimer::default();
+        timer.pause_at(timer.last_resume_at);
+        let indicator = StatusIndicator {
+            row: &widget,
+            timer: &timer,
+        };
+        let lines = indicator.lines(/*width*/ 120);
+        let rendered = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("(0s • esc to interrupt)"));
+        assert!(rendered.contains("exec: 1 process"));
+        assert!(rendered.contains("hook: checking"));
+        assert!(rendered.contains("turn details"));
     }
 
     #[test]

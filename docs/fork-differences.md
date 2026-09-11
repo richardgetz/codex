@@ -114,6 +114,9 @@ balance = 2
 # Valid range: 1..15768000 (30 years); 30 or more is recommended.
 oversight_timeout_minutes = 30
 # For longer-running work, for example: oversight_timeout_minutes = 60
+# Optional: show passive idle and parked-wait notices for debugging (default false).
+# Set true to enable these notices; actionable oversight-deadline warnings remain visible either way.
+show_idle_notifications = false
 # Optional: preflight substantial lookup work and let a Worker filter bulk
 # material before returning selected evidence. Defaults to false.
 dynamic_handoff = true
@@ -187,6 +190,11 @@ max_concurrent = 10
   ordinary work, while a smaller value is useful for an explicit test or a
   short task. The setting belongs under `[team.lead]` and is independent of
   the Worker concurrency ceiling.
+- `team.lead.show_idle_notifications` defaults to `false`. Set it to `true` to
+  show passive idle and parked-wait notices while debugging. Oversight deadline
+  warnings and their actionable Lead wake remain visible either way. This is a
+  global config preference; it is not stored in a thread's team snapshot, so a
+  resumed thread follows the current config value.
 - When a Lead finishes a turn while direct Workers are still running, it parks
   without polling and makes zero automatic inference requests. Queue-only
   Worker progress is retained in a bounded in-memory summary (at most 32
@@ -202,6 +210,19 @@ max_concurrent = 10
   `multi_agents.send_input` surface keeps its existing explicit turn-input
   behavior and may wake a target; this idle contract does not reinterpret those
   task inputs as routine progress.
+- A Team Worker that enters `wait_agent` with no active child dependency or
+  queued activity queues one bounded handoff to its immediate parent. The
+  handoff identifies the Worker as waiting for review or follow-up; it never
+  marks the Worker complete. Repeated waits in the same turn are suppressed
+  until meaningful parent input or new work arrives. V2 waits for currently
+  admitted model/tool operations to quiesce, then rechecks approval, user-input,
+  usage, mailbox, and child state; cancellation or another wait outcome drops
+  the signal before quiescence and the final boundary. Spawned non-wait sibling
+  dispatches are counted from task creation through completion or cancellation,
+  including readiness-blocked and quiescent exec/MCP wrappers; the coordination
+  wait itself is excluded. Work admitted after this boundary and sibling waits
+  are not inferred. Legacy V1 explicit-target waits remain result collection
+  and do not emit this signal.
 - Configured Stop hooks that explicitly block completion remain actionable and
   can require a Lead continuation before it parks. Once those blocks are
   resolved, ordinary successful Stop/after-agent hooks do not create an
@@ -410,19 +431,30 @@ to the ephemeral `thread/activity/updated` notification. Each state carries
 in-flight operations. Activity state is process-local and is not restored from
 rollout history after a cold resume.
 
-In the native TUI, this event stream drives one compact row for the selected
-Lead tree: `Lead: idle|working|waiting · Workers: N working[, M waiting]`.
-Worker counts include unfinished loaded direct and nested descendants under
-that root; in the normal row, `N` and `M` count working and waiting Workers
-respectively. Completed, closed, and unrelated roots are excluded. The same
-projection feeds the terminal title, so the title and row agree. A Lead or
-Worker that is actually working animates; approval, user-input, usage-limit,
-and agent waits stay static. `Pausing` animates while in-flight operations
-remain and reports their aggregate count; the static row is
+In the native TUI, this event stream drives two aligned rows for the selected
+Lead tree: `Lead: idle|working|waiting · Team: N working[, M waiting]`, then
+`Workers: N[/cap] · Subagents: M`. Team counts include every unfinished loaded
+direct and nested Worker; Workers counts only unfinished direct Lead children,
+with the optional `team.worker.max_concurrent` ceiling shown as the denominator;
+Subagents counts deeper descendants. Completed, closed, and unrelated roots are
+excluded. The same projection feeds the terminal title, so the title and rows
+agree. A Lead or Worker that is actually working animates; approval, user-input,
+usage-limit, and agent waits stay static. A Worker entering an ordinary
+coordination wait remains displayed as working for 30 monotonic seconds from
+its first transition. Repeated waiting events do not extend that grace, and a
+bounded one-shot redraw reveals expiry even without a new event or with reduced
+motion enabled. `Pausing` animates while in-flight operations remain and
+reports their aggregate count; the static row is
 `Paused · Lead + N workers · /continue to resume`, with `N` equal to the total
-unfinished working and waiting Workers. The row honors reduced-motion settings
-and updates from activity events rather than polling. See the [app-server API](../codex-rs/app-server/README.md)
-for connection and thread lifecycle details.
+unfinished Workers. Error/completion and close events, along with manual pause,
+remain immediate. Terminal completion wins over delayed activity updates until
+the next `turn/started`; reset and reconnect rebuild parent metadata only for
+the selected loaded tree and skip `NotLoaded`, ephemeral, or temporary helper
+threads. Activity from an unknown or unloaded child is ignored until a fresh
+`thread/started`/`turn/started` admits it. The display logic adds no inference
+or backend polling. See the [app-server
+API](../codex-rs/app-server/README.md) for connection and thread lifecycle
+details.
 
 ### GPT-Live voice in the native TUI
 

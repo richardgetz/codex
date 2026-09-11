@@ -194,6 +194,8 @@ impl App {
                 ReconnectPresentation::Conversation
             };
             self.chat_widget.pause_for_disconnect();
+            self.team_activity.clear();
+            self.chat_widget.set_team_activity(None);
             self.startup_pending_protected_request = false;
             self.abort_all_thread_event_listeners();
             for (_, (_, task)) in self.dynamic_tool_tasks.drain() {
@@ -370,6 +372,7 @@ impl App {
             server.reconnect(app_server.request_handle(), self.app_event_tx.clone());
         }
         self.reconnect.offline = false;
+        self.sync_team_activity_status();
         self.chat_widget.update_account_state(
             bootstrap.status_account_display,
             bootstrap.plan_type,

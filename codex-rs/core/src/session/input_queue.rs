@@ -90,6 +90,7 @@ pub(crate) struct InputQueue {
     activity_tx: watch::Sender<InputQueueActivity>,
     mailbox_pending_mails: Mutex<VecDeque<PendingMailboxCommunication>>,
     team_lead_progress: Mutex<TeamLeadProgressBuffer>,
+    dependency_free_wait_handoff_turn: Mutex<Option<String>>,
 }
 
 struct PendingMailboxCommunication {
@@ -123,7 +124,31 @@ impl InputQueue {
             activity_tx,
             mailbox_pending_mails: Mutex::new(VecDeque::new()),
             team_lead_progress: Mutex::new(TeamLeadProgressBuffer::default()),
+            dependency_free_wait_handoff_turn: Mutex::new(None),
         }
+    }
+
+    /// Claims the one parent handoff allowed for a dependency-free wait in one model turn.
+    ///
+    /// A wait call can be retried by the model without any new work arriving. Keep that retry
+    /// quiet until a new turn or explicit input gives the Worker a meaningful reason to ask its
+    /// parent for attention again.
+    pub(crate) async fn claim_dependency_free_wait_handoff(&self, sub_id: &str) -> bool {
+        if sub_id.is_empty() {
+            return false;
+        }
+        let mut claimed_turn = self.dependency_free_wait_handoff_turn.lock().await;
+        if claimed_turn.as_deref() == Some(sub_id) {
+            return false;
+        }
+        *claimed_turn = Some(sub_id.to_string());
+        true
+    }
+
+    /// Allows meaningful incoming work to arm a later dependency-free wait handoff in the same
+    /// active turn. Routine queue-only progress does not call this method.
+    async fn reset_dependency_free_wait_handoff(&self) {
+        *self.dependency_free_wait_handoff_turn.lock().await = None;
     }
 
     /// Retains routine Worker progress without publishing mailbox activity. The bounded buffer is
@@ -250,6 +275,9 @@ impl InputQueue {
         start_options: TurnStartOptions,
         team_lead_trigger: bool,
     ) {
+        if communication.trigger_turn {
+            self.reset_dependency_free_wait_handoff().await;
+        }
         self.mailbox_pending_mails
             .lock()
             .await
@@ -474,6 +502,7 @@ impl InputQueue {
         turn_state: &Mutex<TurnState>,
         input: Vec<TurnInput>,
     ) {
+        self.reset_dependency_free_wait_handoff().await;
         {
             let mut turn_state = turn_state.lock().await;
             for input in input {
@@ -835,9 +864,15 @@ mod tests {
             /*trigger_turn*/ false,
         );
         let mail_two = make_mail(
-            AgentPath::try_from("/root/worker").expect("agent path"),
+            AgentPath::try_from("/root/worker_a").expect("agent path"),
             AgentPath::root(),
             "two",
+            /*trigger_turn*/ true,
+        );
+        let mail_three = make_mail(
+            AgentPath::try_from("/root/worker_b").expect("agent path"),
+            AgentPath::root(),
+            "three",
             /*trigger_turn*/ true,
         );
 
@@ -847,12 +882,16 @@ mod tests {
         input_queue
             .enqueue_mailbox_communication(mail_two.clone(), Default::default())
             .await;
+        input_queue
+            .enqueue_mailbox_communication(mail_three.clone(), Default::default())
+            .await;
 
         assert_eq!(
             input_queue.drain_mailbox_input_items().await.0,
             vec![
                 TurnInput::InterAgentCommunication(mail_one),
-                TurnInput::InterAgentCommunication(mail_two)
+                TurnInput::InterAgentCommunication(mail_two),
+                TurnInput::InterAgentCommunication(mail_three),
             ]
         );
         assert!(!input_queue.has_pending_mailbox_items().await);
@@ -956,6 +995,61 @@ mod tests {
             .enqueue_mailbox_communication(trigger_mail, Default::default())
             .await;
         assert!(input_queue.has_trigger_turn_mailbox_items().await);
+    }
+
+    #[tokio::test]
+    async fn dependency_free_wait_handoff_is_one_shot_until_new_work_arrives() {
+        let input_queue = InputQueue::new();
+
+        assert!(
+            input_queue
+                .claim_dependency_free_wait_handoff("turn-1")
+                .await
+        );
+        assert!(
+            !input_queue
+                .claim_dependency_free_wait_handoff("turn-1")
+                .await
+        );
+        assert!(
+            input_queue
+                .claim_dependency_free_wait_handoff("turn-2")
+                .await
+        );
+
+        input_queue
+            .enqueue_mailbox_communication(
+                make_mail(
+                    AgentPath::root(),
+                    AgentPath::try_from("/root/worker").expect("agent path"),
+                    "routine",
+                    /*trigger_turn*/ false,
+                ),
+                Default::default(),
+            )
+            .await;
+        assert!(
+            !input_queue
+                .claim_dependency_free_wait_handoff("turn-2")
+                .await
+        );
+
+        input_queue
+            .enqueue_mailbox_communication(
+                make_mail(
+                    AgentPath::root(),
+                    AgentPath::try_from("/root/worker").expect("agent path"),
+                    "follow-up",
+                    /*trigger_turn*/ true,
+                ),
+                Default::default(),
+            )
+            .await;
+        assert!(
+            input_queue
+                .claim_dependency_free_wait_handoff("turn-2")
+                .await
+        );
     }
 
     #[tokio::test]

@@ -153,7 +153,9 @@ impl Handler {
             )
             .await;
 
-        if let (Some(active_workers), Some(deadline)) = (active_direct_workers, lead_deadline) {
+        if let (Some(active_workers), Some(deadline)) = (active_direct_workers, lead_deadline)
+            && session.lead_idle_notifications_enabled().await
+        {
             session
                 .emit_lead_idle_event(format_lead_wait_message(active_workers, deadline.unix_secs))
                 .await;

@@ -228,11 +228,13 @@ fn save_config_resolved_fields(
             |profile: &codex_config::TeamModelProfile,
              dynamic_handoff: Option<bool>,
              balance: Option<u8>,
+             show_idle_notifications: Option<bool>,
              oversight_timeout_minutes: Option<u64>| TeamModelProfileToml {
                 model: Some(profile.model.clone()),
                 reasoning_effort: Some(profile.reasoning_effort.clone()),
                 balance,
                 dynamic_handoff,
+                show_idle_notifications,
                 oversight_timeout_minutes,
             };
         let worker_profile_to_toml =
@@ -249,6 +251,7 @@ fn save_config_resolved_fields(
                     &profiles.lead,
                     Some(profiles.lead_dynamic_handoff),
                     Some(profiles.lead_balance),
+                    Some(config.team.lead_show_idle_notifications),
                     Some(profiles.lead_oversight_timeout_minutes),
                 )
             }),
@@ -747,6 +750,52 @@ reasoning_effort = "high"
 
         validate_config_lock_replay(&expected, &actual, ConfigLockReplayOptions::default())
             .expect("legacy missing and explicit default Lead balance should be equivalent");
+    }
+
+    #[test]
+    fn lock_validation_accepts_legacy_missing_idle_notification_setting() {
+        let expected: ConfigLockfileToml = toml::from_str(&format!(
+            r#"
+version = 1
+codex_version = "{}"
+
+[config.team]
+enabled = true
+
+[config.team.lead]
+model = "gpt-lead"
+reasoning_effort = "high"
+
+[config.team.worker]
+model = "gpt-worker"
+reasoning_effort = "high"
+"#,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .expect("legacy lock without idle notifications should deserialize");
+        let actual: ConfigLockfileToml = toml::from_str(&format!(
+            r#"
+version = 1
+codex_version = "{}"
+
+[config.team]
+enabled = true
+
+[config.team.lead]
+model = "gpt-lead"
+reasoning_effort = "high"
+show_idle_notifications = false
+
+[config.team.worker]
+model = "gpt-worker"
+reasoning_effort = "high"
+"#,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .expect("lock with explicit false idle notifications should deserialize");
+
+        validate_config_lock_replay(&expected, &actual, ConfigLockReplayOptions::default())
+            .expect("legacy missing and explicit false idle notifications should be equivalent");
     }
 
     #[tokio::test]

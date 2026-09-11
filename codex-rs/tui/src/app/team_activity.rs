@@ -6,31 +6,65 @@
 //! compact projection to `ChatWidget`.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::time::Duration;
+use std::time::Instant;
 
+use codex_app_server_protocol::SessionSource;
+use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadActivity;
 use codex_app_server_protocol::ThreadActivityUpdatedNotification;
+use codex_app_server_protocol::ThreadActivityWaitReason;
 use codex_app_server_protocol::ThreadPauseState;
+use codex_app_server_protocol::ThreadStatus;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::SubAgentSource;
 
 use crate::chatwidget::TeamActivityStatus;
 use crate::chatwidget::TeamPauseState as UiPauseState;
 use crate::chatwidget::TeamRoleActivity;
 
+/// Keep a Worker visibly working through short routine coordination waits.
+///
+/// This is a display-only grace period. It does not alter backend activity, Lead oversight, or
+/// any admission/polling behavior. The timer starts only on a real Working -> ordinary Waiting
+/// transition and is never extended by repeated Waiting notifications.
+pub(super) const ORDINARY_WAITING_GRACE: Duration = Duration::from_secs(30);
+
 #[derive(Clone, Debug)]
 struct ThreadActivityEntry {
     root_thread_id: ThreadId,
+    parent_thread_id: Option<ThreadId>,
+    parent_thread_id_known: bool,
     activity: ThreadActivity,
+    wait_reason: Option<ThreadActivityWaitReason>,
     pause_state: ThreadPauseState,
     in_flight_operations: u32,
+    ordinary_waiting_since: Option<Instant>,
 }
 
 #[derive(Debug, Default)]
 pub(super) struct TeamActivityProjection {
     entries: HashMap<ThreadId, ThreadActivityEntry>,
+    /// Parent metadata is supplied by existing ThreadStarted/thread-read records. Activity
+    /// notifications intentionally stay unchanged, so this remains a client-side classification.
+    parent_thread_ids: HashMap<ThreadId, Option<ThreadId>>,
+    /// Terminal notifications can race detached activity updates. Keep barriers only for IDs in
+    /// the currently admitted loaded tree; removed/unloaded children are rejected as unknown
+    /// until a fresh ThreadStarted event admits them again.
+    terminal_threads: HashSet<ThreadId>,
+    /// A root close/delete/archive can race detached updates before any root metadata is loaded.
+    /// This single selected-root barrier covers that uncached case without retaining old IDs.
+    closed_root: Option<ThreadId>,
+    selected_root: Option<ThreadId>,
 }
 
 impl TeamActivityProjection {
     pub(super) fn observe(&mut self, notification: &ThreadActivityUpdatedNotification) {
+        self.observe_at(notification, Instant::now());
+    }
+
+    fn observe_at(&mut self, notification: &ThreadActivityUpdatedNotification, now: Instant) {
         let Ok(thread_id) = ThreadId::from_string(&notification.thread_id) else {
             tracing::warn!(
                 thread_id = %notification.thread_id,
@@ -45,44 +79,303 @@ impl TeamActivityProjection {
             );
             return;
         };
+        let is_root_activity = thread_id == root_thread_id;
+        if !is_root_activity && !self.parent_thread_ids.contains_key(&thread_id) {
+            return;
+        }
+        let parent_thread_id = self.parent_thread_ids.get(&thread_id).copied().flatten();
+        let parent_thread_id_known = self.parent_thread_ids.contains_key(&thread_id);
+        if self.closed_root == Some(root_thread_id) || self.terminal_threads.contains(&thread_id) {
+            // Activity completion can race the detached guard's final update. Preserve pause
+            // updates for a completed/idle thread, but never let stale activity or grace state
+            // bring it back into the aggregate counts.
+            let pause_state = self
+                .entries
+                .get(&thread_id)
+                .map(|entry| entry.pause_state)
+                .and_then(|pause_state| {
+                    (notification.activity != ThreadActivity::Idle
+                        && match pause_state {
+                            ThreadPauseState::Paused => {
+                                notification.pause_state != ThreadPauseState::Paused
+                            }
+                            ThreadPauseState::Pausing => {
+                                notification.pause_state == ThreadPauseState::Running
+                            }
+                            ThreadPauseState::Running => false,
+                        })
+                    .then_some(pause_state)
+                })
+                .unwrap_or(notification.pause_state);
+            self.entries.insert(
+                thread_id,
+                ThreadActivityEntry {
+                    root_thread_id,
+                    parent_thread_id,
+                    parent_thread_id_known,
+                    activity: ThreadActivity::Idle,
+                    wait_reason: None,
+                    pause_state,
+                    in_flight_operations: 0,
+                    ordinary_waiting_since: None,
+                },
+            );
+            return;
+        }
+        let previous = self.entries.get(&thread_id);
+        let ordinary_waiting = is_ordinary_waiting(notification.activity, notification.wait_reason);
+        let ordinary_waiting_since = if ordinary_waiting
+            && previous.is_some_and(|entry| {
+                entry.pause_state == ThreadPauseState::Running
+                    && notification.pause_state == ThreadPauseState::Running
+                    && (entry.activity == ThreadActivity::Working
+                        || (entry.activity == ThreadActivity::Waiting
+                            && entry.ordinary_waiting_since.is_some()))
+            }) {
+            previous
+                .and_then(|entry| entry.ordinary_waiting_since)
+                .or(Some(now))
+        } else {
+            None
+        };
         self.entries.insert(
             thread_id,
             ThreadActivityEntry {
                 root_thread_id,
+                parent_thread_id,
+                parent_thread_id_known,
                 activity: notification.activity,
+                wait_reason: notification.wait_reason,
                 pause_state: notification.pause_state,
                 in_flight_operations: notification.in_flight_operations,
+                ordinary_waiting_since,
             },
         );
     }
 
-    pub(super) fn remove_thread(&mut self, thread_id: ThreadId) {
-        let root_thread_id = self
-            .entries
-            .remove(&thread_id)
-            .map(|entry| entry.root_thread_id);
-        if root_thread_id == Some(thread_id) {
-            self.entries
-                .retain(|_, entry| entry.root_thread_id != thread_id);
+    /// Cache parent metadata from an existing app-server thread record.
+    pub(super) fn observe_thread_metadata(&mut self, thread: &Thread) {
+        let Ok(thread_id) = ThreadId::from_string(&thread.id) else {
+            return;
+        };
+        let parent_thread_id = thread
+            .parent_thread_id
+            .as_deref()
+            .and_then(|parent| ThreadId::from_string(parent).ok())
+            .or(match &thread.source {
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id, ..
+                }) => Some(*parent_thread_id),
+                _ => None,
+            });
+        self.observe_thread_parent(thread_id, parent_thread_id);
+    }
+
+    /// Cache a parent edge for a thread and apply it to an activity entry already seen.
+    pub(super) fn observe_thread_parent(
+        &mut self,
+        thread_id: ThreadId,
+        parent_thread_id: Option<ThreadId>,
+    ) {
+        self.start_thread(thread_id);
+        self.parent_thread_ids.insert(thread_id, parent_thread_id);
+        if let Some(entry) = self.entries.get_mut(&thread_id) {
+            entry.parent_thread_id = parent_thread_id;
+            entry.parent_thread_id_known = true;
         }
     }
 
-    pub(super) fn status_for_root(&self, root_thread_id: ThreadId) -> Option<TeamActivityStatus> {
+    /// Clear a terminal tombstone when a genuinely new turn starts for this thread.
+    pub(super) fn start_thread(&mut self, thread_id: ThreadId) {
+        self.terminal_threads.remove(&thread_id);
+        if self.closed_root == Some(thread_id) {
+            self.closed_root = None;
+        }
+    }
+
+    /// Replace parent metadata with the currently selected loaded tree.
+    pub(super) fn replace_thread_metadata(
+        &mut self,
+        selected_root: Option<ThreadId>,
+        metadata: impl IntoIterator<Item = (ThreadId, Option<ThreadId>)>,
+    ) {
+        if self.selected_root != selected_root {
+            self.terminal_threads.clear();
+            self.closed_root = None;
+        }
+        self.selected_root = selected_root;
+        self.parent_thread_ids = metadata.into_iter().collect();
+        if let Some(root_thread_id) = selected_root {
+            self.parent_thread_ids.insert(root_thread_id, None);
+            let admitted_thread_ids: HashSet<_> = self.parent_thread_ids.keys().copied().collect();
+            self.entries.retain(|thread_id, entry| {
+                entry.root_thread_id == root_thread_id && admitted_thread_ids.contains(thread_id)
+            });
+            self.terminal_threads
+                .retain(|thread_id| admitted_thread_ids.contains(thread_id));
+        } else {
+            self.entries.clear();
+            self.parent_thread_ids.clear();
+            self.terminal_threads.clear();
+            self.closed_root = None;
+        }
+        for (thread_id, entry) in &mut self.entries {
+            if let Some(parent_thread_id) = self.parent_thread_ids.get(thread_id) {
+                entry.parent_thread_id = *parent_thread_id;
+                entry.parent_thread_id_known = true;
+            } else {
+                entry.parent_thread_id = None;
+                entry.parent_thread_id_known = false;
+            }
+        }
+    }
+
+    /// Clear all event-derived activity and metadata after a thread reset or reconnect.
+    pub(super) fn clear(&mut self) {
+        self.entries.clear();
+        self.parent_thread_ids.clear();
+        self.terminal_threads.clear();
+        self.closed_root = None;
+        self.selected_root = None;
+    }
+
+    /// Mark terminal activity immediately while retaining root metadata for any other workers.
+    pub(super) fn finish_thread(&mut self, thread_id: ThreadId) {
+        if self.parent_thread_ids.contains_key(&thread_id)
+            || self.entries.contains_key(&thread_id)
+            || self.selected_root == Some(thread_id)
+        {
+            self.terminal_threads.insert(thread_id);
+        }
+        if let Some(entry) = self.entries.get_mut(&thread_id) {
+            entry.activity = ThreadActivity::Idle;
+            entry.wait_reason = None;
+            entry.ordinary_waiting_since = None;
+            entry.in_flight_operations = 0;
+        }
+    }
+
+    /// Expire display-only grace periods against the UI's monotonic clock.
+    pub(super) fn expire_waiting_graces(&mut self, now: Instant) {
+        for entry in self.entries.values_mut() {
+            if entry
+                .ordinary_waiting_since
+                .is_some_and(|since| now.saturating_duration_since(since) >= ORDINARY_WAITING_GRACE)
+            {
+                entry.ordinary_waiting_since = None;
+            }
+        }
+    }
+
+    /// Return the next UI redraw deadline for an unexpired grace period.
+    pub(super) fn next_waiting_grace_deadline(&self, now: Instant) -> Option<Instant> {
+        self.entries
+            .values()
+            .filter_map(|entry| {
+                entry
+                    .ordinary_waiting_since
+                    .map(|since| since + ORDINARY_WAITING_GRACE)
+            })
+            .filter(|deadline| *deadline > now)
+            .min()
+    }
+
+    pub(super) fn remove_thread(&mut self, thread_id: ThreadId) {
+        let entry_root_thread_id = self
+            .entries
+            .get(&thread_id)
+            .map(|entry| entry.root_thread_id);
+        let is_root = entry_root_thread_id == Some(thread_id)
+            || self
+                .parent_thread_ids
+                .get(&thread_id)
+                .is_some_and(Option::is_none)
+            || self.selected_root == Some(thread_id)
+            || self
+                .entries
+                .values()
+                .any(|entry| entry.root_thread_id == thread_id);
+        let mut removed = HashSet::from([thread_id]);
+        loop {
+            let descendants: Vec<_> = self
+                .parent_thread_ids
+                .iter()
+                .filter_map(|(candidate, parent)| {
+                    (!removed.contains(candidate)
+                        && parent
+                            .as_ref()
+                            .is_some_and(|parent| removed.contains(parent)))
+                    .then_some(*candidate)
+                })
+                .collect();
+            if descendants.is_empty() {
+                break;
+            }
+            removed.extend(descendants);
+        }
+        let admitted_thread_ids: HashSet<_> = self.parent_thread_ids.keys().copied().collect();
+        self.entries.retain(|candidate, entry| {
+            !removed.contains(candidate) && (!is_root || entry.root_thread_id != thread_id)
+        });
+        self.parent_thread_ids
+            .retain(|candidate, _| !removed.contains(candidate));
+        if is_root {
+            self.entries
+                .retain(|_, entry| entry.root_thread_id != thread_id);
+            if self.selected_root == Some(thread_id) {
+                self.closed_root = Some(thread_id);
+            }
+        }
+        for candidate in removed {
+            if admitted_thread_ids.contains(&candidate) || self.selected_root == Some(candidate) {
+                self.terminal_threads.insert(candidate);
+            }
+        }
+    }
+
+    pub(super) fn status_for_root(
+        &self,
+        root_thread_id: ThreadId,
+        worker_max_concurrent: Option<usize>,
+    ) -> Option<TeamActivityStatus> {
+        self.status_for_root_at(root_thread_id, worker_max_concurrent, Instant::now())
+    }
+
+    pub(super) fn status_for_root_at(
+        &self,
+        root_thread_id: ThreadId,
+        worker_max_concurrent: Option<usize>,
+        now: Instant,
+    ) -> Option<TeamActivityStatus> {
         // The root entry is authoritative for the session pause state. A descendant event can
         // arrive after a root toggle and must not make a paused tree appear running again.
         let root_entry = self.entries.get(&root_thread_id)?;
-        let lead = role_activity(root_entry.activity);
+        let lead = role_activity(display_activity(root_entry, now));
         let mut workers_working = 0;
         let mut workers_waiting = 0;
+        let mut direct_workers = 0;
+        let mut subagents = 0;
         let mut in_flight_operations = root_entry.in_flight_operations;
         let mut descendants_draining = false;
         for (_thread_id, entry) in self.entries.iter().filter(|(thread_id, entry)| {
             **thread_id != root_thread_id && entry.root_thread_id == root_thread_id
         }) {
-            match entry.activity {
+            let activity = display_activity(entry, now);
+            match activity {
                 ThreadActivity::Working => workers_working += 1,
                 ThreadActivity::Waiting => workers_waiting += 1,
                 ThreadActivity::Idle => {}
+            }
+            // Keep the aggregate Team count useful while metadata is still loading, but do not
+            // claim an unknown lineage is direct or nested until an existing parent edge arrives.
+            if activity != ThreadActivity::Idle && entry.parent_thread_id_known {
+                match entry.parent_thread_id {
+                    Some(parent_thread_id) if parent_thread_id == root_thread_id => {
+                        direct_workers += 1;
+                    }
+                    Some(_) => subagents += 1,
+                    None => {}
+                }
             }
             descendants_draining |=
                 entry.pause_state == ThreadPauseState::Pausing || entry.in_flight_operations > 0;
@@ -104,6 +397,9 @@ impl TeamActivityProjection {
             lead,
             workers_working,
             workers_waiting,
+            direct_workers,
+            subagents,
+            worker_max_concurrent,
             pause_state,
             in_flight_operations,
         };
@@ -119,6 +415,27 @@ fn role_activity(activity: ThreadActivity) -> TeamRoleActivity {
     }
 }
 
+fn is_ordinary_waiting(
+    activity: ThreadActivity,
+    wait_reason: Option<ThreadActivityWaitReason>,
+) -> bool {
+    activity == ThreadActivity::Waiting
+        && matches!(wait_reason, None | Some(ThreadActivityWaitReason::Agents))
+}
+
+fn display_activity(entry: &ThreadActivityEntry, now: Instant) -> ThreadActivity {
+    if entry.activity == ThreadActivity::Waiting
+        && entry.pause_state == ThreadPauseState::Running
+        && entry
+            .ordinary_waiting_since
+            .is_some_and(|since| now.saturating_duration_since(since) < ORDINARY_WAITING_GRACE)
+    {
+        ThreadActivity::Working
+    } else {
+        entry.activity
+    }
+}
+
 impl From<ThreadPauseState> for UiPauseState {
     fn from(value: ThreadPauseState) -> Self {
         match value {
@@ -130,10 +447,15 @@ impl From<ThreadPauseState> for UiPauseState {
 }
 
 impl super::App {
+    pub(super) fn start_thread_activity(&mut self, thread_id: ThreadId) {
+        self.team_activity.start_thread(thread_id);
+    }
+
     pub(super) fn observe_thread_activity(
         &mut self,
         notification: &ThreadActivityUpdatedNotification,
     ) {
+        self.sync_team_activity_metadata();
         self.team_activity.observe(notification);
         self.sync_team_activity_status();
     }
@@ -144,11 +466,78 @@ impl super::App {
     }
 
     pub(super) fn sync_team_activity_status(&mut self) {
-        let status = self
-            .primary_thread_id
-            .and_then(|root_thread_id| self.team_activity.status_for_root(root_thread_id));
+        let now = Instant::now();
+        self.sync_team_activity_metadata();
+        self.team_activity.expire_waiting_graces(now);
+        if let Some(deadline) = self.team_activity.next_waiting_grace_deadline(now) {
+            self.chat_widget
+                .frame_requester()
+                .schedule_frame_in(deadline.saturating_duration_since(now));
+        }
+        let status = self.primary_thread_id.and_then(|root_thread_id| {
+            self.team_activity
+                .status_for_root(root_thread_id, self.config.team.worker_max_concurrent)
+        });
         self.chat_widget.set_team_activity(status);
     }
+
+    fn sync_team_activity_metadata(&mut self) {
+        let Some(primary_thread_id) = self.primary_thread_id else {
+            self.team_activity.replace_thread_metadata(None, []);
+            return;
+        };
+
+        let metadata: HashMap<ThreadId, Option<ThreadId>> = self
+            .agents_overview
+            .threads
+            .values()
+            .flatten()
+            .filter(|thread| !matches!(thread.status, ThreadStatus::NotLoaded))
+            .filter_map(|thread| {
+                let thread_id = ThreadId::from_string(&thread.id).ok()?;
+                Some((thread_id, thread_parent_thread_id(thread)))
+            })
+            .collect();
+        let mut selected_thread_ids = HashSet::from([primary_thread_id]);
+        loop {
+            let descendants: Vec<_> = metadata
+                .iter()
+                .filter_map(|(thread_id, parent_thread_id)| {
+                    parent_thread_id
+                        .filter(|parent| selected_thread_ids.contains(parent))
+                        .and_then(|_| selected_thread_ids.insert(*thread_id).then_some(*thread_id))
+                })
+                .collect();
+            if descendants.is_empty() {
+                break;
+            }
+        }
+        let selected_metadata = metadata
+            .into_iter()
+            .filter(|(thread_id, _)| selected_thread_ids.contains(thread_id))
+            .filter(|(thread_id, _)| *thread_id != primary_thread_id)
+            .chain(std::iter::once((primary_thread_id, None)));
+        self.team_activity
+            .replace_thread_metadata(Some(primary_thread_id), selected_metadata);
+    }
+
+    pub(super) fn finish_thread_activity(&mut self, thread_id: ThreadId) {
+        self.team_activity.finish_thread(thread_id);
+        self.sync_team_activity_status();
+    }
+}
+
+fn thread_parent_thread_id(thread: &Thread) -> Option<ThreadId> {
+    thread
+        .parent_thread_id
+        .as_deref()
+        .and_then(|parent| ThreadId::from_string(parent).ok())
+        .or(match &thread.source {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            }) => Some(*parent_thread_id),
+            _ => None,
+        })
 }
 
 #[cfg(test)]

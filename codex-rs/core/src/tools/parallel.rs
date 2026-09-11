@@ -133,6 +133,20 @@ impl ToolCallRuntime {
         let turn = Arc::clone(&step_context.turn);
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
+        // Register every spawned sibling before readiness or the parallel gate can delay it. The
+        // built-in collaboration wait is the one exception: counting this coordination call
+        // would make its own dependency-free handoff wait on itself. Other quiescent runtimes,
+        // including exec and MCP wrappers, remain visible to the handoff guard until completion.
+        let handoff_dispatch = match (
+            call.tool_name.namespace.as_deref(),
+            call.tool_name.name.as_str(),
+        ) {
+            // V2 exposes the coordination wait as a plain tool name; V1 retains its
+            // namespaced legacy surface. Neither call should count itself as pending work.
+            (None, "wait_agent")
+            | (Some("collaboration") | Some("multi_agent_v1"), "wait_agent") => None,
+            _ => Some(session.begin_handoff_dispatch()),
+        };
         let invocation_cancellation_token = cancellation_token.clone();
         let started = Instant::now();
         let tool_call_timing_guard =
@@ -158,6 +172,7 @@ impl ToolCallRuntime {
 
         let mut dispatch_handle: AbortOnDropHandle<Result<AnyToolResult, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
+                let _handoff_dispatch = handoff_dispatch;
                 if let Err(err) = session
                     .wait_for_activity_resume(&invocation_cancellation_token)
                     .await
@@ -415,6 +430,7 @@ mod tests {
     use codex_protocol::models::FunctionCallOutputBody;
     use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::openai_models::ToolMode;
+    use futures::future::BoxFuture;
     use pretty_assertions::assert_eq;
     use tokio::sync::Notify;
     use tokio::sync::oneshot;
@@ -655,6 +671,52 @@ mod tests {
 
     impl CoreToolRuntime for ActivityGateHandler {}
 
+    struct ReadinessGateHandler {
+        tool_name: codex_tools::ToolName,
+        readiness_started: Arc<Notify>,
+        readiness_release: Arc<Notify>,
+    }
+
+    impl ToolExecutor<ToolInvocation> for ReadinessGateHandler {
+        fn tool_name(&self) -> codex_tools::ToolName {
+            self.tool_name.clone()
+        }
+
+        fn spec(&self) -> codex_tools::ToolSpec {
+            codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+                name: self.tool_name.name.clone(),
+                description: "Readiness gate test tool.".to_string(),
+                strict: false,
+                defer_loading: None,
+                parameters: codex_tools::JsonSchema::default(),
+                output_schema: None,
+            })
+        }
+
+        fn handle<'a>(&'a self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+        where
+            ToolInvocation: 'a,
+        {
+            Box::pin(async {
+                Ok(
+                    Box::new(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
+                        as Box<dyn crate::tools::context::ToolOutput>,
+                )
+            })
+        }
+    }
+
+    impl CoreToolRuntime for ReadinessGateHandler {
+        fn wait_until_ready<'a>(&'a self, _session: &'a Arc<Session>) -> Option<BoxFuture<'a, ()>> {
+            let readiness_started = Arc::clone(&self.readiness_started);
+            let readiness_release = Arc::clone(&self.readiness_release);
+            Some(Box::pin(async move {
+                readiness_started.notify_one();
+                readiness_release.notified().await;
+            }))
+        }
+    }
+
     #[tokio::test]
     async fn tool_dispatch_waits_for_activity_resume_and_reports_execution() -> anyhow::Result<()> {
         let (session, turn_context) = crate::session::tests::make_session_and_context().await;
@@ -738,6 +800,136 @@ mod tests {
         .await
         .expect("activity guard should drain after tool completion");
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pending_sibling_dispatch_blocks_handoff_quiescence_before_activity_admission()
+    -> anyhow::Result<()> {
+        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let tool_name = codex_tools::ToolName::plain("readiness_gate");
+        let readiness_started = Arc::new(Notify::new());
+        let readiness_release = Arc::new(Notify::new());
+        let handler = Arc::new(ReadinessGateHandler {
+            tool_name: tool_name.clone(),
+            readiness_started: Arc::clone(&readiness_started),
+            readiness_release: Arc::clone(&readiness_release),
+        }) as Arc<dyn CoreToolRuntime>;
+        let step_context = StepContext::for_test(Arc::clone(&turn_context));
+        let router = Arc::new(ToolRouter::from_parts(
+            ToolRegistry::from_tools([handler]),
+            Vec::new(),
+            ToolMode::Direct,
+            BTreeMap::new(),
+            /*tool_namespaces_info*/ None,
+            &[],
+        ));
+        let step_context = step_context.with_tool_router_for_test(router);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let runtime = ToolCallRuntime::new(
+            Arc::clone(&session),
+            Arc::clone(&step_context),
+            Arc::clone(&step_context.tool_router),
+            tracker,
+        );
+
+        // This models a response that schedules `wait_agent` beside a sibling execution call:
+        // the sibling has been spawned and is blocked in readiness before its activity guard.
+        let call = ToolCall {
+            tool_name,
+            call_id: "readiness-gate-call".to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+            encrypted_function_args: None,
+        };
+        let cancellation_token = CancellationToken::new();
+        let dispatch = tokio::spawn(runtime.handle_tool_call(call, cancellation_token));
+        tokio::time::timeout(Duration::from_secs(1), readiness_started.notified())
+            .await
+            .expect("execution sibling should reach readiness gate");
+        assert_eq!(session.pending_handoff_dispatches(), 1);
+        assert_eq!(session.activity_in_flight.load(Ordering::Acquire), 0);
+
+        let waiter_session = Arc::clone(&session);
+        let waiter_cancellation = CancellationToken::new();
+        let waiter = tokio::spawn(async move {
+            waiter_session
+                .wait_for_activity_quiescence(&waiter_cancellation)
+                .await
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+
+        readiness_release.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), dispatch)
+            .await
+            .expect("execution sibling should finish after readiness release")
+            .expect("execution sibling task should join")?;
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("handoff quiescence should wake after sibling completion")
+            .expect("handoff quiescence task should join")
+            .expect("handoff quiescence should succeed");
+        assert_eq!(session.pending_handoff_dispatches(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn plain_v2_wait_agent_is_not_counted_as_pending_handoff_dispatch() -> anyhow::Result<()>
+    {
+        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let tool_name = codex_tools::ToolName::plain("wait_agent");
+        let readiness_started = Arc::new(Notify::new());
+        let readiness_release = Arc::new(Notify::new());
+        let handler = Arc::new(ReadinessGateHandler {
+            tool_name: tool_name.clone(),
+            readiness_started: Arc::clone(&readiness_started),
+            readiness_release: Arc::clone(&readiness_release),
+        }) as Arc<dyn CoreToolRuntime>;
+        let step_context = StepContext::for_test(Arc::clone(&turn_context));
+        let router = Arc::new(ToolRouter::from_parts(
+            ToolRegistry::from_tools([handler]),
+            Vec::new(),
+            ToolMode::Direct,
+            BTreeMap::new(),
+            /*tool_namespaces_info*/ None,
+            &[],
+        ));
+        let step_context = step_context.with_tool_router_for_test(router);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let runtime = ToolCallRuntime::new(
+            Arc::clone(&session),
+            Arc::clone(&step_context),
+            Arc::clone(&step_context.tool_router),
+            tracker,
+        );
+
+        // V2 exposes wait_agent as a plain tool name. Keep it out of the pending dispatch count
+        // so the handoff future does not wait on its own coordination call.
+        let call = ToolCall {
+            tool_name,
+            call_id: "plain-wait-agent-call".to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+            encrypted_function_args: None,
+        };
+        let dispatch = tokio::spawn(runtime.handle_tool_call(call, CancellationToken::new()));
+        tokio::time::timeout(Duration::from_secs(1), readiness_started.notified())
+            .await
+            .expect("wait_agent dispatch should reach readiness gate");
+        assert_eq!(session.pending_handoff_dispatches(), 0);
+
+        readiness_release.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), dispatch)
+            .await
+            .expect("wait_agent dispatch should finish after readiness release")
+            .expect("wait_agent dispatch task should join")?;
         Ok(())
     }
 

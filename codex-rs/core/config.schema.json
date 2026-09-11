@@ -4548,6 +4548,10 @@
         },
         "reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
+        },
+        "show_idle_notifications": {
+          "description": "Whether passive Lead idle and parked-wait notifications should be shown.",
+          "type": "boolean"
         }
       },
       "type": "object"

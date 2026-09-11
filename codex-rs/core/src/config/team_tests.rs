@@ -128,6 +128,7 @@ async fn team_settings_snapshot_carries_lead_balance() -> std::io::Result<()> {
                     reasoning_effort: Some(ReasoningEffortConfig::High),
                     balance: Some(4),
                     dynamic_handoff: None,
+                    show_idle_notifications: None,
                     oversight_timeout_minutes: None,
                 }),
                 worker: Some(TeamWorkerProfileToml {

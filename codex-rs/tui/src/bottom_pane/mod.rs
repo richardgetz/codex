@@ -26,6 +26,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::pending_input_preview::PendingInputPreview;
 use crate::bottom_pane::pending_thread_approvals::PendingThreadApprovals;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
+use crate::chatwidget::TeamActivityStatus;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
@@ -258,8 +259,7 @@ pub(crate) struct BottomPane {
     ///
     /// A parked Lead must still show active Workers, while the local task flag
     /// remains false so input and interrupt routing keep their existing meaning.
-    team_activity_header: Option<String>,
-    team_activity_animated: bool,
+    team_activity_status: Option<TeamActivityStatus>,
     /// Running-hook summary supplied by the lifecycle owner after its reveal delay.
     hook_status_message: Option<String>,
     inline_banner: Option<actionable_banner::InlineBanner>,
@@ -336,8 +336,7 @@ impl BottomPane {
             is_task_running: false,
             slash_command_task_running: false,
             status: None,
-            team_activity_header: None,
-            team_activity_animated: false,
+            team_activity_status: None,
             hook_status_message: None,
             inline_banner: None,
             status_timer: crate::status_indicator_widget::StatusTimer::default(),
@@ -1164,7 +1163,7 @@ impl BottomPane {
                 self.sync_status_inline_message();
                 self.request_redraw();
             }
-        } else if self.team_activity_header.is_none() {
+        } else if self.team_activity_status.is_none() {
             // Hide the status indicator when a task completes, but keep other modal views.
             self.hide_status_indicator();
         }
@@ -1178,7 +1177,7 @@ impl BottomPane {
 
     /// Hide the status indicator while leaving task-running state untouched.
     pub(crate) fn hide_status_indicator(&mut self) {
-        if self.team_activity_header.is_none() && self.status.take().is_some() {
+        if self.team_activity_status.is_none() && self.status.take().is_some() {
             self.request_redraw();
         }
     }
@@ -1209,11 +1208,24 @@ impl BottomPane {
     /// This status is deliberately separate from [`Self::is_task_running`]. A
     /// Lead parked while Workers execute gets an animated row without making
     /// Esc or slash-command gating act as though the Lead owns a turn.
-    pub(crate) fn set_team_activity(&mut self, header: Option<String>, animated: bool) {
-        self.team_activity_header = header;
-        self.team_activity_animated = animated;
-        if self.team_activity_header.is_some() {
+    pub(crate) fn set_team_activity(&mut self, status: Option<TeamActivityStatus>) {
+        if self.team_activity_status == status {
+            return;
+        }
+        let entering_team_activity = self.team_activity_status.is_none() && status.is_some();
+        self.team_activity_status = status;
+        if self.team_activity_status.is_some() {
             self.ensure_status_indicator();
+            if entering_team_activity
+                && !self.is_task_running
+                && let Some(status) = self.status.as_mut()
+            {
+                status.update_details(
+                    None,
+                    StatusDetailsCapitalization::Preserve,
+                    STATUS_DETAILS_DEFAULT_MAX_LINES,
+                );
+            }
         } else if !self.is_task_running {
             self.hide_status_indicator();
         }
@@ -1225,17 +1237,14 @@ impl BottomPane {
         let Some(status) = self.status.as_mut() else {
             return;
         };
-        if let Some(header) = &self.team_activity_header {
-            status.update_header(header.clone());
-            status.update_details(
-                None,
-                StatusDetailsCapitalization::Preserve,
-                STATUS_DETAILS_DEFAULT_MAX_LINES,
-            );
+        if let Some(team_activity) = self.team_activity_status {
+            status.update_header(team_activity.header());
+            status.set_team_activity(Some(team_activity));
             status.set_elapsed_visible(self.is_task_running);
             status.set_interrupt_hint_visible(self.is_task_running);
-            status.set_animations_enabled(self.team_activity_animated && self.animations_enabled);
+            status.set_animations_enabled(team_activity.is_animated() && self.animations_enabled);
         } else {
+            status.set_team_activity(None);
             status.set_elapsed_visible(true);
             status.set_interrupt_hint_visible(self.is_task_running);
             status.set_animations_enabled(self.animations_enabled);

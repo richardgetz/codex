@@ -106,8 +106,32 @@ impl App {
             let _ = self.dynamic_tool_status_updates.send(status.clone());
         }
 
+        let temporary_thread = matches!(
+            server_notification_thread_target(&notification),
+            ServerNotificationThreadTarget::Thread(thread_id)
+                if self.temporary_structured_requests.contains_key(&thread_id)
+        );
+
+        if let ServerNotification::TurnStarted(started) = &notification
+            && let Ok(thread_id) = ThreadId::from_string(&started.thread_id)
+        {
+            self.start_thread_activity(thread_id);
+        }
+
+        if let ServerNotification::ThreadStarted(started) = &notification
+            && !temporary_thread
+            && !started.thread.ephemeral
+        {
+            // Activity notifications intentionally carry no parent edge. Cache the existing
+            // ThreadStarted metadata so the display can distinguish direct Workers from nested
+            // descendants without adding fields to the app-server protocol.
+            self.team_activity.observe_thread_metadata(&started.thread);
+        }
+
         if let ServerNotification::ThreadActivityUpdated(activity) = &notification {
-            self.observe_thread_activity(activity);
+            if !temporary_thread {
+                self.observe_thread_activity(activity);
+            }
             return;
         }
 
@@ -124,8 +148,22 @@ impl App {
         // Hidden helper threads must not enter visible thread routing or overview refreshes.
         if let ServerNotificationThreadTarget::Thread(thread_id) =
             server_notification_thread_target(&notification)
-            && let Some(sender) = self.temporary_structured_requests.get(&thread_id)
+            && let Some(sender) = self.temporary_structured_requests.get(&thread_id).cloned()
         {
+            if matches!(
+                &notification,
+                ServerNotification::Error(error) if !error.will_retry
+            ) || matches!(
+                &notification,
+                ServerNotification::TurnCompleted(_)
+                    | ServerNotification::ThreadClosed(_)
+                    | ServerNotification::ThreadDeleted(_)
+                    | ServerNotification::ThreadArchived(_)
+            ) {
+                // Temporary helper threads are intentionally absent from the visible overview;
+                // still release any stale projection entry before returning from this branch.
+                self.remove_thread_activity(thread_id);
+            }
             if matches!(
                 &notification,
                 ServerNotification::ItemCompleted(_) | ServerNotification::TurnCompleted(_)
@@ -153,6 +191,17 @@ impl App {
                 .or_default();
         }
         self.track_agents_overview_notification(&notification);
+        if let Some(thread_id) = match &notification {
+            ServerNotification::Error(error) if !error.will_retry => {
+                ThreadId::from_string(&error.thread_id).ok()
+            }
+            ServerNotification::TurnCompleted(completed) => {
+                ThreadId::from_string(&completed.thread_id).ok()
+            }
+            _ => None,
+        } {
+            self.finish_thread_activity(thread_id);
+        }
         if let Some(thread_id) = match &notification {
             ServerNotification::ThreadClosed(notification) => {
                 ThreadId::from_string(&notification.thread_id).ok()
