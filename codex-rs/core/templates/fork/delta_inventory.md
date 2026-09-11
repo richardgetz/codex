@@ -168,7 +168,8 @@ release or merge rules.
     retained scheduler and nudges an existing usage wait without a synthetic
     model turn. Activity state is process-local and is not restored after a
     cold resume; completed, cancelled, and manually stopped work is never
-    revived.
+    revived. The MCP `tools/call` runner forwards activity updates as
+    notifications while retaining its existing turn completion semantics.
   - The native TUI renders the selected tree as `Lead: idle|working|waiting ·
     Workers: N working[, M waiting]`; `N` and `M` count unfinished working and
     waiting direct or nested Workers respectively under that root, excluding
@@ -617,4 +618,6 @@ release or merge rules.
   row, counts unfinished direct and nested Workers only within the selected
   root, keeps the title aligned with that projection, animates only actual
   work (and in-flight Pausing), honors reduced-motion settings, and renders
-  the static `Paused · Lead + N workers · /continue to resume` row.
+  the static `Paused · Lead + N workers · /continue to resume` row. Verify
+  `codex-mcp-server` handles `ThreadActivityUpdated` exhaustively, forwards
+  the notification, and continues waiting for real turn completion.
