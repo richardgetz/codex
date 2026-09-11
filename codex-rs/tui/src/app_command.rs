@@ -30,6 +30,8 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) enum AppCommand {
     Interrupt,
+    /// Pause the root Lead/Worker activity scope at a safe boundary.
+    PauseActivity,
     ContinueUsage,
     SetUsageAutoResume {
         enabled: bool,
@@ -135,6 +137,10 @@ impl AppCommand {
 
     pub(crate) fn continue_usage() -> Self {
         Self::ContinueUsage
+    }
+
+    pub(crate) fn pause_activity() -> Self {
+        Self::PauseActivity
     }
 
     pub(crate) fn set_usage_auto_resume(enabled: bool) -> Self {

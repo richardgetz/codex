@@ -134,6 +134,7 @@ impl ChatWidget {
                 auto_resume: usage_auto_resume_enabled,
                 ..Default::default()
             },
+            team_activity_status: None,
             has_chatgpt_account,
             has_codex_backend_auth,
             model_catalog,

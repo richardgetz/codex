@@ -1,0 +1,19 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: popup
+---
+  Lead usage/confidence balance
+  Tune Lead oversight; Worker effort and required checks stay unchanged.
+
+  1. Maximum savings                       Use the fewest practical optional Lead oversight
+                                           checkpoints and reuse existing evidence.
+  2. Usage efficient                       Use targeted Lead oversight where it can prevent likely
+                                           rework.
+› 3. Current behavior (default) (current)  Keep today's discretionary Lead oversight behavior
+                                           unchanged.
+  4. Confidence focused                    Independently check important assumptions and risky
+                                           decisions.
+  5. Maximum confidence                    Examine plausible failure modes and cross-check
+                                           consequential results.
+
+  Press enter to confirm or esc to go back

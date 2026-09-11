@@ -2506,6 +2506,15 @@
     "ThreadTeamSettings": {
       "description": "Effective team state returned in thread settings.",
       "properties": {
+        "leadBalance": {
+          "format": "uint8",
+          "maximum": 5.0,
+          "minimum": 1.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "leadModel": {
           "type": [
             "string",

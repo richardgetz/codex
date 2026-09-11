@@ -227,9 +227,11 @@ fn save_config_resolved_fields(
         let profile_to_toml =
             |profile: &codex_config::TeamModelProfile,
              dynamic_handoff: Option<bool>,
+             balance: Option<u8>,
              oversight_timeout_minutes: Option<u64>| TeamModelProfileToml {
                 model: Some(profile.model.clone()),
                 reasoning_effort: Some(profile.reasoning_effort.clone()),
+                balance,
                 dynamic_handoff,
                 oversight_timeout_minutes,
             };
@@ -246,6 +248,7 @@ fn save_config_resolved_fields(
                 profile_to_toml(
                     &profiles.lead,
                     Some(profiles.lead_dynamic_handoff),
+                    Some(profiles.lead_balance),
                     Some(profiles.lead_oversight_timeout_minutes),
                 )
             }),
@@ -698,6 +701,52 @@ reasoning_effort = "high"
 
         validate_config_lock_replay(&expected, &actual, ConfigLockReplayOptions::default())
             .expect("legacy missing and explicit false dynamic handoff should be equivalent");
+    }
+
+    #[test]
+    fn lock_validation_accepts_legacy_missing_lead_balance() {
+        let expected: ConfigLockfileToml = toml::from_str(&format!(
+            r#"
+version = 1
+codex_version = "{}"
+
+[config.team]
+enabled = true
+
+[config.team.lead]
+model = "gpt-lead"
+reasoning_effort = "high"
+
+[config.team.worker]
+model = "gpt-worker"
+reasoning_effort = "high"
+"#,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .expect("legacy lock without Lead balance should deserialize");
+        let actual: ConfigLockfileToml = toml::from_str(&format!(
+            r#"
+version = 1
+codex_version = "{}"
+
+[config.team]
+enabled = true
+
+[config.team.lead]
+model = "gpt-lead"
+reasoning_effort = "high"
+balance = 3
+
+[config.team.worker]
+model = "gpt-worker"
+reasoning_effort = "high"
+"#,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .expect("lock with explicit default Lead balance should deserialize");
+
+        validate_config_lock_replay(&expected, &actual, ConfigLockReplayOptions::default())
+            .expect("legacy missing and explicit default Lead balance should be equivalent");
     }
 
     #[tokio::test]

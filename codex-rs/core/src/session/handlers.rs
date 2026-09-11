@@ -105,6 +105,55 @@ pub async fn continue_usage(sess: &Arc<Session>, sub_id: String) {
     .await;
 }
 
+pub async fn pause_activity(sess: &Arc<Session>, sub_id: String) {
+    let snapshots = sess
+        .services
+        .agent_control
+        .pause_activity_for_subtree()
+        .await;
+    sess.send_event_raw_without_materializing_rollout(Event {
+        id: sub_id,
+        msg: EventMsg::Warning(WarningEvent {
+            message: format!(
+                "Paused activity for {} loaded thread{}; in-flight operations finish at their cooperative boundary.",
+                snapshots.len(),
+                if snapshots.len() == 1 { "" } else { "s" }
+            ),
+        }),
+    })
+    .await;
+}
+
+pub async fn continue_activity(sess: &Arc<Session>, sub_id: String) {
+    let snapshots = sess
+        .services
+        .agent_control
+        .continue_activity_for_subtree()
+        .await;
+    let usage_waiting = sess
+        .services
+        .agent_control
+        .request_usage_resume_for_subtree(sess.thread_id())
+        .await
+        > 0;
+    let usage_suffix = if usage_waiting {
+        " An immediate usage check was requested for retained usage-paused work."
+    } else {
+        ""
+    };
+    sess.send_event_raw_without_materializing_rollout(Event {
+        id: sub_id,
+        msg: EventMsg::Warning(WarningEvent {
+            message: format!(
+                "Resumed activity for {} loaded thread{}; retained work will use its existing scheduler.{usage_suffix}",
+                snapshots.len(),
+                if snapshots.len() == 1 { "" } else { "s" }
+            ),
+        }),
+    })
+    .await;
+}
+
 pub async fn clean_background_terminals(sess: &Arc<Session>) {
     sess.close_unified_exec_processes().await;
 }
@@ -1507,6 +1556,14 @@ pub(super) async fn submission_loop(
                 }
                 Op::ContinueUsage => {
                     continue_usage(&sess, sub.id.clone()).await;
+                    false
+                }
+                Op::PauseActivity => {
+                    pause_activity(&sess, sub.id.clone()).await;
+                    false
+                }
+                Op::ContinueActivity => {
+                    continue_activity(&sess, sub.id.clone()).await;
                     false
                 }
                 Op::CleanBackgroundTerminals => {

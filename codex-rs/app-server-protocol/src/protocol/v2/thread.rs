@@ -136,6 +136,164 @@ pub struct ThreadUsageResumeParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadUsageResumeResponse {}
 
+/// High-level execution activity for a loaded thread.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadActivity {
+    Idle,
+    Working,
+    Waiting,
+}
+
+/// Why a thread is waiting instead of actively executing.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadActivityWaitReason {
+    Approval,
+    UserInput,
+    UsageLimit,
+    Agents,
+}
+
+/// Process-local manual pause state for a loaded thread.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadPauseState {
+    Running,
+    Pausing,
+    Paused,
+}
+
+/// Request to pause the selected thread's root agent tree.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadActivityPauseParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadActivityPauseResponse {}
+
+/// Request to resume the selected thread's root agent tree.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadActivityContinueParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadActivityContinueResponse {}
+
+/// Request the current process-local activity state for a thread tree.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadActivityReadParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadActivityState {
+    pub thread_id: String,
+    pub root_thread_id: String,
+    pub activity: ThreadActivity,
+    pub pause_state: ThreadPauseState,
+    #[ts(optional = nullable)]
+    pub wait_reason: Option<ThreadActivityWaitReason>,
+    pub in_flight_operations: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadActivityReadResponse {
+    pub activities: Vec<ThreadActivityState>,
+}
+
+/// Ephemeral activity and manual-pause notification for a loaded thread.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadActivityUpdatedNotification {
+    pub thread_id: String,
+    pub root_thread_id: String,
+    pub activity: ThreadActivity,
+    pub pause_state: ThreadPauseState,
+    #[ts(optional = nullable)]
+    pub wait_reason: Option<ThreadActivityWaitReason>,
+    pub in_flight_operations: u32,
+}
+
+impl From<codex_protocol::protocol::ThreadActivity> for ThreadActivity {
+    fn from(value: codex_protocol::protocol::ThreadActivity) -> Self {
+        match value {
+            codex_protocol::protocol::ThreadActivity::Idle => Self::Idle,
+            codex_protocol::protocol::ThreadActivity::Working => Self::Working,
+            codex_protocol::protocol::ThreadActivity::Waiting => Self::Waiting,
+        }
+    }
+}
+
+impl From<codex_protocol::protocol::ThreadActivityWaitReason> for ThreadActivityWaitReason {
+    fn from(value: codex_protocol::protocol::ThreadActivityWaitReason) -> Self {
+        match value {
+            codex_protocol::protocol::ThreadActivityWaitReason::Approval => Self::Approval,
+            codex_protocol::protocol::ThreadActivityWaitReason::UserInput => Self::UserInput,
+            codex_protocol::protocol::ThreadActivityWaitReason::UsageLimit => Self::UsageLimit,
+            codex_protocol::protocol::ThreadActivityWaitReason::Agents => Self::Agents,
+        }
+    }
+}
+
+impl From<codex_protocol::protocol::ThreadPauseState> for ThreadPauseState {
+    fn from(value: codex_protocol::protocol::ThreadPauseState) -> Self {
+        match value {
+            codex_protocol::protocol::ThreadPauseState::Running => Self::Running,
+            codex_protocol::protocol::ThreadPauseState::Pausing => Self::Pausing,
+            codex_protocol::protocol::ThreadPauseState::Paused => Self::Paused,
+        }
+    }
+}
+
+impl From<codex_protocol::protocol::ThreadActivityUpdatedEvent>
+    for ThreadActivityUpdatedNotification
+{
+    fn from(value: codex_protocol::protocol::ThreadActivityUpdatedEvent) -> Self {
+        Self {
+            thread_id: value.thread_id.to_string(),
+            root_thread_id: value.root_thread_id.to_string(),
+            activity: value.activity.into(),
+            pause_state: value.pause_state.into(),
+            wait_reason: value.wait_reason.map(Into::into),
+            in_flight_operations: value.in_flight_operations,
+        }
+    }
+}
+
+impl From<ThreadActivityUpdatedNotification> for ThreadActivityState {
+    fn from(value: ThreadActivityUpdatedNotification) -> Self {
+        Self {
+            thread_id: value.thread_id,
+            root_thread_id: value.root_thread_id,
+            activity: value.activity,
+            pause_state: value.pause_state,
+            wait_reason: value.wait_reason,
+            in_flight_operations: value.in_flight_operations,
+        }
+    }
+}
+
 impl From<ThreadUsagePolicyParams> for ThreadUsagePolicy {
     fn from(value: ThreadUsagePolicyParams) -> Self {
         Self {
@@ -338,9 +496,10 @@ pub struct ThreadStartResponse {
 
 /// Team mode or profile patch accepted by `thread/settings/update`.
 ///
-/// When `role`, `model`, and `reasoning_effort` are supplied, the selected
-/// profile is changed for this thread only. The server preserves the other
-/// profile and the role assignment captured by the thread snapshot.
+/// When `role` and one or more profile fields are supplied, the selected
+/// profile is changed for this thread only. `leadBalance` is Lead-only. The
+/// server preserves the other profile and the role assignment captured by the
+/// thread snapshot.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
@@ -352,6 +511,10 @@ pub struct ThreadTeamSettingsUpdate {
     pub model: Option<String>,
     #[ts(optional = nullable)]
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Sparse Lead-only oversight balance update, from 1 (maximum savings) through 5 (maximum confidence).
+    #[schemars(range(min = 1, max = 5))]
+    #[ts(optional = nullable)]
+    pub lead_balance: Option<u8>,
 }
 
 impl ThreadStartResponse {
@@ -473,6 +636,8 @@ pub struct ThreadTeamSettings {
     pub role: Option<TeamRole>,
     pub lead_model: Option<String>,
     pub lead_reasoning_effort: Option<ReasoningEffort>,
+    #[schemars(range(min = 1, max = 5))]
+    pub lead_balance: Option<u8>,
     pub worker_model: Option<String>,
     pub worker_reasoning_effort: Option<ReasoningEffort>,
     pub previous_model: Option<String>,

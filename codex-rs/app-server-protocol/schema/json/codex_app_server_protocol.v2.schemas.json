@@ -16208,6 +16208,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/activity/updated"
+              ],
+              "title": "Thread/activity/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadActivityUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/activity/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/tokenUsage/updated"
               ],
               "title": "Thread/tokenUsage/updatedNotificationMethod",
@@ -18508,6 +18528,106 @@
       ],
       "type": "string"
     },
+    "ThreadActivity": {
+      "description": "High-level execution activity for a loaded thread.",
+      "enum": [
+        "idle",
+        "working",
+        "waiting"
+      ],
+      "type": "string"
+    },
+    "ThreadActivityState": {
+      "properties": {
+        "activity": {
+          "$ref": "#/definitions/ThreadActivity"
+        },
+        "inFlightOperations": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "pauseState": {
+          "$ref": "#/definitions/ThreadPauseState"
+        },
+        "rootThreadId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "waitReason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadActivityWaitReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "activity",
+        "inFlightOperations",
+        "pauseState",
+        "rootThreadId",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadActivityUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Ephemeral activity and manual-pause notification for a loaded thread.",
+      "properties": {
+        "activity": {
+          "$ref": "#/definitions/ThreadActivity"
+        },
+        "inFlightOperations": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "pauseState": {
+          "$ref": "#/definitions/ThreadPauseState"
+        },
+        "rootThreadId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "waitReason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadActivityWaitReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "activity",
+        "inFlightOperations",
+        "pauseState",
+        "rootThreadId",
+        "threadId"
+      ],
+      "title": "ThreadActivityUpdatedNotification",
+      "type": "object"
+    },
+    "ThreadActivityWaitReason": {
+      "description": "Why a thread is waiting instead of actively executing.",
+      "enum": [
+        "approval",
+        "userInput",
+        "usageLimit",
+        "agents"
+      ],
+      "type": "string"
+    },
     "ThreadApproveGuardianDeniedActionParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -20612,6 +20732,15 @@
       "title": "ThreadOrchestratorMemoryForgetResponse",
       "type": "object"
     },
+    "ThreadPauseState": {
+      "description": "Process-local manual pause state for a loaded thread.",
+      "enum": [
+        "running",
+        "pausing",
+        "paused"
+      ],
+      "type": "string"
+    },
     "ThreadProjectUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -22544,6 +22673,15 @@
     "ThreadTeamSettings": {
       "description": "Effective team state returned in thread settings.",
       "properties": {
+        "leadBalance": {
+          "format": "uint8",
+          "maximum": 5.0,
+          "minimum": 1.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "leadModel": {
           "type": [
             "string",
@@ -22612,8 +22750,18 @@
       "type": "object"
     },
     "ThreadTeamSettingsUpdate": {
-      "description": "Team mode or profile patch accepted by `thread/settings/update`.\n\nWhen `role`, `model`, and `reasoning_effort` are supplied, the selected profile is changed for this thread only. The server preserves the other profile and the role assignment captured by the thread snapshot.",
+      "description": "Team mode or profile patch accepted by `thread/settings/update`.\n\nWhen `role` and one or more profile fields are supplied, the selected profile is changed for this thread only. `leadBalance` is Lead-only. The server preserves the other profile and the role assignment captured by the thread snapshot.",
       "properties": {
+        "leadBalance": {
+          "description": "Sparse Lead-only oversight balance update, from 1 (maximum savings) through 5 (maximum confidence).",
+          "format": "uint8",
+          "maximum": 5.0,
+          "minimum": 1.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "mode": {
           "$ref": "#/definitions/TeamMode"
         },

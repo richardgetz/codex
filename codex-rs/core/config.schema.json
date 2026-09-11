@@ -4525,6 +4525,13 @@
       "additionalProperties": false,
       "description": "A model and reasoning effort read from config.toml.",
       "properties": {
+        "balance": {
+          "description": "Balance between discretionary Lead oversight usage and confidence.",
+          "format": "uint8",
+          "maximum": 5.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
         "dynamic_handoff": {
           "description": "Whether the Lead should make a quick preflight and delegate substantial lookup work to a Worker when filtering bulk material can reduce Lead context.",
           "type": "boolean"
@@ -6172,7 +6179,7 @@
       "properties": {
         "check_interval_minutes": {
           "default": 60,
-          "description": "Minutes between account usage checks when no authoritative reset is available, or when a reset timestamp has proved stale.",
+          "description": "Maximum minutes between account usage checks. A known provider reset is checked sooner when it falls inside this interval.",
           "format": "uint64",
           "maximum": 10080.0,
           "minimum": 1.0,

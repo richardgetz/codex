@@ -191,8 +191,11 @@ Example with notification opt-out:
 - `thread/searchOccurrences` — experimental; find literal, case-insensitive matches in visible user messages and summary-selected final assistant messages within one paginated thread.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; supports updating persisted `gitInfo` fields and experimental `projectId`, then returns the refreshed `thread`. Omit `projectId` to preserve assignment and pass an empty string to clear it.
 - `thread/section/move` — atomically move a thread into the section identified by `sectionId`, before another thread or at the end when `beforeThreadId` is `null`. Reordering within the same section preserves `sectionEnteredAt`; entering a different section resets it. Set `sectionId` to `null` to remove the thread from its section. Returns `{}` on success.
-- `thread/settings/update` — experimental; queue a partial update to a loaded thread’s next-turn settings without starting a turn or adding transcript items. Omitted fields leave settings unchanged; `serviceTier: null` clears the tier; `usagePolicy` is per-thread and defaults to `{ "autoResume": false, "minimumRemainingPercent": null }`; inside `usagePolicy`, omitted fields preserve their current values and `minimumRemainingPercent: null` clears the floor. Set `autoResume: true` to retry resettable provider usage limits after the provider-reported reset, and set `minimumRemainingPercent` to stop harness-generated continuation below that known provider-window floor. Provider usage data is advisory and may be stale; API-equivalent spend remains informational rather than a hard cap. Auto-resume waits only while the rejected turn remains active in the current process; the policy persists for later turns and future resumes. Forks inherit the source thread’s policy. The optional `team` field accepts `{ "mode": "off" | "leadWorker" }` plus an optional `{ "role": "lead" | "worker", "model": string, "reasoningEffort": string }` profile patch. Profile patches are validated against the catalog, retained in the current thread snapshot, and leave the other profile and restoration state untouched; switching off still restores the prior single-model settings. Deprecated `multiAgentMode` is ignored, while Ultra reasoning effort enables proactive multi-agent behavior; `sandboxPolicy` and `permissions` cannot be combined. Parent-owned Multi-Agent V2 subagents reject direct settings updates. Returns `{}` when the update is accepted and emits `thread/settings/updated` with the full effective settings only if they actually change. `turn/start` settings overrides emit the same notification when they change the stored settings.
+- `thread/settings/update` — experimental; queue a partial update to a loaded thread’s next-turn settings without starting a turn or adding transcript items. Omitted fields leave settings unchanged; `serviceTier: null` clears the tier; `usagePolicy` is per-thread and defaults to `{ "autoResume": false, "minimumRemainingPercent": null }`; inside `usagePolicy`, omitted fields preserve their current values and `minimumRemainingPercent: null` clears the floor. Set `autoResume: true` to retry resettable provider usage limits after the provider-reported reset, and set `minimumRemainingPercent` to stop harness-generated continuation below that known provider-window floor. Provider usage data is advisory and may be stale; API-equivalent spend remains informational rather than a hard cap. Auto-resume waits only while the rejected turn remains active in the current process; the policy persists for later turns and future resumes. Forks inherit the source thread’s policy. The optional `team` field accepts `{ "mode": "off" | "leadWorker" }` plus an optional `{ "role": "lead" | "worker", "model": string, "reasoningEffort": string, "leadBalance": 1..5 }` profile patch. `leadBalance` is a sparse Lead-only update; it defaults to 3, is retained in the current thread snapshot, and changes discretionary Lead oversight without changing Worker scope, required checks, approvals, or configured efforts. Profile patches are validated against the catalog, retained in the current thread snapshot, and leave the other profile and restoration state untouched; switching off still restores the prior single-model settings. Deprecated `multiAgentMode` is ignored, while Ultra reasoning effort enables proactive multi-agent behavior; `sandboxPolicy` and `permissions` cannot be combined. Parent-owned Multi-Agent V2 subagents reject direct settings updates. Returns `{}` when the update is accepted and emits `thread/settings/updated` with the full effective settings only if they actually change. `turn/start` settings overrides emit the same notification when they change the stored settings.
 - `thread/usage/resume` — experimental; request an immediate account-usage check for a thread currently parked by reset-aware auto-resume. The request is wake-only: it does not enqueue a user turn or bypass the configured continuation floor. The response is `{}`; the thread emits a warning describing whether a paused check was found, and the normal scheduler remains in charge when the provider still reports exhaustion.
+- `thread/activity/pause` — experimental; cooperatively pause the selected thread's Lead tree, including every currently loaded ThreadSpawn descendant. When the selected thread is a Worker, its Lead root is used. The response is `{}`; model and tool work admitted after the pause waits at its next boundary, while already-running operations may finish. This process-local state does not cancel, suspend, or replay external commands and is not restored by a cold resume.
+- `thread/activity/continue` — experimental; release the selected Lead tree's cooperative pause and wake retained work through its existing scheduler. It also requests an immediate usage check for any retained usage wait. The response is `{}` and no synthetic model turn is created.
+- `thread/activity/read` — experimental; return the current process-local activity snapshot for the selected Lead tree. Each `activities` entry identifies a thread, its `activity` (`idle`, `working`, or `waiting`), `pauseState` (`running`, `pausing`, or `paused`), optional `waitReason`, and `inFlightOperations` count. Completed, cancelled, and manually stopped threads are not revived by this read or by continue.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
 - `thread/goal/set` — create or update the single persisted goal for a materialized thread; returns the current goal and emits `thread/goal/updated`. Parent-owned Multi-Agent V2 subagents reject goal updates, including while unloaded.
@@ -506,6 +509,10 @@ enabled = false
 [team.lead]
 model = "gpt-6-astra"
 reasoning_effort = "high"
+# Optional: Lead-only discretionary oversight balance, 1..5 (default 3).
+balance = 2
+# Optional: let the Lead delegate substantial bulk lookups for filtering.
+dynamic_handoff = true
 
 [team.worker]
 model = "gpt-5.6-luna"
@@ -536,8 +543,9 @@ and the model restored by `off` come from the server's thread state.
     "threadId": "thr_123",
     "threadSettings": { "model": "gpt-6-astra", "effort": "high", "team": {
         "mode": "leadWorker", "role": "lead", "leadModel": "gpt-6-astra",
-        "leadReasoningEffort": "high", "workerModel": "gpt-5.6-luna",
-        "workerReasoningEffort": "max", "previousModel": "gpt-5.4"
+        "leadReasoningEffort": "high", "leadBalance": 2,
+        "workerModel": "gpt-5.6-luna", "workerReasoningEffort": "max",
+        "previousModel": "gpt-5.4"
     } }
 } }
 ```
@@ -552,8 +560,10 @@ before the thread entered team mode:
 } }
 ```
 
-In the TUI, the equivalent commands are `/team on`, `/team off`, and
-`/team status`.
+In the TUI, the equivalent commands are `/team on`, `/team off`, `/team status`,
+and `/team balance` (or `/team balance 1..5`). The balance picker changes only
+the current Lead session snapshot; level 3 is the exact current behavior. The
+balance is advisory and makes no hard token-savings or correctness guarantee.
 
 Thread start, resume, and fork responses expose the effective `team` state,
 and `thread/settings/updated` includes it in the full settings snapshot. New
@@ -1839,6 +1849,14 @@ Each realtime item has an `id`, a `realtimeSessionId`, and one of four types: `r
 Recoverable configuration and initialization warnings use the existing `configWarning` notification: `{ summary, details?, path?, range? }`. App-server may emit it during initialization for config parsing and related setup diagnostics, or to the requesting connection during `thread/start` when that thread's exec-policy rules fail to parse.
 
 Generic runtime warnings use the `warning` notification: `{ threadId?, message }`. App-server emits this for non-fatal warnings from the core event stream, including cases where not all enabled skills are included in the model-visible skills list for a session.
+
+The ephemeral `thread/activity/updated` notification reports the current
+process-local activity state for one loaded thread: `threadId`,
+`rootThreadId`, `activity` (`idle`, `working`, or `waiting`), `pauseState`
+(`running`, `pausing`, or `paused`), optional `waitReason`, and
+`inFlightOperations`. It is emitted when a pause boundary, resume, or admitted
+operation changes state. Clients should call `thread/activity/read` after a
+reconnect because this notification is not replayed from rollout history.
 
 ### Notification opt-out
 

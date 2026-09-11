@@ -1099,6 +1099,7 @@ async fn thread_resume_explicit_model_and_effort_overrides_win_over_off_team_sna
         role: Some(TeamRole::Lead),
         lead_model: Some("gpt-6-astra".to_string()),
         lead_reasoning_effort: Some(ReasoningEffort::High),
+        lead_balance: Some(codex_config::DEFAULT_TEAM_LEAD_BALANCE),
         worker_model: Some("gpt-5.6-luna".to_string()),
         worker_reasoning_effort: Some(ReasoningEffort::Max),
         previous_model: None,

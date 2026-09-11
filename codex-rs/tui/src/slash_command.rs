@@ -61,6 +61,7 @@ pub enum SlashCommand {
     #[strum(to_string = "pwd", serialize = "cwd")]
     Pwd,
     Usage,
+    Pause,
     Continue,
     DebugConfig,
     Title,
@@ -145,7 +146,10 @@ impl SlashCommand {
             SlashCommand::Cd => "change the current working directory",
             SlashCommand::Pwd => "show the current working directory",
             SlashCommand::Usage => "view account usage or configure reset-aware automatic resume",
-            SlashCommand::Continue => "wake a paused usage-limit check and retry now",
+            SlashCommand::Pause => "pause this Lead/Worker session after in-flight work drains",
+            SlashCommand::Continue => {
+                "resume paused Lead/Worker activity and retry a usage-limit check"
+            }
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
@@ -274,6 +278,7 @@ impl SlashCommand {
                 | SlashCommand::Spend
                 | SlashCommand::Pwd
                 | SlashCommand::Usage
+                | SlashCommand::Pause
                 | SlashCommand::Continue
                 | SlashCommand::Ide
         )
@@ -323,6 +328,7 @@ impl SlashCommand {
             | SlashCommand::Voice
             | SlashCommand::Pwd
             | SlashCommand::Usage
+            | SlashCommand::Pause
             | SlashCommand::Continue
             | SlashCommand::DebugConfig
             | SlashCommand::Ps

@@ -199,6 +199,7 @@ impl App {
             .agent_navigation
             .active_agent_label(self.current_displayed_thread_id(), self.primary_thread_id);
         self.chat_widget.set_active_agent_label(label);
+        self.sync_team_activity_status();
         self.sync_side_thread_ui();
     }
 
@@ -441,7 +442,9 @@ impl App {
 
     pub(super) fn thread_id_for_active_op(&self, op: &AppCommand) -> Option<ThreadId> {
         match op {
-            AppCommand::Interrupt | AppCommand::ContinueUsage => self.current_displayed_thread_id(),
+            AppCommand::Interrupt | AppCommand::PauseActivity | AppCommand::ContinueUsage => {
+                self.current_displayed_thread_id()
+            }
             _ => self.active_thread_id,
         }
     }
@@ -597,6 +600,10 @@ impl App {
         op: &AppCommand,
     ) -> Result<bool> {
         match op {
+            AppCommand::PauseActivity => {
+                app_server.thread_activity_pause(thread_id).await?;
+                Ok(true)
+            }
             AppCommand::Interrupt => {
                 let mut turn_id = self
                     .active_turn_id_for_thread(thread_id)
@@ -668,7 +675,10 @@ impl App {
                 Ok(true)
             }
             AppCommand::ContinueUsage => {
-                app_server.thread_usage_resume(thread_id).await?;
+                // The activity continuation also wakes retained usage-limit work. Keeping this
+                // as one request avoids racing two root-scoped wakeups when `/continue` is used
+                // from a Lead or Worker view.
+                app_server.thread_activity_continue(thread_id).await?;
                 Ok(true)
             }
             AppCommand::SetUsageAutoResume { enabled } => {
@@ -1387,6 +1397,7 @@ impl App {
             self.recap.reset_for_new_thread(Instant::now());
         }
         self.primary_thread_id = Some(thread_id);
+        self.sync_team_activity_status();
         self.agents_overview.threads.entry(thread_id).or_default();
         self.primary_session_configured = Some(session.clone());
         self.upsert_agent_picker_thread(

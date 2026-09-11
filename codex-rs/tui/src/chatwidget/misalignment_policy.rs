@@ -15,6 +15,8 @@ impl ChatWidget {
             && !matches!(
                 op,
                 AppCommand::Interrupt
+                    | AppCommand::PauseActivity
+                    | AppCommand::ContinueUsage
                     | AppCommand::CleanBackgroundTerminals
                     | AppCommand::OverrideTurnContext { .. }
                     | AppCommand::ReloadUserConfig

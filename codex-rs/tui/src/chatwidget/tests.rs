@@ -269,6 +269,8 @@ mod slash_commands;
 mod status_and_layout;
 mod status_command_tests;
 mod status_surface_previews;
+#[path = "tests/team_activity_tests.rs"]
+mod team_activity;
 mod terminal_title;
 mod usage;
 

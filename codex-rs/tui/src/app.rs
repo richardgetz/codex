@@ -255,6 +255,7 @@ mod session_lifecycle;
 mod side;
 mod startup;
 mod startup_prompts;
+mod team_activity;
 mod thread_event_buffer;
 mod thread_events;
 mod thread_goal_actions;
@@ -656,6 +657,7 @@ pub(crate) struct App {
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
     agents_overview: agents_overview::AgentsOverviewState,
+    team_activity: team_activity::TeamActivityProjection,
     side_threads: HashMap<ThreadId, SideThreadState>,
     abandoned_side_threads: HashSet<ThreadId>,
     active_thread_id: Option<ThreadId>,

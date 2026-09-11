@@ -251,6 +251,7 @@ use codex_protocol::exec_output::StreamOutput;
 
 mod capacity_retry;
 pub(crate) use capacity_retry::wait_for_active_turn_model_capacity_retry;
+mod activity;
 mod code_mode_warning;
 mod config_lock;
 pub(crate) mod context_window;
@@ -3482,6 +3483,14 @@ impl Session {
         self.send_event_raw_with_persistence(event, persist).await;
     }
 
+    /// Deliver a process-local event without writing it to rollout history or the thread trace.
+    ///
+    /// Activity and manual-pause state is reconstructed from the live session on reconnect, so
+    /// persisting these snapshots would make a later resume appear stale.
+    pub(crate) async fn send_event_raw_ephemeral(&self, event: Event) {
+        self.deliver_event_raw(event).await;
+    }
+
     async fn send_event_raw_with_persistence(&self, event: Event, persist: bool) {
         // Keep realtime reduction, canonical append, and delivery in the same order.
         // This lock must not acquire SessionState or ActiveTurn: event producers can
@@ -4136,6 +4145,7 @@ impl Session {
                 warn!("No pending user input found for sub_id: {sub_id}");
             }
         }
+        self.publish_activity_state().await;
     }
 
     #[expect(
@@ -4189,6 +4199,7 @@ impl Session {
                 warn!("No pending request_permissions found for call_id: {call_id}");
             }
         }
+        self.publish_activity_state().await;
     }
 
     fn normalize_request_permissions_response(
@@ -4312,6 +4323,7 @@ impl Session {
                 warn!("No pending dynamic tool call found for call_id: {call_id}");
             }
         }
+        self.publish_activity_state().await;
     }
 
     #[expect(
@@ -4337,6 +4349,7 @@ impl Session {
                 warn!("No pending approval found for call_id: {approval_id}");
             }
         }
+        self.publish_activity_state().await;
     }
 
     pub(crate) fn response_item_create_time() -> serde_json::Number {

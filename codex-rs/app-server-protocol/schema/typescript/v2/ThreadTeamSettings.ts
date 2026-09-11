@@ -8,4 +8,4 @@ import type { TeamRole } from "../TeamRole";
 /**
  * Effective team state returned in thread settings.
  */
-export type ThreadTeamSettings = { mode: TeamMode, role: TeamRole | null, leadModel: string | null, leadReasoningEffort: ReasoningEffort | null, workerModel: string | null, workerReasoningEffort: ReasoningEffort | null, previousModel: string | null, previousReasoningEffort: ReasoningEffort | null, };
+export type ThreadTeamSettings = { mode: TeamMode, role: TeamRole | null, leadModel: string | null, leadReasoningEffort: ReasoningEffort | null, leadBalance: number | null, workerModel: string | null, workerReasoningEffort: ReasoningEffort | null, previousModel: string | null, previousReasoningEffort: ReasoningEffort | null, };

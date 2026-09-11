@@ -58,3 +58,29 @@ fn dynamic_handoff_updates_lead_and_worker_guidance() {
         .expect("disabling team policy should replace retained instructions");
     assert!(!fragment.body().contains("Dynamic lookup handoff"));
 }
+
+#[test]
+fn lead_balance_updates_lead_guidance_but_not_worker_guidance() {
+    let default_lead = TeamPolicyState::new(TeamRole::Lead, None);
+    let default_snapshot = default_lead.snapshot();
+    let focused_lead = TeamPolicyState::new(TeamRole::Lead, None).with_lead_balance(4);
+    let fragment = focused_lead
+        .render_diff(PreviousSectionState::Known(&default_snapshot))
+        .expect("Lead balance should update Lead instructions");
+    assert!(fragment.body().contains("Confidence focused"));
+
+    let worker = TeamPolicyState::new(TeamRole::Worker, None).with_lead_balance(5);
+    let fragment = worker
+        .render_diff(PreviousSectionState::Absent)
+        .expect("Worker instructions should be rendered");
+    assert!(!fragment.body().contains("Lead usage/confidence balance"));
+
+    let worker_snapshot = worker.snapshot();
+    let default_worker = TeamPolicyState::new(TeamRole::Worker, None);
+    assert!(
+        default_worker
+            .render_diff(PreviousSectionState::Known(&worker_snapshot))
+            .is_none(),
+        "Lead-only balance changes must not refresh Worker context"
+    );
+}

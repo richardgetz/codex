@@ -106,6 +106,11 @@ impl App {
             let _ = self.dynamic_tool_status_updates.send(status.clone());
         }
 
+        if let ServerNotification::ThreadActivityUpdated(activity) = &notification {
+            self.observe_thread_activity(activity);
+            return;
+        }
+
         if let ServerNotification::ThreadStarted(started) = &notification
             && started.thread.ephemeral
             && matches!(
@@ -148,6 +153,20 @@ impl App {
                 .or_default();
         }
         self.track_agents_overview_notification(&notification);
+        if let Some(thread_id) = match &notification {
+            ServerNotification::ThreadClosed(notification) => {
+                ThreadId::from_string(&notification.thread_id).ok()
+            }
+            ServerNotification::ThreadDeleted(notification) => {
+                ThreadId::from_string(&notification.thread_id).ok()
+            }
+            ServerNotification::ThreadArchived(notification) => {
+                ThreadId::from_string(&notification.thread_id).ok()
+            }
+            _ => None,
+        } {
+            self.remove_thread_activity(thread_id);
+        }
         if matches!(
             &notification,
             ServerNotification::ThreadStarted(_)

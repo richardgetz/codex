@@ -12,6 +12,7 @@ pub(crate) fn team_settings_from_core(
         role: settings.role,
         lead_model: settings.lead_model,
         lead_reasoning_effort: settings.lead_reasoning_effort,
+        lead_balance: settings.lead_balance,
         worker_model: settings.worker_model,
         worker_reasoning_effort: settings.worker_reasoning_effort,
         previous_model: settings.previous_model,
@@ -31,6 +32,7 @@ pub(crate) fn team_settings_update_to_core(
         role: update.role,
         model: update.model,
         reasoning_effort: update.reasoning_effort,
+        lead_balance: update.lead_balance,
     }
 }
 
@@ -48,6 +50,7 @@ mod tests {
             role: Some(TeamRole::Worker),
             model: Some("gpt-5.6-sol".to_string()),
             reasoning_effort: Some(ReasoningEffort::High),
+            lead_balance: None,
         };
         assert_eq!(
             team_settings_update_to_core(update),
@@ -56,6 +59,7 @@ mod tests {
                 role: Some(codex_protocol::protocol::TeamRole::Worker),
                 model: Some("gpt-5.6-sol".to_string()),
                 reasoning_effort: Some(ReasoningEffort::High),
+                lead_balance: None,
             }
         );
     }

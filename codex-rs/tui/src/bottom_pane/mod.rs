@@ -209,6 +209,7 @@ pub(crate) use chat_composer::InputResult;
 pub(crate) use chat_composer::QueuedInputAction;
 pub(crate) use chat_composer_history::HistoryEntry;
 
+use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use experimental_features_view::ExperimentalFeatureItem;
@@ -253,6 +254,12 @@ pub(crate) struct BottomPane {
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
+    /// Session-wide Lead/Worker activity shown independently of the local task flag.
+    ///
+    /// A parked Lead must still show active Workers, while the local task flag
+    /// remains false so input and interrupt routing keep their existing meaning.
+    team_activity_header: Option<String>,
+    team_activity_animated: bool,
     /// Running-hook summary supplied by the lifecycle owner after its reveal delay.
     hook_status_message: Option<String>,
     inline_banner: Option<actionable_banner::InlineBanner>,
@@ -329,6 +336,8 @@ impl BottomPane {
             is_task_running: false,
             slash_command_task_running: false,
             status: None,
+            team_activity_header: None,
+            team_activity_animated: false,
             hook_status_message: None,
             inline_banner: None,
             status_timer: crate::status_indicator_widget::StatusTimer::default(),
@@ -1049,9 +1058,13 @@ impl BottomPane {
         details_capitalization: StatusDetailsCapitalization,
         details_max_lines: usize,
     ) -> bool {
-        if let Some(status) = self.status.as_mut() {
-            status.update_header(header);
-            status.update_details(details, details_capitalization, details_max_lines.max(1));
+        if self.status.is_some() {
+            {
+                let status = self.status.as_mut().expect("status checked above");
+                status.update_header(header);
+                status.update_details(details, details_capitalization, details_max_lines.max(1));
+            }
+            self.sync_team_activity_indicator();
             self.request_redraw();
             return true;
         }
@@ -1151,10 +1164,11 @@ impl BottomPane {
                 self.sync_status_inline_message();
                 self.request_redraw();
             }
-        } else {
+        } else if self.team_activity_header.is_none() {
             // Hide the status indicator when a task completes, but keep other modal views.
             self.hide_status_indicator();
         }
+        self.sync_team_activity_indicator();
     }
 
     pub(crate) fn set_slash_command_task_running(&mut self, running: bool) {
@@ -1164,7 +1178,7 @@ impl BottomPane {
 
     /// Hide the status indicator while leaving task-running state untouched.
     pub(crate) fn hide_status_indicator(&mut self) {
-        if self.status.take().is_some() {
+        if self.team_activity_header.is_none() && self.status.take().is_some() {
             self.request_redraw();
         }
     }
@@ -1185,7 +1199,46 @@ impl BottomPane {
                 );
             }
             self.sync_status_inline_message();
+            self.sync_team_activity_indicator();
             self.request_redraw();
+        }
+    }
+
+    /// Set the session-wide Lead/Worker activity row.
+    ///
+    /// This status is deliberately separate from [`Self::is_task_running`]. A
+    /// Lead parked while Workers execute gets an animated row without making
+    /// Esc or slash-command gating act as though the Lead owns a turn.
+    pub(crate) fn set_team_activity(&mut self, header: Option<String>, animated: bool) {
+        self.team_activity_header = header;
+        self.team_activity_animated = animated;
+        if self.team_activity_header.is_some() {
+            self.ensure_status_indicator();
+        } else if !self.is_task_running {
+            self.hide_status_indicator();
+        }
+        self.sync_team_activity_indicator();
+        self.request_redraw();
+    }
+
+    fn sync_team_activity_indicator(&mut self) {
+        let Some(status) = self.status.as_mut() else {
+            return;
+        };
+        if let Some(header) = &self.team_activity_header {
+            status.update_header(header.clone());
+            status.update_details(
+                None,
+                StatusDetailsCapitalization::Preserve,
+                STATUS_DETAILS_DEFAULT_MAX_LINES,
+            );
+            status.set_elapsed_visible(self.is_task_running);
+            status.set_interrupt_hint_visible(self.is_task_running);
+            status.set_animations_enabled(self.team_activity_animated && self.animations_enabled);
+        } else {
+            status.set_elapsed_visible(true);
+            status.set_interrupt_hint_visible(self.is_task_running);
+            status.set_animations_enabled(self.animations_enabled);
         }
     }
 

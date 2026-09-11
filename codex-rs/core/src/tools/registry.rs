@@ -51,11 +51,49 @@ pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
 pub use codex_tools::ToolExecutor;
 pub use codex_tools::ToolExposure;
 
+/// Describes whether a tool runtime occupies the thread's execution activity while it runs.
+///
+/// Wait and approval runtimes remain quiescent so a paused thread can report the retained wait
+/// instead of pretending that it is still executing. Runtimes that perform actual side effects
+/// or external work retain the default execution classification.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ToolActivityKind {
+    Execution,
+    Quiescent,
+}
+
 /// Typed runtime contract for locally executed tools.
 ///
 /// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
+    /// Returns whether dispatch should contribute to the session's in-flight activity count.
+    fn activity_operation_kind(&self) -> ToolActivityKind {
+        let tool_name = self.tool_name();
+        if self.mcp_server_name().is_some()
+            || matches!(
+                tool_name.name.as_str(),
+                "apply_patch"
+                    | "code_mode_wait"
+                    | "exec_command"
+                    | "exec"
+                    | "shell"
+                    | "shell_command"
+                    | "request_permissions"
+                    | "request_user_input"
+                    | "request_user_input_async"
+                    | "sleep"
+                    | "wait_agent"
+                    | "wait_for_environment"
+                    | "wait"
+            )
+        {
+            ToolActivityKind::Quiescent
+        } else {
+            ToolActivityKind::Execution
+        }
+    }
+
     /// Whether this built-in control tool needs a structured tool-call event.
     fn is_builtin_control_tool(&self) -> bool {
         false

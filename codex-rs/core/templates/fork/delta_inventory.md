@@ -31,6 +31,16 @@ release or merge rules.
     to Workers spawned afterward while in-flight Workers stay pinned. Re-enabling
     Team mode while a Lead is parked with direct Workers starts a fresh oversight
     interval after the assignment is published.
+  - `[team.lead].balance` defaults to `3` and accepts only `1..5`. `/team balance`
+    opens a five-choice Lead usage/confidence picker and `/team balance 1..5`
+    accepts a typed selection. The value is a session snapshot override that
+    survives resume/fork and does not mutate global config or Team On/Off state.
+    It changes only discretionary Lead oversight; level `3` preserves today's
+    behavior exactly, while Workers retain full scope, completeness, required
+    checks, approvals, and configured efforts.
+    This advisory control makes no hard token-savings or correctness guarantee.
+    It remains independent of `dynamic_handoff`, leaves
+    `oversight_timeout_minutes` unchanged, and adds no polling loop.
   - Root sessions use Lead and delegated ThreadSpawn/review sessions use
     Worker; model and effort overrides cannot promote or bypass that assignment.
   - Routing enforces the selected catalog model and effort. It does not provide
@@ -128,16 +138,46 @@ release or merge rules.
     and a validated 1-minute-to-7-day fallback interval. `/usage auto-resume
     on|off|status` changes or reports the displayed thread policy; a root
     change propagates to loaded ThreadSpawn descendants and future children,
-    while a Worker change remains scoped to that Worker. `/continue` wakes an
-    existing usage wait in the selected thread subtree without creating a
-    model turn. Floor-paused automatic work uses the same scheduler; completed,
-    cancelled, and manually stopped work is never revived.
+    while a Worker change remains scoped to that Worker. Native `/continue` and
+    `thread/activity/continue` resolve a viewed Worker to its Lead root, release
+    that activity tree, and wake existing usage waits without creating a model
+    turn. The usage-only `thread/usage/resume` request remains wake-only for
+    the requested thread's loaded usage subtree and does not release a manual
+    activity pause. Floor-paused automatic work uses the same scheduler;
+    completed, cancelled, and manually stopped work is never revived.
   - The policy is preserved through resume, copied/reference/paginated forks,
     Last-N forks, and spawned subthreads. The persisted policy survives a cold
     resume, but an in-flight reset wait is process-local.
   - A hard API-equivalent dollar cap is not enforced because ordinary provider
     responses do not expose authoritative spend limits; local spend estimates
     remain informational.
+
+- Session-scoped cooperative activity pause:
+  - `/pause` and `/continue` pause or release the current Lead tree, including
+    loaded direct and nested ThreadSpawn Workers; a viewed Worker resolves to
+    its Lead root. New children reconcile the root state before admitting work.
+  - The process-local pause gates future model/tool starts, usage-reset wakeups,
+    and Lead oversight deadlines. Already-admitted side-effectful operations
+    may finish at a cooperative boundary; external subprocesses or remote jobs
+    are not suspended or replayed. Waiting for approval, user input, usage, or
+    another agent is quiescent and reports `paused`.
+  - App-server v2 exposes `thread/activity/pause`,
+    `thread/activity/continue`, `thread/activity/read`, and the ephemeral
+    `thread/activity/updated` notification with structured activity, pause
+    state, wait reason, and in-flight operation count. Continue releases the
+    retained scheduler and nudges an existing usage wait without a synthetic
+    model turn. Activity state is process-local and is not restored after a
+    cold resume; completed, cancelled, and manually stopped work is never
+    revived.
+  - The native TUI renders the selected tree as `Lead: idle|working|waiting ·
+    Workers: N working[, M waiting]`; `N` and `M` count unfinished working and
+    waiting direct or nested Workers respectively under that root, excluding
+    completed, closed, and unrelated roots. The same event-driven projection
+    drives the terminal title. Working Lead/Workers animate, approval/user-input/
+    usage/agent waits remain static, `Pausing` animates while aggregate in-flight
+    operations drain, and `Paused · Lead + N workers · /continue to resume` is
+    static, with `N` equal to the total unfinished Workers. Reduced-motion
+    settings disable animation; no polling is added.
 
 - Recursive per-response usage accounting:
   - App-server v2 sends the legacy context-window counters through
@@ -455,6 +495,14 @@ release or merge rules.
   supported catalog pairs, Team Off remains unchanged during profile edits,
   updated profiles apply to newly spawned Workers, and in-flight Workers stay
   pinned to their captured profile.
+- Verify `[team.lead].balance` defaults to `3`, accepts only `1..5`, rejects
+  Worker updates, and persists through session snapshots, resume, and fork.
+  Verify `/team balance` renders all five approved labels and typed values,
+  preserves Team Off and global config, keeps level `3` byte-for-byte at the
+  current behavior, and changes only discretionary Lead oversight guidance;
+  Worker scope, required checks, approvals, and configured efforts remain
+  unchanged. Verify balance remains independent of `dynamic_handoff`, leaves
+  `oversight_timeout_minutes` unchanged, and adds no polling loop.
 - Verify `[team.lead].dynamic_handoff` defaults to `false`, is accepted under
   `[team.lead]`, injects bounded role-specific Lead/Worker guidance when true,
   keeps small or Lead-context-heavy lookups direct, requests concise selected
@@ -558,3 +606,15 @@ release or merge rules.
   configured continuation floor. Verify the TUI default and interval bounds,
   known-reset scheduling, hourly fallback account refresh, floor-paused work,
   `/continue` wake/report behavior, and cancellation/manual-stop preservation.
+- Verify `/pause` and `/continue` affect only the selected Lead tree, reconcile
+  newly loaded descendants, gate future model/tool starts and automatic Lead or
+  usage wakes, preserve retained work without synthetic turns, and report
+  running/pausing/paused separately from idle/working/waiting activity. Confirm
+  already-launched external commands are neither suspended nor replayed and
+  process-local activity is reconstructed through `thread/activity/read` after
+  reconnect rather than cold-resume persistence. Verify the TUI uses the
+  event-driven `Lead: idle|working|waiting · Workers: N working[, M waiting]`
+  row, counts unfinished direct and nested Workers only within the selected
+  root, keeps the title aligned with that projection, animates only actual
+  work (and in-flight Pausing), honors reduced-motion settings, and renders
+  the static `Paused · Lead + N workers · /continue to resume` row.

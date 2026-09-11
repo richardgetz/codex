@@ -58,6 +58,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::StrictReviewRequiredNotification;
+use codex_app_server_protocol::ThreadActivityUpdatedNotification;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
@@ -1371,6 +1372,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                     ))
                     .await;
             }
+        }
+        EventMsg::ThreadActivityUpdated(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::ThreadActivityUpdated(
+                    ThreadActivityUpdatedNotification::from(event),
+                ))
+                .await;
         }
         EventMsg::TurnDiff(turn_diff_event) => {
             handle_turn_diff(conversation_id, &event_turn_id, turn_diff_event, &outgoing).await;

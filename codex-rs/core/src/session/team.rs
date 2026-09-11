@@ -5,6 +5,8 @@ use crate::context::world_state::TeamPolicyState;
 use crate::session::session::SessionConfiguration;
 use crate::session::step_settings::StepSettingsUpdate;
 use crate::thread_manager::ThreadSettingsOverrideFlags;
+use codex_config::MAX_TEAM_LEAD_BALANCE;
+use codex_config::MIN_TEAM_LEAD_BALANCE;
 use codex_config::TeamRole as ConfigTeamRole;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
@@ -177,7 +179,20 @@ pub(crate) fn world_state_policy(
             .effective_team_profiles()
             .is_some_and(|profiles| profiles.lead_dynamic_handoff);
         protocol_role_for_session_source(config, source).map(|role| {
-            TeamPolicyState::new(role, worker_max_concurrent).with_dynamic_handoff(dynamic_handoff)
+            let lead_balance = if role == TeamRole::Lead {
+                {
+                    config
+                        .effective_team_profiles()
+                        .map_or(codex_config::DEFAULT_TEAM_LEAD_BALANCE, |profiles| {
+                            profiles.lead_balance
+                        })
+                }
+            } else {
+                codex_config::DEFAULT_TEAM_LEAD_BALANCE
+            };
+            TeamPolicyState::new(role, worker_max_concurrent)
+                .with_dynamic_handoff(dynamic_handoff)
+                .with_lead_balance(lead_balance)
         })
     } else if config.team_state_persisted {
         Some(TeamPolicyState::disabled())
@@ -217,7 +232,10 @@ fn invalid_team(candidate: impl Into<String>) -> ConstraintError {
 }
 
 pub(crate) fn team_update_changes_profile(update: &ThreadTeamSettingsUpdate) -> bool {
-    update.role.is_some() || update.model.is_some() || update.reasoning_effort.is_some()
+    update.role.is_some()
+        || update.model.is_some()
+        || update.reasoning_effort.is_some()
+        || update.lead_balance.is_some()
 }
 
 /// Applies a sparse profile patch to a cloned config before it is validated or
@@ -233,9 +251,10 @@ pub(crate) fn apply_team_profile_update(
     let role = update
         .role
         .ok_or_else(|| invalid_team("profile role is required when updating a team profile"))?;
-    if update.model.is_none() && update.reasoning_effort.is_none() {
+    if update.model.is_none() && update.reasoning_effort.is_none() && update.lead_balance.is_none()
+    {
         return Err(invalid_team(
-            "a team profile update must include a model or reasoning effort",
+            "a team profile update must include a model, reasoning effort, or Lead balance",
         ));
     }
     let mut profiles = config
@@ -246,6 +265,18 @@ pub(crate) fn apply_team_profile_update(
         TeamRole::Lead => &mut profiles.lead,
         TeamRole::Worker => &mut profiles.worker,
     };
+    if update.lead_balance.is_some() && role != TeamRole::Lead {
+        return Err(invalid_team(
+            "Lead balance can only be updated for the Lead profile",
+        ));
+    }
+    if let Some(balance) = update.lead_balance
+        && !(MIN_TEAM_LEAD_BALANCE..=MAX_TEAM_LEAD_BALANCE).contains(&balance)
+    {
+        return Err(invalid_team(format!(
+            "Lead balance must be between {MIN_TEAM_LEAD_BALANCE} and {MAX_TEAM_LEAD_BALANCE}"
+        )));
+    }
     if let Some(model) = update.model.as_ref() {
         let model = model.trim();
         if model.is_empty() {
@@ -257,6 +288,9 @@ pub(crate) fn apply_team_profile_update(
     }
     if let Some(reasoning_effort) = update.reasoning_effort.clone() {
         profile.reasoning_effort = reasoning_effort;
+    }
+    if let Some(balance) = update.lead_balance {
+        profiles.lead_balance = balance;
     }
     config.team_runtime_profiles = Some(profiles);
     Ok(())

@@ -934,11 +934,15 @@ impl ChatWidget {
 
     /// Computes the compact runtime status label used by word-based status items.
     ///
-    /// Startup takes precedence over normal task states, and idle state renders
-    /// as `Ready` regardless of the last active status bucket.
+    /// Startup takes precedence over normal task states. A visible team projection takes
+    /// precedence over the local Lead status so parked Leads still expose Worker activity;
+    /// otherwise idle state renders as `Ready` regardless of the last active status bucket.
     pub(super) fn run_state_status_text(&self) -> String {
         if self.mcp_startup_status.is_some() {
             return "Starting".to_string();
+        }
+        if let Some(team_activity) = self.team_activity_status {
+            return team_activity.header();
         }
 
         match self.status_state.terminal_title_status_kind {
@@ -998,6 +1002,9 @@ impl ChatWidget {
 
         self.mcp_startup_status.is_some()
             || self.bottom_pane.is_task_running()
+            || self
+                .team_activity_status
+                .is_some_and(TeamActivityStatus::is_animated)
             || self.status_state.terminal_title_status_kind == TerminalTitleStatusKind::Undoing
     }
 

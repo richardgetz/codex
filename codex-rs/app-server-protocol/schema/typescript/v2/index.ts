@@ -464,6 +464,10 @@ export type { TextPosition } from "./TextPosition";
 export type { TextRange } from "./TextRange";
 export type { Thread } from "./Thread";
 export type { ThreadActiveFlag } from "./ThreadActiveFlag";
+export type { ThreadActivity } from "./ThreadActivity";
+export type { ThreadActivityState } from "./ThreadActivityState";
+export type { ThreadActivityUpdatedNotification } from "./ThreadActivityUpdatedNotification";
+export type { ThreadActivityWaitReason } from "./ThreadActivityWaitReason";
 export type { ThreadApproveGuardianDeniedActionParams } from "./ThreadApproveGuardianDeniedActionParams";
 export type { ThreadApproveGuardianDeniedActionResponse } from "./ThreadApproveGuardianDeniedActionResponse";
 export type { ThreadArchiveParams } from "./ThreadArchiveParams";
@@ -519,6 +523,7 @@ export type { ThreadOrchestratorMemoryConsolidateParams } from "./ThreadOrchestr
 export type { ThreadOrchestratorMemoryConsolidateResponse } from "./ThreadOrchestratorMemoryConsolidateResponse";
 export type { ThreadOrchestratorMemoryForgetParams } from "./ThreadOrchestratorMemoryForgetParams";
 export type { ThreadOrchestratorMemoryForgetResponse } from "./ThreadOrchestratorMemoryForgetResponse";
+export type { ThreadPauseState } from "./ThreadPauseState";
 export type { ThreadProjectUpdatedNotification } from "./ThreadProjectUpdatedNotification";
 export type { ThreadQueueChangedNotification } from "./ThreadQueueChangedNotification";
 export type { ThreadReadParams } from "./ThreadReadParams";

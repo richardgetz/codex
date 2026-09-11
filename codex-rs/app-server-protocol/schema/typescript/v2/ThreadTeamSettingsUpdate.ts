@@ -8,8 +8,13 @@ import type { TeamRole } from "../TeamRole";
 /**
  * Team mode or profile patch accepted by `thread/settings/update`.
  *
- * When `role`, `model`, and `reasoning_effort` are supplied, the selected
- * profile is changed for this thread only. The server preserves the other
- * profile and the role assignment captured by the thread snapshot.
+ * When `role` and one or more profile fields are supplied, the selected
+ * profile is changed for this thread only. `leadBalance` is Lead-only. The
+ * server preserves the other profile and the role assignment captured by the
+ * thread snapshot.
  */
-export type ThreadTeamSettingsUpdate = { mode: TeamMode, role?: TeamRole | null, model?: string | null, reasoningEffort?: ReasoningEffort | null, };
+export type ThreadTeamSettingsUpdate = { mode: TeamMode, role?: TeamRole | null, model?: string | null, reasoningEffort?: ReasoningEffort | null,
+/**
+ * Sparse Lead-only oversight balance update, from 1 (maximum savings) through 5 (maximum confidence).
+ */
+leadBalance?: number | null, };

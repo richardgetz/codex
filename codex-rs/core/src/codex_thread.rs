@@ -45,6 +45,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadActivityUpdatedEvent;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
@@ -569,8 +570,8 @@ impl CodexThread {
         } else {
             None
         };
-        let result = self.io.submit_turn_input(request, mode).await;
-        result
+
+        self.io.submit_turn_input(request, mode).await
     }
 
     /// Persist whether this thread is eligible for future memory generation.
@@ -743,6 +744,18 @@ impl CodexThread {
 
     pub async fn agent_status(&self) -> AgentStatus {
         self.io.agent_status().await
+    }
+
+    /// Return live process-local activity and pause snapshots for this thread's root tree.
+    ///
+    /// Manual pause state is intentionally not persisted in rollout history; callers that attach
+    /// after reconnect should use this accessor before relying on future ephemeral events.
+    pub async fn activity_snapshot(&self) -> Vec<ThreadActivityUpdatedEvent> {
+        self.session
+            .services
+            .agent_control
+            .activity_snapshot_for_subtree()
+            .await
     }
 
     pub async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {

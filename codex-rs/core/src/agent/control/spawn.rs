@@ -566,6 +566,8 @@ impl AgentControl {
                 }
                 self.reconcile_spawned_usage_auto_resume(&reloaded_thread.thread.session)
                     .await;
+                self.reconcile_spawned_activity(&reloaded_thread.thread.session)
+                    .await;
                 self.state.clear_evicted_environments(thread_id);
                 residency_slot.commit(reloaded_thread.thread_id);
                 state.notify_thread_created(reloaded_thread.thread_id);
@@ -759,6 +761,8 @@ impl AgentControl {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }))
         ) {
             self.reconcile_spawned_usage_auto_resume(&new_thread.thread.session)
+                .await;
+            self.reconcile_spawned_activity(&new_thread.thread.session)
                 .await;
         }
 
@@ -1309,6 +1313,8 @@ impl AgentControl {
         )
         .await;
         self.reconcile_spawned_usage_auto_resume(&resumed_thread.thread.session)
+            .await;
+        self.reconcile_spawned_activity(&resumed_thread.thread.session)
             .await;
 
         Ok((resumed_thread.thread_id, multi_agent_version))

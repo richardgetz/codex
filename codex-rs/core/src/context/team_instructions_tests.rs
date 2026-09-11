@@ -46,3 +46,28 @@ fn dynamic_handoff_guidance_is_role_specific_and_opt_in() {
         .body();
     assert!(!disabled_body.contains("Dynamic lookup handoff"));
 }
+
+#[test]
+fn lead_balance_guidance_is_lead_only_and_default_is_unchanged() {
+    let default_body = TeamInstructions::new(TeamRole::Lead, None).body();
+    let explicit_default_body = TeamInstructions::new(TeamRole::Lead, None)
+        .with_lead_balance(3)
+        .body();
+    assert_eq!(explicit_default_body, default_body);
+
+    let savings_body = TeamInstructions::new(TeamRole::Lead, None)
+        .with_lead_balance(1)
+        .body();
+    assert!(savings_body.contains("Lead usage/confidence balance: Maximum savings"));
+    assert!(savings_body.contains("discretionary Lead oversight only"));
+
+    let confidence_body = TeamInstructions::new(TeamRole::Lead, None)
+        .with_lead_balance(5)
+        .body();
+    assert!(confidence_body.contains("Lead usage/confidence balance: Maximum confidence"));
+
+    let worker_body = TeamInstructions::new(TeamRole::Worker, None)
+        .with_lead_balance(5)
+        .body();
+    assert!(!worker_body.contains("Lead usage/confidence balance"));
+}

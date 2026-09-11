@@ -319,10 +319,11 @@ async fn wait_for_activity_or_worker_status(
     for mut status_rx in worker_status_watchers {
         worker_statuses.push(async move {
             loop {
-                if {
+                let res = {
                     let status = status_rx.borrow();
                     is_final(&status) || matches!(&*status, AgentStatus::Interrupted)
-                } {
+                };
+                if res {
                     return;
                 }
                 if status_rx.changed().await.is_err() {

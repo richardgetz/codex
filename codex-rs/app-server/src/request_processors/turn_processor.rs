@@ -3,6 +3,9 @@ use super::*;
 use codex_agent_extension::AgentInvocation;
 use codex_agent_extension::AgentRun;
 use codex_agent_extension::AgentRunner;
+use codex_app_server_protocol::ThreadActivityUpdatedNotification;
+use codex_config::MAX_TEAM_LEAD_BALANCE;
+use codex_config::MIN_TEAM_LEAD_BALANCE;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -211,6 +214,35 @@ impl TurnRequestProcessor {
         params: ThreadUsageResumeParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_usage_resume_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_activity_pause(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadActivityPauseParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_activity_pause_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_activity_continue(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadActivityContinueParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_activity_continue_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_activity_read(
+        &self,
+        params: ThreadActivityReadParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_activity_read_inner(params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -911,6 +943,20 @@ impl TurnRequestProcessor {
                 (None, None, None)
             };
         let effort = effort.map(Some);
+        if let Some(team_update) = team.as_ref()
+            && let Some(balance) = team_update.lead_balance
+        {
+            if team_update.role != Some(codex_app_server_protocol::TeamRole::Lead) {
+                return Err(invalid_request(
+                    "Lead balance can only be updated for the Lead profile",
+                ));
+            }
+            if !(MIN_TEAM_LEAD_BALANCE..=MAX_TEAM_LEAD_BALANCE).contains(&balance) {
+                return Err(invalid_request(format!(
+                    "Lead balance must be between {MIN_TEAM_LEAD_BALANCE} and {MAX_TEAM_LEAD_BALANCE}"
+                )));
+            }
+        }
         let team_snapshot = team.as_ref().and_then(|team_update| {
             snapshot.as_ref().and_then(|snapshot| {
                 snapshot.team.clone().map(|mut team_snapshot| {
@@ -923,6 +969,9 @@ impl TurnRequestProcessor {
                                 }
                                 if let Some(effort) = team_update.reasoning_effort.clone() {
                                     team_snapshot.lead_reasoning_effort = Some(effort);
+                                }
+                                if let Some(balance) = team_update.lead_balance {
+                                    team_snapshot.lead_balance = Some(balance);
                                 }
                             }
                             codex_protocol::protocol::TeamRole::Worker => {
@@ -1064,6 +1113,44 @@ impl TurnRequestProcessor {
             .await
             .map_err(|err| internal_error(format!("failed to request usage check: {err}")))?;
         Ok(ThreadUsageResumeResponse {})
+    }
+
+    async fn thread_activity_pause_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadActivityPauseParams,
+    ) -> Result<ThreadActivityPauseResponse, JSONRPCErrorError> {
+        let (_, thread) = self.load_thread(&params.thread_id).await?;
+        self.submit_core_op(request_id, thread.as_ref(), Op::PauseActivity)
+            .await
+            .map_err(|err| internal_error(format!("failed to pause thread activity: {err}")))?;
+        Ok(ThreadActivityPauseResponse {})
+    }
+
+    async fn thread_activity_continue_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadActivityContinueParams,
+    ) -> Result<ThreadActivityContinueResponse, JSONRPCErrorError> {
+        let (_, thread) = self.load_thread(&params.thread_id).await?;
+        self.submit_core_op(request_id, thread.as_ref(), Op::ContinueActivity)
+            .await
+            .map_err(|err| internal_error(format!("failed to continue thread activity: {err}")))?;
+        Ok(ThreadActivityContinueResponse {})
+    }
+
+    async fn thread_activity_read_inner(
+        &self,
+        params: ThreadActivityReadParams,
+    ) -> Result<ThreadActivityReadResponse, JSONRPCErrorError> {
+        let (_, thread) = self.load_thread(&params.thread_id).await?;
+        let activities = thread
+            .activity_snapshot()
+            .await
+            .into_iter()
+            .map(|activity| ThreadActivityUpdatedNotification::from(activity).into())
+            .collect();
+        Ok(ThreadActivityReadResponse { activities })
     }
 
     async fn thread_inject_items_response_inner(

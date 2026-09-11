@@ -15,11 +15,30 @@ const DISABLED_TEAM_INSTRUCTIONS: &str = "Lead/Worker team mode is disabled for 
 const TEAM_ACTION_WAKE_INSTRUCTIONS: &str = "For Multi-Agent V2, use send_message for routine progress and send_message_action when the Lead needs immediate attention; legacy V1 uses multi_agents.send_input.
 ";
 
+fn lead_balance_guidance(balance: u8) -> Option<&'static str> {
+    match balance {
+        1 => Some(
+            "Lead usage/confidence balance: Maximum savings. Use the fewest practical optional Lead oversight checkpoints, reuse existing evidence, and avoid extra verification unless it is needed for a sound acceptance decision. This affects discretionary Lead oversight only; keep Worker scope, completeness, required checks, approvals, and configured efforts unchanged.\n",
+        ),
+        2 => Some(
+            "Lead usage/confidence balance: Usage efficient. Use targeted Lead oversight where it can prevent likely rework, reuse existing evidence, and avoid broad redundant verification. This affects discretionary Lead oversight only; keep Worker scope, completeness, required checks, approvals, and configured efforts unchanged.\n",
+        ),
+        4 => Some(
+            "Lead usage/confidence balance: Confidence focused. Independently check important assumptions and risky decisions, and choose targeted cross-checks for consequential Worker results. This affects discretionary Lead oversight only; keep Worker scope, completeness, required checks, approvals, and configured efforts unchanged.\n",
+        ),
+        5 => Some(
+            "Lead usage/confidence balance: Maximum confidence. Examine plausible failure modes and cross-check consequential results before acceptance while keeping checks targeted and avoiding routine repetition. This affects discretionary Lead oversight only; keep Worker scope, completeness, required checks, approvals, and configured efforts unchanged.\n",
+        ),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TeamInstructions {
     role: Option<TeamRole>,
     worker_max_concurrent: Option<usize>,
     dynamic_handoff: bool,
+    lead_balance: u8,
 }
 
 impl TeamInstructions {
@@ -30,6 +49,7 @@ impl TeamInstructions {
                 .then_some(worker_max_concurrent)
                 .flatten(),
             dynamic_handoff: false,
+            lead_balance: codex_config::DEFAULT_TEAM_LEAD_BALANCE,
         }
     }
 
@@ -38,11 +58,17 @@ impl TeamInstructions {
         self
     }
 
+    pub(crate) fn with_lead_balance(mut self, lead_balance: u8) -> Self {
+        self.lead_balance = lead_balance;
+        self
+    }
+
     pub(crate) fn disabled() -> Self {
         Self {
             role: None,
             worker_max_concurrent: None,
             dynamic_handoff: false,
+            lead_balance: codex_config::DEFAULT_TEAM_LEAD_BALANCE,
         }
     }
 }
@@ -85,6 +111,11 @@ impl ContextualUserFragment for TeamInstructions {
                 Some(TeamRole::Worker) => WORKER_DYNAMIC_HANDOFF_INSTRUCTIONS,
                 None => "",
             });
+        }
+        if self.role == Some(TeamRole::Lead)
+            && let Some(guidance) = lead_balance_guidance(self.lead_balance)
+        {
+            instructions.push_str(guidance);
         }
         let Some(worker_max_concurrent) = self.worker_max_concurrent else {
             return instructions;
