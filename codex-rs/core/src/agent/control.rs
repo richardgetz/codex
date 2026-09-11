@@ -84,6 +84,7 @@ mod service_tier;
 mod spawn;
 mod usage_policy;
 mod user_authorization;
+mod worker_handoff;
 mod worker_limit;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1298,6 +1299,7 @@ fn thread_spawn_depth(session_source: &SessionSource) -> Option<i32> {
         _ => None,
     }
 }
+
 #[cfg(test)]
 #[path = "control_tests.rs"]
 mod tests;

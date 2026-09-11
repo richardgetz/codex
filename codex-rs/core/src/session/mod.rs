@@ -266,6 +266,7 @@ mod input_queue;
 mod lead_idle;
 pub(crate) use lead_idle::LeadIdleArmMode;
 pub(crate) use lead_idle::format_lead_wait_message;
+pub(crate) use lead_idle::truncate_message;
 mod mcp;
 mod mcp_prewarm;
 mod mcp_refresh;
@@ -292,6 +293,7 @@ mod turn_provenance;
 mod turn_suspension;
 mod usage;
 mod usage_policy;
+mod worker_handoff;
 mod world_state;
 use self::code_mode_warning::unsupported_code_mode_warning;
 use self::config_lock::export_config_lock_if_configured;
@@ -2669,6 +2671,7 @@ impl Session {
             // timer behind.
             if let Some((active_workers, deadline)) =
                 self.rearm_lead_oversight_after_team_enable().await
+                && self.lead_idle_notifications_enabled().await
             {
                 self.emit_lead_idle_event(crate::session::lead_idle::format_lead_idle_message(
                     active_workers,

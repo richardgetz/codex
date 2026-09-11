@@ -94,6 +94,25 @@ release or merge rules.
     finish with their captured settings. The legacy V1 `multi_agents.send_input`
     surface retains its explicit turn-input semantics and can wake a target;
     those task inputs are not reclassified as routine progress.
+  - A Team Worker entering `wait_agent` with no active child dependency or
+    queued activity queues one bounded handoff to its immediate parent. The
+    handoff requests review or follow-up without marking the Worker complete;
+    a per-turn latch suppresses repeated waits until meaningful parent input
+    or new work arrives. V2 waits for currently admitted model/tool operations
+    to quiesce and rechecks approval, user-input, usage, mailbox, and child
+    state before sending; cancellation or another wait signal wins without a
+    handoff before quiescence and the final boundary. Spawned non-wait sibling
+    dispatches are counted from task creation through completion or cancellation,
+    including readiness-blocked and quiescent exec/MCP wrappers; the coordination
+    wait itself is excluded. The signal still only covers dependencies visible at
+    this boundary, so work admitted afterward and sibling waits are not inferred.
+    Legacy V1 explicit-target waits remain result collection and do not emit
+    this dependency-free handoff.
+  - `[team.lead].show_idle_notifications` defaults to `false`. When enabled,
+    passive idle and parked-wait notices are emitted for debugging; actionable
+    oversight-deadline warnings and wakes remain visible regardless. The global
+    config preference is not stored in thread team snapshots, so resumed threads
+    follow the current config value.
   - Team admission follows ordinary multi-agent backend compatibility, so a
     V2 Lead can use a V1 Worker; invalid active assignments fail open for root
     startup/resume with a warning and per-thread `off` mode, while delegated
@@ -170,15 +189,29 @@ release or merge rules.
     cold resume; completed, cancelled, and manually stopped work is never
     revived. The MCP `tools/call` runner forwards activity updates as
     notifications while retaining its existing turn completion semantics.
-  - The native TUI renders the selected tree as `Lead: idle|working|waiting ·
-    Workers: N working[, M waiting]`; `N` and `M` count unfinished working and
-    waiting direct or nested Workers respectively under that root, excluding
-    completed, closed, and unrelated roots. The same event-driven projection
-    drives the terminal title. Working Lead/Workers animate, approval/user-input/
-    usage/agent waits remain static, `Pausing` animates while aggregate in-flight
-    operations drain, and `Paused · Lead + N workers · /continue to resume` is
-    static, with `N` equal to the total unfinished Workers. Reduced-motion
-    settings disable animation; no polling is added.
+  - The native TUI renders the selected tree as two aligned rows: `Lead:
+    idle|working|waiting · Team: N working[, M waiting]`, followed by
+    `Workers: N[/cap] · Subagents: M`. Team counts include all unfinished
+    direct and nested Workers; Workers counts only unfinished direct Lead
+    children, using the optional `[team.worker].max_concurrent` ceiling as the
+    denominator; Subagents counts deeper descendants. Completed, closed, and
+    unrelated roots are excluded, and the same event-driven projection drives
+    the terminal title. Working Lead/Workers animate, approval/user-input/
+    usage/agent waits remain static, `Pausing` animates while aggregate
+    in-flight operations drain, and `Paused · Lead + N workers · /continue to
+    resume` is static, with `N` equal to the total unfinished Workers.
+    Reduced-motion settings disable animation; no polling is added. Ordinary
+    coordination waits retain a display-only working state for 30 monotonic
+    seconds after the first Working-to-Waiting transition. Repeated waiting
+    events do not extend that grace, and a bounded one-shot redraw reveals
+    expiry without a new event or animation. Approval, user-input, usage-limit,
+    error/completion, close, and pause transitions remain immediate. Parent
+    edges come from existing thread metadata; no activity protocol fields or
+    backend polling are added. Terminal completion wins over delayed activity
+    updates until the next `turn/started`; reset/reconnect rebuilds metadata
+    only for the selected loaded tree, ignores `NotLoaded`, ephemeral, or
+    temporary helper threads, and rejects unknown/unloaded child activity until
+    a fresh `thread/started`/`turn/started` admits it.
 
 - Recursive per-response usage accounting:
   - App-server v2 sends the legacy context-window counters through
@@ -530,6 +563,22 @@ release or merge rules.
   idle/deadline state. Verify Team Off serializes the final automatic-turn
   admission boundary, drops stale trigger mail while retaining queue-only
   communication, and permits already-admitted in-flight turns to finish.
+- Verify a dependency-free Team Worker `wait_agent` queues one bounded handoff
+  to its immediate parent without marking completion, suppresses repeated
+  waits in one turn, rearms after meaningful parent input or new work, queues
+  while the parent is paused, and leaves routine progress quiet. Verify the
+  V2 wait first quiesces currently admitted model/tool operations and pending
+  non-wait sibling dispatches, rechecks approval, user-input, usage, mailbox,
+  and child state, and drops the signal when cancellation or another wait
+  outcome wins. Its limitation remains
+  dependencies visible at the boundary; work admitted afterward and sibling
+  waits are not inferred. Legacy V1 explicit-target waits remain result
+  collection and do not emit this signal.
+- Verify `[team.lead].show_idle_notifications` defaults to false, suppresses
+  passive idle and parked-wait notices without suppressing oversight deadline
+  warnings or actionable wakes, and emits the passive notices when enabled.
+  Verify legacy and resumed thread snapshots continue to follow the current
+  global config value.
 - Verify the reserved `collaboration.send_message` schema remains unchanged
   (target/message only, with its pre-team description), while Team mode exposes
   standalone `send_message_action` and routes it to an immediate Lead wake.
@@ -619,5 +668,14 @@ release or merge rules.
   root, keeps the title aligned with that projection, animates only actual
   work (and in-flight Pausing), honors reduced-motion settings, and renders
   the static `Paused · Lead + N workers · /continue to resume` row. Verify
-  `codex-mcp-server` handles `ThreadActivityUpdated` exhaustively, forwards
-  the notification, and continues waiting for real turn completion.
+  the running two-row Team/Workers/Subagents layout, direct Worker cap
+  denominator, nested parent metadata hydration, and 30-second ordinary-wait
+  grace: repeated waits must not extend it, expiry must redraw without a new
+  event or animation, and approval/user-input/usage-limit/error/completion,
+  close, and pause states must stay immediate. Verify terminal completion wins
+  over delayed activity until the next `turn/started`, metadata-only root
+  removal prunes descendants, reset/reconnect rebuilds only the selected loaded
+  tree, and ephemeral/temporary helper threads do not enter the projection.
+  Verify `codex-mcp-server`
+  handles `ThreadActivityUpdated` exhaustively, forwards the notification, and
+  continues waiting for real turn completion.

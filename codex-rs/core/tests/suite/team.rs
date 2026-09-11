@@ -98,6 +98,7 @@ fn team_config(mode: TeamMode, lead_model: &str, worker_model: &str) -> TeamConf
                 codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
         }),
         worker_max_concurrent: None,
+        lead_show_idle_notifications: false,
     }
 }
 

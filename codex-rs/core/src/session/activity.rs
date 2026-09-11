@@ -18,22 +18,41 @@ use tokio_util::sync::CancellationToken;
 
 /// Guard covering one model/tool operation for activity reporting.
 ///
-/// Dropping the guard never cancels the operation. It asynchronously publishes the resulting
-/// state so a pause request can transition from `Pausing` to `Paused` after the operation exits.
+/// Dropping the guard never cancels the operation. It synchronously releases the in-flight slot
+/// and wakes quiescence waiters, then asynchronously publishes the resulting state so a pause
+/// request can transition from `Pausing` to `Paused` after the operation exits.
 pub(crate) struct ActivityOperationGuard {
     session: Arc<Session>,
 }
 
 impl Drop for ActivityOperationGuard {
     fn drop(&mut self) {
+        self.session
+            .activity_in_flight
+            .fetch_sub(1, Ordering::AcqRel);
+        self.session.activity_operation_notify.notify_waiters();
         let session = Arc::clone(&self.session);
         if let Ok(handle) = Handle::try_current() {
             handle.spawn(async move {
-                session.activity_operation_finished().await;
+                session.publish_activity_state().await;
             });
-        } else {
-            session.activity_in_flight.fetch_sub(1, Ordering::AcqRel);
         }
+    }
+}
+
+/// Guard covering one non-wait tool dispatch while it is waiting for readiness or execution
+/// admission. This handoff-only count keeps a Worker from waking its parent ahead of a sibling
+/// tool that has been spawned but has not reached its activity operation guard yet.
+pub(crate) struct HandoffDispatchGuard {
+    session: Arc<Session>,
+}
+
+impl Drop for HandoffDispatchGuard {
+    fn drop(&mut self) {
+        self.session
+            .handoff_dispatches_pending
+            .fetch_sub(1, Ordering::AcqRel);
+        self.session.activity_operation_notify.notify_waiters();
     }
 }
 
@@ -100,6 +119,45 @@ impl Session {
         }
     }
 
+    /// Register a non-wait tool dispatch before its task is spawned so dependency-free handoffs
+    /// observe siblings that are still waiting for readiness or the parallel execution gate.
+    pub(crate) fn begin_handoff_dispatch(self: &Arc<Self>) -> HandoffDispatchGuard {
+        self.handoff_dispatches_pending
+            .fetch_add(1, Ordering::AcqRel);
+        HandoffDispatchGuard {
+            session: Arc::clone(self),
+        }
+    }
+
+    pub(crate) fn pending_handoff_dispatches(&self) -> u32 {
+        self.handoff_dispatches_pending.load(Ordering::Acquire)
+    }
+
+    /// Wait until admitted activity operations and pending non-wait dispatches have drained.
+    ///
+    /// The notification is registered before the counter check so an operation that finishes
+    /// between those steps cannot strand the caller. Callers must recheck their own state after
+    /// this boundary because a new operation may be admitted immediately afterward.
+    pub(crate) async fn wait_for_activity_quiescence(
+        &self,
+        cancellation_token: &CancellationToken,
+    ) -> CodexResult<()> {
+        loop {
+            let notified = self.activity_operation_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.activity_in_flight.load(Ordering::Acquire) == 0
+                && self.pending_handoff_dispatches() == 0
+            {
+                return Ok(());
+            }
+            tokio::select! {
+                _ = cancellation_token.cancelled() => return Err(CodexErr::TurnAborted),
+                _ = &mut notified => {},
+            }
+        }
+    }
+
     /// Return the current live activity state for reconnect/status paths.
     pub(crate) async fn activity_state(&self) -> ThreadActivityUpdatedEvent {
         let in_flight_operations = self.activity_in_flight.load(Ordering::Acquire);
@@ -126,11 +184,6 @@ impl Session {
             wait_reason,
             in_flight_operations,
         }
-    }
-
-    pub(crate) async fn activity_operation_finished(&self) {
-        self.activity_in_flight.fetch_sub(1, Ordering::AcqRel);
-        self.publish_activity_state().await;
     }
 
     async fn activity_for_active_turn(
