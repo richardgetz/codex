@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-11/mcp-activity-build#526c33b9b65c"
+  change_type: fix
+  scope: mcp
+  summary: Restore release compilation after introducing team activity events.
+  decision: Explicitly handle ThreadActivityUpdated with other thread metadata in the MCP tool runner's exhaustive event match.
+  constraints:
+    - Preserve forwarding of the event as a notification.
+    - Activity updates must not complete, restart, or interrupt the current MCP tool turn.
+    - Keep the event match exhaustive rather than hiding future additions behind a wildcard.
+    - Validate the affected production crate under the failed release target and profile.
+  intent_priority: should
+  code_locations:
+    - codex-rs/mcp-server/src/codex_tool_runner.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: Codex Lead and Luna Worker team
+    model: gpt-6-astra
