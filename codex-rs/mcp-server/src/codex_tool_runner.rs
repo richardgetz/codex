@@ -308,7 +308,8 @@ async fn run_codex_tool_session_inner(
                     }
                     EventMsg::ThreadNameUpdated(_)
                     | EventMsg::ThreadGoalUpdated(_)
-                    | EventMsg::ThreadQueueChanged(_) => {
+                    | EventMsg::ThreadQueueChanged(_)
+                    | EventMsg::ThreadActivityUpdated(_) => {
                         // Ignore thread-scoped metadata updates in MCP tool runner.
                     }
                     EventMsg::McpStartupUpdate(_) | EventMsg::McpStartupComplete(_) => {
