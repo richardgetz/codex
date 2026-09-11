@@ -1,0 +1,26 @@
+intent:
+  id: "intent/2026-09-11/team-status-and-handoff"
+  change_type: fix
+  scope: team
+  summary: Make team activity legible and prevent silent Worker handoff stalls.
+  decision: Separate direct Worker and nested Subagent counts, debounce ordinary waiting only in the display, keep terminal lifecycle authoritative, and mechanically request parent attention when a Worker parks without an observable dependency.
+  constraints:
+    - Preserve routine-progress quietness and avoid periodic Lead inference.
+    - Deduplicate handoffs without falsely marking tasks complete or losing distinct Workers.
+    - Preserve approval, usage, pause, cancellation, and actual oversight deadline behavior.
+    - Default passive Lead idle notices off with an explicit debugging opt-in.
+    - Keep lifecycle and context state bounded; retain legacy configuration compatibility.
+    - Deliver all requested changes in one PR targeting stable; leave merging to the user.
+  intent_priority: should
+  code_locations:
+    - codex-rs/core/src/session/worker_handoff.rs
+    - codex-rs/core/src/session/input_queue.rs
+    - codex-rs/core/src/session/lead_idle.rs
+    - codex-rs/tui/src/app/team_activity.rs
+    - codex-rs/tui/src/chatwidget/team_activity.rs
+    - codex-rs/config/src/team.rs
+    - docs/fork-differences.md
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Lead and Luna Worker team"
+    model: "gpt-6-astra"
