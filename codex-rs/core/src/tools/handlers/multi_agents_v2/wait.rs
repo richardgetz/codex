@@ -322,7 +322,8 @@ async fn wait_for_activity_or_worker_status(
                 let res = {
                     let status = status_rx.borrow();
                     is_final(&status) || matches!(&*status, AgentStatus::Interrupted)
-                }; if res {
+                };
+                if res {
                     return;
                 }
                 if status_rx.changed().await.is_err() {

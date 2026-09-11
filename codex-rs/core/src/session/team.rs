@@ -179,13 +179,17 @@ pub(crate) fn world_state_policy(
             .effective_team_profiles()
             .is_some_and(|profiles| profiles.lead_dynamic_handoff);
         protocol_role_for_session_source(config, source).map(|role| {
-            let lead_balance = if role == TeamRole::Lead { {
+            let lead_balance = if role == TeamRole::Lead {
+                {
                     config
                         .effective_team_profiles()
                         .map_or(codex_config::DEFAULT_TEAM_LEAD_BALANCE, |profiles| {
                             profiles.lead_balance
                         })
-                } } else { codex_config::DEFAULT_TEAM_LEAD_BALANCE };
+                }
+            } else {
+                codex_config::DEFAULT_TEAM_LEAD_BALANCE
+            };
             TeamPolicyState::new(role, worker_max_concurrent)
                 .with_dynamic_handoff(dynamic_handoff)
                 .with_lead_balance(lead_balance)

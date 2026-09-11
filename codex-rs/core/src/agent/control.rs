@@ -322,16 +322,15 @@ impl AgentControl {
             None
         };
 
-        self
-            .send_inter_agent_communication_after_capacity_check(
-                agent_id,
-                &state,
-                communication,
-                agent_communication_context,
-                start_options,
-                team_lead_completion,
-            )
-            .await
+        self.send_inter_agent_communication_after_capacity_check(
+            agent_id,
+            &state,
+            communication,
+            agent_communication_context,
+            start_options,
+            team_lead_completion,
+        )
+        .await
     }
 
     pub(crate) async fn emit_sub_agent_activity(
