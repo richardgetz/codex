@@ -78,13 +78,31 @@ The maintained fork layer must be kept current in this skill. If the fork picks 
 As of the current branch, the fork contract includes at least:
 
 - fork packaging/versioning surfaces for the `codex-rick` line
-- account alias switching and keychain/file auth compatibility
-- Plan mode and scratchpad-backed Continuous mode behavior, including
-  config-gated model-capacity retry
-- orchestrator memory, memory helper naming, cleanup/consolidation, and slash commands
-- built-in scratchpad, built-in schedule, compaction recovery, and resume/fast-resume integration
-- MCP behavior with mode enablement filters, startup cancellation retry, missing-tool recovery, and selected-executor isolation
-- fork docs and skill docs that teach future agents how to preserve the fork
+- account alias switching, keychain/file auth compatibility, and managed
+  authentication recovery
+- Plan mode, removed Orchestrator/legacy collaboration compatibility, and
+  scratchpad-backed Continuous mode behavior, including config-gated
+  model-capacity retry
+- opt-in Lead/Worker teams, routing, usage balance, dynamic handoff,
+  concurrency/oversight controls, and activity pause/continue behavior
+- per-thread usage policy, recursive usage accounting, local spend visibility,
+  reset-aware auto-resume, and session-owned temporary storage
+- GPT-Live voice/device controls and realtime handoff diagnostics
+- macOS GPU/Metal Seatbelt allowances and their regression coverage
+- Rick-owned feature toggles, fork-aware help/feature labeling, and
+  mode-scoped enablement filters
+- advisory decision provenance and Git intent crossroads, plus first-class
+  Conventional Commits and Git intent-note guidance
+- orchestrator-memory compatibility, user-preferences memory, memory helper
+  naming, cleanup/consolidation, migration, and slash commands
+- named exec-policy rulesets and session-scoped agent pruning
+- built-in scratchpad, built-in schedule, compaction recovery, and
+  resume/fast-resume integration
+- MCP behavior with mode enablement filters, startup-cancellation retry,
+  missing-tool recovery, eager/lazy inventory visibility, and selected
+  executor isolation
+- situational requirements, state-migration compatibility, and fork docs and
+  skill docs that teach future agents how to preserve the fork
 
 When refreshing `stable`, prefer carrying forward commits that stay inside those surfaces or are clearly required to preserve them.
 

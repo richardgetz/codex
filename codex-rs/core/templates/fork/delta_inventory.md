@@ -20,6 +20,23 @@ release or merge rules.
 
 ## Unreleased
 
+- Fork distribution and release contract:
+  `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
+  tags, stable-triggered releases, Apple Silicon lane, and migration-number
+  policy remain fork-owned (see the release and migration docs).
+- macOS Seatbelt GPU/Metal base-policy allowances preserve focused IOKit,
+  service, and sysctl access for sandboxed MPS/MLX/PyTorch workloads with
+  deny-wildcard regression coverage.
+- Rick-owned `enable_mcp_approvals` feature toggles and `(rick)` owner labels
+  remain on fork-only experimental help and announcements.
+- Native GPT-Live voice in the TUI remains fork-owned: WebRTC V3 transport,
+  microphone/speaker controls, voice rotation, handoff classification and
+  preamble policy, bounded diagnostics/history, and realtime configuration.
+- Named exec-policy rulesets (`overlay`/`exclusive`) remain selectable through
+  app-server `execPolicy` and server config.
+- Fork-aware help context and fork-only feature labeling keep
+  `docs/fork-differences.md` current and identify Rick-owned metadata.
+
 - Opt-in Lead/Worker model teams:
   - `[team]` can define exactly one Lead and one Worker model/effort profile;
     profiles remain disabled for new sessions unless `team.enabled = true`.
@@ -520,6 +537,20 @@ release or merge rules.
 
 ## Merge Checklist
 
+- Verify the fork distribution/release contract (`@rickgetz/codex`,
+  `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
+  Apple Silicon releases) and migration-number policy remain intact.
+- Verify the macOS Seatbelt GPU/Metal base-policy allowances and focused
+  regression tests survive upstream policy changes without wildcard access.
+- Verify `enable_mcp_approvals` remains a Rick-owned toggle and fork-only
+  experimental help/announcements retain the `(rick)` owner label.
+- Verify GPT-Live voice/device controls, WebRTC V3 handoff classification,
+  preamble behavior, bounded diagnostics/history, and realtime config remain
+  available in the native TUI.
+- Verify named exec-policy rulesets retain their `overlay`/`exclusive`
+  semantics and app-server `execPolicy` selection.
+- Verify fork-aware help continues to load the checked-in fork differences and
+  `(rick)` feature labeling remains applied to fork-only metadata.
 - Verify `[team]` rejects enabled configurations without both complete profiles,
   remains disabled by default, and `/team` state survives resume/fork without
   mutating global config. Verify Lead routing, Worker routing for all delegated
