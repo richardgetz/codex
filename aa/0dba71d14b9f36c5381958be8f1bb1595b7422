@@ -1,0 +1,25 @@
+intent:
+  id: "intent/2026-09-11/stable-refresh-rust-v0.154.0#aa0dba71d14b"
+  change_type: chore
+  scope: stable
+  summary: Refresh fork stable from upstream rust-v0.154.0 while retaining the maintained fork contract.
+  decision: Branch from the released fork stable state and merge the upstream release tag, adapting fork behavior to upstream API changes.
+  constraints:
+    - Preserve shipped migration filenames, SQL, and checksums.
+    - Preserve documented fork runtime, configuration, packaging, authentication, MCP, and UX surfaces.
+    - Do not merge fork main into stable.
+    - Keep outstanding validation limitations explicit in the refresh PR; do not merge or publish a release as part of this task.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core
+    - codex-rs/app-server
+    - codex-rs/app-server-protocol
+    - codex-rs/tui
+    - codex-rs/state/migrations
+    - codex-rs/core/templates/fork/delta_inventory.md
+    - docs/fork-differences.md
+    - .codex/skills/fork-stable-release/SKILL.md
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Lead and Worker team"
+    model: "gpt-6-astra"
