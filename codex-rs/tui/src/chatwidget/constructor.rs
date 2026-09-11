@@ -13,6 +13,7 @@ impl ChatWidget {
     ) -> Self {
         let ChatWidgetInit {
             config,
+            local_settings,
             frame_requester,
             app_event_tx,
             state_db,
@@ -21,12 +22,12 @@ impl ChatWidget {
             initial_user_message,
             enhanced_keys_supported,
             has_chatgpt_account,
+            requires_openai_auth,
             has_codex_backend_auth,
             model_catalog,
             feedback,
             is_first_run,
             status_account_display,
-            runtime_model_provider_base_url,
             initial_plan_type,
             initial_collaboration_mode,
             model,
@@ -75,11 +76,12 @@ impl ChatWidget {
         let current_cwd = Some(config.cwd.to_path_buf());
         let effective_service_tier = crate::service_tier_resolution::effective_service_tier(
             &config,
+            &local_settings.notices,
             &header_model,
             &model_catalog.try_list_models().unwrap_or_default(),
         );
         let current_terminal_info = terminal_info();
-        let runtime_keymap = RuntimeKeymap::from_config(&config.tui_keymap).ok();
+        let runtime_keymap = RuntimeKeymap::from_config(&local_settings.tui.keymap).ok();
         let default_keymap = RuntimeKeymap::defaults();
         let copy_last_response_binding = runtime_keymap
             .as_ref()
@@ -98,13 +100,14 @@ impl ChatWidget {
             codex_http_client::ClientRouteClass::Other,
         );
         pets::start_configured_pet_load_if_needed(
-            &config,
+            &local_settings,
             /*ambient_pet_missing*/ true,
             frame_requester.clone(),
             app_event_tx.clone(),
             pet_http_client.clone(),
         );
         let mut widget = Self {
+            cyber_policy_notice: Default::default(),
             app_event_tx: app_event_tx.clone(),
             state_db,
             provenance_commands_enabled,
@@ -116,13 +119,14 @@ impl ChatWidget {
                 has_input_focus: true,
                 enhanced_keys_supported,
                 placeholder_text: placeholder.clone(),
-                disable_paste_burst: config.disable_paste_burst,
-                animations_enabled: config.animations,
+                disable_paste_burst: local_settings.tui.disable_paste_burst.unwrap_or(false),
+                animations_enabled: local_settings.tui.animations,
                 skills: None,
             }),
             transcript: TranscriptState::new(active_cell),
-            raw_output_mode: config.tui_raw_output_mode,
+            raw_output_mode: local_settings.tui.raw_output_mode,
             config,
+            local_settings,
             effective_service_tier,
             skills_all: Vec::new(),
             skills_initial_state: None,
@@ -136,17 +140,21 @@ impl ChatWidget {
             },
             team_activity_status: None,
             has_chatgpt_account,
+            requires_openai_auth,
             has_codex_backend_auth,
             model_catalog,
             model_popup_request_id: None,
             model_popup_target: ModelPopupTarget::Conversation,
+            permission_popup_request_id: None,
+            worktree_popup_request_id: None,
+            permission_profiles_menu_opened: false,
             model_popup_model_ids: Vec::new(),
             session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             status_account_display,
-            runtime_model_provider_base_url,
             remote_connection: None,
+            local_worktree_operations: true,
             token_info: None,
             usage_rollup,
             account_generation: 0,
@@ -171,7 +179,9 @@ impl ChatWidget {
             rate_limit_warnings: RateLimitWarningState::default(),
             exhausted_account_rotation_aliases: HashSet::new(),
             backend_banner_state: backend_banners::BackendBannerState::default(),
+            automatic_model_switch_state: backend_banners::AutomaticModelSwitchState::default(),
             backend_banner_notice_model: None,
+            luna_reserve_notice_account_id: None,
             warning_display_state: WarningDisplayState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             previous_custom_permission_selection: None,
@@ -229,11 +239,11 @@ impl ChatWidget {
             thread_id: None,
             dismissed_plan_mode_nudge_scopes: HashSet::new(),
             thread_name: None,
-            pending_automatic_thread_names: HashSet::new(),
             thread_rename_block_message: None,
             active_side_conversation: false,
             blocks_direct_input: false,
-            misalignment_policy_violation: false,
+            external_writer_view: false,
+            misalignment_policy_violation: None,
             normal_placeholder_text: placeholder,
             side_placeholder_text: side_placeholder,
             forked_from: None,
@@ -291,7 +301,7 @@ impl ChatWidget {
         if let Some(keymap) = runtime_keymap {
             widget.bottom_pane.set_keymap_bindings(&keymap);
         }
-        if widget.config.tui_vim_mode_default {
+        if widget.local_settings.tui.vim_mode_default {
             widget.bottom_pane.enable_vim_in_insert_mode();
         } else {
             widget.bottom_pane.set_vim_enabled(/*enabled*/ false);
@@ -307,6 +317,7 @@ impl ChatWidget {
             .set_provenance_commands_enabled(provenance_commands_enabled);
         widget.sync_service_tier_commands();
         widget.sync_personality_command_enabled();
+        widget.sync_worktrees_enabled();
         widget.sync_plugins_command_enabled();
         widget.sync_goal_command_enabled();
         widget.sync_mentions_v2_enabled();
@@ -329,6 +340,10 @@ impl ChatWidget {
             .bottom_pane
             .set_token_activity_command_enabled(widget.has_codex_backend_auth);
         widget.refresh_status_surfaces();
+        widget.bottom_pane.set_astra_sparkle(
+            widget.effective_collaboration_mode().model(),
+            &widget.local_settings.tui,
+        );
 
         widget
     }

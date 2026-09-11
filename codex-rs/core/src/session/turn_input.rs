@@ -131,6 +131,11 @@ impl PreparedTurnInputSettings {
             None
         };
         let mut updates = self.thread_settings_update.unwrap_or_default();
+        let previous_usage_policy = if emit_thread_settings_applied {
+            Some(session.thread_settings_snapshot().await.usage_policy)
+        } else {
+            None
+        };
         updates.service_tier_for_turn = service_tier;
 
         let options = NewTurnContextOptions {
@@ -163,7 +168,15 @@ impl PreparedTurnInputSettings {
                 .set_turn_trigger(turn_trigger);
         }
         if emit_thread_settings_applied {
-            thread_settings::emit_applied(session, submission_id, settings_snapshot).await;
+            let usage_policy_changed = previous_usage_policy
+                .is_some_and(|previous| previous != settings_snapshot.usage_policy);
+            thread_settings::emit_applied(
+                session,
+                submission_id,
+                settings_snapshot,
+                usage_policy_changed,
+            )
+            .await;
         }
         session
             .record_scratchpad_checkpoint_before_turn(turn_context.as_ref())
@@ -259,7 +272,6 @@ async fn start_or_steer(
             ));
         }
     };
-    let can_start_root_turn = start.parent_turn_id.is_none() && start.root_turn_id.is_none();
     let incoming_root_turn_id = start
         .parent_turn_id
         .as_ref()
@@ -301,16 +313,6 @@ async fn start_or_steer(
                 unreachable!("explicit user input can enter Plan mode");
             };
             session.cancel_lead_oversight().await;
-            if can_start_root_turn
-                && has_explicit_input
-                && turn_context
-                    .turn_metadata_state
-                    .can_start_root_turn(&turn_context.session_source)
-            {
-                turn_context
-                    .turn_metadata_state
-                    .set_root_turn_id(submission_id.clone());
-            }
             if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
                 turn_context
                     .turn_metadata_state
@@ -332,7 +334,7 @@ async fn start_or_steer(
                 ));
             }
             if has_explicit_input {
-                task_input.push(pending_turn_input(input));
+                task_input.push(pending_turn_input(session, input).await);
             }
             session
                 .try_spawn_task(turn_context, task_input, RegularTask::new())
@@ -366,7 +368,6 @@ async fn start_if_idle(
         &input,
         SubmittedTurnInput::ResponseItem(ResponseItem::FunctionCallOutput { call_id: None, .. })
     );
-    let can_start_root_turn = start.parent_turn_id.is_none() && start.root_turn_id.is_none();
     if kind != TurnStartKind::User && session.input_queue.has_trigger_turn_mailbox_items().await {
         return Ok(TurnInputSubmission::NotSubmitted {
             reason: NotSubmittedReason::PendingTriggerTurn,
@@ -442,16 +443,6 @@ async fn start_if_idle(
             .turn_metadata_state
             .set_responsesapi_client_metadata(responsesapi_client_metadata);
     }
-    if kind == TurnStartKind::User
-        && can_start_root_turn
-        && turn_context
-            .turn_metadata_state
-            .can_start_root_turn(&turn_context.session_source)
-    {
-        turn_context
-            .turn_metadata_state
-            .set_root_turn_id(submission_id.clone());
-    }
     session
         .maybe_emit_model_warnings_for_turn(turn_context.as_ref())
         .await;
@@ -471,12 +462,12 @@ async fn start_if_idle(
                     lead_progress_communication(summary),
                 ));
             }
-            task_input.push(pending_turn_input(input));
+            task_input.push(pending_turn_input(session, input).await);
         }
         TurnStartKind::Automatic => {
             // Empty automatic user input resumes sampling without a new message.
             if !matches!(&input, SubmittedTurnInput::UserInput { .. }) {
-                initial_pending_input.push(pending_turn_input(input));
+                initial_pending_input.push(pending_turn_input(session, input).await);
             }
         }
         TurnStartKind::Recovery => {
@@ -655,9 +646,10 @@ impl Session {
                 TurnInput::UserInput {
                     content: std::mem::take(content),
                     client_id: client_id.clone(),
+                    acceptance_order: self.reserve_user_input_order().await,
                 }
             }
-            input => pending_turn_input(input.clone()),
+            input => pending_turn_input(self, input.clone()).await,
         };
         pending_input.push(input);
         if active_task
@@ -697,11 +689,13 @@ async fn merge_additional_context_input(
         .collect()
 }
 
-fn pending_turn_input(input: SubmittedTurnInput) -> TurnInput {
+async fn pending_turn_input(session: &Session, input: SubmittedTurnInput) -> TurnInput {
     match input {
-        SubmittedTurnInput::UserInput { content, client_id } => {
-            TurnInput::UserInput { content, client_id }
-        }
+        SubmittedTurnInput::UserInput { content, client_id } => TurnInput::UserInput {
+            content,
+            client_id,
+            acceptance_order: session.reserve_user_input_order().await,
+        },
         SubmittedTurnInput::ResponseItem(mut item)
             if matches!(
                 &item,

@@ -12,6 +12,7 @@ fn usage_limits_fragment_describes_provider_windows_and_policy() {
     let rate_limits = RateLimitSnapshot {
         limit_id: None,
         limit_name: None,
+        normal_model_slug: None,
         primary: Some(RateLimitWindow {
             used_percent: 70.0,
             window_minutes: Some(300),
@@ -61,6 +62,7 @@ fn usage_limits_fragment_is_not_repeated_when_snapshot_is_unchanged() {
         std::slice::from_ref(&RateLimitSnapshot {
             limit_id: None,
             limit_name: None,
+            normal_model_slug: None,
             primary: Some(RateLimitWindow {
                 used_percent: 10.0,
                 window_minutes: Some(300),
@@ -180,6 +182,7 @@ fn usage_limits_context_has_a_token_bound_for_multibyte_limit_ids() {
                 "界".repeat(super::MAX_LIMIT_ID_CHARS)
             )),
             limit_name: None,
+            normal_model_slug: None,
             primary: Some(RateLimitWindow {
                 used_percent: 50.0,
                 window_minutes: Some(300),

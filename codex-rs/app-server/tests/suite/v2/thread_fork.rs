@@ -105,6 +105,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 async fn list_threads(mcp: &mut TestAppServer) -> Result<ThreadListResponse> {
     let list_id = mcp
         .send_thread_list_request(ThreadListParams {
+            originators: None,
             cursor: None,
             limit: Some(50),
             sort_key: None,
@@ -369,6 +370,114 @@ async fn thread_fork_inherits_usage_policy() -> Result<()> {
         .send_thread_fork_request(ThreadForkParams {
             thread_id: source_thread_id,
             last_turn_id: Some(source_turn_id),
+            ..Default::default()
+        })
+        .await?;
+    let fork: ThreadForkResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(fork_id)).await??;
+
+    assert_eq!(
+        fork.usage_policy,
+        ThreadUsagePolicy {
+            auto_resume: true,
+            minimum_remaining_percent: Some(20),
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_latest_unloaded_paginated_reference_inherits_usage_policy() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+
+    let (root_thread_id, root_path) = {
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .build_initialized()
+            .await?;
+        let start_id = mcp
+            .send_thread_start_request_with_auto_env(ThreadStartParams {
+                history_mode: Some(ThreadHistoryMode::Paginated),
+                ..Default::default()
+            })
+            .await?;
+        let ThreadStartResponse { thread, .. } =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
+
+        let update_id = mcp
+            .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+                thread_id: thread.id.clone(),
+                usage_policy: Some(ThreadUsagePolicyParams {
+                    auto_resume: Some(true),
+                    minimum_remaining_percent: Some(Some(20)),
+                }),
+                ..Default::default()
+            })
+            .await?;
+        let _: ThreadSettingsUpdateResponse =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(update_id)).await??;
+        let updated: ThreadSettingsUpdatedNotification = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_notification("thread/settings/updated"),
+        )
+        .await??;
+        assert_eq!(
+            updated.thread_settings.usage_policy,
+            ThreadUsagePolicy {
+                auto_resume: true,
+                minimum_remaining_percent: Some(20),
+            }
+        );
+
+        (
+            thread.id,
+            thread.path.expect("root rollout path should be present"),
+        )
+    };
+
+    let root_contents = std::fs::read_to_string(root_path.as_path())?;
+    let root_end_ordinal = root_contents.lines().count() as u64;
+    let root_end_byte_offset = std::fs::metadata(root_path.as_path())?.len();
+
+    // A reference-backed child with no local records receives only SessionMeta from
+    // `load_for_fork`; the unloaded fork path must read the ancestor's latest context to recover
+    // the usage policy persisted there.
+    let child_thread_id = create_fake_paginated_rollout(
+        codex_home.path(),
+        "2025-01-06T12-00-00",
+        "2025-01-06T12:00:00Z",
+        "unused child prefix",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let child_path = rollout_path(
+        codex_home.path(),
+        "2025-01-06T12-00-00",
+        child_thread_id.as_str(),
+    );
+    let child_contents = std::fs::read_to_string(child_path.as_path())?;
+    let mut child_lines = child_contents.lines();
+    let mut child_meta: Value =
+        serde_json::from_str(child_lines.next().expect("child session metadata"))?;
+    child_meta["payload"]["forked_from_id"] = json!(root_thread_id);
+    child_meta["payload"]["forked_from_ordinal_exclusive"] = json!(root_end_ordinal);
+    child_meta["payload"]["history_base"] = json!({
+        "thread_id": root_thread_id,
+        "end_ordinal_exclusive": root_end_ordinal,
+        "end_byte_offset": root_end_byte_offset,
+    });
+    child_meta["ordinal"] = json!(root_end_ordinal);
+    std::fs::write(child_path.as_path(), format!("{child_meta}\n"))?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: child_thread_id,
             ..Default::default()
         })
         .await?;
@@ -2172,7 +2281,7 @@ async fn assert_thread_fork_freezes_active_paginated_turn_as_interrupted(
         .expect("fork history base");
     let child_rollout = std::fs::read_to_string(forked_path.as_path())?
         .lines()
-        .map(serde_json::from_str::<RolloutLine>)
+        .map(codex_rollout::parse_rollout_line)
         .collect::<Result<Vec<_>, _>>()?;
     assert!(matches!(
         child_rollout.as_slice(),

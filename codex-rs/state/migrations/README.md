@@ -78,3 +78,12 @@ it is appended as `0055_upstream_projects_recency.sql`.
 The Git metadata clear markers are appended as `0056_rick_git_info_clears.sql`
 so an explicit metadata clear cannot be overwritten by a stale rollout
 upsert.
+
+The `rust-v0.154.0` refresh keeps those shipped migrations unchanged. Its
+incoming thread metadata migrations collide with the existing numeric sequence,
+so they are appended as:
+
+```text
+0057_upstream_threads_originator.sql
+0058_upstream_threads_daybreak_enabled.sql
+```

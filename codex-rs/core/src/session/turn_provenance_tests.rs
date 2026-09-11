@@ -7,6 +7,7 @@ use super::user_input_text_for_provenance;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::tests::make_session_and_context_with_auth_config_home_and_rx;
+use crate::session::turn::McpStartupRequirements;
 use crate::session::turn_context::TurnContext;
 use codex_login::CodexAuth;
 use codex_protocol::models::ImageDetail;
@@ -365,17 +366,20 @@ async fn disabled_run_turn_preserves_model_flow_without_provenance() {
     let (session, turn_context, state_db, _codex_home) =
         provenance_fixture(false, Some(format!("{}/v1", server.uri()))).await;
     record_test_boundary(&state_db).await;
+    let mut mcp_startup_requirements = McpStartupRequirements::default();
 
     let result = crate::session::turn::run_turn(
         session.clone(),
         turn_context,
         vec![TurnInput::UserInput {
+            acceptance_order: None,
             content: vec![UserInput::Text {
                 text: "please change generated files".to_string(),
                 text_elements: Vec::new(),
             }],
             client_id: None,
         }],
+        &mut mcp_startup_requirements,
         /*prewarmed_client_session*/ None,
         CancellationToken::new(),
     )
@@ -491,17 +495,20 @@ async fn enabled_run_turn_records_advisory_and_continues_model_work() {
     let (session, turn_context, state_db, _codex_home) =
         provenance_fixture(true, Some(format!("{}/v1", server.uri()))).await;
     record_test_boundary(&state_db).await;
+    let mut mcp_startup_requirements = McpStartupRequirements::default();
 
     let result = crate::session::turn::run_turn(
         session.clone(),
         turn_context,
         vec![TurnInput::UserInput {
+            acceptance_order: None,
             content: vec![UserInput::Text {
                 text: "please change generated files".to_string(),
                 text_elements: Vec::new(),
             }],
             client_id: None,
         }],
+        &mut mcp_startup_requirements,
         /*prewarmed_client_session*/ None,
         CancellationToken::new(),
     )
@@ -603,17 +610,20 @@ async fn enabled_git_intent_bridge_records_advisory_before_model_work() {
         Some(repo.path().to_path_buf()),
     )
     .await;
+    let mut mcp_startup_requirements = McpStartupRequirements::default();
 
     let result = crate::session::turn::run_turn(
         session,
         turn_context,
         vec![TurnInput::UserInput {
+            acceptance_order: None,
             content: vec![UserInput::Text {
                 text: "please modify generated files for the API contract".to_string(),
                 text_elements: Vec::new(),
             }],
             client_id: None,
         }],
+        &mut mcp_startup_requirements,
         /*prewarmed_client_session*/ None,
         CancellationToken::new(),
     )

@@ -233,7 +233,7 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
     )
     .await?;
 
-    let root_request = wait_for_captured_request(
+    let _root_request = wait_for_captured_request(
         &root_initial_response,
         |request| {
             request

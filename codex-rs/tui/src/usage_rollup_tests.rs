@@ -503,7 +503,9 @@ fn direct_snapshot_before_exact_response_does_not_bill_cumulative_history() {
         Some(10)
     );
     assert_eq!(
-        history["response_dates"].as_object().map(|ids| ids.len()),
+        history["response_dates"]
+            .as_object()
+            .map(serde_json::Map::len),
         Some(1)
     );
 }

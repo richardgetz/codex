@@ -190,6 +190,7 @@ async fn request_skill_dependencies(
             },
         )
         .await
+        .map(|response| response.response)
         .unwrap_or_else(|| RequestUserInputResponse {
             answers: HashMap::new(),
         });

@@ -22,6 +22,7 @@ SELECT
     threads.updated_at_ms AS updated_at,
     threads.recency_at_ms AS recency_at,
     threads.source,
+    threads.originator,
     threads.history_mode,
     threads.thread_source,
     threads.agent_nickname,
@@ -54,6 +55,7 @@ SELECT
     threads.section_position,
     threads.section_entered_at_ms,
     threads.project_id,
+    threads.daybreak_enabled,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
@@ -624,6 +626,7 @@ INSERT INTO threads (
     updated_at_ms,
     recency_at_ms,
     source,
+    originator,
     history_mode,
     thread_source,
     agent_nickname,
@@ -650,8 +653,9 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode,
-    project_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    project_id,
+    daybreak_enabled
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -664,6 +668,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(datetime_to_epoch_millis(updated_at))
         .bind(datetime_to_epoch_millis(recency_at))
         .bind(metadata.source.as_str())
+        .bind(metadata.originator.as_deref())
         .bind(metadata.history_mode.as_str())
         .bind(
             metadata
@@ -701,9 +706,24 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.git_origin_url.as_deref())
         .bind("enabled")
         .bind(metadata.project_id.as_deref())
+        .bind(metadata.daybreak_enabled)
         .execute(self.pool.as_ref())
         .await?;
         self.insert_thread_spawn_edge_from_source_if_absent(metadata.id, metadata.source.as_str())
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Set the user preference without changing rollout-derived thread metadata.
+    pub async fn set_thread_daybreak_enabled(
+        &self,
+        thread_id: ThreadId,
+        daybreak_enabled: bool,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query("UPDATE threads SET daybreak_enabled = ? WHERE id = ?")
+            .bind(daybreak_enabled)
+            .bind(thread_id.to_string())
+            .execute(self.pool.as_ref())
             .await?;
         Ok(result.rows_affected() > 0)
     }
@@ -912,6 +932,7 @@ WHERE id = ?
         // Backfill/reconcile callers merge existing git info before upserting, but that
         // read/modify/write is not atomic. Preserve non-null SQLite git fields here so
         // an explicit metadata update cannot be lost if a stale rollout upsert lands later.
+        // Daybreak and project choices are insert-only here; explicit changes use their setters.
         sqlx::query(
             r#"
 INSERT INTO threads (
@@ -924,6 +945,7 @@ INSERT INTO threads (
     updated_at_ms,
     recency_at_ms,
     source,
+    originator,
     history_mode,
     thread_source,
     agent_nickname,
@@ -950,8 +972,9 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode,
-    project_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    project_id,
+    daybreak_enabled
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = CASE
         WHEN ? OR threads.archived = excluded.archived THEN excluded.rollout_path
@@ -964,6 +987,7 @@ ON CONFLICT(id) DO UPDATE SET
     updated_at_ms = excluded.updated_at_ms,
     recency_at_ms = threads.recency_at_ms,
     source = excluded.source,
+    originator = COALESCE(threads.originator, excluded.originator),
     -- Paginated history is a one-way promotion; stale legacy metadata must not downgrade it.
     history_mode = CASE
         WHEN threads.history_mode = 'paginated' THEN threads.history_mode
@@ -1009,6 +1033,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(datetime_to_epoch_millis(updated_at))
         .bind(datetime_to_epoch_millis(insert_recency_at))
         .bind(metadata.source.as_str())
+        .bind(metadata.originator.as_deref())
         .bind(metadata.history_mode.as_str())
         .bind(
             metadata
@@ -1046,6 +1071,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.git_origin_url.as_deref())
         .bind(creation_memory_mode.unwrap_or("enabled"))
         .bind(metadata.project_id.as_deref())
+        .bind(metadata.daybreak_enabled)
         .bind(matches!(archive_state_update, ArchiveStateUpdate::Replace))
         .bind(matches!(archive_state_update, ArchiveStateUpdate::Replace))
         .bind(matches!(archive_state_update, ArchiveStateUpdate::Replace))
@@ -1327,6 +1353,7 @@ SELECT
     threads.updated_at_ms AS updated_at,
     threads.recency_at_ms AS recency_at,
     threads.source,
+    threads.originator,
     threads.history_mode,
     threads.thread_source,
     threads.agent_nickname,
@@ -1359,6 +1386,7 @@ SELECT
     threads.section_position,
     threads.section_entered_at_ms,
     threads.project_id,
+    threads.daybreak_enabled,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
@@ -1376,6 +1404,7 @@ pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
         | RolloutItem::TurnContext(_)
         | RolloutItem::WorldState(_)
         | RolloutItem::RealtimeItem(_)
+        | RolloutItem::RetainedContext(_)
         | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::TokenUsageRecord(_)
         | RolloutItem::EventMsg(_) => None,
@@ -2748,7 +2777,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upsert_thread_preserves_existing_git_fields_atomically() {
+    async fn upsert_thread_preserves_existing_git_and_originator_atomically() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(
             crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
@@ -2772,6 +2801,7 @@ mod tests {
             .expect("initial upsert should succeed");
 
         let mut rollout_metadata = metadata.clone();
+        rollout_metadata.originator = Some("recorded_client".to_string());
         rollout_metadata.git_sha = Some("rollout-sha".to_string());
         rollout_metadata.git_branch = Some("rollout-branch".to_string());
         rollout_metadata.git_origin_url = Some(
@@ -2789,12 +2819,27 @@ mod tests {
             .await
             .expect("thread should load")
             .expect("thread should exist");
+        assert_eq!(persisted.originator.as_deref(), Some("recorded_client"));
         assert_eq!(persisted.git_sha.as_deref(), Some("sqlite-sha"));
         assert_eq!(persisted.git_branch.as_deref(), Some("sqlite-branch"));
         assert_eq!(
             persisted.git_origin_url.as_deref(),
             Some("git@example.com:openai/codex.git")
         );
+
+        for incoming_originator in [None, Some("resume_client")] {
+            rollout_metadata.originator = incoming_originator.map(str::to_owned);
+            runtime
+                .upsert_thread(&rollout_metadata)
+                .await
+                .expect("later upsert should succeed");
+            let persisted = runtime
+                .get_thread(thread_id)
+                .await
+                .expect("thread should load")
+                .expect("thread should exist");
+            assert_eq!(persisted.originator.as_deref(), Some("recorded_client"));
+        }
     }
 
     #[tokio::test]

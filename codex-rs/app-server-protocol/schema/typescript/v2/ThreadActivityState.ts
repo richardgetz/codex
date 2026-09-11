@@ -5,4 +5,4 @@ import type { ThreadActivity } from "./ThreadActivity";
 import type { ThreadActivityWaitReason } from "./ThreadActivityWaitReason";
 import type { ThreadPauseState } from "./ThreadPauseState";
 
-export type ThreadActivityState = { threadId: string, rootThreadId: string, activity: ThreadActivity, pauseState: ThreadPauseState, waitReason?: ThreadActivityWaitReason | null, inFlightOperations: number, };
+export type ThreadActivityState = { threadId: string, rootThreadId: string, activity: ThreadActivity, pauseState: ThreadPauseState, waitReason: ThreadActivityWaitReason | null, inFlightOperations: number, };

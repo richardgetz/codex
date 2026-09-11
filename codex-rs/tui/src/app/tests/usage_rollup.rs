@@ -215,6 +215,7 @@ async fn background_descendant_usage_survives_routing_and_widget_switch() -> Res
     assert_eq!(before_switch.sources.len(), 2);
 
     let replacement = ChatWidget::new_with_app_event(ChatWidgetInit {
+        local_settings: crate::local_settings::LocalSettings::from(&app.config),
         config: app.config.clone(),
         environment_manager: app.environment_manager.clone(),
         frame_requester: FrameRequester::test_dummy(),
@@ -230,10 +231,7 @@ async fn background_descendant_usage_survives_routing_and_widget_switch() -> Res
         feedback: app.feedback.clone(),
         is_first_run: false,
         status_account_display: app.chat_widget.status_account_display().cloned(),
-        runtime_model_provider_base_url: app
-            .chat_widget
-            .runtime_model_provider_base_url()
-            .map(str::to_string),
+        requires_openai_auth: app.chat_widget.requires_openai_auth,
         initial_plan_type: app.chat_widget.current_plan_type(),
         initial_collaboration_mode: None,
         model: Some(app.chat_widget.current_model().to_string()),

@@ -22,6 +22,7 @@ pub(crate) use card::UsageRollupStatus;
 pub(crate) use card::new_status_output;
 #[cfg(test)]
 pub(crate) use card::new_status_output_with_rate_limits;
+#[cfg(test)]
 pub(crate) use card::new_status_output_with_rate_limits_handle;
 pub(crate) use card::new_status_output_with_rate_limits_handle_with_sources;
 pub(crate) use helpers::compose_agents_summary;

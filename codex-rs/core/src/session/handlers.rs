@@ -413,6 +413,7 @@ async fn user_input_or_turn_inner_with_reasoning_effort(
                 task_input.push(TurnInput::UserInput {
                     content: items,
                     client_id: client_user_message_id,
+                    acceptance_order: sess.reserve_user_input_order().await,
                 });
             }
             if task_input.is_empty() {
@@ -1546,7 +1547,11 @@ pub(super) async fn submission_loop(
     // To break out of this loop, send Op::Shutdown.
     let mut shutdown_received = false;
     while let Ok(sub) = rx_sub.recv().await {
-        debug!(?sub, "Submission");
+        if matches!(sub.op, Op::ResolveElicitation { .. }) {
+            debug!(submission_id = %sub.id, operation = sub.op.kind(), "Submission");
+        } else {
+            debug!(?sub, "Submission");
+        }
         let dispatch_span = submission_dispatch_span(&sub);
         let should_exit = async {
             match sub.op {

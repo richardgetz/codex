@@ -10,6 +10,7 @@ fn rate_limits(
     RateLimitSnapshot {
         limit_id: None,
         limit_name: None,
+        normal_model_slug: None,
         primary: Some(RateLimitWindow {
             used_percent: primary_used_percent,
             window_minutes: Some(300),

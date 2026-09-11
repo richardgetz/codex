@@ -8,4 +8,4 @@ import type { ThreadPauseState } from "./ThreadPauseState";
 /**
  * Ephemeral activity and manual-pause notification for a loaded thread.
  */
-export type ThreadActivityUpdatedNotification = { threadId: string, rootThreadId: string, activity: ThreadActivity, pauseState: ThreadPauseState, waitReason?: ThreadActivityWaitReason | null, inFlightOperations: number, };
+export type ThreadActivityUpdatedNotification = { threadId: string, rootThreadId: string, activity: ThreadActivity, pauseState: ThreadPauseState, waitReason: ThreadActivityWaitReason | null, inFlightOperations: number, };

@@ -232,6 +232,7 @@ deny = [
         "pagable",
         "rmcp",
         "tonic",
+        "webrtc",
         "zbus",
         # These third-party WebRTC crates still use async-trait and are required
         # by the native GPT-Live WebRTC transport in codex-tui.

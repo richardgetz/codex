@@ -260,6 +260,8 @@ define_runtime_action_bindings! {
         previous_permission_mode,
         next_permission_mode,
         edit_queued_message,
+        prompt_stack_back,
+        skip_question,
     ],
     "composer" => Composer, composer, composer [
         submit,
@@ -294,6 +296,7 @@ define_runtime_action_bindings! {
         insert_line_start,
         open_line_below,
         open_line_above,
+        enter_replace_mode,
         move_left,
         move_right,
         move_up,
@@ -383,6 +386,7 @@ define_runtime_action_bindings! {
         cancel,
     ],
     "agents" => Agents, agents, agents [
+        resume,
         search,
         new_task,
         rename,

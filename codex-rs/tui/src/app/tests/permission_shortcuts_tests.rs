@@ -42,8 +42,10 @@ async fn permission_shortcut_rejections_leave_state_unchanged() -> Result<()> {
             },
         )
         .await?;
-        let mut app_server =
-            AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(client));
+        let mut app_server = AppServerSession::new(
+            codex_app_server_client::AppServerClient::InProcess(client),
+            crate::app_server_session::ThreadParamsMode::Embedded,
+        );
         while events.try_recv().is_ok() {}
         let transcript_len = app.transcript_cells.len();
         app.apply_permission_shortcut(
@@ -73,6 +75,22 @@ async fn permission_shortcut_rejections_leave_state_unchanged() -> Result<()> {
                 .replace(&thread_id.to_string(), "<THREAD_ID>")
         );
         assert!(events.try_recv().is_err());
+        if !experimental_api {
+            app.select_permission_profile(
+                &mut app_server,
+                PermissionProfileSelection {
+                    profile_id: "server-only".into(),
+                    approval_policy: None,
+                    approvals_reviewer: None,
+                    display_label: "server-only".into(),
+                },
+            )
+            .await;
+            insta::assert_snapshot!(
+                next_history_message(&mut events),
+                @"■ Named profiles require a newer app server."
+            );
+        }
         app_server.shutdown().await?;
     }
     Ok(())
