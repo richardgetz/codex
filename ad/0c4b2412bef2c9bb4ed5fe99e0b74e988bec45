@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-11/team-ci-format#ad0c4b2412be"
+  change_type: chore
+  scope: core
+  summary: Restore CI formatting after the final team-control lint edits.
+  decision: Apply the repository formatter after lint auto-fixes and verify the same format check used by CI.
+  constraints:
+    - Change formatting only; preserve team activity, pause, and Lead balance behavior.
+    - Do not weaken CI checks or run broad tests for a formatting-only correction.
+  intent_priority: should
+  code_locations:
+    - codex-rs/core/src/agent/control.rs
+    - codex-rs/core/src/session/team.rs
+    - codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: Codex Lead and Luna Worker team
+    model: gpt-6-astra
