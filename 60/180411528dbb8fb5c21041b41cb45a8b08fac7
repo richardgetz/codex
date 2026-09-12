@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-12/reconnect-fixture-lifecycle#6018041152"
+  change_type: "test"
+  scope: "codex-rs/tui"
+  summary: "Model reconnect fixture completion before asserting queued follow-up submission."
+  decision: "Drive the restored prompt through the existing test lifecycle start/completion notifications so the fixture clears both pending-start and task-running state before testing follow-up queue draining."
+  constraints:
+    - "Keep production queue gates unchanged."
+    - "Preserve recovered-input manual-edit and follow-up submission assertions."
+    - "Do not alter the original Team or TUI proof assertions."
+  intent_priority: "normal"
+  code_locations:
+    - "codex-rs/tui/src/chatwidget/tests/composer_submission.rs::reconnect_holds_only_recovered_input_until_manually_edited"
+  requested_by: "/root/stable_refresh"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
