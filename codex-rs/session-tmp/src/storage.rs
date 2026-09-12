@@ -1,8 +1,6 @@
 use super::AGENTS_DIR;
 use super::CleanupReport;
 use super::EntryMetadata;
-use super::MANAGED_ROOT_MARKER;
-use super::MANAGED_ROOT_MARKER_CONTENT;
 use super::ReapMode;
 use super::SESSION_METADATA_FILE;
 use super::SESSIONS_DIR;
@@ -46,61 +44,23 @@ pub(super) struct LeaseRecord {
     pub(super) updated_at: u64,
 }
 
-pub(super) fn ensure_managed_root(root: &Path) -> Result<(), SessionTmpError> {
-    fs::create_dir_all(root)?;
-    ensure_directory_not_symlink(root)?;
-    set_private_directory(root)?;
-    let marker = root.join(MANAGED_ROOT_MARKER);
-    if fs::symlink_metadata(&marker)
+pub(super) fn read_lease_record(path: &Path) -> Result<LeaseRecord, SessionTmpError> {
+    if fs::symlink_metadata(path)
         .map(|metadata| file_type_is_link(metadata.file_type()))
         .unwrap_or(false)
     {
-        return Err(SessionTmpError::UnsafeManagedPath(marker));
+        return Err(SessionTmpError::UnsafeManagedPath(path.to_path_buf()));
     }
-    if marker.exists() {
-        let content = fs::read_to_string(&marker)?;
-        if content != MANAGED_ROOT_MARKER_CONTENT {
-            return Err(SessionTmpError::RootNotManaged(root.to_path_buf()));
-        }
-    } else {
-        let mut entries = fs::read_dir(root)?;
-        if entries.next().transpose()?.is_some() {
-            return Err(SessionTmpError::RootNotManaged(root.to_path_buf()));
-        }
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&marker)
-        {
-            Ok(mut file) => {
-                use std::io::Write;
-                file.write_all(MANAGED_ROOT_MARKER_CONTENT.as_bytes())?;
-                file.sync_all()?;
-                set_private_file(&marker)?;
-            }
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-                let content = fs::read_to_string(&marker)?;
-                if content != MANAGED_ROOT_MARKER_CONTENT {
-                    return Err(SessionTmpError::RootNotManaged(root.to_path_buf()));
-                }
-                set_private_file(&marker)?;
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
-    let sessions_dir = root.join(SESSIONS_DIR);
-    ensure_directory_not_symlink(&sessions_dir)?;
-    fs::create_dir_all(&sessions_dir)?;
-    set_private_directory(&sessions_dir)?;
-    Ok(())
+    Ok(serde_json::from_slice(&fs::read(path)?)?)
 }
 
 pub(super) fn reap_sessions(
-    root: &Path,
+    state: &super::state::ControlState,
     mode: ReapMode,
     excluded_session_id: Option<&str>,
 ) -> Result<CleanupReport, SessionTmpError> {
-    let sessions_dir = root.join(SESSIONS_DIR);
+    let sessions_dir = state.state_sessions_dir();
+    state.ensure_state_layout()?;
     ensure_directory_not_symlink(&sessions_dir)?;
     let now = now_seconds();
     let mut report = CleanupReport::default();
@@ -155,10 +115,23 @@ pub(super) fn reap_sessions(
         }) else {
             continue;
         };
+        let _legacy_lock = match try_lock_legacy_session(state.payload_root(), directory_session_id)? {
+            LegacyLock::Held(lock) => Some(lock),
+            LegacyLock::Absent => None,
+            LegacyLock::Unavailable => continue,
+        };
         let Ok(record) = read_session_record(&record_path) else {
             continue;
         };
-        let fresh_lease = match has_fresh_lease(&session_dir.join(LEASES_DIR), LEASE_STALE_AFTER) {
+        let fresh_lease = match has_fresh_lease(&session_dir.join(LEASES_DIR), LEASE_STALE_AFTER)
+            .and_then(|state_lease| {
+                has_fresh_lease(
+                    &state.legacy_session_dir(directory_session_id).join(LEASES_DIR),
+                    LEASE_STALE_AFTER,
+                )
+                .map(|legacy_lease| state_lease || legacy_lease)
+            })
+        {
             Ok(fresh_lease) => fresh_lease,
             Err(error) if is_skippable_reap_error(mode, &error) => {
                 tracing::debug!(
@@ -183,23 +156,162 @@ pub(super) fn reap_sessions(
         {
             continue;
         }
-        match remove_path(&session_dir) {
-            Ok(true) => {
-                report.removed_paths += 1;
-                report.removed_sessions += 1;
+        let payload_session = state.payload_session_dir(directory_session_id);
+        if let Ok(metadata) = fs::symlink_metadata(&payload_session)
+            && (file_type_is_link(metadata.file_type()) || !metadata.file_type().is_dir())
+        {
+            let error = SessionTmpError::UnsafeManagedPath(payload_session);
+            if is_skippable_reap_error(mode, &error) {
+                continue;
             }
+            return Err(error);
+        }
+        match remove_path(&payload_session) {
+            Ok(true) => report.removed_paths += 1,
             Ok(false) => {}
             Err(error) if is_skippable_reap_error(mode, &error) => {
                 tracing::debug!(
                     error = %error,
-                    session_dir = %session_dir.display(),
+                    session_dir = %payload_session.display(),
                     "skipping stale session that could not be removed"
                 );
             }
             Err(error) => return Err(error),
         }
+        if let Err(error) = remove_state_session(&session_dir) {
+            if is_skippable_reap_error(mode, &error) {
+                tracing::debug!(error = %error, session_dir = %session_dir.display(), "skipping stale session control cleanup");
+                continue;
+            }
+            return Err(error);
+        }
+        if !session_dir.exists() {
+            drop(_legacy_lock);
+            drop(_session_lock);
+            if let Err(error) = remove_session_lock(&sessions_dir, directory_session_id) {
+                if is_skippable_reap_error(mode, &error) {
+                    tracing::debug!(
+                        error = %error,
+                        session_id = %directory_session_id,
+                        "stale session lock cleanup deferred"
+                    );
+                } else {
+                    return Err(error);
+                }
+            }
+            report.removed_sessions += 1;
+        }
     }
     Ok(report)
+}
+
+pub(super) fn remove_session_lock(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<(), SessionTmpError> {
+    let locks_dir = sessions_dir.join(SESSION_LOCKS_DIR);
+    ensure_directory_not_symlink(&locks_dir)?;
+    if !locks_dir.is_dir() {
+        return Ok(());
+    }
+    let lock_path = locks_dir.join(format!("{session_id}.lock"));
+    match fs::symlink_metadata(&lock_path) {
+        Ok(metadata) if file_type_is_link(metadata.file_type()) => {
+            return Err(SessionTmpError::UnsafeManagedPath(lock_path));
+        }
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            return Err(SessionTmpError::UnsafeManagedPath(lock_path));
+        }
+        Ok(_) => match fs::remove_file(&lock_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        },
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    }
+    if fs::read_dir(&locks_dir)?.next().transpose()?.is_none() {
+        fs::remove_dir(locks_dir)?;
+    }
+    Ok(())
+}
+
+fn remove_state_session(session_dir: &Path) -> Result<(), SessionTmpError> {
+    for name in [SESSION_METADATA_FILE, super::ENTRY_METADATA_DIR, LEASES_DIR] {
+        let path = session_dir.join(name);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if file_type_is_link(metadata.file_type()) {
+            return Err(SessionTmpError::UnsafeManagedPath(path));
+        }
+        if metadata.is_dir() {
+            let entries = fs::read_dir(&path)?;
+            for item in entries {
+                let child = item?.path();
+                let child_name = child.file_stem().and_then(|name| name.to_str());
+                let child_metadata = fs::symlink_metadata(&child)?;
+                if file_type_is_link(child_metadata.file_type()) {
+                    return Err(SessionTmpError::UnsafeManagedPath(child));
+                }
+                if name == super::ENTRY_METADATA_DIR {
+                    let Ok(record) = read_metadata(&child) else {
+                        continue;
+                    };
+                    if record.session_id
+                        != session_dir
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or_default()
+                        || child_name != Some(record.id.as_str())
+                    {
+                        continue;
+                    }
+                } else if name == LEASES_DIR {
+                    let Ok(record) = read_lease_record(&child) else {
+                        continue;
+                    };
+                    if record.session_id
+                        != session_dir
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or_default()
+                        || record.schema_version != 1
+                        || child_name != Some(record.thread_id.as_str())
+                        || validate_component(&record.thread_id).is_err()
+                    {
+                        continue;
+                    }
+                }
+                remove_path(&child)?;
+            }
+            if fs::read_dir(&path)?.next().transpose()?.is_none() {
+                fs::remove_dir(&path)?;
+            }
+        } else if name == SESSION_METADATA_FILE {
+            let Ok(record) = read_session_record(&path) else {
+                continue;
+            };
+            if record.schema_version != 1
+                || record.session_id
+                    != session_dir
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or_default()
+            {
+                continue;
+            }
+            remove_path(&path)?;
+        } else {
+            return Err(SessionTmpError::UnsafeManagedPath(path));
+        }
+    }
+    if fs::read_dir(session_dir)?.next().transpose()?.is_none() {
+        fs::remove_dir(session_dir)?;
+    }
+    Ok(())
 }
 
 fn is_skippable_reap_error(mode: ReapMode, error: &SessionTmpError) -> bool {
@@ -213,15 +325,20 @@ fn is_skippable_reap_error(mode: ReapMode, error: &SessionTmpError) -> bool {
 }
 
 pub(super) fn resolve_user_session_id(
-    root: &Path,
+    state: &super::state::ControlState,
     candidate_session_id: &str,
     thread_id: &str,
 ) -> Result<String, SessionTmpError> {
-    let sessions_dir = root.join(SESSIONS_DIR);
+    validate_component(candidate_session_id)?;
+    validate_component(thread_id)?;
+    state.ensure_state_layout()?;
+    let sessions_dir = state.state_sessions_dir();
     ensure_directory_not_symlink(&sessions_dir)?;
-    let candidate_dir = sessions_dir.join(candidate_session_id);
-    ensure_directory_not_symlink(&candidate_dir)?;
-    if candidate_dir.is_dir() {
+    let candidate_dir = state.state_session_dir(candidate_session_id);
+    if candidate_dir.is_dir()
+        && read_session_record(&candidate_dir.join(SESSION_METADATA_FILE))
+            .is_ok_and(|record| record.session_id == candidate_session_id)
+    {
         return Ok(candidate_session_id.to_string());
     }
 
@@ -247,13 +364,27 @@ pub(super) fn resolve_user_session_id(
         if record.session_id != session_id {
             continue;
         }
-        let agent_dir = session_dir.join(AGENTS_DIR).join(thread_id);
-        if fs::symlink_metadata(&agent_dir)
+        let agent_dir = state.payload_session_dir(session_id).join(AGENTS_DIR).join(thread_id);
+        let payload_agent_exists = fs::symlink_metadata(&agent_dir)
             .map(|metadata| {
                 metadata.file_type().is_dir() && !file_type_is_link(metadata.file_type())
             })
-            .unwrap_or(false)
-        {
+            .unwrap_or(false);
+        let metadata_dir = session_dir.join(super::ENTRY_METADATA_DIR);
+        let metadata_mentions_thread = metadata_dir.is_dir()
+            && fs::read_dir(&metadata_dir)
+                .ok()
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .any(|item| {
+                    read_metadata(&item.path())
+                        .is_ok_and(|metadata| metadata.session_id == session_id && metadata.thread_id == thread_id)
+                });
+        let lease_path = session_dir
+            .join(LEASES_DIR)
+            .join(format!("{thread_id}.json"));
+        if payload_agent_exists || metadata_mentions_thread || lease_path.exists() {
             return Ok(session_id.to_string());
         }
     }
@@ -321,7 +452,10 @@ pub(super) fn lease_is_fresh(path: &Path, max_age: Duration) -> bool {
     now_seconds().saturating_sub(updated_at) < max_age.as_secs()
 }
 
-fn has_fresh_lease(leases_dir: &Path, max_age: Duration) -> Result<bool, SessionTmpError> {
+pub(super) fn has_fresh_lease(
+    leases_dir: &Path,
+    max_age: Duration,
+) -> Result<bool, SessionTmpError> {
     match fs::symlink_metadata(leases_dir) {
         Ok(metadata)
             if file_type_is_link(metadata.file_type()) || !metadata.file_type().is_dir() =>
@@ -388,6 +522,45 @@ fn open_session_lock(session_dir: &Path) -> Result<File, SessionTmpError> {
     Ok(file)
 }
 
+/// Try to lock a legacy payload lock without creating a new control file.
+/// New code keeps locks in external state; this read-only compatibility check
+/// prevents migration from racing an older binary that still owns the old
+/// lock domain.
+pub(super) fn try_lock_legacy_session(
+    payload_root: &Path,
+    session_id: &str,
+) -> Result<LegacyLock, SessionTmpError> {
+    let locks_dir = payload_root.join(SESSIONS_DIR).join(SESSION_LOCKS_DIR);
+    ensure_directory_not_symlink(&locks_dir)?;
+    let lock_path = locks_dir.join(format!("{session_id}.lock"));
+    let metadata = match fs::symlink_metadata(&lock_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(LegacyLock::Absent),
+        Err(error) => return Err(error.into()),
+    };
+    if file_type_is_link(metadata.file_type()) {
+        return Err(SessionTmpError::UnsafeManagedPath(lock_path));
+    }
+    if !metadata.file_type().is_file() {
+        return Err(SessionTmpError::UnsafeManagedPath(lock_path));
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)?;
+    match file.try_lock() {
+        Ok(()) => Ok(LegacyLock::Held(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(LegacyLock::Unavailable),
+        Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+    }
+}
+
+pub(super) enum LegacyLock {
+    Held(File),
+    Unavailable,
+    Absent,
+}
+
 pub(super) fn lock_session(session_dir: &Path) -> Result<File, SessionTmpError> {
     let file = open_session_lock(session_dir)?;
     file.lock()?;
@@ -403,6 +576,68 @@ pub(super) fn try_lock_session(session_dir: &Path) -> Result<Option<File>, Sessi
     }
 }
 
+/// Try the external lock for an already enrolled session without creating a
+/// lock file or parent directory. Heartbeats and migration probes use this
+/// form so a reaper can remove a session while they are asleep without a
+/// racing probe recreating partial control state.
+pub(super) fn try_lock_existing_session(
+    session_dir: &Path,
+) -> Result<ExistingSessionLock, SessionTmpError> {
+    let metadata = match fs::symlink_metadata(session_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Ok(ExistingSessionLock::Absent);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if file_type_is_link(metadata.file_type()) || !metadata.file_type().is_dir() {
+        return Err(SessionTmpError::UnsafeManagedPath(session_dir.to_path_buf()));
+    }
+    let sessions_dir = session_dir
+        .parent()
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "session path has no parent"))?;
+    let locks_dir = sessions_dir.join(SESSION_LOCKS_DIR);
+    let lock_metadata = match fs::symlink_metadata(&locks_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Ok(ExistingSessionLock::Absent);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if file_type_is_link(lock_metadata.file_type()) || !lock_metadata.file_type().is_dir() {
+        return Err(SessionTmpError::UnsafeManagedPath(locks_dir));
+    }
+    let session_id = session_dir
+        .file_name()
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "session path has no name"))?;
+    let lock_path = locks_dir.join(format!("{}.lock", session_id.to_string_lossy()));
+    let metadata = match fs::symlink_metadata(&lock_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Ok(ExistingSessionLock::Absent);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if file_type_is_link(metadata.file_type()) || !metadata.file_type().is_file() {
+        return Err(SessionTmpError::UnsafeManagedPath(lock_path));
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)?;
+    match file.try_lock() {
+        Ok(()) => Ok(ExistingSessionLock::Held(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(ExistingSessionLock::Unavailable),
+        Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+    }
+}
+
+pub(super) enum ExistingSessionLock {
+    Held(File),
+    Unavailable,
+    Absent,
+}
+
 pub(super) fn write_json_atomically<T: Serialize>(
     path: &Path,
     value: &T,
@@ -415,6 +650,41 @@ pub(super) fn write_json_atomically<T: Serialize>(
     })?;
     ensure_directory_not_symlink(parent)?;
     fs::create_dir_all(parent)?;
+    ensure_directory_not_symlink(parent)?;
+    write_json_atomically_in_existing_parent(path, value)
+}
+
+/// Atomically updates a control file only when its parent already exists.
+/// Heartbeats use this variant for legacy compatibility files so deleting a
+/// disposable payload cannot cause the heartbeat to recreate its old control
+/// hierarchy.
+pub(super) fn write_json_atomically_existing<T: Serialize>(
+    path: &Path,
+    value: &T,
+) -> Result<(), SessionTmpError> {
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            "metadata path has no parent directory",
+        )
+    })?;
+    ensure_directory_not_symlink(parent)?;
+    if !parent.is_dir() {
+        return Err(io::Error::new(ErrorKind::NotFound, "metadata parent directory is missing").into());
+    }
+    write_json_atomically_in_existing_parent(path, value)
+}
+
+fn write_json_atomically_in_existing_parent<T: Serialize>(
+    path: &Path,
+    value: &T,
+) -> Result<(), SessionTmpError> {
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            "metadata path has no parent directory",
+        )
+    })?;
     ensure_directory_not_symlink(parent)?;
     if fs::symlink_metadata(path)
         .map(|metadata| file_type_is_link(metadata.file_type()))

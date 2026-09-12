@@ -60,8 +60,6 @@ use tokio::sync::SemaphorePermit;
 
 pub(crate) const MEMORY_WRITE_GATE_PERMITS: u32 = 1024;
 
-const SESSION_TMP_RECOVERY_ROOT: &str = "session-tmp-recovery";
-
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
@@ -1232,56 +1230,26 @@ impl Session {
                             | codex_session_tmp::SessionTmpError::RootNotAbsolute(_)
                             | codex_session_tmp::SessionTmpError::RootNotManaged(_)
                             | codex_session_tmp::SessionTmpError::UnsafeManagedPath(_)
+                            | codex_session_tmp::SessionTmpError::InvalidMetadata { .. }
+                            | codex_session_tmp::SessionTmpError::Json(_)
                     ) =>
                 {
                     return Err(error.into());
                 }
-                Err(original_error) => {
-                    let recovery_root = config.codex_home.join(SESSION_TMP_RECOVERY_ROOT);
-                    let recovery_config = codex_session_tmp::SessionTmpConfig {
-                        root: Some(recovery_root.to_path_buf()),
-                        ..session_tmp_config.clone()
-                    };
-                    match codex_session_tmp::SessionTmpManager::open(
-                        &recovery_config,
-                        config.codex_home.as_path(),
-                        &session_id.to_string(),
-                        &thread_id.to_string(),
-                        session_tmp_owner,
-                    ) {
-                        Ok(session_tmp) => {
-                            warn!(
-                                error = %original_error,
-                                recovery_root = %recovery_root.display(),
-                                "managed session temporary storage root unavailable; using a validated recovery root for this runtime"
-                            );
-                            (
-                                session_tmp,
-                                recovery_config,
-                                Some(format!(
-                                    "Session temporary storage root was unavailable; using recovery root {} for this runtime. The original root was not adopted or deleted.",
-                                    recovery_root.display()
-                                )),
-                            )
-                        }
-                        Err(recovery_error) => {
-                            warn!(
-                                error = %original_error,
-                                recovery_error = %recovery_error,
-                                recovery_root = %recovery_root.display(),
-                                "managed session temporary storage is unavailable; continuing without it for this runtime"
-                            );
-                            (
-                                None,
-                                codex_session_tmp::SessionTmpConfig {
-                                    enabled: false,
-                                    root: None,
-                                    stale_after: session_tmp_config.stale_after,
-                                },
-                                Some("Session temporary storage is unavailable; continuing without it for this runtime. The configured and recovery roots could not be opened safely; use a new empty root or repair a managed marker after verifying its contents.".to_owned()),
-                            )
-                        }
-                    }
+                Err(error) => {
+                    warn!(
+                        error = %error,
+                        "managed session temporary storage is unavailable; continuing without it for this runtime"
+                    );
+                    (
+                        None,
+                        codex_session_tmp::SessionTmpConfig {
+                            enabled: false,
+                            root: None,
+                            stale_after: session_tmp_config.stale_after,
+                        },
+                        Some("Session temporary storage is unavailable; continuing without it for this runtime. Verify the configured root and external control state before enabling it again.".to_owned()),
+                    )
                 }
             };
         let config = if let Some(warning) = session_tmp_warning {

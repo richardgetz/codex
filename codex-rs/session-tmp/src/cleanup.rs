@@ -1,8 +1,5 @@
 use super::AGENTS_DIR;
 use super::ENTRY_METADATA_DIR;
-use super::LEASES_DIR;
-use super::MANAGED_ROOT_MARKER;
-use super::MANAGED_ROOT_MARKER_CONTENT;
 use super::SESSION_METADATA_FILE;
 use super::SESSIONS_DIR;
 use super::SessionTmpManager;
@@ -47,9 +44,9 @@ impl SessionTmpManager {
             return Err(SessionTmpError::CleanupNotOwned);
         }
         self.ensure_session_layout()?;
-        let _session_lock = storage::lock_session(&self.session_dir)?;
+        let _session_lock = storage::lock_session(&self.state_session_dir)?;
         let mut report = CleanupReport::default();
-        let metadata_dir = self.session_dir.join(ENTRY_METADATA_DIR);
+        let metadata_dir = self.state_session_dir.join(ENTRY_METADATA_DIR);
         super::storage::ensure_directory_not_symlink(&metadata_dir)?;
         let active_agent_threads = self.active_agent_threads()?;
         let preserved_directories = active_agent_threads
@@ -107,13 +104,13 @@ impl SessionTmpManager {
             return Err(SessionTmpError::CleanupNotOwned);
         }
         self.ensure_root_identity()?;
-        reap_sessions(&self.root, mode, Some(&self.session_id))
+        reap_sessions(&self.state, mode, Some(&self.session_id))
     }
 
     fn clean_paths(&self) -> Result<CleanupReport, SessionTmpError> {
         self.ensure_session_layout()?;
-        let _session_lock = storage::lock_session(&self.session_dir)?;
-        let metadata_dir = self.session_dir.join(ENTRY_METADATA_DIR);
+        let _session_lock = storage::lock_session(&self.state_session_dir)?;
+        let metadata_dir = self.state_session_dir.join(ENTRY_METADATA_DIR);
         super::storage::ensure_directory_not_symlink(&metadata_dir)?;
         super::storage::ensure_directory_not_symlink(&self.session_dir.join(AGENTS_DIR))?;
         let mut report = CleanupReport::default();
@@ -215,26 +212,41 @@ impl SessionTmpManager {
     fn active_agent_threads(&self) -> Result<HashSet<String>, SessionTmpError> {
         let agents_dir = self.session_dir.join(AGENTS_DIR);
         super::storage::ensure_directory_not_symlink(&agents_dir)?;
-        if !agents_dir.is_dir() {
-            return Ok(HashSet::new());
-        }
         let mut threads = HashSet::new();
-        for item in fs::read_dir(agents_dir)? {
-            let path = item?.path();
-            let Some(thread_id) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if thread_id != self.thread_id
-                && fs::symlink_metadata(&path)
-                    .map(|metadata| {
-                        metadata.file_type().is_dir() && !file_type_is_link(metadata.file_type())
-                    })
-                    .unwrap_or(false)
-                && storage::lease_is_fresh_for_thread(&self.session_dir, thread_id)
-            {
-                threads.insert(thread_id.to_string());
+        if agents_dir.is_dir() {
+            for item in fs::read_dir(&agents_dir)? {
+                let path = item?.path();
+                let Some(thread_id) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                if thread_id != self.thread_id
+                    && fs::symlink_metadata(&path)
+                        .map(|metadata| {
+                            metadata.file_type().is_dir() && !file_type_is_link(metadata.file_type())
+                        })
+                        .unwrap_or(false)
+                    && (storage::lease_is_fresh_for_thread(&self.state_session_dir, thread_id)
+                        || storage::lease_is_fresh_for_thread(&self.session_dir, thread_id))
+                {
+                    threads.insert(thread_id.to_string());
+                }
             }
         }
+        add_fresh_lease_threads(
+            &self.state_session_dir.join(super::storage::LEASES_DIR),
+            &self.session_id,
+            &self.thread_id,
+            &mut threads,
+        )?;
+        add_fresh_lease_threads(
+            &self
+                .state
+                .legacy_session_dir(&self.session_id)
+                .join(super::storage::LEASES_DIR),
+            &self.session_id,
+            &self.thread_id,
+            &mut threads,
+        )?;
         Ok(threads)
     }
 
@@ -243,7 +255,7 @@ impl SessionTmpManager {
         metadata: EntryMetadata,
     ) -> Result<TempEntry, SessionTmpError> {
         self.ensure_session_layout()?;
-        let metadata_dir = self.session_dir.join(ENTRY_METADATA_DIR);
+        let metadata_dir = self.state_session_dir.join(ENTRY_METADATA_DIR);
         super::storage::ensure_directory_not_symlink(&metadata_dir)?;
         fs::create_dir_all(&metadata_dir)?;
         set_private_directory(&metadata_dir)?;
@@ -260,7 +272,7 @@ impl SessionTmpManager {
 
     pub(super) fn write_session_record(&self, status: &str) -> Result<(), SessionTmpError> {
         self.ensure_session_layout()?;
-        let path = self.session_dir.join(SESSION_METADATA_FILE);
+        let path = self.state_session_dir.join(SESSION_METADATA_FILE);
         let created_at = read_session_record(&path)
             .ok()
             .map(|record| record.created_at)
@@ -303,44 +315,59 @@ impl SessionTmpManager {
         if !absolute_path.starts_with(&agent_dir) {
             return Err(SessionTmpError::PathOutsideAgent(absolute_path));
         }
-        self.ensure_entry_parent(&absolute_path, &agent_dir)?;
+        match fs::symlink_metadata(&agent_dir) {
+            Ok(metadata) if file_type_is_link(metadata.file_type()) => {
+                return Err(SessionTmpError::UnsafeManagedPath(agent_dir));
+            }
+            Ok(metadata) if !metadata.file_type().is_dir() => {
+                return Err(SessionTmpError::UnsafeManagedPath(agent_dir));
+            }
+            Ok(_) => self.ensure_entry_parent(&absolute_path, &agent_dir)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // A manually deleted payload may remove another agent's
+                // directory while its external metadata remains. The path is
+                // component-validated above, and no existing descendant can
+                // escape when the agent root itself is absent.
+            }
+            Err(error) => return Err(error.into()),
+        }
         Ok(absolute_path)
     }
 
     pub(super) fn ensure_root_identity(&self) -> Result<(), SessionTmpError> {
+        self.state.ensure_identity()?;
+        super::state::ensure_existing_ancestors_for_runtime(&self.root)?;
         super::storage::ensure_directory_not_symlink(&self.root)?;
-        let canonical_root = fs::canonicalize(&self.root)?;
+        let canonical_root = super::state::canonicalize_for_identity(&self.root)?;
         if canonical_root != self.canonical_root {
             return Err(SessionTmpError::UnsafeManagedPath(self.root.clone()));
-        }
-        let marker = self.root.join(MANAGED_ROOT_MARKER);
-        if fs::symlink_metadata(&marker)
-            .map(|metadata| storage::file_type_is_link(metadata.file_type()))
-            .unwrap_or(false)
-        {
-            return Err(SessionTmpError::UnsafeManagedPath(marker));
-        }
-        if fs::read_to_string(&marker)? != MANAGED_ROOT_MARKER_CONTENT {
-            return Err(SessionTmpError::RootNotManaged(self.root.clone()));
         }
         Ok(())
     }
 
     pub(super) fn ensure_session_layout(&self) -> Result<(), SessionTmpError> {
         self.ensure_root_identity()?;
-        let sessions_dir = self.root.join(SESSIONS_DIR);
+        let payload_namespace = &self.payload_namespace;
+        super::storage::ensure_directory_not_symlink(payload_namespace)?;
+        fs::create_dir_all(payload_namespace)?;
+        super::storage::set_private_directory(payload_namespace)?;
+        let sessions_dir = payload_namespace.join(SESSIONS_DIR);
         super::storage::ensure_directory_not_symlink(&sessions_dir)?;
         fs::create_dir_all(&sessions_dir)?;
+        super::storage::set_private_directory(&sessions_dir)?;
         super::storage::ensure_directory_not_symlink(&self.session_dir)?;
         fs::create_dir_all(&self.session_dir)?;
+        super::storage::set_private_directory(&self.session_dir)?;
         let agents_dir = self.session_dir.join(AGENTS_DIR);
         super::storage::ensure_directory_not_symlink(&agents_dir)?;
         fs::create_dir_all(&agents_dir)?;
-        let leases_dir = self.session_dir.join(LEASES_DIR);
-        super::storage::ensure_directory_not_symlink(&leases_dir)?;
-        fs::create_dir_all(&leases_dir)?;
+        super::storage::set_private_directory(&agents_dir)?;
+        super::storage::ensure_directory_not_symlink(&self.state_session_dir)?;
+        fs::create_dir_all(&self.state_session_dir)?;
+        super::storage::set_private_directory(&self.state_session_dir)?;
         super::storage::ensure_directory_not_symlink(&self.agent_dir)?;
         fs::create_dir_all(&self.agent_dir)?;
+        super::storage::set_private_directory(&self.agent_dir)?;
         Ok(())
     }
 
@@ -374,6 +401,46 @@ impl SessionTmpManager {
             }
         }
     }
+}
+
+fn add_fresh_lease_threads(
+    leases_dir: &Path,
+    session_id: &str,
+    current_thread_id: &str,
+    threads: &mut HashSet<String>,
+) -> Result<(), SessionTmpError> {
+    match fs::symlink_metadata(leases_dir) {
+        Ok(metadata) if file_type_is_link(metadata.file_type()) || !metadata.file_type().is_dir() => {
+            return Err(SessionTmpError::UnsafeManagedPath(leases_dir.to_path_buf()));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    }
+    for item in fs::read_dir(leases_dir)? {
+        let path = item?.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if file_type_is_link(metadata.file_type()) || !metadata.file_type().is_file() {
+            return Err(SessionTmpError::UnsafeManagedPath(path));
+        }
+        let Ok(record) = storage::read_lease_record(&path) else {
+            continue;
+        };
+        let Some(thread_name) = path.file_stem().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if record.schema_version == 1
+            && record.session_id == session_id
+            && path.extension().and_then(|extension| extension.to_str()) == Some("json")
+            && thread_name == record.thread_id
+            && record.thread_id != current_thread_id
+            && storage::validate_component(&record.thread_id).is_ok()
+            && storage::lease_is_fresh(&path, storage::LEASE_STALE_AFTER)
+        {
+            threads.insert(record.thread_id);
+        }
+    }
+    Ok(())
 }
 
 impl Drop for SessionTmpManager {

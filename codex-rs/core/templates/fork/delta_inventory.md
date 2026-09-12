@@ -361,24 +361,20 @@ release or merge rules.
   - Config: `[session_tmp]`; `enabled` defaults to `false`, `root` defaults to
     `<codex_home>/session-tmp`, and `stale_after_days` defaults to `7`.
   - When enabled, each root session and spawned agent receives an isolated
-    managed directory with durable path lineage and ownership metadata. Only
-    managed-layout paths are eligible for cleanup; agents are told that all
+    managed directory with durable path lineage and ownership metadata. The
+    control state is stored under `<codex_home>/state/session-tmp`; disposable
+    payload roots can be deleted and recreated in place without losing leases
+    or ownership. Agents are told that all
     files under their managed directory are disposable and must not store
     durable artifacts, credentials, or source files there.
-  - If a configured root cannot be opened safely, startup and resume first try
-    the deterministic `<codex_home>/session-tmp-recovery` root through the same
-    marker and symlink checks. The original root is not adopted,
-    marker-repaired, or deleted (the safety check may tighten its permissions);
-    a warning names the recovery root used for that runtime. If both roots fail,
-    startup fails open with a bounded warning and disables session
-    temporary storage for that runtime. Operators must choose a new empty root
-    or repair a verified `.codex-managed-session-tmp` marker before re-enabling
-    the feature.
-  - The documented recovery uses a new absolute root, such as
-    `codex -c 'session_tmp.enabled=true' -c
-    'session_tmp.root="/Users/me/.codex/session-tmp-new"'`. The marker is
-    created only for an empty root; the old root and its data are preserved,
-    and the configured root applies on the next start.
+  - New roots enroll only when empty, while validated legacy roots import
+    marker-era session records into external state and retire validated legacy
+    controls plus the old marker after inactive leases and locks drain. The historical
+    `<codex_home>/session-tmp-recovery` tree is automatically merged into the
+    normal default payload namespace with collision-safe, resumable moves;
+    live old-version sessions defer migration until a later open. Unknown
+    files remain untouched, and markerless nonempty custom roots are never
+    adopted.
   - Slash command: `/tmp [status|list|clean|clear|reap [days|--force]]`. The
     current root session owns cleanup; `clear` also removes manual-retention
     entries. Age-limited `reap [days]` and explicit `reap --force` use managed
@@ -386,8 +382,8 @@ release or merge rules.
     `--force` bypassing only the heartbeat age cutoff, skipping unsafe lock or
     lease state, and reporting removed sessions plus preserved safety reasons
     without counting retained session directories as entry paths. `/tmp status`
-    reports the selected recovery agent path when
-    startup had to bypass a rejected original root.
+    reports the configured payload path; external control-state paths are not
+    exposed through agent roots or temporary-directory listings.
 - Local token usage and spend tracking:
   - `/status` can show API-equivalent token usage and estimated cost when
     `[tui.status_token_usage].enabled = true`.
@@ -652,13 +648,17 @@ release or merge rules.
   source of truth.
 - Verify initial context preserves Skills → Apps → Plugins ordering without
   changing App enablement or connector filtering.
-- Verify marker or safety failures in an enabled session temporary root first
-  recover to the deterministic marker-protected sibling root when possible,
-  name the actual recovery path in the warning, and otherwise fail open with a
-  bounded runtime-only disable. Preserve untrusted root contents without
-  adoption or marker rewrites. Verify `/tmp reap --force` bypasses only the age
-  cutoff, reports removed session/path counts, protects the current and fresh-
-  lease sessions, and rejects an ambiguous age-plus-force form.
+- Verify session temporary control state stays under
+  `<codex_home>/state/session-tmp`, payload deletion recreates the same
+  configured namespace, and no control files are written below payload roots.
+  Verify marker-era roots import exact records and retire their marker only
+  after legacy leases and locks drain; recovery-root consolidation is
+  collision-safe, resumable, preserves unknown files, defers live old-version
+  sessions, and retires obsolete recovery state automatically. Markerless
+  nonempty custom roots must remain inert. Verify `/tmp reap --force` bypasses
+  only the age cutoff, reports removed session/path counts, protects current
+  and fresh-lease sessions, preserves unsafe state, and rejects an ambiguous
+  age-plus-force form.
 - Verify `[team]` rejects enabled configurations without both complete profiles,
   remains disabled by default, and `/team` state survives resume/fork without
   mutating global config. Verify Lead routing, Worker routing for all delegated
