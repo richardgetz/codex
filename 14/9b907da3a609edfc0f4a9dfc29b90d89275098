@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-12/team-usage-mock-disambiguation#149b907da3"
+  change_type: "test"
+  scope: "team"
+  summary: "Keep nested usage response mocks disjoint under asynchronous child startup."
+  decision: "Use the fork contract that child-call outputs are omitted from forked context to reserve the grandchild response mock for its own initial request."
+  constraints:
+    - "Do not weaken recursive usage projection assertions."
+    - "Preserve V1/V2 mixed backend coverage."
+    - "Keep the original Team delegation proof tests unchanged."
+    - "Use main-only validation for Cargo tests."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/tests/suite/team_usage.rs::team_usage_projection_reconstructs_recursive_worker_sources"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex stable_refresh Worker"
+    model: "gpt-5.6"
