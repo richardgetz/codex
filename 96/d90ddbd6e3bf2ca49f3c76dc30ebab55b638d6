@@ -1,0 +1,26 @@
+intent:
+  id: "intent/2026-09-12/tool-visibility-regressions"
+  change_type: "fix"
+  scope: "core"
+  summary: "Preserve the fork default-on update-plan contract, repair its explicit gate test, and retain recovered MCP placeholders through cached registration."
+  decision: "Keep UpdatePlanToolConfig default-on and is_none_or resolution from the fork stable line; make the visibility test explicitly disable the tool, compare session_tmp action constants directly, pass augmented MCP inventories through cache registration, and document the preserved fork contracts."
+  constraints:
+    - "Preserve the stable fork default-on update_plan behavior; explicit enabled=false must still hide and unregister it."
+    - "Preserve session_tmp disabled-by-default behavior and hidden lineage tools."
+    - "Preserve MCP mode/config filtering, placeholder recovery, and binding-identity handler reuse."
+    - "Do not change sandbox environment-variable handling."
+    - "Update the fork delta inventory for preserved default/recovery behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/config/src/config_toml.rs"
+    - "codex-rs/core/config.schema.json"
+    - "codex-rs/core/src/config/config_tests.rs"
+    - "codex-rs/core/src/config/mod.rs"
+    - "codex-rs/core/src/mcp_tool_exposure.rs"
+    - "codex-rs/core/src/tools/spec_plan.rs"
+    - "codex-rs/core/src/tools/spec_plan_tests.rs"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5"
