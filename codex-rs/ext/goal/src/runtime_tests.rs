@@ -67,8 +67,8 @@ async fn completed_background_wait_preserves_terminal_handling_for_same_turn() -
 
         let turn_id = "turn-1";
         accounting_state.start_turn(turn_id, ModeKind::Default, &TokenUsage::default());
-        let intent_generation = runtime.begin_background_wait_turn(turn_id).await;
-        accounting_state.set_turn_intent_generation(turn_id, intent_generation);
+        // Let registration establish the wait scope so this proof also compiles against the
+        // pre-split runtime, where the turn-generation setter had a different name.
         accounting_state.mark_turn_goal_active(turn_id, goal.goal_id.clone());
 
         let turn_store = ExtensionData::new(turn_id);
@@ -77,12 +77,7 @@ async fn completed_background_wait_preserves_terminal_handling_for_same_turn() -
             .await;
         let wait_handle = ToolWaitHandle::new("42");
         runtime
-            .register_background_wait(
-                turn_id,
-                &turn_store,
-                "call-wait",
-                &wait_handle,
-            )
+            .register_background_wait(turn_id, &turn_store, "call-wait", &wait_handle)
             .await;
         let wait = runtime
             .claim_background_wait()
@@ -98,7 +93,10 @@ async fn completed_background_wait_preserves_terminal_handling_for_same_turn() -
             "the watcher should complete the exact registered process set"
         );
 
-        runtime.stop_active_goal_for_turn(turn_id, reason).await?;
+        runtime
+            .stop_active_goal_for_turn(turn_id, reason)
+            .await
+            .map_err(anyhow::Error::msg)?;
         let goal = state_dbs
             .thread_goals()
             .get_thread_goal(thread_id)
