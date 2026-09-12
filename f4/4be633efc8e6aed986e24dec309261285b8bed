@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-12/tool-dispatch-cancel-finished#7d1cc10f42"
+  change_type: "fix"
+  scope: "core-activity"
+  summary: "Ensure cancellation owns a dispatch that finished before the select observed cancellation."
+  decision: "Use the terminal lifecycle flag rather than task completion as the result authority; a finished pre-admission dispatch without that flag can have returned the same cancellation-derived TurnAborted error and must flow through the normal aborted response path."
+  constraints:
+    - "Preserve results whose registry terminal lifecycle was claimed."
+    - "Keep genuine join failures and successful results intact."
+    - "Do not start handlers after activity pause or cancellation."
+    - "Retain existing timing and abort notification behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/tools/parallel.rs::ToolCallRuntime::handle_tool_call_with_source"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
