@@ -1,0 +1,21 @@
+intent:
+  id: goal-wait-completion-runtime-proof
+  change_type: test
+  scope: goal
+  summary: Prove tracked wait completion cannot suppress same-turn terminal handling.
+  decision: Enable unit tests for the goal extension library and exercise registration, watcher claim, exact process-set completion, and both terminal stop reasons through private runtime internals; correct the integration fixture to pair each error with its expected status without widening production APIs.
+  constraints:
+    - Preserve production visibility and lifecycle APIs.
+    - Cover TurnError and UsageLimit independently.
+    - Keep the proof deterministic without a live process or billed model.
+    - Retain public lifecycle coverage for integration tests.
+  intent_priority: must
+  code_locations:
+    - codex-rs/ext/goal/Cargo.toml
+    - codex-rs/ext/goal/src/runtime.rs
+    - codex-rs/ext/goal/src/runtime_tests.rs
+    - codex-rs/ext/goal/tests/goal_extension_backend.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: Codex Worker
+    model: unknown
