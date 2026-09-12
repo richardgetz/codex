@@ -32,6 +32,22 @@ fn accepts_safe_integral_float_arguments_for_integer_fields() {
 }
 
 #[test]
+fn accepts_the_safe_integer_boundary_without_rounding() {
+    for (arguments, expected) in [
+        (
+            r#"{"duration_ms":9007199254740992.0}"#,
+            9_007_199_254_740_992,
+        ),
+        (r#"{"duration_ms":0.00000000000000001e17}"#, 1),
+    ] {
+        let parsed = parse_arguments_with_integral_float_fallback::<ValueWithDuration>(arguments)
+            .expect("safe integral values should parse");
+
+        assert_eq!(parsed.duration_ms, expected);
+    }
+}
+
+#[test]
 fn preserves_decimal_values_when_value_is_requested() {
     let parsed =
         parse_arguments_with_integral_float_fallback::<Value>(r#"{"duration_ms":60000.0}"#)

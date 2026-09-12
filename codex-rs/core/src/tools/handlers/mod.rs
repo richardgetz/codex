@@ -56,6 +56,8 @@ use codex_utils_path_uri::PathUri;
 use serde::de::DeserializeOwned;
 use serde_json::Map;
 use serde_json::Value;
+use serde_json::value::RawValue;
+use std::collections::BTreeMap;
 
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::function_tool::FunctionCallError;
@@ -93,7 +95,7 @@ pub use view_image::ViewImageHandler;
 pub(crate) use wait_for_environment::WaitForEnvironmentHandler;
 pub use wait_for_environment::WaitForEnvironmentToolConfig;
 
-const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_992.0;
+const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_992;
 
 pub(crate) fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>
 where
@@ -118,13 +120,19 @@ where
         Ok(value) => Ok(value),
         Err(error) => {
             let error_message = error.to_string();
-            let Ok(mut value) = serde_json::from_str::<Value>(arguments) else {
+            let Ok(mut values) = serde_json::from_str::<BTreeMap<String, Box<RawValue>>>(arguments)
+            else {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "failed to parse function arguments: {error_message}"
                 )));
             };
-            normalize_integral_float_values(&mut value);
-            serde_json::from_value(value).map_err(|_| {
+            normalize_integral_float_values(&mut values);
+            let Ok(normalized) = serde_json::to_string(&values) else {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "failed to parse function arguments: {error_message}"
+                )));
+            };
+            serde_json::from_str(&normalized).map_err(|_| {
                 FunctionCallError::RespondToModel(format!(
                     "failed to parse function arguments: {error_message}"
                 ))
@@ -133,21 +141,29 @@ where
     }
 }
 
-fn normalize_integral_float_values(value: &mut Value) {
-    let Value::Object(values) = value else {
-        return;
-    };
-    for (key, value) in values {
+fn normalize_integral_float_values(values: &mut BTreeMap<String, Box<RawValue>>) {
+    for (key, value) in values.iter_mut() {
         if !integer_argument_key(key) {
             continue;
         }
-        let Value::Number(number) = value else {
+        let Some(normalized) = normalize_integral_number_text(value.get()) else {
             continue;
         };
-        let Some(normalized) = normalize_integral_float(number) else {
+        let Some(magnitude) = normalized
+            .strip_prefix('-')
+            .unwrap_or(&normalized)
+            .parse::<u64>()
+            .ok()
+        else {
             continue;
         };
-        *number = normalized;
+        if magnitude > MAX_SAFE_INTEGER {
+            continue;
+        }
+        let Ok(raw) = RawValue::from_string(normalized) else {
+            continue;
+        };
+        *value = raw;
     }
 }
 
@@ -163,36 +179,14 @@ fn integer_argument_key(key: &str) -> bool {
     )
 }
 
-fn normalize_integral_float(number: &serde_json::Number) -> Option<serde_json::Number> {
-    let text = number.to_string();
-    let normalized = normalize_integral_number_text(&text)?;
-    let value = number.as_f64()?;
-    if !value.is_finite() || value.abs() > MAX_SAFE_INTEGER || value.fract() != 0.0 {
-        return None;
-    }
-    let canonical = serde_json::Number::from_f64(value)?;
-    if normalize_integral_number_text(&canonical.to_string())? != normalized {
-        return None;
-    }
-    if value < 0.0 {
-        Some(serde_json::Number::from(value as i64))
-    } else {
-        Some(serde_json::Number::from(value as u64))
-    }
-}
-
 /// Returns a canonical integer spelling only when the JSON number is exactly
 /// integral. Decimal/exponent parsing stays textual so rounded f64 values do
 /// not silently turn unsafe model output into a different integer.
 fn normalize_integral_number_text(text: &str) -> Option<String> {
-    let (mantissa, exponent) = text
-        .split_once(['e', 'E'])
-        .map_or((text, 0), |(mantissa, exponent)| {
-            (mantissa, exponent.parse::<i32>().ok().unwrap_or(i32::MIN))
-        });
-    if exponent == i32::MIN {
-        return None;
-    }
+    let (mantissa, exponent) = match text.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().ok()?),
+        None => (text, 0),
+    };
     let (negative, mantissa) = mantissa
         .strip_prefix('-')
         .map_or((false, mantissa), |mantissa| (true, mantissa));
@@ -209,38 +203,50 @@ fn normalize_integral_number_text(text: &str) -> Option<String> {
     digits.push_str(integer);
     digits.push_str(fraction);
     let decimal_position = integer.len() as i64 + i64::from(exponent);
-    if decimal_position < 0 {
-        if digits.chars().any(|character| character != '0') {
-            return None;
-        }
+    let Some(first_nonzero) = digits
+        .as_bytes()
+        .iter()
+        .position(|character| *character != b'0')
+    else {
         return Some("0".to_string());
-    }
-    // Integral values above 2^53 are rejected by the f64 safety check below,
-    // so avoid allocating an unbounded zero suffix for huge exponents here.
-    if decimal_position > 16 {
+    };
+    let significant_digits = &digits[first_nonzero..];
+    let significant_decimal_position = decimal_position - first_nonzero as i64;
+    if significant_decimal_position <= 0 {
         return None;
     }
-    let decimal_position = usize::try_from(decimal_position).ok()?;
-    if decimal_position < digits.len()
-        && digits[decimal_position..]
+    // Integral values above 2^53 are rejected by the safe integer check below,
+    // so avoid allocating an unbounded zero suffix for huge exponents here.
+    if significant_decimal_position > 16 {
+        return None;
+    }
+    let decimal_position = usize::try_from(significant_decimal_position).ok()?;
+    if decimal_position < significant_digits.len()
+        && significant_digits[decimal_position..]
             .chars()
             .any(|character| character != '0')
     {
         return None;
     }
-    let integer_end = decimal_position.min(digits.len());
-    let mut integer_digits = digits[..integer_end].to_string();
-    if decimal_position > digits.len() {
-        integer_digits.extend(std::iter::repeat_n('0', decimal_position - digits.len()));
+    let integer_end = decimal_position.min(significant_digits.len());
+    let mut integer_digits = significant_digits[..integer_end].to_string();
+    if decimal_position > significant_digits.len() {
+        integer_digits.extend(std::iter::repeat_n(
+            '0',
+            decimal_position - significant_digits.len(),
+        ));
     }
-    let integer_digits = integer_digits.trim_start_matches('0');
-    if integer_digits.is_empty() {
-        Some("0".to_string())
-    } else if negative {
-        Some(format!("-{integer_digits}"))
+    let normalized = if negative {
+        format!("-{integer_digits}")
     } else {
-        Some(integer_digits.to_string())
-    }
+        integer_digits
+    };
+    let magnitude = normalized
+        .strip_prefix('-')
+        .unwrap_or(&normalized)
+        .parse::<u64>()
+        .ok()?;
+    (magnitude <= MAX_SAFE_INTEGER).then_some(normalized)
 }
 
 fn resolve_sandbox_permissions(

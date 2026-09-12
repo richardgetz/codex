@@ -114,6 +114,13 @@ release or merge rules.
   - Automatic Goal continuations use the same Lead admission boundary and stay
     parked while direct Workers remain active; completion or actionable input
     rechecks the Goal without adding a polling turn.
+  - Ordinary Goal continuations park while the active Goal turn owns tracked
+    unified-exec processes, wake once exact processes terminate or are
+    released, and invalidate stale waiters on turn/Goal replacement, cancel,
+    or user input without stopping the external process.
+  - Selected integer-valued wait arguments accept exactly integral decimal or
+    exponent spellings using their raw numeric lexemes; nested `Value` fields,
+    fractional values, unsafe integers, and handler bounds remain unchanged.
   - A Team Worker entering `wait_agent` with no active child dependency or
     queued activity queues one bounded handoff to its immediate parent. The
     handoff requests review or follow-up without marking the Worker complete;
@@ -600,6 +607,15 @@ release or merge rules.
 - Verify automatic Goal continuations share the Lead admission boundary, remain
   parked while direct Workers are active, and recheck after Worker completion or
   actionable input without introducing a polling turn.
+- Verify ordinary Goal external-wait parking attributes only exact managed
+  unified-exec process IDs to the active Goal turn, wakes once on terminal or
+  released processes, deduplicates concurrent continuations, and invalidates
+  stale waiters on turn/Goal replacement, cancellation, or user input while
+  leaving external processes alive.
+- Verify selected integer wait arguments accept only exactly integral decimal or
+  exponent spellings from preserved raw lexemes, while nested `Value` fields,
+  fractional/unsafe/overflow values, and existing handler bounds remain
+  unchanged.
 - Verify a dependency-free Team Worker `wait_agent` queues one bounded handoff
   to its immediate parent without marking completion, suppresses repeated
   waits in one turn, rearms after meaningful parent input or new work, queues
