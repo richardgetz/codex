@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-12/core-peer-root-payload-diagnostic#14bad46139"
+  change_type: "test"
+  scope: "core-subagent-notifications"
+  summary: "Report bounded root payload candidates when peer completion matching fails."
+  decision: "Include capped root-thread READ request summaries in the existing failure path so a failed peer routing assertion distinguishes mailbox materialization, endpoint attribution, and payload loss without relaxing the strict matcher."
+  constraints:
+    - "Capture at most four root-thread READ candidates and eight agent messages per candidate."
+    - "Cap author and recipient previews at 128 characters and content previews at 256 characters."
+    - "Keep the original mount predicate, completion activity checks, and payload assertion unchanged."
+    - "Use existing ResponseMock APIs; do not modify production routing or public APIs."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/tests/suite/subagent_notifications.rs::multi_agent_v2_peer_followup_completion_notifies_initiating_turn"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
