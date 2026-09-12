@@ -9,6 +9,7 @@ use std::sync::Weak;
 use std::time::Duration;
 
 use codex_analytics::AnalyticsEventsClient;
+use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -24,6 +25,8 @@ use codex_extension_api::ToolCallSource;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolPayload;
+use codex_extension_api::ToolStartInput;
+use codex_extension_api::ToolWaitInput;
 use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
@@ -38,6 +41,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -983,18 +987,9 @@ async fn terminal_errors_after_wait_turn_rebind_stop_the_same_goal() -> anyhow::
 
         // Register a tracked process, then rebind the wait scope to the next
         // turn. The unchanged Goal must still honor its terminal result.
-        let runtime_handle = harness.runtime_handle();
-        let turn_store = ExtensionData::new("turn-1");
-        runtime_handle
-            .capture_tool_wait_scope(&turn_store, "call-wait")
-            .await;
-        runtime_handle
-            .register_background_wait(
-                "turn-1",
-                &turn_store,
-                "call-wait",
-                &ToolWaitHandle::new("42"),
-            )
+        let wait_handle = ToolWaitHandle::new("42");
+        harness
+            .notify_tool_wait("turn-1", "call-wait", "exec_command", &wait_handle)
             .await;
         harness.stop_turn("turn-1").await;
         harness.start_turn("turn-2", &TokenUsage::default()).await;
@@ -1804,6 +1799,22 @@ fn tool_names(tools: &[Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>]) -> Ve
     tools.iter().map(|tool| tool.tool_name().name).collect()
 }
 
+struct EmptyConversationHistory;
+
+impl ConversationHistorySnapshot for EmptyConversationHistory {
+    fn history_version(&self) -> u64 {
+        0
+    }
+
+    fn user_message_revision(&self) -> u64 {
+        0
+    }
+
+    fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
+        Box::new(std::iter::empty())
+    }
+}
+
 struct GoalExtensionHarness {
     registry: Arc<codex_extension_api::ExtensionRegistry<()>>,
     session_store: ExtensionData,
@@ -2031,6 +2042,51 @@ impl GoalExtensionHarness {
                     tool_name: &tool_name,
                     source: ToolCallSource::Direct,
                     outcome,
+                })
+                .await;
+        }
+    }
+
+    async fn notify_tool_wait(
+        &self,
+        turn_id: &str,
+        call_id: &str,
+        tool_name: &str,
+        wait_handle: &ToolWaitHandle,
+    ) {
+        let turn_store = ExtensionData::new(turn_id);
+        let tool_name = codex_extension_api::ToolName::plain(tool_name);
+        let payload = ToolPayload::Function {
+            arguments: "{}".to_string(),
+        };
+        let conversation_history: Arc<dyn ConversationHistorySnapshot> =
+            Arc::new(EmptyConversationHistory);
+        for contributor in self.registry.tool_lifecycle_contributors() {
+            contributor
+                .on_tool_start(ToolStartInput {
+                    session_store: &self.session_store,
+                    thread_store: &self.thread_store,
+                    turn_store: &turn_store,
+                    turn_id,
+                    root_turn_id: None,
+                    call_id,
+                    tool_name: &tool_name,
+                    mcp_tool: None,
+                    payload: &payload,
+                    conversation_history: Arc::clone(&conversation_history),
+                    source: ToolCallSource::Direct,
+                })
+                .await;
+            contributor
+                .on_tool_wait(ToolWaitInput {
+                    session_store: &self.session_store,
+                    thread_store: &self.thread_store,
+                    turn_store: &turn_store,
+                    turn_id,
+                    call_id,
+                    tool_name: &tool_name,
+                    source: ToolCallSource::Direct,
+                    wait_handle,
                 })
                 .await;
         }
