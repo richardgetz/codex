@@ -1298,13 +1298,13 @@ async fn plain_name_selection_prefers_executor_skill_over_host_name_collision() 
 
     let session_store = ExtensionData::new("session");
     let thread_store = ExtensionData::new("thread");
-    thread_store.insert(vec![SelectedCapabilityRoot {
+    let selected_roots = vec![SelectedCapabilityRoot {
         id: "lint-fix".to_string(),
         location: CapabilityRootLocation::Environment {
             environment_id: "env-1".to_string(),
             path: PathUri::parse("file:///skills/lint-fix").expect("skill root URI"),
         },
-    }]);
+    }];
     let session_source = SessionSource::Cli;
     let config = default_config();
     registry.thread_lifecycle_contributors()[0]
@@ -1317,6 +1317,25 @@ async fn plain_name_selection_prefers_executor_skill_over_host_name_collision() 
             extension_metrics: None,
             session_store: &session_store,
             thread_store: &thread_store,
+        })
+        .await;
+
+    // Turn-input contribution consumes the executor catalog captured by the preceding
+    // world-state contribution, just as the production sampling-step flow does.
+    let turn_store = ExtensionData::new("turn-1");
+    registry
+        .context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-1",
+            model_info: &catalog_model_info(),
+            environments: &[],
+            ready_selected_capability_roots: &selected_roots,
+            executor_capability_discovery: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &turn_store,
         })
         .await;
 
@@ -1333,7 +1352,7 @@ async fn plain_name_selection_prefers_executor_skill_over_host_name_collision() 
             /*extension_metrics*/ None,
             &session_store,
             &thread_store,
-            &ExtensionData::new("turn-1"),
+            &turn_store,
         )
         .await;
 
