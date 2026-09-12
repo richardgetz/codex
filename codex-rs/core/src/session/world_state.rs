@@ -318,36 +318,6 @@ impl Session {
                     .features
                     .enabled(Feature::DeferredExecutor),
         ));
-        let apps_available =
-            if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
-                AppToolPolicyEvaluator::new(&turn_context.config.config_layer_stack)
-                    .apply_app_enabled_state(connectors::accessible_connectors_from_mcp_tools(
-                        step_context.mcp.tools(),
-                    ))
-                    .into_iter()
-                    .any(|connector| connector.is_accessible && connector.is_enabled)
-            } else {
-                false
-            };
-        let apps_usage_instructions_available =
-            apps_available && step_model_info.include_apps_usage_instructions;
-        world_state.add_section(AppsInstructionsState::new(
-            apps_usage_instructions_available,
-        ));
-        let plugins_usage_instructions_available = step_context.mcp.plugins_available()
-            && step_model_info.include_plugin_usage_instructions;
-        world_state.add_section(PluginsInstructionsState::new(
-            plugins_usage_instructions_available,
-        ));
-        if turn_context
-            .config
-            .features
-            .enabled(Feature::DeferredToolWorldState)
-        {
-            world_state.add_section(ToolsState::new(
-                step_context.tool_router.deferred_tool_namespaces(),
-            ));
-        }
         let environments = step_context.environments.to_selections();
         let ready_selected_capability_roots = step_context
             .selected_capability_roots
@@ -392,6 +362,36 @@ impl Session {
             {
                 world_state.add_extension_section(section);
             }
+        }
+        let apps_available =
+            if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
+                AppToolPolicyEvaluator::new(&turn_context.config.config_layer_stack)
+                    .apply_app_enabled_state(connectors::accessible_connectors_from_mcp_tools(
+                        step_context.mcp.tools(),
+                    ))
+                    .into_iter()
+                    .any(|connector| connector.is_accessible && connector.is_enabled)
+            } else {
+                false
+            };
+        let apps_usage_instructions_available =
+            apps_available && step_model_info.include_apps_usage_instructions;
+        world_state.add_section(AppsInstructionsState::new(
+            apps_usage_instructions_available,
+        ));
+        let plugins_usage_instructions_available = step_context.mcp.plugins_available()
+            && step_model_info.include_plugin_usage_instructions;
+        world_state.add_section(PluginsInstructionsState::new(
+            plugins_usage_instructions_available,
+        ));
+        if turn_context
+            .config
+            .features
+            .enabled(Feature::DeferredToolWorldState)
+        {
+            world_state.add_section(ToolsState::new(
+                step_context.tool_router.deferred_tool_namespaces(),
+            ));
         }
         let mut multi_agent_mode = MultiAgentModeState::new(
             super::multi_agents::effective_multi_agent_mode(turn_context),

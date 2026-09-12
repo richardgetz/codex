@@ -21,9 +21,7 @@ use crate::compact;
 use crate::compact::CompactedHistoryMetadata;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
-use crate::connectors;
 use crate::context::ActiveScratchpadContext;
-use crate::context::AppsInstructions;
 use crate::context::AvailableMcpInstructions;
 use crate::context::ContextualUserFragment;
 use crate::context::ConventionalCommitsInstructions;
@@ -84,7 +82,6 @@ use codex_async_utils::OrCancelExt;
 use codex_config::types::MemoriesScope;
 use codex_config::types::ScratchpadToml;
 use codex_config::types::SessionTmpToml;
-use codex_connectors::AppToolPolicyEvaluator;
 use codex_connectors::connector_runtime_context_key;
 use codex_context_fragments::RenderedFragment;
 use codex_exec_server::Environment;
@@ -5359,31 +5356,6 @@ impl Session {
                 .await
             {
                 developer_sections.push(fragment.into());
-            }
-        }
-        if !separate_guardian_developer_message
-            && turn_context.config.include_apps_instructions
-            && turn_context.apps_enabled()
-        {
-            let mcp_runtime = &self.services.mcp_runtime;
-            let mcp_tools = match mcp {
-                Some(mcp) => mcp.tools().to_vec(),
-                None => mcp_runtime.latest_list_all_tools().await,
-            };
-            let accessible_connectors =
-                connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
-            let accessible_and_enabled_connectors =
-                AppToolPolicyEvaluator::new(&turn_context.config.config_layer_stack)
-                    .apply_app_enabled_state(accessible_connectors);
-            let accessible_and_enabled_connectors = filter_connectors_for_mode(
-                &turn_context.config,
-                turn_context.mode,
-                &accessible_and_enabled_connectors,
-            );
-            if let Some(apps_instructions) =
-                AppsInstructions::from_connectors(&accessible_and_enabled_connectors)
-            {
-                developer_sections.push(apps_instructions.render_fragment());
             }
         }
         // This is full-context metadata. Steady-state context diffs should not re-emit it.

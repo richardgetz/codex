@@ -40,9 +40,9 @@ release or merge rules.
   `/orchestrator-memory-forget <needle>` command index ahead of the
   8,000-token middle-truncated inventory so essential fork commands remain
   discoverable while the full inventory stays the source of truth.
-- Initial developer context keeps extension Skills ahead of static Apps usage
-  guidance and world-state Plugins guidance, while preserving the existing App
-  enablement and connector filtering rules.
+- Initial developer context keeps extension Skills world-state sections ahead of
+  Apps and Plugins usage guidance, while preserving the existing App enablement,
+  model-capability, and connector filtering rules.
 - Main-checkout Rust build coordination: one designated build owner runs
   serialized Cargo/`just` validation against one shared target/cache after
   source integration; worker worktrees remain source-only, and active
