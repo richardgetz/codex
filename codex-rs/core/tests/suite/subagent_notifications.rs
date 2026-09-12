@@ -2888,6 +2888,31 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
         )
     );
 
+    // `TurnComplete` is broadcast before the child completion is forwarded to its
+    // parent. Wait for the queue-only completion operation so the root request
+    // below cannot race that forwarding step.
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let delivered = manager.captured_ops().into_iter().any(|(thread_id, op)| {
+                thread_id == root_thread_id
+                    && matches!(
+                        op,
+                        Op::InterAgentCommunication { communication, .. }
+                            if !communication.trigger_turn
+                                && communication.author.as_str() == "/root/worker"
+                                && communication.recipient.is_root()
+                                && communication.content.contains("peer follow-up finished")
+                    )
+            });
+            if delivered {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("worker completion should be queued for the root");
+
     let root_result_request = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
