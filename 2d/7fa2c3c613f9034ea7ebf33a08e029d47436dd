@@ -1,0 +1,17 @@
+intent:
+  id: intent/2026-09-12/goal-stale-terminal-error-test#2d7fa2c3c
+  change_type: test
+  scope: goal-continuation
+  summary: Exercise stale terminal errors through the normal turn-stop lifecycle.
+  decision: Extend the replacement Goal regression to run on_turn_stop before applying replacement runtime effects, matching the production error completion order and asserting the replacement remains active.
+  constraints:
+    - Cover both generic turn errors and usage-limit errors without live model requests.
+    - Preserve existing lifecycle and state assertions.
+    - Keep the test deterministic by placing the replacement DB write before stale error handling.
+  intent_priority: must
+  code_locations:
+    - codex-rs/ext/goal/tests/goal_extension_backend.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: unknown
