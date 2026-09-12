@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-12/core-context-ordering#0027144c04"
+  change_type: "fix"
+  scope: "core-context"
+  summary: "Clarify the bounded fork-help command index without changing its behavior."
+  decision: "Describe `/orchestrator-memory-forget` as pruning orchestrator-memory entries so the compact index matches the documented command semantics."
+  constraints:
+    - "Keep the existing bounded command index and 8,000-token ForkHelp cap unchanged."
+    - "Do not change command dispatch or memory storage behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/context/fork_help_instructions.rs::ForkHelpInstructions::body"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
