@@ -365,6 +365,7 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
+            runtime.accounting_state().reset_empty_responses();
             if !runtime.is_enabled() {
                 return;
             }

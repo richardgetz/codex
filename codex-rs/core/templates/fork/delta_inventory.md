@@ -126,6 +126,10 @@ release or merge rules.
     after three consecutive empty responses, while tool, reasoning, user,
     objective, and error activity resets the streak. Tracked external waits
     remain event-driven and do not admit a continuation until their wake.
+  - Backports upstream explicit pause semantics from PR #44290: `update_goal`
+    accepts `paused` only for an explicit user request, accounts final progress
+    with budget limits taking precedence, and keeps resume and system-limit
+    statuses host-controlled.
   - A Team Worker entering `wait_agent` with no active child dependency or
     queued activity queues one bounded handoff to its immediate parent. The
     handoff requests review or follow-up without marking the Worker complete;
@@ -625,6 +629,9 @@ release or merge rules.
   host-admitted automatic Goal turns, blocks after three consecutive empty
   final responses, resets on non-commentary activity/user input/objective or
   error changes, and preserves tracked external wait parking and wake behavior.
+- Verify the upstream explicit pause semantics (PR #44290): `update_goal`
+  accepts `paused` only for an explicit user request, accounts final progress
+  with budget-limited precedence, and rejects resume and system-limit statuses.
 - Verify a dependency-free Team Worker `wait_agent` queues one bounded handoff
   to its immediate parent without marking completion, suppresses repeated
   waits in one turn, rearms after meaningful parent input or new work, queues
