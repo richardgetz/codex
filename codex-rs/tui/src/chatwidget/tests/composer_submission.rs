@@ -2456,7 +2456,8 @@ async fn reconnect_holds_only_recovered_input_until_manually_edited() {
             assert_no_submit_op(&mut ops);
             chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
             assert_matches!(next_submit_op(&mut ops), Op::UserTurn { .. });
-            chat.input_queue.user_turn_pending_start = false;
+            handle_turn_started(&mut chat, "reconnected-turn");
+            handle_turn_completed(&mut chat, "reconnected-turn", /*duration_ms*/ None);
         }
         chat.input_queue
             .queued_user_messages
