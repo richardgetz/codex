@@ -653,7 +653,7 @@ mod tests {
                 },
                 encrypted_function_args: None,
             };
-            let response = runtime.handle_tool_call(call, cancellation_token.clone());
+            let response = runtime.clone().handle_tool_call(call, cancellation_token.clone());
             cancellation_token.cancel();
 
             tokio::time::timeout(Duration::from_secs(1), async {
