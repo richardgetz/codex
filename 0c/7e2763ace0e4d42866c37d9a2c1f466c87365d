@@ -1,0 +1,16 @@
+intent:
+  id: intent/2026-09-11/tools-model-info-fixture#0c7e2763ac
+  change_type: test
+  scope: codex-tools-fixtures
+  summary: Keep the codex-tools ModelInfo test fixture aligned with current protocol fields.
+  decision: Populate newly required optional and capability fields with the same neutral defaults used by the protocol test model.
+  constraints:
+    - Change test fixture data only; do not alter production behavior or model defaults.
+    - Preserve existing tool configuration assertions and fixture semantics.
+  intent_priority: must
+  code_locations:
+    - codex-rs/tools/src/tool_config_tests.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: Codex Worker
+    model: unknown
