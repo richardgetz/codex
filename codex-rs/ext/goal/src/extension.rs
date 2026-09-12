@@ -233,7 +233,7 @@ where
                 return;
             }
 
-            runtime.begin_background_wait_turn(input.turn_id).await;
+            let goal_generation = runtime.begin_background_wait_turn(input.turn_id).await;
 
             if let Err(err) = self
                 .state_dbs
@@ -250,6 +250,7 @@ where
                 input.collaboration_mode.mode,
                 input.token_usage_at_turn_start,
             );
+            accounting.set_turn_goal_generation(input.turn_id, goal_generation);
             if matches!(
                 input.collaboration_mode.mode,
                 codex_protocol::config_types::ModeKind::Plan

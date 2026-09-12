@@ -116,8 +116,10 @@ release or merge rules.
     rechecks the Goal without adding a polling turn.
   - Ordinary Goal continuations park while the active Goal turn owns tracked
     unified-exec processes, wake once exact processes terminate or are
-    released, and invalidate stale waiters on turn/Goal replacement, cancel,
-    or user input without stopping the external process.
+    released. A monotonic intent generation rejects stale terminal callbacks
+    after same-ID objective edits or Goal replacement, while turn/Goal
+    cancellation and user input invalidate waiters without stopping the
+    external process.
   - Selected integer-valued wait arguments accept exactly integral decimal or
     exponent spellings using their raw numeric lexemes; nested `Value` fields,
     fractional values, unsafe integers, and handler bounds remain unchanged.
@@ -618,9 +620,11 @@ release or merge rules.
   actionable input without introducing a polling turn.
 - Verify ordinary Goal external-wait parking attributes only exact managed
   unified-exec process IDs to the active Goal turn, wakes once on terminal or
-  released processes, deduplicates concurrent continuations, and invalidates
-  stale waiters on turn/Goal replacement, cancellation, or user input while
-  leaving external processes alive.
+  released processes, deduplicates concurrent continuations, and uses a
+  monotonic intent generation to ignore stale terminal errors after same-ID
+  objective edits or Goal replacement. Turn/Goal replacement, cancellation,
+  and user input invalidate stale waiters while leaving external processes
+  alive.
 - Verify selected integer wait arguments accept only exactly integral decimal or
   exponent spellings from preserved raw lexemes, while nested `Value` fields,
   fractional/unsafe/overflow values, and existing handler bounds remain

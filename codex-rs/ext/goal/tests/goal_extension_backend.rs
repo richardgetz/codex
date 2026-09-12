@@ -837,48 +837,55 @@ async fn turn_error_blocks_goal() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn stale_turn_errors_do_not_stop_a_replacement_goal() -> anyhow::Result<()> {
-    for error in [CodexErrorInfo::Other, CodexErrorInfo::UsageLimitExceeded] {
-        let runtime = test_runtime().await?;
-        let thread_id = test_thread_id()?;
-        seed_thread_metadata(runtime.as_ref(), thread_id).await?;
-        let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
-        harness.start_turn("turn-1", &TokenUsage::default()).await;
+    for runtime_effects_before_error in [false, true] {
+        for error in [CodexErrorInfo::Other, CodexErrorInfo::UsageLimitExceeded] {
+            let runtime = test_runtime().await?;
+            let thread_id = test_thread_id()?;
+            seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+            let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+            harness.start_turn("turn-1", &TokenUsage::default()).await;
 
-        let tools = harness.tools();
-        tool_by_name(&tools, "create_goal")
-            .handle(tool_call(
-                "create_goal",
-                "call-create-first-goal",
-                json!({ "objective": "first goal" }),
-            ))
-            .await?;
+            let tools = harness.tools();
+            tool_by_name(&tools, "create_goal")
+                .handle(tool_call(
+                    "create_goal",
+                    "call-create-first-goal",
+                    json!({ "objective": "first goal" }),
+                ))
+                .await?;
 
-        // The API write completes before its runtime effects are applied. A
-        // stale terminal error in this window must not stop the new goal.
-        let replacement = harness
-            .goal_service
-            .set_thread_goal(
-                runtime.as_ref(),
-                GoalSetRequest {
-                    thread_id,
-                    objective: GoalObjectiveUpdate::Set("replacement goal"),
-                    status: Some(ThreadGoalStatus::Active),
-                    token_budget: GoalTokenBudgetUpdate::Keep,
-                    max_goal_token_budget: None,
-                },
-            )
-            .await?;
-        harness.notify_turn_error("turn-1", error).await;
-        harness.stop_turn("turn-1").await;
-        replacement.apply_runtime_effects(&harness.goal_service).await;
+            // The API write completes before its runtime effects are applied. A
+            // stale terminal error in this window must not stop the new goal.
+            let replacement = harness
+                .goal_service
+                .set_thread_goal(
+                    runtime.as_ref(),
+                    GoalSetRequest {
+                        thread_id,
+                        objective: GoalObjectiveUpdate::Set("replacement goal"),
+                        status: Some(ThreadGoalStatus::Active),
+                        token_budget: GoalTokenBudgetUpdate::Keep,
+                        max_goal_token_budget: None,
+                    },
+                )
+                .await?;
+            if runtime_effects_before_error {
+                replacement.apply_runtime_effects(&harness.goal_service).await;
+            }
+            harness.notify_turn_error("turn-1", error).await;
+            harness.stop_turn("turn-1").await;
+            if !runtime_effects_before_error {
+                replacement.apply_runtime_effects(&harness.goal_service).await;
+            }
 
-        let goal = runtime
-            .thread_goals()
-            .get_thread_goal(thread_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("replacement goal should exist"))?;
-        assert_eq!("replacement goal", goal.objective);
-        assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+            let goal = runtime
+                .thread_goals()
+                .get_thread_goal(thread_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("replacement goal should exist"))?;
+            assert_eq!("replacement goal", goal.objective);
+            assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+        }
     }
     Ok(())
 }
