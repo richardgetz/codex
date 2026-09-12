@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-09-12/agent-picker-activity#1a9d52a6b9"
+  change_type: "fix"
+  scope: "tui-agent-picker"
+  summary: "Make active-turn and idle entries visually distinct in the legacy slash agent picker."
+  decision: "Render cached active-turn entries with a green black-circle marker, idle open entries with a dim middle dot, and retain the plain bullet for closed entries."
+  constraints:
+    - "Use existing AgentPickerThreadEntry is_running and is_closed lifecycle state; do not infer waiting or paused state or add polling."
+    - "Preserve picker labels, one-cell row prefix width, spawn-order keyboard navigation, and closed-entry visibility."
+    - "Leave the /agents overview and team activity pause semantics unchanged."
+    - "Keep snapshots and fork inventory/docs aligned."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/multi_agents.rs::agent_picker_status_dot_spans"
+    - "codex-rs/tui/src/app/session_lifecycle.rs::agent_picker_selection_view_params"
+    - "codex-rs/tui/src/app/tests/session_lifecycle_requests.rs"
+    - "codex-rs/tui/src/snapshots/codex_tui__app__tests__path_backed_agent_picker.snap"
+    - "docs/fork-differences.md"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-worker"
+    model: "gpt-5.6-luna"
