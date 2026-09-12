@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-12/reconnect-account-switch-fixture#131f027bca"
+  change_type: "test"
+  scope: "codex-rs/tui"
+  summary: "Keep the PTY reconnect fixture compatible with startup account selection."
+  decision: "Answer the startup account/switch request with the protocol's empty success response, use one model fixture constant for server and screen assertions, and include bounded config/account/model provenance when a screen expectation is absent."
+  constraints:
+    - "Test-only fixture and failure diagnostics; no production behavior changes."
+    - "Preserve all reconnect screen and request-count assertions."
+    - "Do not run Cargo or broaden the fake server."
+  intent_priority: "normal"
+  code_locations:
+    - "codex-rs/tui/tests/suite/reconnect.rs::automatic_reconnect_restores_draft_and_routes_new_notifications"
+  requested_by: "/root/stable_refresh"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
