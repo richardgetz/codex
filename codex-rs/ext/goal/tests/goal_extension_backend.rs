@@ -969,7 +969,13 @@ async fn stale_turn_stop_does_not_charge_progress_to_replacement_objective() -> 
 
 #[tokio::test]
 async fn terminal_errors_after_wait_turn_rebind_stop_the_same_goal() -> anyhow::Result<()> {
-    for error in [CodexErrorInfo::Other, CodexErrorInfo::UsageLimitExceeded] {
+    for (error, expected_status) in [
+        (CodexErrorInfo::Other, codex_state::ThreadGoalStatus::Blocked),
+        (
+            CodexErrorInfo::UsageLimitExceeded,
+            codex_state::ThreadGoalStatus::UsageLimited,
+        ),
+    ] {
         let runtime = test_runtime().await?;
         let thread_id = test_thread_id()?;
         seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -1000,10 +1006,6 @@ async fn terminal_errors_after_wait_turn_rebind_stop_the_same_goal() -> anyhow::
             .get_thread_goal(thread_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
-        let expected_status = match &error {
-            CodexErrorInfo::Other => codex_state::ThreadGoalStatus::Blocked,
-            CodexErrorInfo::UsageLimitExceeded => codex_state::ThreadGoalStatus::UsageLimited,
-        };
         assert_eq!(expected_status, goal.status);
     }
     Ok(())
