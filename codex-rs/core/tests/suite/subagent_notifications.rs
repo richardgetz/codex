@@ -115,22 +115,6 @@ fn request_has_input_type(req: &wiremock::Request, ty: &str) -> bool {
         })
 }
 
-fn request_has_agent_message_endpoint(
-    req: &wiremock::Request,
-    field: &str,
-    expected: &str,
-) -> bool {
-    decoded_body(req)
-        .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
-        .and_then(|body| body.get("input").and_then(Value::as_array).cloned())
-        .is_some_and(|items| {
-            items.iter().any(|item| {
-                item.get("type").and_then(Value::as_str) == Some("agent_message")
-                    && item.get(field).and_then(Value::as_str) == Some(expected)
-            })
-        })
-}
-
 fn decoded_body(req: &wiremock::Request) -> Option<Vec<u8>> {
     let is_zstd = req
         .headers
@@ -2748,23 +2732,10 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
     test.submit_turn(SPAWN_WORKER_PROMPT).await?;
     let worker_thread_id = created_threads.recv().await?;
     let worker_thread = test.thread_manager.get_thread(worker_thread_id).await?;
-    let worker_initial_completion = wait_for_event(worker_thread.as_ref(), |event| {
+    wait_for_event(worker_thread.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-    if let EventMsg::TurnComplete(completion) = &worker_initial_completion {
-        let last_agent_message = completion
-            .last_agent_message
-            .as_deref()
-            .map(|message| message.chars().take(256).collect::<String>());
-        let error = completion.error.as_ref().map(|error| {
-            format!("{error:?}").chars().take(256).collect::<String>()
-        });
-        eprintln!(
-            "peer worker completion stage=initial turn_id={} last_agent_message={last_agent_message:?} error={error:?}",
-            completion.turn_id,
-        );
-    }
 
     let requester_spawn_args = serde_json::to_string(&json!({
         "message": REQUESTER_TASK,
@@ -2873,42 +2844,13 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
         .function_call_output_text(FOLLOWUP_CALL_ID)
         .expect("requester follow-up tool output");
     assert_eq!(followup_output, "");
-    let worker_followup_completion = wait_for_event(worker_thread.as_ref(), |event| {
+    wait_for_event(worker_thread.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-    if let EventMsg::TurnComplete(completion) = &worker_followup_completion {
-        let last_agent_message = completion
-            .last_agent_message
-            .as_deref()
-            .map(|message| message.chars().take(256).collect::<String>());
-        let error = completion.error.as_ref().map(|error| {
-            format!("{error:?}").chars().take(256).collect::<String>()
-        });
-        eprintln!(
-            "peer worker completion stage=followup turn_id={} last_agent_message={last_agent_message:?} error={error:?}",
-            completion.turn_id,
-        );
-    }
 
-    let worker_followup_requests = worker_followup_request.requests();
-    let worker_followup_turn_ids = worker_followup_requests
-        .iter()
-        .filter_map(|request| {
-            request
-                .body_json()
-                .get("client_metadata")
-                .and_then(|metadata| metadata.get("turn_id"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .take(2)
-        .collect::<Vec<_>>();
-    eprintln!(
-        "peer worker followup request count={} turn_ids={worker_followup_turn_ids:?}",
-        worker_followup_requests.len(),
-    );
-    let worker_followup_turn_id = worker_followup_requests
+    let worker_followup_turn_id = worker_followup_request
+        .requests()
         .into_iter()
         .find_map(|request| {
             let body = request.body_json();
@@ -2965,10 +2907,9 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
     // root request below, so this assertion does not race mailbox materialization.
     timeout(Duration::from_secs(5), async {
         loop {
-            let result_send_entries = String::from_utf8(
-                output.lock().expect("buffer lock").clone(),
-            )
-                .expect("logs should be UTF-8")
+            let logs = String::from_utf8(output.lock().expect("buffer lock").clone())
+                .expect("logs should be UTF-8");
+            let result_send_ids = logs
                 .lines()
                 .filter(|line| {
                     line.contains("kind=\"result\"")
@@ -2976,59 +2917,33 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
                         && line.contains(&format!("sender_thread_id={worker_thread_id}"))
                         && line.contains(&format!("receiver_thread_id={root_thread_id}"))
                 })
-                .take(4)
                 .filter_map(|line| {
-                    // Parse the identifier from the full line before retaining a bounded
-                    // preview; tracing places it after the preview's 512-byte boundary.
-                    let communication_id = line.split_whitespace().find_map(|field| {
-                        field
-                            .strip_prefix("communication_id=")
-                            .map(|value| value.trim_matches('"').to_string())
-                    })?;
-                    Some((
-                        communication_id,
-                        line.chars().take(512).collect::<String>(),
-                    ))
+                    log_field(line, "communication_id").map(str::to_owned)
                 })
-                .collect::<Vec<_>>();
-            if result_send_entries.len() >= 2 {
-                let communication_ids = result_send_entries
-                    .iter()
-                    .map(|(communication_id, _)| communication_id)
-                    .collect::<Vec<_>>();
-                let received_lines = String::from_utf8(
-                    output.lock().expect("buffer lock").clone(),
-                )
-                .expect("logs should be UTF-8")
-                .lines()
-                .filter(|line| {
-                    line.contains("state=\"receive\"")
-                        && communication_ids
-                            .iter()
-                            .any(|id| line.contains(&format!("communication_id={id}")))
-                })
-                .map(|line| line.chars().take(512).collect::<String>())
                 .take(4)
                 .collect::<Vec<_>>();
-                let has_distinct_ids = communication_ids.len() >= 2
-                    && communication_ids[0] != communication_ids[1];
-                let all_submissions_received = has_distinct_ids
-                    && communication_ids.iter().take(2).all(|id| {
-                        received_lines
-                            .iter()
-                            .any(|line| line.contains(&format!("communication_id={id}")))
-                    });
+            if result_send_ids.len() >= 2 {
+                let first_id = &result_send_ids[0];
+                let second_id = &result_send_ids[1];
+                let has_distinct_ids = first_id != second_id;
+                let all_submissions_received = if has_distinct_ids {
+                    let mut received_first = false;
+                    let mut received_second = false;
+                    for line in logs.lines().filter(|line| line.contains("state=\"receive\"")) {
+                        let Some(communication_id) = log_field(line, "communication_id") else {
+                            continue;
+                        };
+                        received_first |= communication_id == first_id.as_str();
+                        received_second |= communication_id == second_id.as_str();
+                        if received_first && received_second {
+                            break;
+                        }
+                    }
+                    received_first && received_second
+                } else {
+                    false
+                };
                 if all_submissions_received {
-                    eprintln!(
-                        "peer result send telemetry count={} lines={:?} receive_lines={:?}",
-                        result_send_entries.len(),
-                        result_send_entries
-                            .iter()
-                            .take(4)
-                            .map(|(_, line)| line)
-                            .collect::<Vec<_>>(),
-                        received_lines,
-                    );
                     break;
                 }
             }
@@ -3038,95 +2953,12 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
     .await
     .expect("worker completion should be queued for the root");
 
-    let root_thread_id_for_match = root_thread_id.to_string();
     let root_result_request = mount_sse_once_match(
         &server,
-        move |request: &wiremock::Request| {
-            let has_read_result_prompt = body_contains(request, READ_RESULT_PROMPT);
-            let has_worker_final_text = body_contains(request, "peer follow-up finished");
-            let has_worker_sender = body_contains(request, "Sender: /root/worker");
-            let has_expected_author =
-                request_has_agent_message_endpoint(request, "author", "/root/worker");
-            let has_expected_recipient =
-                request_has_agent_message_endpoint(request, "recipient", "/root");
-            let body = decoded_body(request)
-                .and_then(|body| serde_json::from_slice::<Value>(&body).ok());
-            let request_thread_id = body
-                .as_ref()
-                .and_then(|body| body.get("client_metadata"))
-                .and_then(|metadata| metadata.get("thread_id"))
-                .and_then(Value::as_str);
-            if request_thread_id == Some(root_thread_id_for_match.as_str()) {
-                let agent_messages = body
-                    .as_ref()
-                    .and_then(|body| body.get("input"))
-                    .and_then(Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(|item| {
-                                (item.get("type").and_then(Value::as_str) == Some("agent_message"))
-                                    .then_some(item)
-                            })
-                            .take(4)
-                            .map(|item| {
-                                let author = item
-                                    .get("author")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("<missing>");
-                                let recipient = item
-                                    .get("recipient")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("<missing>");
-                                let content = item
-                                    .get("content")
-                                    .map(Value::to_string)
-                                    .unwrap_or_else(|| "<missing>".to_string());
-                                let content = content.chars().take(256).collect::<String>();
-                                format!("author={author} recipient={recipient} content={content}")
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" | ")
-                    })
-                    .unwrap_or_default();
-                let agent_messages = agent_messages.chars().take(768).collect::<String>();
-                let relevant_input = body
-                    .as_ref()
-                    .and_then(|body| body.get("input"))
-                    .and_then(Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(|item| {
-                                let item = item.to_string();
-                                (item.contains(READ_RESULT_PROMPT)
-                                    || item.contains("peer follow-up finished")
-                                    || item.contains("/root/worker"))
-                                    .then_some(item)
-                            })
-                            .take(4)
-                            .collect::<Vec<_>>()
-                            .join(" | ")
-                    })
-                    .unwrap_or_default();
-                let relevant_input = relevant_input.chars().take(768).collect::<String>();
-                let content_encoding = request
-                    .headers
-                    .get("content-encoding")
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("<none>");
-                eprintln!(
-                    "peer root matcher thread_id={} read_result={} sender_text={} final_text={} author={} recipient={} content_encoding={} agent_messages={agent_messages:?} input={relevant_input:?}",
-                    request_thread_id.unwrap_or("<missing>"),
-                    has_read_result_prompt,
-                    has_worker_sender,
-                    has_worker_final_text,
-                    has_expected_author,
-                    has_expected_recipient,
-                    content_encoding,
-                );
-            }
-            has_read_result_prompt && has_worker_sender && has_worker_final_text
+        |request: &wiremock::Request| {
+            body_contains(request, READ_RESULT_PROMPT)
+                && body_contains(request, "Sender: /root/worker")
+                && body_contains(request, "peer follow-up finished")
         },
         sse(vec![
             ev_response_created("resp-routing-root-result"),
