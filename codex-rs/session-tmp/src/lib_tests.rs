@@ -1045,6 +1045,24 @@ fn force_reap_preserves_unsafe_session_state_and_continues() {
     };
     fs::remove_dir_all(unsafe_session_root.join(LEASES_DIR)).unwrap();
     fs::write(unsafe_session_root.join(LEASES_DIR), b"preserve unsafe state").unwrap();
+    let unsafe_lease_entry_root = {
+        let manager = SessionTmpManager::open(
+            &config,
+            root.path(),
+            "unsafe-lease-entry",
+            "unsafe-thread",
+            SessionTmpOwner::RootSession,
+        )
+        .unwrap()
+        .unwrap();
+        manager.session_root().to_path_buf()
+    };
+    fs::create_dir(
+        unsafe_lease_entry_root
+            .join(LEASES_DIR)
+            .join("unexpected-directory"),
+    )
+    .unwrap();
     let inactive_session_root = {
         let manager = SessionTmpManager::open(
             &config,
@@ -1067,6 +1085,13 @@ fn force_reap_preserves_unsafe_session_state_and_continues() {
     assert!(!inactive_session_root.exists());
     assert!(unsafe_session_root.exists());
     assert!(unsafe_session_root.join(LEASES_DIR).is_file());
+    assert!(unsafe_lease_entry_root.exists());
+    assert!(
+        unsafe_lease_entry_root
+            .join(LEASES_DIR)
+            .join("unexpected-directory")
+            .is_dir()
+    );
 }
 
 #[test]

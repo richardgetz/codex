@@ -47,7 +47,7 @@ pub(crate) fn reap_message(report: &CleanupReport, mode: ReapMode) -> String {
         ReapMode::Force => "All sessions were considered regardless of age".to_string(),
     };
     format!(
-        "Session temporary stale-session reap complete: removed {} path(s), preserved {} path(s), removed {} session(s). {policy}; the current session, sessions with a fresh lease or held lock, invalid records, and unsafe entries were preserved.",
-        report.removed_paths, report.preserved_paths, report.removed_sessions,
+        "Session temporary stale-session reap complete: removed {} session(s). {policy}; the current session, sessions with a fresh lease or held lock, invalid records, and unsafe entries were preserved.",
+        report.removed_sessions,
     )
 }

@@ -331,7 +331,9 @@ the effective assignment in thread responses. See the
   managed lock and lease checks, protect the current and genuinely live
   sessions, and report the preserved safety reasons. `--force` bypasses only
   the heartbeat age cutoff, skips entries with unsafe lock or lease state, and
-  cannot be combined with a day count.
+  cannot be combined with a day count. The result reports removed sessions and
+  the preserved safety policy without treating retained session directories as
+  removable entry paths.
   When startup selected the recovery root, `/tmp status` reports that managed
   agent path rather than the rejected original root.
 

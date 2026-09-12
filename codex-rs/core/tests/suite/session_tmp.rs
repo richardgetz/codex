@@ -447,7 +447,7 @@ async fn unavailable_session_tmp_recovers_into_validated_runtime_root() -> anyho
     let entry = completion
         .function_call_output_text(call_id)
         .expect("session_tmp output should be captured");
-    let entry: Value = serde_json::from_str(entry)?;
+    let entry: Value = serde_json::from_str(&entry)?;
     let absolute_path = entry["absolute_path"]
         .as_str()
         .expect("recovered entry should have an absolute path");

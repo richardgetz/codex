@@ -115,7 +115,7 @@ impl SessionTmpManager {
                     };
                     resolve_user_session_id(&root, session_id, thread_id).and_then(|session_id| {
                         Self::open_inner(
-                            config,
+                            &config,
                             default_root,
                             &session_id,
                             thread_id,

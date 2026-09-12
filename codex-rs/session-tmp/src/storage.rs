@@ -182,7 +182,7 @@ pub(super) fn reap_sessions(
                 report.removed_sessions += 1;
             }
             Ok(false) => {}
-            Err(error) if is_skippable_reap_error(&error) => {
+            Err(error) if is_skippable_reap_error(mode, &error) => {
                 tracing::debug!(
                     error = %error,
                     session_dir = %session_dir.display(),
@@ -315,16 +315,20 @@ pub(super) fn lease_is_fresh(path: &Path, max_age: Duration) -> bool {
 }
 
 fn has_fresh_lease(leases_dir: &Path, max_age: Duration) -> Result<bool, SessionTmpError> {
-    ensure_directory_not_symlink(leases_dir)?;
-    if !leases_dir.is_dir() {
-        return Ok(false);
+    match fs::symlink_metadata(leases_dir) {
+        Ok(metadata)
+            if file_type_is_link(metadata.file_type()) || !metadata.file_type().is_dir() =>
+        {
+            return Err(SessionTmpError::UnsafeManagedPath(leases_dir.to_path_buf()));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
     }
     for item in fs::read_dir(leases_dir)? {
         let path = item?.path();
-        if fs::symlink_metadata(&path)
-            .map(|metadata| file_type_is_link(metadata.file_type()))
-            .unwrap_or(false)
-        {
+        let metadata = fs::symlink_metadata(&path)?;
+        if file_type_is_link(metadata.file_type()) || !metadata.file_type().is_file() {
             return Err(SessionTmpError::UnsafeManagedPath(path));
         }
         if lease_is_fresh(&path, max_age) {

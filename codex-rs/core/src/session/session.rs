@@ -1236,7 +1236,7 @@ impl Session {
                 Err(original_error) => {
                     let recovery_root = config.codex_home.join(SESSION_TMP_RECOVERY_ROOT);
                     let recovery_config = codex_session_tmp::SessionTmpConfig {
-                        root: Some(recovery_root.clone()),
+                        root: Some(recovery_root.to_path_buf()),
                         ..session_tmp_config.clone()
                     };
                     match codex_session_tmp::SessionTmpManager::open(

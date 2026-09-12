@@ -384,8 +384,9 @@ release or merge rules.
     entries. Age-limited `reap [days]` and explicit `reap --force` use managed
     locks and leases to protect the current and genuinely live sessions, with
     `--force` bypassing only the heartbeat age cutoff, skipping unsafe lock or
-    lease state, and reporting preserved safety reasons. `/tmp status` reports
-    the selected recovery agent path when
+    lease state, and reporting removed sessions plus preserved safety reasons
+    without counting retained session directories as entry paths. `/tmp status`
+    reports the selected recovery agent path when
     startup had to bypass a rejected original root.
 - Local token usage and spend tracking:
   - `/status` can show API-equivalent token usage and estimated cost when
