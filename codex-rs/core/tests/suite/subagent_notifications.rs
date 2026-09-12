@@ -2636,7 +2636,11 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Keep this fixture on one runtime thread so the scoped tracing subscriber also
+// observes events emitted by the spawned session loops. A thread-local
+// subscriber is not inherited by Tokio worker threads, and this test only uses
+// tracing as a queue-admission barrier.
+#[tokio::test(flavor = "current_thread")]
 async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> Result<()> {
     const SPAWN_WORKER_PROMPT: &str = "spawn the completion-routing worker";
     const SPAWN_REQUESTER_PROMPT: &str = "spawn the completion-routing requester";
