@@ -1,5 +1,6 @@
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use core_test_support::responses;
 use wiremock::Mock;
@@ -49,6 +50,28 @@ pub async fn create_mock_responses_server_sequence_unchecked(responses: Vec<Stri
     server
 }
 
+/// Same as `create_mock_responses_server_sequence_unchecked`, with a per-response
+/// delay. This is useful for exercising lifecycle races while a model request is
+/// still in flight.
+pub async fn create_mock_responses_server_sequence_with_delays_unchecked(
+    responses: Vec<(String, Duration)>,
+) -> MockServer {
+    let server = responses::start_mock_server().await;
+
+    let seq_responder = DelayedSeqResponder {
+        num_calls: AtomicUsize::new(0),
+        responses,
+    };
+
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(seq_responder)
+        .mount(&server)
+        .await;
+
+    server
+}
+
 struct SeqResponder {
     num_calls: AtomicUsize,
     responses: Vec<String>,
@@ -62,6 +85,22 @@ impl Respond for SeqResponder {
             .get(call_num)
             .expect("mock model response should exist");
         responses::sse_response(response.clone())
+    }
+}
+
+struct DelayedSeqResponder {
+    num_calls: AtomicUsize,
+    responses: Vec<(String, Duration)>,
+}
+
+impl Respond for DelayedSeqResponder {
+    fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+        let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
+        let (response, delay) = self
+            .responses
+            .get(call_num)
+            .expect("mock model response should exist");
+        responses::sse_response(response.clone()).set_delay(*delay)
     }
 }
 
