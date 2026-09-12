@@ -36,6 +36,10 @@ release or merge rules.
   app-server `execPolicy` and server config.
 - Fork-aware help context and fork-only feature labeling keep
   `docs/fork-differences.md` current and identify Rick-owned metadata.
+- Main-checkout Rust build coordination: one designated build owner runs
+  serialized Cargo/`just` validation against one shared target/cache after
+  source integration; worker worktrees remain source-only, and active
+  targets/worktrees are preserved.
 
 - Opt-in Lead/Worker model teams:
   - Team On is the user's explicit in-thread authorization to delegate
@@ -568,6 +572,11 @@ release or merge rules.
   enablement model.
 
 ## Merge Checklist
+
+- Verify upstream refreshes preserve the main-checkout, single-owner,
+  serialized Cargo workflow, source-only worker worktrees, integrated-source
+  freeze with exact-revision handoff, and preservation of active
+  targets/worktrees.
 
 - Verify the fork distribution/release contract (`@rickgetz/codex`,
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered

@@ -84,6 +84,13 @@ Run `just fmt` (in the `codex-rs` directory) automatically after you have finish
 
 Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Do not re-run tests after running `fix` or `fmt`.
 
+## Multi-agent Rust build coordination
+
+- Assign one build owner per repository/session. The owner runs Rust validation and reports the integrated source revision and result.
+- Workers use worktrees for source edits and review only. Integrate intended commits into the main checkout before running any Cargo or `just` Rust command, including `test`, `fix`, `fmt`, and `build`.
+- Run those commands serially through one shared Cargo target/cache. Freeze the integrated source while validation runs; workers hand off exact revisions and wait for the owner's result before starting another build.
+- Preserve active targets and worktrees. Reclaim generated artifacts only after the owner confirms the target is idle and the cleanup scope is exact.
+
 ## The `codex-core` crate
 
 Over time, the `codex-core` crate (defined in `codex-rs/core/`) has become bloated because it is the largest crate, so it is often easier to add something new to `codex-core` rather than refactor out the library code you need so your new code neither takes a dependency on, nor contributes to the size of, `codex-core`.
