@@ -1,0 +1,19 @@
+intent:
+  id: intent/2026-09-12/goal-wait-empty-check#cb7d0dd342
+  change_type: fix
+  scope: goal-continuation
+  summary: Keep tracked external waits parked during ordinary Goal turn-stop checks.
+  decision: Defer background-wait invalidation until an empty-response breaker actually transitions the active Goal to blocked; terminal error, usage, and execution-unavailable paths still invalidate immediately.
+  constraints:
+    - Preserve exact process attribution, cancellation, dedupe, and completion wake behavior.
+    - Prevent normal tool-backed turns from losing their wait before idle continuation admission.
+    - Keep the three-empty breaker and explicit pause behavior unchanged.
+    - Preserve external process lifecycle and app-server wire compatibility.
+  intent_priority: must
+  code_locations:
+    - codex-rs/ext/goal/src/runtime.rs
+    - codex-rs/app-server/tests/suite/v2/goal_wait.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: unknown
