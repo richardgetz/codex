@@ -1208,7 +1208,10 @@ async fn exec_command_allows_sticky_turn_permissions_without_inline_request_perm
     match resp {
         Ok(output) => {
             let output = expect_text_output(&output);
-            assert!(output.contains("hi"));
+            assert!(
+                output.contains("hi"),
+                "exec_command returned unexpected output: {output:?}"
+            );
         }
         Err(FunctionCallError::RespondToModel(output)) => {
             assert!(
