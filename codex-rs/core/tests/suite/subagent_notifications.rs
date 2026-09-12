@@ -2922,7 +2922,7 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
     // send preserves FIFO ordering before the root request below.
     timeout(Duration::from_secs(5), async {
         loop {
-            let result_sends = String::from_utf8(output.lock().expect("buffer lock").clone())
+            let result_send_lines = String::from_utf8(output.lock().expect("buffer lock").clone())
                 .expect("logs should be UTF-8")
                 .lines()
                 .filter(|line| {
@@ -2931,8 +2931,14 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
                         && line.contains(&format!("sender_thread_id={worker_thread_id}"))
                         && line.contains(&format!("receiver_thread_id={root_thread_id}"))
                 })
-                .count();
-            if result_sends >= 2 {
+                .map(|line| line.chars().take(512).collect::<String>())
+                .collect::<Vec<_>>();
+            if result_send_lines.len() >= 2 {
+                eprintln!(
+                    "peer result send telemetry count={} lines={:?}",
+                    result_send_lines.len(),
+                    result_send_lines.iter().take(4).collect::<Vec<_>>(),
+                );
                 break;
             }
             sleep(Duration::from_millis(10)).await;
@@ -2960,6 +2966,39 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
                 .and_then(|metadata| metadata.get("thread_id"))
                 .and_then(Value::as_str);
             if request_thread_id == Some(root_thread_id_for_match.as_str()) {
+                let agent_messages = body
+                    .as_ref()
+                    .and_then(|body| body.get("input"))
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| {
+                                (item.get("type").and_then(Value::as_str) == Some("agent_message"))
+                                    .then_some(item)
+                            })
+                            .take(4)
+                            .map(|item| {
+                                let author = item
+                                    .get("author")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("<missing>");
+                                let recipient = item
+                                    .get("recipient")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("<missing>");
+                                let content = item
+                                    .get("content")
+                                    .map(Value::to_string)
+                                    .unwrap_or_else(|| "<missing>".to_string());
+                                let content = content.chars().take(256).collect::<String>();
+                                format!("author={author} recipient={recipient} content={content}")
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    })
+                    .unwrap_or_default();
+                let agent_messages = agent_messages.chars().take(768).collect::<String>();
                 let relevant_input = body
                     .as_ref()
                     .and_then(|body| body.get("input"))
@@ -2986,7 +3025,7 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
                     .and_then(|value| value.to_str().ok())
                     .unwrap_or("<none>");
                 eprintln!(
-                    "peer root matcher thread_id={} read_result={} sender_text={} final_text={} author={} recipient={} content_encoding={} input={relevant_input:?}",
+                    "peer root matcher thread_id={} read_result={} sender_text={} final_text={} author={} recipient={} content_encoding={} agent_messages={agent_messages:?} input={relevant_input:?}",
                     request_thread_id.unwrap_or("<missing>"),
                     has_read_result_prompt,
                     has_worker_sender,
