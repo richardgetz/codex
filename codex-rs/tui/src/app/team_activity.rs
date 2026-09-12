@@ -341,6 +341,15 @@ impl TeamActivityProjection {
             .min()
     }
 
+    /// Return the cleanup deadline for the oldest provisional parent edge.
+    pub(super) fn next_local_parent_admission_deadline(&self, now: Instant) -> Option<Instant> {
+        self.locally_admitted_parent_ids
+            .values()
+            .map(|admitted_at| *admitted_at + LOCAL_PARENT_ADMISSION_GRACE)
+            .filter(|deadline| *deadline > now)
+            .min()
+    }
+
     pub(super) fn remove_thread(&mut self, thread_id: ThreadId) {
         let entry_root_thread_id = self
             .entries
@@ -533,6 +542,14 @@ impl super::App {
         self.sync_team_activity_metadata();
         self.team_activity.expire_waiting_graces(now);
         if let Some(deadline) = self.team_activity.next_waiting_grace_deadline(now) {
+            self.chat_widget
+                .frame_requester()
+                .schedule_frame_in(deadline.saturating_duration_since(now));
+        }
+        if let Some(deadline) = self
+            .team_activity
+            .next_local_parent_admission_deadline(now)
+        {
             self.chat_widget
                 .frame_requester()
                 .schedule_frame_in(deadline.saturating_duration_since(now));
