@@ -6,6 +6,7 @@ use super::turn_context::TurnContext;
 use crate::connectors;
 use crate::context::ApprovalPromptContext;
 use crate::context::TokenBudgetContext;
+use crate::enablement::filter_connectors_for_mode;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::AppsInstructionsState;
 use crate::context::world_state::CollaborationModeState;
@@ -365,10 +366,16 @@ impl Session {
         }
         let apps_available =
             if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
-                AppToolPolicyEvaluator::new(&turn_context.config.config_layer_stack)
-                    .apply_app_enabled_state(connectors::accessible_connectors_from_mcp_tools(
-                        step_context.mcp.tools(),
-                    ))
+                let connectors = filter_connectors_for_mode(
+                    &turn_context.config,
+                    turn_context.mode,
+                    &connectors::accessible_connectors_from_mcp_tools(step_context.mcp.tools()),
+                );
+                let connectors = AppToolPolicyEvaluator::new(
+                    &turn_context.config.config_layer_stack,
+                )
+                .apply_app_enabled_state(connectors);
+                filter_connectors_for_mode(&turn_context.config, turn_context.mode, &connectors)
                     .into_iter()
                     .any(|connector| connector.is_accessible && connector.is_enabled)
             } else {
