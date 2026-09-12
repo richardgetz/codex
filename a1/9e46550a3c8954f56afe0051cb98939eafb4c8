@@ -1,0 +1,15 @@
+intent:
+  id: tui-inline-visualization-short-temp-snapshot-20260912
+  change_type: test
+  scope: codex-rs/tui
+  summary: Align the visualization overlay snapshot with the short temporary viewer path fixture.
+  decision: Remove the path continuation row and retain the resulting pager filler row count after the test uses a repository-local temporary root.
+  constraints:
+    - snapshot-only; no production behavior changes
+    - accept only the deterministic output produced by the reviewed fixture
+    - preserve visualization availability and URL assertions
+  intent_priority: normal
+  code_locations:
+    - codex-rs/tui/src/snapshots/codex_tui__inline_visualization__tests__transcript_overlay_visualization_becomes_available.snap
+  requested_by: /root/stable_refresh
+  recorded_by: codex
