@@ -1299,6 +1299,7 @@ impl App {
                     .then(|| RuntimePermissionProfileOverride::from_restored_config(config));
                 }
                 self.backfill_loaded_subagent_threads(app_server).await;
+                self.refresh_team_activity_from_server(app_server).await;
                 if !read_only {
                     self.replay_agents_overview_requests(app_server, resumed_thread_id)
                         .await;

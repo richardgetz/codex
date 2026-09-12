@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::ThreadActivityState;
 use codex_app_server_protocol::ThreadActivityUpdatedNotification;
 use codex_app_server_protocol::ThreadActivityWaitReason;
 use pretty_assertions::assert_eq;
@@ -165,6 +166,154 @@ fn unknown_activity_waits_for_parent_metadata_admission() {
     assert_eq!(after_metadata.workers_waiting, 1);
     assert_eq!(after_metadata.direct_workers, 1);
     assert_eq!(after_metadata.subagents, 1);
+}
+
+#[test]
+fn activity_snapshot_counts_workers_without_live_update_edges() {
+    let root = ThreadId::new();
+    let worker = ThreadId::new();
+    let nested_worker = ThreadId::new();
+    let mut projection = TeamActivityProjection::default();
+    projection.replace_thread_metadata(
+        Some(root),
+        [
+            (root, None),
+            (worker, Some(root)),
+            (nested_worker, Some(worker)),
+        ],
+    );
+
+    let state = |thread_id: ThreadId, activity: ThreadActivity| ThreadActivityState {
+        thread_id: thread_id.to_string(),
+        root_thread_id: root.to_string(),
+        activity,
+        pause_state: ThreadPauseState::Running,
+        wait_reason: None,
+        in_flight_operations: 1,
+    };
+    projection.observe_state(state(root, ThreadActivity::Idle));
+    projection.observe_state(state(worker, ThreadActivity::Working));
+    projection.observe_state(state(nested_worker, ThreadActivity::Working));
+
+    assert_eq!(
+        projection.status_for_root(root, None),
+        Some(TeamActivityStatus {
+            lead: TeamRoleActivity::Idle,
+            workers_working: 2,
+            workers_waiting: 0,
+            direct_workers: 1,
+            subagents: 1,
+            worker_max_concurrent: None,
+            pause_state: UiPauseState::Running,
+            in_flight_operations: 3,
+        })
+    );
+}
+
+#[test]
+fn metadata_hydration_attempts_are_bounded_and_reopened_by_metadata() {
+    let root = ThreadId::new();
+    let mut projection = TeamActivityProjection::default();
+    projection.replace_thread_metadata(Some(root), [(root, None)]);
+
+    let attempted: Vec<_> = (0..MAX_TEAM_ACTIVITY_METADATA_HYDRATION_ATTEMPTS)
+        .map(|_| ThreadId::new())
+        .collect();
+    for thread_id in &attempted {
+        assert!(projection.begin_metadata_hydration(*thread_id));
+    }
+    assert_eq!(
+        projection.metadata_hydration_attempts.len(),
+        MAX_TEAM_ACTIVITY_METADATA_HYDRATION_ATTEMPTS
+    );
+    let extra = ThreadId::new();
+    assert!(projection.begin_metadata_hydration(extra));
+    assert_eq!(
+        projection.metadata_hydration_attempts.len(),
+        MAX_TEAM_ACTIVITY_METADATA_HYDRATION_ATTEMPTS
+    );
+    assert!(
+        !projection
+            .metadata_hydration_attempts
+            .contains_key(&attempted[0])
+    );
+
+    projection.replace_thread_metadata(Some(root), [(root, None), (attempted[1], Some(root))]);
+    assert!(
+        !projection
+            .metadata_hydration_attempts
+            .contains_key(&attempted[1])
+    );
+    assert!(projection.begin_metadata_hydration(attempted[1]));
+
+    projection.finish_thread(attempted[2]);
+    assert!(
+        projection
+            .metadata_hydration_attempts
+            .contains_key(&attempted[2])
+    );
+    assert!(projection.terminal_threads.contains(&attempted[2]));
+    projection.start_thread(attempted[2]);
+    assert!(
+        !projection
+            .metadata_hydration_attempts
+            .contains_key(&attempted[2])
+    );
+}
+
+#[test]
+fn unknown_hydration_terminal_state_blocks_late_activity_until_turn_starts() {
+    let root = ThreadId::new();
+    let worker = ThreadId::new();
+    let start = Instant::now();
+    let mut projection = TeamActivityProjection::default();
+    projection.replace_thread_metadata(Some(root), [(root, None)]);
+    projection.observe_at(
+        &notification(
+            root,
+            root,
+            ThreadActivity::Idle,
+            ThreadPauseState::Running,
+            /*in_flight_operations*/ 0,
+        ),
+        start,
+    );
+
+    assert!(projection.begin_metadata_hydration(worker));
+    projection.finish_thread(worker);
+    projection.replace_thread_metadata(Some(root), [(root, None)]);
+    assert!(projection.terminal_threads.contains(&worker));
+    projection.observe_thread_parent(worker, Some(root));
+    projection.observe_at(
+        &notification(
+            worker,
+            root,
+            ThreadActivity::Working,
+            ThreadPauseState::Running,
+            /*in_flight_operations*/ 1,
+        ),
+        start + Duration::from_secs(1),
+    );
+    assert_eq!(projection.entries[&worker].activity, ThreadActivity::Idle);
+
+    projection.start_thread(worker);
+    projection.observe_at(
+        &notification(
+            worker,
+            root,
+            ThreadActivity::Working,
+            ThreadPauseState::Running,
+            /*in_flight_operations*/ 1,
+        ),
+        start + Duration::from_secs(2),
+    );
+    assert_eq!(
+        projection
+            .status_for_root(root, None)
+            .expect("root activity remains visible")
+            .workers_working,
+        1
+    );
 }
 
 #[test]

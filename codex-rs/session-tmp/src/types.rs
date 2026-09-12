@@ -138,6 +138,16 @@ pub struct CleanupReport {
     pub preserved_paths: usize,
 }
 
+/// Policy used when force-reaping abandoned session directories.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReapMode {
+    /// Remove only sessions whose heartbeat is at least this old.
+    OlderThan(Duration),
+    /// Remove every session that passes the lock and lease liveness checks,
+    /// regardless of heartbeat age.
+    Force,
+}
+
 /// Errors returned by managed session temporary storage.
 #[derive(Debug, thiserror::Error)]
 pub enum SessionTmpError {

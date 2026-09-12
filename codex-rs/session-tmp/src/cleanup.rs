@@ -11,13 +11,14 @@ use super::storage::file_type_is_link;
 use super::storage::now_seconds;
 use super::storage::read_metadata;
 use super::storage::read_session_record;
-use super::storage::reap_stale_sessions;
+use super::storage::reap_sessions;
 use super::storage::remove_path;
 use super::storage::remove_untracked_paths;
 use super::storage::set_private_directory;
 use super::storage::write_json_atomically;
 use super::types::CleanupReport;
 use super::types::EntryMetadata;
+use super::types::ReapMode;
 use super::types::SessionTmpError;
 use super::types::TempEntry;
 use std::collections::HashSet;
@@ -96,11 +97,17 @@ impl SessionTmpManager {
     /// Force-cleans other session directories whose heartbeat is older than
     /// `max_age`. Only a root session may invoke this operation.
     pub fn reap(&self, max_age: Duration) -> Result<CleanupReport, SessionTmpError> {
+        self.reap_with_mode(ReapMode::OlderThan(max_age))
+    }
+
+    /// Force-cleans every other session that can be proven inactive by the
+    /// managed lock and lease checks, regardless of heartbeat age.
+    pub fn reap_with_mode(&self, mode: ReapMode) -> Result<CleanupReport, SessionTmpError> {
         if !self.is_root_session {
             return Err(SessionTmpError::CleanupNotOwned);
         }
         self.ensure_root_identity()?;
-        reap_stale_sessions(&self.root, max_age, Some(&self.session_id))
+        reap_sessions(&self.root, mode, Some(&self.session_id))
     }
 
     fn clean_paths(&self) -> Result<CleanupReport, SessionTmpError> {

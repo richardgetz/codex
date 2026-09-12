@@ -51,6 +51,8 @@ mod startup;
 mod startup_warnings_tests;
 #[path = "tests/stream_animation_tests.rs"]
 mod stream_animation_tests;
+#[path = "tests/team_activity_hydration_tests.rs"]
+mod team_activity_hydration;
 #[path = "tests/thread_usage.rs"]
 mod thread_usage;
 #[path = "tests/transcript_composer.rs"]

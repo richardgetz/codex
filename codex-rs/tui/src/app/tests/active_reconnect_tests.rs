@@ -104,6 +104,7 @@ async fn reconnect_restores_history_permissions_and_keeps_old_input_paused() -> 
                     }
                     "thread/read" => Some(json!({"result": {"thread": thread}})),
                     "thread/list" | "thread/loaded/list" => Some(json!({"result": {"data": [], "nextCursor": null}})),
+                    "thread/activity/read" => Some(json!({"result": {"activities": []}})),
                     "thread/goal/get" => Some(json!({"result": {"goal": null}})),
                     "turn/start" => {
                         assert!(!recovered_queue);
@@ -420,6 +421,7 @@ async fn reconnect_reconciles_offscreen_pending_profile_before_restoring_permiss
                 }
                 "thread/list" | "thread/loaded/list" =>
                     json!({"result": {"data": [], "nextCursor": null}}),
+                "thread/activity/read" => json!({"result": {"activities": []}}),
                 "thread/goal/get" => json!({"result": {"goal": null}}),
                 method => panic!("unexpected reconnect request: {method}"),
             }))

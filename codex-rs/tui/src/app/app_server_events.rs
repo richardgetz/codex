@@ -148,7 +148,8 @@ impl App {
 
         if let ServerNotification::ThreadActivityUpdated(activity) = &notification {
             if !temporary_thread {
-                self.observe_thread_activity(activity);
+                self.observe_thread_activity(app_server_client, activity)
+                    .await;
             }
             return;
         }

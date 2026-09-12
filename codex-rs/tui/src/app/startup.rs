@@ -376,6 +376,8 @@ impl App {
             &session_selection,
             SessionSelection::StartFresh | SessionSelection::Exit
         );
+        let startup_resumes_existing_thread =
+            matches!(&session_selection, SessionSelection::Resume(_));
         let start_in_agents_overview =
             matches!(&session_selection, SessionSelection::AgentsOverview);
         let mut read_only_thread = false;
@@ -839,6 +841,10 @@ Fix the config and retry.\n\
             {
                 Ok(result) => result?,
                 Err(err) => return shutdown_on_startup_error(app_server, err).await,
+            }
+            if startup_resumes_existing_thread {
+                app.backfill_loaded_subagent_threads(&mut app_server).await;
+                app.refresh_team_activity_from_server(&mut app_server).await;
             }
             if read_only_thread {
                 app.ensure_thread_channel(thread_id).mark_external_writer();

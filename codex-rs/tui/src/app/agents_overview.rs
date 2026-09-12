@@ -588,6 +588,7 @@ impl App {
         }
         self.maybe_prompt_resume_paused_goal_after_resume(app_server, root_thread_id)
             .await;
+        self.refresh_team_activity_from_server(app_server).await;
 
         Ok(AppRunControl::Continue)
     }

@@ -1855,6 +1855,52 @@ async fn session_tmp_clear_slash_command_force_cleans_current_session() {
 }
 
 #[tokio::test]
+async fn session_tmp_reap_force_slash_command_removes_recent_inactive_session() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let managed_root = tempdir().expect("managed session temporary root");
+    let thread_id = ThreadId::new();
+    chat.set_thread_id_for_test(thread_id);
+    chat.config.session_tmp.enabled = true;
+    chat.config.session_tmp.root = Some(managed_root.path().abs());
+
+    let config = codex_session_tmp::SessionTmpConfig {
+        enabled: true,
+        root: Some(managed_root.path().to_path_buf()),
+        stale_after: Duration::from_secs(60 * 60 * 24 * 7),
+    };
+    let inactive_manager = codex_session_tmp::SessionTmpManager::open(
+        &config,
+        chat.config.codex_home.as_path(),
+        "inactive-session",
+        "inactive-thread",
+        codex_session_tmp::SessionTmpOwner::RootSession,
+    )
+    .expect("open inactive session temporary storage")
+    .expect("inactive session temporary storage should be enabled");
+    let inactive_session_root = inactive_manager.session_root().to_path_buf();
+    drop(inactive_manager);
+
+    chat.dispatch_command_with_args(
+        SlashCommand::SessionTmp,
+        "reap --force".to_string(),
+        Vec::new(),
+    );
+
+    assert!(!inactive_session_root.exists());
+    chat.dispatch_command_with_args(
+        SlashCommand::SessionTmp,
+        "reap 7 --force".to_string(),
+        Vec::new(),
+    );
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell).trim().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!("session_tmp_reap_force_slash_command", rendered);
+}
+
+#[tokio::test]
 async fn session_tmp_slash_command_reports_opt_in_requirement_when_disabled() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_thread_id_for_test(ThreadId::new());

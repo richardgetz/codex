@@ -291,15 +291,51 @@ the effective assignment in thread responses. See the
   managed directory and durable metadata for created or registered paths. The
   configured parent is treated as managed storage, not as a general deletion
   target; cleanup is restricted to the managed layout and its ownership data.
+- If the configured root cannot be opened safely (for example, an existing
+  unmarked directory), startup and resume first try the deterministic
+  `<codex_home>/session-tmp-recovery` root. That fallback is created or opened
+  only through the same marker and symlink checks; the original root is not
+  adopted, marker-repaired, or deleted (the safety check may tighten its
+  permissions). A warning names the recovery root used for that runtime. If
+  both roots fail those checks, startup continues with this feature disabled
+  and a warning; choose a new empty root or repair the
+  `.codex-managed-session-tmp` marker after verifying its contents before
+  enabling the feature again.
+- The safest recovery is a new absolute root, for example:
+
+  ```toml
+  [session_tmp]
+  enabled = true
+  root = "/Users/me/.codex/session-tmp-new"
+  ```
+
+  For a one-time launch, use:
+
+  ```sh
+  codex -c 'session_tmp.enabled=true' \
+    -c 'session_tmp.root="/Users/me/.codex/session-tmp-new"'
+  ```
+
+  Codex creates the managed marker only when that new root is empty; it leaves
+  the old root and its data alone. A configured recovery takes effect on the
+  next start.
 - Agents receive explicit guidance that every file under their managed agent
   directory is disposable, including untracked files created by shell commands.
   Source files, deliverables, checkpoints, credentials, and other durable data
   must stay in the workspace or another explicitly persistent location.
 - `/tmp` (an alias for the fork-only session-temp command) supports `status`,
-  `list`, `clean`, `clear`, and `reap [days]`. `clean` removes session-retained
-  and expired entries while preserving manual-retention entries; `clear` removes
-  all entries belonging to the current session; `reap` force-cleans sessions
-  older than the selected age while protecting the current session.
+  `list`, `clean`, `clear`, and `reap [days|--force]`. `clean` removes
+  session-retained and expired entries while preserving manual-retention
+  entries; `clear` removes all entries belonging to the current session; the
+  age-limited `reap [days]` and the explicit `reap --force` both require the
+  managed lock and lease checks, protect the current and genuinely live
+  sessions, and report the preserved safety reasons. `--force` bypasses only
+  the heartbeat age cutoff, skips entries with unsafe lock or lease state, and
+  cannot be combined with a day count. The result reports removed sessions and
+  the preserved safety policy without treating retained session directories as
+  removable entry paths.
+  When startup selected the recovery root, `/tmp status` reports that managed
+  agent path rather than the rejected original root.
 
 ### Local token usage and spend tracking
 
@@ -450,9 +486,15 @@ unfinished Workers. Error/completion and close events, along with manual pause,
 remain immediate. Terminal completion wins over delayed activity updates until
 the next `turn/started`; reset and reconnect rebuild parent metadata only for
 the selected loaded tree and skip `NotLoaded`, ephemeral, or temporary helper
-threads. Activity from an unknown or unloaded child is ignored until a fresh
-`thread/started`/`turn/started` admits it. The display logic adds no inference
-or backend polling. See the [app-server
+threads. Startup/resume, root selection, and reconnect take one root-scoped
+activity snapshot. If a selected-tree Worker reports live activity before its
+metadata arrives, the TUI makes bounded, event-driven `thread/read` attempts
+through its parent chain; failed, `NotLoaded`, `SystemError`, ephemeral, or
+non-ThreadSpawn records remain rejected. Failed lookup IDs are capped. Metadata
+clears an attempt; a terminal notification keeps its bounded guard until a
+fresh turn or cap eviction permits another attempt. Activity from an unknown or unloaded
+child is otherwise ignored until a fresh `thread/started`/`turn/started`
+admits it. The display logic adds no inference or backend polling. See the [app-server
 API](../codex-rs/app-server/README.md) for connection and thread lifecycle
 details.
 

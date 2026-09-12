@@ -60,6 +60,8 @@ use tokio::sync::SemaphorePermit;
 
 pub(crate) const MEMORY_WRITE_GATE_PERMITS: u32 = 1024;
 
+const SESSION_TMP_RECOVERY_ROOT: &str = "session-tmp-recovery";
+
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
@@ -1209,17 +1211,92 @@ impl Session {
             stale_after: config.session_tmp.stale_after,
         };
         let is_root_session = session_id == SessionId::from(thread_id);
-        let session_tmp = codex_session_tmp::SessionTmpManager::open(
-            &session_tmp_config,
-            config.codex_home.as_path(),
-            &session_id.to_string(),
-            &thread_id.to_string(),
-            if is_root_session {
-                codex_session_tmp::SessionTmpOwner::RootSession
-            } else {
-                codex_session_tmp::SessionTmpOwner::Agent
-            },
-        )?;
+        let session_tmp_owner = if is_root_session {
+            codex_session_tmp::SessionTmpOwner::RootSession
+        } else {
+            codex_session_tmp::SessionTmpOwner::Agent
+        };
+        let (session_tmp, session_tmp_config, session_tmp_warning) =
+            match codex_session_tmp::SessionTmpManager::open(
+                &session_tmp_config,
+                config.codex_home.as_path(),
+                &session_id.to_string(),
+                &thread_id.to_string(),
+                session_tmp_owner,
+            ) {
+                Ok(session_tmp) => (session_tmp, session_tmp_config, None),
+                Err(error)
+                    if !matches!(
+                        &error,
+                        codex_session_tmp::SessionTmpError::Io(_)
+                            | codex_session_tmp::SessionTmpError::RootNotAbsolute(_)
+                            | codex_session_tmp::SessionTmpError::RootNotManaged(_)
+                            | codex_session_tmp::SessionTmpError::UnsafeManagedPath(_)
+                    ) =>
+                {
+                    return Err(error.into());
+                }
+                Err(original_error) => {
+                    let recovery_root = config.codex_home.join(SESSION_TMP_RECOVERY_ROOT);
+                    let recovery_config = codex_session_tmp::SessionTmpConfig {
+                        root: Some(recovery_root.to_path_buf()),
+                        ..session_tmp_config.clone()
+                    };
+                    match codex_session_tmp::SessionTmpManager::open(
+                        &recovery_config,
+                        config.codex_home.as_path(),
+                        &session_id.to_string(),
+                        &thread_id.to_string(),
+                        session_tmp_owner,
+                    ) {
+                        Ok(session_tmp) => {
+                            warn!(
+                                error = %original_error,
+                                recovery_root = %recovery_root.display(),
+                                "managed session temporary storage root unavailable; using a validated recovery root for this runtime"
+                            );
+                            (
+                                session_tmp,
+                                recovery_config,
+                                Some(format!(
+                                    "Session temporary storage root was unavailable; using recovery root {} for this runtime. The original root was not adopted or deleted.",
+                                    recovery_root.display()
+                                )),
+                            )
+                        }
+                        Err(recovery_error) => {
+                            warn!(
+                                error = %original_error,
+                                recovery_error = %recovery_error,
+                                recovery_root = %recovery_root.display(),
+                                "managed session temporary storage is unavailable; continuing without it for this runtime"
+                            );
+                            (
+                                None,
+                                codex_session_tmp::SessionTmpConfig {
+                                    enabled: false,
+                                    root: None,
+                                    stale_after: session_tmp_config.stale_after,
+                                },
+                                Some("Session temporary storage is unavailable; continuing without it for this runtime. The configured and recovery roots could not be opened safely; use a new empty root or repair a managed marker after verifying its contents.".to_owned()),
+                            )
+                        }
+                    }
+                }
+            };
+        let config = if let Some(warning) = session_tmp_warning {
+            let mut config = (*config).clone();
+            config.session_tmp.enabled = session_tmp_config.enabled;
+            config.session_tmp.root = session_tmp_config
+                .root
+                .map(AbsolutePathBuf::from_absolute_path)
+                .transpose()?;
+            config.startup_warnings.push(warning);
+            Arc::new(config)
+        } else {
+            config
+        };
+        session_configuration.original_config_do_not_use = Arc::clone(&config);
         session_configuration.session_tmp_agent_root = session_tmp
             .as_ref()
             .map(|manager| AbsolutePathBuf::from_absolute_path(manager.agent_root()))

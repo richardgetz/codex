@@ -13,6 +13,7 @@ use std::time::Instant;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadActivity;
+use codex_app_server_protocol::ThreadActivityState;
 use codex_app_server_protocol::ThreadActivityUpdatedNotification;
 use codex_app_server_protocol::ThreadActivityWaitReason;
 use codex_app_server_protocol::ThreadPauseState;
@@ -20,6 +21,7 @@ use codex_app_server_protocol::ThreadStatus;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SubAgentSource;
 
+use crate::app_server_session::AppServerSession;
 use crate::chatwidget::TeamActivityStatus;
 use crate::chatwidget::TeamPauseState as UiPauseState;
 use crate::chatwidget::TeamRoleActivity;
@@ -30,6 +32,17 @@ use crate::chatwidget::TeamRoleActivity;
 /// any admission/polling behavior. The timer starts only on a real Working -> ordinary Waiting
 /// transition and is never extended by repeated Waiting notifications.
 pub(super) const ORDINARY_WAITING_GRACE: Duration = Duration::from_secs(30);
+/// Bound a one-shot metadata lookup triggered by a live activity notification.
+///
+/// The lookup runs on the TUI event loop only when a selected-tree child reports activity before
+/// its parent metadata arrives. A timeout keeps an unresponsive remote app-server from stalling
+/// notification processing; later activity remains subject to the same one-attempt admission
+/// guard.
+const TEAM_ACTIVITY_METADATA_HYDRATION_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
+/// Bound ancestor reads when a nested child is the first resumed activity observed.
+const MAX_TEAM_ACTIVITY_METADATA_HYDRATION_DEPTH: usize = 8;
+/// Keep failed metadata lookups bounded when stale activity IDs churn on a selected root.
+pub(super) const MAX_TEAM_ACTIVITY_METADATA_HYDRATION_ATTEMPTS: usize = 256;
 /// Keep an event-admitted parent edge briefly while persisted overview metadata catches up.
 ///
 /// Activity updates can trigger several metadata syncs before a newly spawned thread appears in
@@ -60,19 +73,37 @@ pub(super) struct TeamActivityProjection {
     /// corresponding thread. The value records when the edge was admitted; stale edges expire
     /// after a bounded grace window instead of being retained forever.
     locally_admitted_parent_ids: HashMap<ThreadId, Instant>,
-    /// Terminal notifications can race detached activity updates. Keep barriers only for IDs in
-    /// the currently admitted loaded tree; removed/unloaded children are rejected as unknown
-    /// until a fresh ThreadStarted event admits them again.
+    /// Terminal notifications can race detached activity updates. Keep barriers for IDs in the
+    /// currently admitted loaded tree and for unknown IDs with a bounded hydration guard;
+    /// removed/unloaded children are rejected as unknown until a fresh ThreadStarted event admits
+    /// them again.
     terminal_threads: HashSet<ThreadId>,
     /// A root close/delete/archive can race detached updates before any root metadata is loaded.
     /// This single selected-root barrier covers that uncached case without retaining old IDs.
     closed_root: Option<ThreadId>,
     selected_root: Option<ThreadId>,
+    /// Bound metadata reads for unknown activity IDs while retaining enough order to evict stale
+    /// failed IDs when a selected tree sees more churn than the cap allows.
+    metadata_hydration_attempts: HashMap<ThreadId, u64>,
+    /// Monotonic insertion order used to evict the oldest failed lookup at capacity.
+    metadata_hydration_attempt_sequence: u64,
 }
 
 impl TeamActivityProjection {
     pub(super) fn observe(&mut self, notification: &ThreadActivityUpdatedNotification) {
         self.observe_at(notification, Instant::now());
+    }
+
+    /// Apply a point-in-time activity state returned by `thread/activity/read`.
+    pub(super) fn observe_state(&mut self, state: ThreadActivityState) {
+        self.observe(&ThreadActivityUpdatedNotification {
+            thread_id: state.thread_id,
+            root_thread_id: state.root_thread_id,
+            activity: state.activity,
+            pause_state: state.pause_state,
+            wait_reason: state.wait_reason,
+            in_flight_operations: state.in_flight_operations,
+        });
     }
 
     fn observe_at(&mut self, notification: &ThreadActivityUpdatedNotification, now: Instant) {
@@ -190,6 +221,32 @@ impl TeamActivityProjection {
             });
         self.set_thread_parent(thread_id, parent_thread_id);
         self.locally_admitted_parent_ids.remove(&thread_id);
+        self.metadata_hydration_attempts.remove(&thread_id);
+    }
+
+    pub(super) fn has_thread_metadata(&self, thread_id: ThreadId) -> bool {
+        self.parent_thread_ids.contains_key(&thread_id)
+    }
+
+    pub(super) fn begin_metadata_hydration(&mut self, thread_id: ThreadId) -> bool {
+        if self.metadata_hydration_attempts.contains_key(&thread_id) {
+            return false;
+        }
+        if self.metadata_hydration_attempts.len() >= MAX_TEAM_ACTIVITY_METADATA_HYDRATION_ATTEMPTS
+            && let Some(oldest_thread_id) = self
+                .metadata_hydration_attempts
+                .iter()
+                .min_by_key(|(_, sequence)| *sequence)
+                .map(|(thread_id, _)| *thread_id)
+        {
+            self.metadata_hydration_attempts.remove(&oldest_thread_id);
+            self.terminal_threads.remove(&oldest_thread_id);
+        }
+        let sequence = self.metadata_hydration_attempt_sequence;
+        self.metadata_hydration_attempt_sequence = sequence.saturating_add(1);
+        self.metadata_hydration_attempts
+            .insert(thread_id, sequence)
+            .is_none()
     }
 
     /// Cache a parent edge for a thread and apply it to an activity entry already seen.
@@ -201,10 +258,10 @@ impl TeamActivityProjection {
         self.set_thread_parent(thread_id, parent_thread_id);
         self.locally_admitted_parent_ids
             .insert(thread_id, Instant::now());
+        self.metadata_hydration_attempts.remove(&thread_id);
     }
 
     fn set_thread_parent(&mut self, thread_id: ThreadId, parent_thread_id: Option<ThreadId>) {
-        self.start_thread(thread_id);
         self.parent_thread_ids.insert(thread_id, parent_thread_id);
         if let Some(entry) = self.entries.get_mut(&thread_id) {
             entry.parent_thread_id = parent_thread_id;
@@ -215,6 +272,7 @@ impl TeamActivityProjection {
     /// Clear a terminal tombstone when a genuinely new turn starts for this thread.
     pub(super) fn start_thread(&mut self, thread_id: ThreadId) {
         self.terminal_threads.remove(&thread_id);
+        self.metadata_hydration_attempts.remove(&thread_id);
         if self.closed_root == Some(thread_id) {
             self.closed_root = None;
         }
@@ -232,6 +290,8 @@ impl TeamActivityProjection {
         if !preserve_existing {
             self.terminal_threads.clear();
             self.closed_root = None;
+            self.metadata_hydration_attempts.clear();
+            self.metadata_hydration_attempt_sequence = 0;
         }
         self.selected_root = selected_root;
         let previous_parent_thread_ids = std::mem::take(&mut self.parent_thread_ids);
@@ -239,6 +299,9 @@ impl TeamActivityProjection {
             std::mem::take(&mut self.locally_admitted_parent_ids);
         let active_lineage_ids = self.active_lineage_ids(&previous_parent_thread_ids);
         let mut parent_thread_ids: HashMap<_, _> = metadata.into_iter().collect();
+        for thread_id in parent_thread_ids.keys() {
+            self.metadata_hydration_attempts.remove(thread_id);
+        }
         let mut locally_admitted_parent_ids = HashMap::new();
         if preserve_existing {
             // Collab spawn notifications can admit a parent edge before the next overview
@@ -265,11 +328,14 @@ impl TeamActivityProjection {
             self.parent_thread_ids.insert(root_thread_id, None);
             self.locally_admitted_parent_ids.remove(&root_thread_id);
             let admitted_thread_ids: HashSet<_> = self.parent_thread_ids.keys().copied().collect();
+            let hydration_attempt_ids: HashSet<_> =
+                self.metadata_hydration_attempts.keys().copied().collect();
             self.entries.retain(|thread_id, entry| {
                 entry.root_thread_id == root_thread_id && admitted_thread_ids.contains(thread_id)
             });
-            self.terminal_threads
-                .retain(|thread_id| admitted_thread_ids.contains(thread_id));
+            self.terminal_threads.retain(|thread_id| {
+                admitted_thread_ids.contains(thread_id) || hydration_attempt_ids.contains(thread_id)
+            });
         } else {
             self.entries.clear();
             self.parent_thread_ids.clear();
@@ -296,14 +362,17 @@ impl TeamActivityProjection {
         self.terminal_threads.clear();
         self.closed_root = None;
         self.selected_root = None;
+        self.metadata_hydration_attempts.clear();
+        self.metadata_hydration_attempt_sequence = 0;
     }
 
     /// Mark terminal activity immediately while retaining root metadata for any other workers.
     pub(super) fn finish_thread(&mut self, thread_id: ThreadId) {
-        if self.parent_thread_ids.contains_key(&thread_id)
+        let admitted = self.parent_thread_ids.contains_key(&thread_id)
             || self.entries.contains_key(&thread_id)
-            || self.selected_root == Some(thread_id)
-        {
+            || self.selected_root == Some(thread_id);
+        let hydration_attempted = self.metadata_hydration_attempts.contains_key(&thread_id);
+        if admitted || hydration_attempted {
             self.terminal_threads.insert(thread_id);
         }
         if let Some(entry) = self.entries.get_mut(&thread_id) {
@@ -311,6 +380,11 @@ impl TeamActivityProjection {
             entry.wait_reason = None;
             entry.ordinary_waiting_since = None;
             entry.in_flight_operations = 0;
+        }
+        // Unknown terminal IDs retain their one-shot guard until metadata or a fresh turn arrives;
+        // this prevents a delayed update from reopening a failed lookup.
+        if admitted {
+            self.metadata_hydration_attempts.remove(&thread_id);
         }
     }
 
@@ -436,6 +510,8 @@ impl TeamActivityProjection {
         self.parent_thread_ids
             .retain(|candidate, _| !removed.contains(candidate));
         self.locally_admitted_parent_ids
+            .retain(|candidate, _| !removed.contains(candidate));
+        self.metadata_hydration_attempts
             .retain(|candidate, _| !removed.contains(candidate));
         if is_root {
             self.entries
@@ -565,15 +641,118 @@ impl From<ThreadPauseState> for UiPauseState {
 }
 
 impl super::App {
+    /// Rehydrate process-local activity after a resume or reconnect.
+    ///
+    /// Activity notifications are edge-triggered, so a Worker that was already running when the
+    /// TUI attached may not emit a fresh update. The app-server snapshot fills that gap without
+    /// inferring liveness from historical transcript data. Older servers may not expose the
+    /// experimental read method; in that case live notifications continue to drive the row.
+    pub(super) async fn refresh_team_activity_from_server(
+        &mut self,
+        app_server: &mut AppServerSession,
+    ) {
+        let Some(root_thread_id) = self.primary_thread_id else {
+            return;
+        };
+        self.sync_team_activity_metadata();
+        match app_server.thread_activity_read(root_thread_id).await {
+            Ok(snapshot) => {
+                for state in snapshot.activities {
+                    self.team_activity.observe_state(state);
+                }
+            }
+            Err(error) => {
+                tracing::debug!(%root_thread_id, %error, "team activity snapshot unavailable");
+            }
+        }
+        self.sync_team_activity_status();
+    }
+
     pub(super) fn start_thread_activity(&mut self, thread_id: ThreadId) {
         self.team_activity.start_thread(thread_id);
     }
 
-    pub(super) fn observe_thread_activity(
+    pub(super) async fn observe_thread_activity(
         &mut self,
+        app_server: &AppServerSession,
         notification: &ThreadActivityUpdatedNotification,
     ) {
         self.sync_team_activity_metadata();
+        if let (Ok(thread_id), Ok(root_thread_id)) = (
+            ThreadId::from_string(&notification.thread_id),
+            ThreadId::from_string(&notification.root_thread_id),
+        ) && thread_id != root_thread_id
+            && self.primary_thread_id == Some(root_thread_id)
+            && !self.team_activity.has_thread_metadata(thread_id)
+        {
+            // A resumed V2 Worker can be loaded after startup without a ThreadStarted event. Its
+            // activity snapshot is authoritative, but the protocol intentionally omits parent
+            // metadata; read the persisted records before applying the update. A nested child may
+            // arrive before its parent, so walk only a bounded ancestor chain and admit it once
+            // the chain reaches the selected root or an already-known parent.
+            let mut pending_edges = Vec::new();
+            let mut candidate_thread_id = thread_id;
+            let hydration_deadline =
+                tokio::time::Instant::now() + TEAM_ACTIVITY_METADATA_HYDRATION_TIMEOUT;
+            for _ in 0..MAX_TEAM_ACTIVITY_METADATA_HYDRATION_DEPTH {
+                if !self
+                    .team_activity
+                    .begin_metadata_hydration(candidate_thread_id)
+                {
+                    break;
+                }
+                let thread = match tokio::time::timeout_at(
+                    hydration_deadline,
+                    app_server.thread_read_for_activity(candidate_thread_id),
+                )
+                .await
+                {
+                    Ok(Ok(thread)) => thread,
+                    Ok(Err(error)) => {
+                        tracing::debug!(
+                            thread_id = %candidate_thread_id,
+                            %error,
+                            "team activity metadata hydration unavailable"
+                        );
+                        break;
+                    }
+                    Err(_) => {
+                        tracing::debug!(
+                            thread_id = %candidate_thread_id,
+                            "team activity metadata hydration timed out"
+                        );
+                        break;
+                    }
+                };
+                if ThreadId::from_string(&thread.id).ok() != Some(candidate_thread_id)
+                    || thread.ephemeral
+                    || !matches!(
+                        &thread.status,
+                        ThreadStatus::Idle | ThreadStatus::Active { .. }
+                    )
+                    || !matches!(
+                        &thread.source,
+                        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+                    )
+                {
+                    break;
+                }
+                let Some(parent_thread_id) = thread_parent_thread_id(&thread) else {
+                    break;
+                };
+                pending_edges.push((candidate_thread_id, parent_thread_id));
+                if parent_thread_id == root_thread_id
+                    || self.team_activity.has_thread_metadata(parent_thread_id)
+                {
+                    for (child_thread_id, parent_thread_id) in pending_edges.into_iter().rev() {
+                        self.team_activity
+                            .observe_thread_parent(child_thread_id, Some(parent_thread_id));
+                    }
+                    break;
+                }
+                candidate_thread_id = parent_thread_id;
+            }
+        }
         self.team_activity.observe(notification);
         self.sync_team_activity_status();
     }

@@ -388,6 +388,10 @@ impl App {
             self.replace_chat_widget(ChatWidget::new_with_app_event(init));
             self.chat_widget.restore_reconnected_input(input);
         }
+        if self.primary_thread_id.is_some() {
+            self.backfill_loaded_subagent_threads(app_server).await;
+            self.refresh_team_activity_from_server(app_server).await;
+        }
         // Discover tasks whose notifications were missed, without clearing retained rows.
         // A hidden overview performs this discovery when it is next opened.
         self.agents_overview.initialized = false;

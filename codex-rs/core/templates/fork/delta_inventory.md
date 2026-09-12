@@ -279,11 +279,18 @@ release or merge rules.
     expiry without a new event or animation. Approval, user-input, usage-limit,
     error/completion, close, and pause transitions remain immediate. Parent
     edges come from existing thread metadata; no activity protocol fields or
-    backend polling are added. Terminal completion wins over delayed activity
-    updates until the next `turn/started`; reset/reconnect rebuilds metadata
-    only for the selected loaded tree, ignores `NotLoaded`, ephemeral, or
-    temporary helper threads, and rejects unknown/unloaded child activity until
-    a fresh `thread/started`/`turn/started` admits it.
+    backend polling are added. Startup/resume, root selection, and reconnect
+    take one root-scoped activity snapshot. If a selected-tree Worker reports
+    live activity before its metadata arrives, the TUI makes bounded,
+    event-driven `thread/read` attempts (including a bounded parent chain) to
+    recover its edge; failed, `NotLoaded`, `SystemError`, ephemeral, or
+    non-ThreadSpawn records remain rejected. Failed lookup IDs are capped. Metadata
+    clears an attempt; a terminal notification keeps its bounded guard until a
+    fresh turn or cap eviction permits another attempt. Terminal completion wins over
+    delayed activity updates until the next `turn/started`; reset/reconnect
+    rebuilds metadata only for the selected loaded tree, ignores `NotLoaded`,
+    ephemeral, or temporary helper threads, and rejects unknown/unloaded child
+    activity until a fresh `thread/started`/`turn/started` admits it.
   - Collab spawn and V2 `SubAgentActivity` start/completion events locally admit
     their parent edges before persisted metadata arrives. Same-root metadata
     refreshes retain a provisional edge for a bounded grace window, then keep it
@@ -358,9 +365,29 @@ release or merge rules.
     managed-layout paths are eligible for cleanup; agents are told that all
     files under their managed directory are disposable and must not store
     durable artifacts, credentials, or source files there.
-  - Slash command: `/tmp [status|list|clean|clear|reap [days]]`. The current
-    root session owns cleanup; `clear` also removes manual-retention entries,
-    while `reap` force-cleans only sessions older than the selected age.
+  - If a configured root cannot be opened safely, startup and resume first try
+    the deterministic `<codex_home>/session-tmp-recovery` root through the same
+    marker and symlink checks. The original root is not adopted,
+    marker-repaired, or deleted (the safety check may tighten its permissions);
+    a warning names the recovery root used for that runtime. If both roots fail,
+    startup fails open with a bounded warning and disables session
+    temporary storage for that runtime. Operators must choose a new empty root
+    or repair a verified `.codex-managed-session-tmp` marker before re-enabling
+    the feature.
+  - The documented recovery uses a new absolute root, such as
+    `codex -c 'session_tmp.enabled=true' -c
+    'session_tmp.root="/Users/me/.codex/session-tmp-new"'`. The marker is
+    created only for an empty root; the old root and its data are preserved,
+    and the configured root applies on the next start.
+  - Slash command: `/tmp [status|list|clean|clear|reap [days|--force]]`. The
+    current root session owns cleanup; `clear` also removes manual-retention
+    entries. Age-limited `reap [days]` and explicit `reap --force` use managed
+    locks and leases to protect the current and genuinely live sessions, with
+    `--force` bypassing only the heartbeat age cutoff, skipping unsafe lock or
+    lease state, and reporting removed sessions plus preserved safety reasons
+    without counting retained session directories as entry paths. `/tmp status`
+    reports the selected recovery agent path when
+    startup had to bypass a rejected original root.
 - Local token usage and spend tracking:
   - `/status` can show API-equivalent token usage and estimated cost when
     `[tui.status_token_usage].enabled = true`.
@@ -625,6 +652,13 @@ release or merge rules.
   source of truth.
 - Verify initial context preserves Skills → Apps → Plugins ordering without
   changing App enablement or connector filtering.
+- Verify marker or safety failures in an enabled session temporary root first
+  recover to the deterministic marker-protected sibling root when possible,
+  name the actual recovery path in the warning, and otherwise fail open with a
+  bounded runtime-only disable. Preserve untrusted root contents without
+  adoption or marker rewrites. Verify `/tmp reap --force` bypasses only the age
+  cutoff, reports removed session/path counts, protects the current and fresh-
+  lease sessions, and rejects an ambiguous age-plus-force form.
 - Verify `[team]` rejects enabled configurations without both complete profiles,
   remains disabled by default, and `/team` state survives resume/fork without
   mutating global config. Verify Lead routing, Worker routing for all delegated
@@ -803,7 +837,13 @@ release or merge rules.
   running/pausing/paused separately from idle/working/waiting activity. Confirm
   already-launched external commands are neither suspended nor replayed and
   process-local activity is reconstructed through `thread/activity/read` after
-  reconnect rather than cold-resume persistence. Verify the TUI uses the
+  startup/resume, root selection, and reconnect rather than cold-resume
+  persistence; verify bounded `thread/read` hydration attempts admit a
+  resumed Worker activity edge only after validating its selected-root parent
+  chain and loaded ThreadSpawn status, and failed lookup tracking stays capped,
+  clears on metadata, and retains a bounded terminal guard until fresh-turn or
+  cap-eviction admission. Verify the TUI uses the
+  Verify the TUI uses the
   event-driven `Lead: idle|working|waiting · Workers: N working[, M waiting]`
   row, counts unfinished direct and nested Workers only within the selected
   root, keeps the title aligned with that projection, animates only actual

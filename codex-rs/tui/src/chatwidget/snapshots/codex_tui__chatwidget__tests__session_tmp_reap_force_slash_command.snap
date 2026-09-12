@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+assertion_line: 1896
+expression: rendered
+---
+• Session temporary stale-session reap complete: removed 1 session(s). All sessions were considered regardless of age; the current session, sessions with a fresh lease or held lock, invalid records, and unsafe entries were preserved. Reaping uses managed locks and leases to protect the current and genuinely live sessions.
+■ Usage: /tmp [status|list|clean|clear|reap [days|--force]]

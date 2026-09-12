@@ -2,11 +2,12 @@
 
 use crate::legacy_core::config::Config;
 use codex_session_tmp::CleanupReport;
+use codex_session_tmp::ReapMode;
 use codex_session_tmp::SessionTmpConfig;
 use codex_session_tmp::SessionTmpListing;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
-pub(crate) const USAGE: &str = "Usage: /tmp [status|list|clean|clear|reap [days]]";
+pub(crate) const USAGE: &str = "Usage: /tmp [status|list|clean|clear|reap [days|--force]]";
 
 pub(crate) fn config(config: &Config) -> SessionTmpConfig {
     SessionTmpConfig {
@@ -34,5 +35,19 @@ pub(crate) fn cleanup_message(action: &str, report: &CleanupReport) -> String {
     format!(
         "Session temporary {action} complete: removed {} path(s), preserved {} path(s), removed {} session(s).",
         report.removed_paths, report.preserved_paths, report.removed_sessions,
+    )
+}
+
+pub(crate) fn reap_message(report: &CleanupReport, mode: ReapMode) -> String {
+    let policy = match mode {
+        ReapMode::OlderThan(max_age) => format!(
+            "Only sessions older than {} day(s) were considered",
+            max_age.as_secs() / (24 * 60 * 60)
+        ),
+        ReapMode::Force => "All sessions were considered regardless of age".to_string(),
+    };
+    format!(
+        "Session temporary stale-session reap complete: removed {} session(s). {policy}; the current session, sessions with a fresh lease or held lock, invalid records, and unsafe entries were preserved.",
+        report.removed_sessions,
     )
 }
