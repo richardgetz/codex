@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-09-12/main-only-build-coordination#08f7a84b2"
+  change_type: "docs"
+  scope: "build-coordination"
+  summary: "Document a single-owner main-checkout workflow for multi-agent Rust validation."
+  decision: "Keep worker worktrees source-only and run all Cargo and just Rust commands serially from the integrated main checkout through one shared target/cache."
+  constraints:
+    - "Assign exactly one build owner per repository/session."
+    - "Freeze the integrated source while validation runs and hand off exact revisions before another build."
+    - "Preserve active targets and worktrees; reclaim only generated artifacts from a verified idle target with an exact scope."
+    - "Do not encode machine-specific absolute paths in repository guidance."
+  intent_priority: "must"
+  code_locations:
+    - "AGENTS.md::Multi-agent Rust build coordination"
+    - "codex-rs/core/templates/fork/delta_inventory.md::Unreleased"
+    - "codex-rs/core/templates/fork/delta_inventory.md::Merge Checklist"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-worker"
+    model: "gpt-5"
