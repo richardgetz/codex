@@ -1,0 +1,17 @@
+intent:
+  id: team-edge-expiry-active-heartbeat-2026-09-12
+  change_type: fix
+  scope: TUI provisional Team parent-edge lifecycle
+  summary: Keep active or waiting locally admitted Worker edges alive while activity snapshots continue, even when ThreadStarted metadata is absent.
+  decision: Refresh the provisional admission timestamp for non-idle snapshots and expire a provisional edge only after 30 seconds with no non-idle entry; terminal or idle edges remain bounded and removable.
+  constraints:
+    - Preserve direct and nested Worker counts when metadata delivery is delayed or ThreadStarted is absent.
+    - Retain unknown and unloaded child rejection after a bounded idle/omission grace period.
+    - Keep cleanup event-driven without polling and preserve Team Off behavior.
+  intent_priority: high
+  code_locations:
+    - codex-rs/tui/src/app/team_activity.rs
+  requested_by: user
+  recorded_by: codex
+  agent: /root/stable_refresh
+  model: gpt-5.6-sol
