@@ -1183,9 +1183,9 @@ async fn team_worker_limit_rejects_second_direct_spawn_and_reuses_completed_slot
     let _root_after_gate_request = wait_for_captured_request(
         &root_after_gate,
         |request| {
-            request_has_model(request, LEAD_MODEL)
-                && request_has_function_call_output(request, ROOT_DIRECT_GATE_CALL_ID)
-                && !body_contains(request, "first worker complete")
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, ROOT_DIRECT_GATE_CALL_ID)
+                && !request.body_contains_text("first worker complete")
         },
         "root direct limit gate continuation",
     )
@@ -1227,9 +1227,9 @@ async fn team_worker_limit_rejects_second_direct_spawn_and_reuses_completed_slot
     let _root_after_worker_completion_request = wait_for_captured_request(
         &root_after_worker_completion,
         |request| {
-            request_has_model(request, LEAD_MODEL)
-                && request_has_function_call_output(request, ROOT_DIRECT_GATE_CALL_ID)
-                && body_contains(request, "first worker complete")
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, ROOT_DIRECT_GATE_CALL_ID)
+                && request.body_contains_text("first worker complete")
         },
         "root direct limit worker completion wake",
     )

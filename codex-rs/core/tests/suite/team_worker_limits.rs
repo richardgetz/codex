@@ -155,9 +155,9 @@ async fn team_worker_limit_admits_shell_task_while_worker_idle(
     let _root_after_worker_completion_request = wait_for_captured_request(
         &root_after_worker_completion,
         |request| {
-            request_has_model(request, LEAD_MODEL)
-                && request_has_function_call_output(request, SHELL_LIMIT_SPAWN_CALL_ID)
-                && body_contains(request, "worker initial complete")
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, SHELL_LIMIT_SPAWN_CALL_ID)
+                && request.body_contains_text("worker initial complete")
         },
         "shell test worker completion wake",
     )
@@ -221,8 +221,11 @@ async fn team_worker_limit_admits_shell_task_while_worker_idle(
     let second_request = wait_for_captured_request(
         &root_after_second,
         |request| {
-            request_has_model(request, LEAD_MODEL)
-                && request_has_function_call_output(request, SHELL_LIMIT_SECOND_SPAWN_CALL_ID)
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(
+                    request,
+                    SHELL_LIMIT_SECOND_SPAWN_CALL_ID,
+                )
         },
         "shell test second spawn",
     )
