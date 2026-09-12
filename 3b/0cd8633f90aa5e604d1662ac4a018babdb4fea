@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-09-12/core-context-ordering#3b0cd8633f"
+  change_type: "fix"
+  scope: "core-context"
+  summary: "Keep essential fork commands visible and restore extension Skills before static Apps guidance."
+  decision: "Front-load a compact fork command index before the existing 8,000-token middle-truncated inventory, and append static Apps guidance after extension thread/turn contributors while preserving world-state catalog ordering and all existing App gates."
+  constraints:
+    - "Keep the ForkHelp fragment bounded at 8,000 tokens and retain the checked-in inventory as the source of truth."
+    - "Preserve Apps enablement, connector accessibility policy, mode filtering, and MCP tool discovery."
+    - "Order only extension thread/turn Skills before static Apps; preserve existing world-state section ordering."
+    - "Do not change upstream API or wire contracts."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/context/fork_help_instructions.rs::ForkHelpInstructions::body"
+    - "codex-rs/core/src/session/mod.rs::Session::build_initial_context_with_world_state_impl"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
