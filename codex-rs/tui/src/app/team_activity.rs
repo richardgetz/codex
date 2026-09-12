@@ -30,6 +30,12 @@ use crate::chatwidget::TeamRoleActivity;
 /// any admission/polling behavior. The timer starts only on a real Working -> ordinary Waiting
 /// transition and is never extended by repeated Waiting notifications.
 pub(super) const ORDINARY_WAITING_GRACE: Duration = Duration::from_secs(30);
+/// Keep an event-admitted parent edge briefly while persisted overview metadata catches up.
+///
+/// Activity updates can trigger several metadata syncs before a newly spawned thread appears in
+/// the overview, so this is time-based rather than refresh-count based. Once the window expires,
+/// an omitted edge is treated as stale and late activity is rejected.
+pub(super) const LOCAL_PARENT_ADMISSION_GRACE: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 struct ThreadActivityEntry {
@@ -49,6 +55,10 @@ pub(super) struct TeamActivityProjection {
     /// Parent metadata is supplied by existing ThreadStarted/thread-read records. Activity
     /// notifications intentionally stay unchanged, so this remains a client-side classification.
     parent_thread_ids: HashMap<ThreadId, Option<ThreadId>>,
+    /// Parent edges admitted from collab activity are provisional until the overview includes the
+    /// corresponding thread. The value records when the edge was admitted; stale edges expire
+    /// after a bounded grace window instead of being retained forever.
+    locally_admitted_parent_ids: HashMap<ThreadId, Instant>,
     /// Terminal notifications can race detached activity updates. Keep barriers only for IDs in
     /// the currently admitted loaded tree; removed/unloaded children are rejected as unknown
     /// until a fresh ThreadStarted event admits them again.
@@ -65,6 +75,7 @@ impl TeamActivityProjection {
     }
 
     fn observe_at(&mut self, notification: &ThreadActivityUpdatedNotification, now: Instant) {
+        self.expire_local_parent_edges(now);
         let Ok(thread_id) = ThreadId::from_string(&notification.thread_id) else {
             tracing::warn!(
                 thread_id = %notification.thread_id,
@@ -166,9 +177,10 @@ impl TeamActivityProjection {
                 SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id, ..
                 }) => Some(*parent_thread_id),
-                _ => None,
-            });
-        self.observe_thread_parent(thread_id, parent_thread_id);
+            _ => None,
+        });
+        self.set_thread_parent(thread_id, parent_thread_id);
+        self.locally_admitted_parent_ids.remove(&thread_id);
     }
 
     /// Cache a parent edge for a thread and apply it to an activity entry already seen.
@@ -177,6 +189,12 @@ impl TeamActivityProjection {
         thread_id: ThreadId,
         parent_thread_id: Option<ThreadId>,
     ) {
+        self.set_thread_parent(thread_id, parent_thread_id);
+        self.locally_admitted_parent_ids
+            .insert(thread_id, Instant::now());
+    }
+
+    fn set_thread_parent(&mut self, thread_id: ThreadId, parent_thread_id: Option<ThreadId>) {
         self.start_thread(thread_id);
         self.parent_thread_ids.insert(thread_id, parent_thread_id);
         if let Some(entry) = self.entries.get_mut(&thread_id) {
@@ -199,6 +217,8 @@ impl TeamActivityProjection {
         selected_root: Option<ThreadId>,
         metadata: impl IntoIterator<Item = (ThreadId, Option<ThreadId>)>,
     ) {
+        let now = Instant::now();
+        self.expire_local_parent_edges(now);
         let preserve_existing = selected_root.is_some() && self.selected_root == selected_root;
         if !preserve_existing {
             self.terminal_threads.clear();
@@ -206,20 +226,32 @@ impl TeamActivityProjection {
         }
         self.selected_root = selected_root;
         let previous_parent_thread_ids = std::mem::take(&mut self.parent_thread_ids);
+        let previous_locally_admitted_parent_ids =
+            std::mem::take(&mut self.locally_admitted_parent_ids);
         let mut parent_thread_ids: HashMap<_, _> = metadata.into_iter().collect();
+        let mut locally_admitted_parent_ids = HashMap::new();
         if preserve_existing {
             // Collab spawn notifications can admit a parent edge before the next overview
-            // refresh sees the new thread. Keep those locally admitted edges until overview
-            // metadata catches up, while letting fresh metadata replace stale relationships.
-            for (thread_id, parent_thread_id) in previous_parent_thread_ids {
-                parent_thread_ids
-                    .entry(thread_id)
-                    .or_insert(parent_thread_id);
+            // refresh sees the new thread. Keep each locally admitted edge for a bounded grace
+            // window while letting fresh metadata replace stale relationships. Once the window
+            // expires, an omitted edge is treated as authoritative and dropped.
+            for (thread_id, admitted_at) in previous_locally_admitted_parent_ids {
+                if parent_thread_ids.contains_key(&thread_id)
+                    || now.saturating_duration_since(admitted_at) >= LOCAL_PARENT_ADMISSION_GRACE
+                {
+                    continue;
+                }
+                if let Some(parent_thread_id) = previous_parent_thread_ids.get(&thread_id) {
+                    parent_thread_ids.insert(thread_id, *parent_thread_id);
+                    locally_admitted_parent_ids.insert(thread_id, admitted_at);
+                }
             }
         }
         self.parent_thread_ids = parent_thread_ids;
+        self.locally_admitted_parent_ids = locally_admitted_parent_ids;
         if let Some(root_thread_id) = selected_root {
             self.parent_thread_ids.insert(root_thread_id, None);
+            self.locally_admitted_parent_ids.remove(&root_thread_id);
             let admitted_thread_ids: HashSet<_> = self.parent_thread_ids.keys().copied().collect();
             self.entries.retain(|thread_id, entry| {
                 entry.root_thread_id == root_thread_id && admitted_thread_ids.contains(thread_id)
@@ -229,6 +261,7 @@ impl TeamActivityProjection {
         } else {
             self.entries.clear();
             self.parent_thread_ids.clear();
+            self.locally_admitted_parent_ids.clear();
             self.terminal_threads.clear();
             self.closed_root = None;
         }
@@ -247,6 +280,7 @@ impl TeamActivityProjection {
     pub(super) fn clear(&mut self) {
         self.entries.clear();
         self.parent_thread_ids.clear();
+        self.locally_admitted_parent_ids.clear();
         self.terminal_threads.clear();
         self.closed_root = None;
         self.selected_root = None;
@@ -277,6 +311,20 @@ impl TeamActivityProjection {
             {
                 entry.ordinary_waiting_since = None;
             }
+        }
+    }
+
+    fn expire_local_parent_edges(&mut self, now: Instant) {
+        let stale_thread_ids: Vec<_> = self
+            .locally_admitted_parent_ids
+            .iter()
+            .filter_map(|(thread_id, admitted_at)| {
+                (now.saturating_duration_since(*admitted_at) >= LOCAL_PARENT_ADMISSION_GRACE)
+                    .then_some(*thread_id)
+            })
+            .collect();
+        for thread_id in stale_thread_ids {
+            self.remove_thread(thread_id);
         }
     }
 
@@ -331,6 +379,8 @@ impl TeamActivityProjection {
             !removed.contains(candidate) && (!is_root || entry.root_thread_id != thread_id)
         });
         self.parent_thread_ids
+            .retain(|candidate, _| !removed.contains(candidate));
+        self.locally_admitted_parent_ids
             .retain(|candidate, _| !removed.contains(candidate));
         if is_root {
             self.entries

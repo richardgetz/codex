@@ -212,6 +212,37 @@ fn collab_admitted_parent_metadata_survives_activity_refresh() {
 }
 
 #[test]
+fn locally_admitted_parent_metadata_expires_after_missing_refresh() {
+    let root = ThreadId::new();
+    let worker = ThreadId::new();
+    let mut projection = TeamActivityProjection::default();
+
+    projection.replace_thread_metadata(Some(root), [(root, None)]);
+    projection.observe_thread_parent(worker, Some(root));
+
+    // The first refresh gives a just-spawned thread time to appear in the overview.
+    projection.replace_thread_metadata(Some(root), [(root, None)]);
+    assert!(projection.parent_thread_ids.contains_key(&worker));
+
+    // An additional omission is authoritative: late activity for the abandoned edge must be
+    // rejected rather than keeping an unloaded child in the aggregate forever.
+    projection.locally_admitted_parent_ids.insert(
+        worker,
+        Instant::now() - LOCAL_PARENT_ADMISSION_GRACE - Duration::from_secs(1),
+    );
+    projection.replace_thread_metadata(Some(root), [(root, None)]);
+    assert!(!projection.parent_thread_ids.contains_key(&worker));
+    projection.observe(&notification(
+        worker,
+        root,
+        ThreadActivity::Working,
+        ThreadPauseState::Running,
+        /*in_flight_operations*/ 1,
+    ));
+    assert!(!projection.entries.contains_key(&worker));
+}
+
+#[test]
 fn projection_renders_pause_transition_and_clears_when_idle() {
     let root = ThreadId::new();
     let worker = ThreadId::new();

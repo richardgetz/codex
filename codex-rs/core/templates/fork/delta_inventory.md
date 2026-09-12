@@ -255,10 +255,11 @@ release or merge rules.
     only for the selected loaded tree, ignores `NotLoaded`, ephemeral, or
     temporary helper threads, and rejects unknown/unloaded child activity until
     a fresh `thread/started`/`turn/started` admits it.
-  - Collab spawn and V2 `SubAgentActivity` start events locally admit their
-    parent edges before persisted metadata arrives. Same-root metadata refreshes
-    retain those locally admitted edges until the overview catches up, keeping
-    unfinished direct and nested Workers visible without polling.
+  - Collab spawn and V2 `SubAgentActivity` start/completion events locally admit
+    their parent edges before persisted metadata arrives. Same-root metadata
+    refreshes retain a provisional edge for a bounded grace window, then prune
+    an omitted edge, keeping unfinished direct and nested Workers visible without
+    polling.
 
 - Recursive per-response usage accounting:
   - App-server v2 sends the legacy context-window counters through
@@ -762,9 +763,10 @@ release or merge rules.
   over delayed activity until the next `turn/started`, metadata-only root
   removal prunes descendants, reset/reconnect rebuilds only the selected loaded
   tree, and ephemeral/temporary helper threads do not enter the projection.
-  Verify collab spawn and V2 `SubAgentActivity` start events admit parent edges
-  before metadata refresh, and same-root refreshes retain those edges until
-  overview metadata catches up.
+  Verify collab spawn and V2 `SubAgentActivity` start/completion events admit
+  parent edges before metadata refresh, same-root refreshes retain a provisional
+  edge for a bounded grace window, and later omissions prune stale/unloaded
+  edges.
   Verify `codex-mcp-server`
   handles `ThreadActivityUpdated` exhaustively, forwards the notification, and
   continues waiting for real turn completion.

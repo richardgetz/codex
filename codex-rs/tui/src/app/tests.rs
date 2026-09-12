@@ -2340,6 +2340,61 @@ async fn sub_agent_activity_admits_parent_edge_before_thread_metadata() {
 }
 
 #[tokio::test]
+async fn collab_spawn_completion_admits_parent_edge_before_thread_metadata() {
+    let mut app = make_test_app().await;
+    let parent_thread_id = ThreadId::new();
+    let worker_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000126").expect("valid thread id");
+    app.primary_thread_id = Some(parent_thread_id);
+    app.team_activity
+        .replace_thread_metadata(Some(parent_thread_id), [(parent_thread_id, None)]);
+
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(Box::new(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: parent_thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: ThreadItem::CollabAgentToolCall {
+                id: "spawn-1".to_string(),
+                tool: codex_app_server_protocol::CollabAgentTool::SpawnAgent,
+                status: codex_app_server_protocol::CollabAgentToolCallStatus::Completed,
+                sender_thread_id: parent_thread_id.to_string(),
+                receiver_thread_ids: vec![worker_thread_id.to_string()],
+                prompt: Some("delegate this work".to_string()),
+                model: Some("worker-model".to_string()),
+                reasoning_effort: None,
+                agents_states: HashMap::new(),
+            },
+        }),
+    )));
+
+    app.team_activity.observe(&ThreadActivityUpdatedNotification {
+        thread_id: parent_thread_id.to_string(),
+        root_thread_id: parent_thread_id.to_string(),
+        activity: ThreadActivity::Idle,
+        pause_state: ThreadPauseState::Running,
+        wait_reason: None,
+        in_flight_operations: 0,
+    });
+    app.team_activity.observe(&ThreadActivityUpdatedNotification {
+        thread_id: worker_thread_id.to_string(),
+        root_thread_id: parent_thread_id.to_string(),
+        activity: ThreadActivity::Working,
+        pause_state: ThreadPauseState::Running,
+        wait_reason: None,
+        in_flight_operations: 1,
+    });
+
+    assert_eq!(
+        app.team_activity
+            .status_for_root(parent_thread_id, None)
+            .expect("spawn completion should admit the worker edge")
+            .workers_working,
+        1
+    );
+}
+
+#[tokio::test]
 async fn collab_receiver_notification_does_not_cache_not_found_thread() {
     let mut app = make_test_app().await;
     let receiver_thread_id =

@@ -1313,7 +1313,10 @@ impl App {
         let Some(receiver_thread_ids) = collab_receiver_thread_ids(notification) else {
             return;
         };
-        let is_item_started = matches!(notification, ServerNotification::ItemStarted(_));
+        let admits_parent_edge = matches!(
+            notification,
+            ServerNotification::ItemStarted(_) | ServerNotification::ItemCompleted(_)
+        );
         let parent_thread_id = match server_notification_thread_target(notification) {
             ServerNotificationThreadTarget::Thread(thread_id) => Some(thread_id),
             ServerNotificationThreadTarget::InvalidThreadId(_)
@@ -1334,7 +1337,7 @@ impl App {
                 continue;
             };
 
-            if is_item_started
+            if admits_parent_edge
                 && let Some(parent_thread_id) = parent_thread_id
                 && parent_thread_id != thread_id
             {
