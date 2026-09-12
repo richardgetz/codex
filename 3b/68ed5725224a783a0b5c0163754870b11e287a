@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-09-12/tool-visibility-regressions"
+  change_type: "fix"
+  scope: "core"
+  summary: "Restore update-plan opt-in defaults and MCP placeholder registration while correcting the session_tmp exposure fixture."
+  decision: "Apply upstream update_plan opt-in semantics, pass recovered MCP placeholders through cached tool registration, and compare session_tmp action constants in tests."
+  constraints:
+    - "Preserve session_tmp disabled-by-default behavior and hidden lineage tools."
+    - "Preserve MCP mode/config filtering and placeholder recovery."
+    - "Do not change sandbox environment-variable handling."
+    - "No fork delta inventory entry; this restores existing upstream/fork contracts."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/config/src/config_toml.rs"
+    - "codex-rs/core/config.schema.json"
+    - "codex-rs/core/src/config/mod.rs"
+    - "codex-rs/core/src/config/config_tests.rs"
+    - "codex-rs/core/src/mcp_tool_exposure.rs"
+    - "codex-rs/core/src/tools/spec_plan.rs"
+    - "codex-rs/core/src/tools/spec_plan_tests.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5"
