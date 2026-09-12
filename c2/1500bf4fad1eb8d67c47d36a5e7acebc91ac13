@@ -1,0 +1,18 @@
+intent:
+  id: team-edge-active-lineage-retention-2026-09-12
+  change_type: fix
+  scope: TUI provisional Team parent-edge lifecycle
+  summary: Keep active direct and nested provisional Worker lineages through the grace deadline when persisted metadata is delayed.
+  decision: Compute active entries and their parent ancestors before metadata replacement and expiry; retain omitted provisional edges for any active lineage, while pruning only edges with no active entry or descendant after 30 seconds.
+  constraints:
+    - Preserve long-running Workers that never emit ThreadStarted and nested activity when parent state is idle.
+    - Keep unknown or abandoned local edges bounded and rejected after inactivity.
+    - Keep cleanup event-driven with no polling and leave Team Off and existing proof assertions unchanged.
+  intent_priority: high
+  code_locations:
+    - codex-rs/tui/src/app/team_activity.rs
+    - codex-rs/tui/src/app/team_activity_tests.rs
+  requested_by: user
+  recorded_by: codex
+  agent: /root/stable_refresh
+  model: gpt-5.6-sol
