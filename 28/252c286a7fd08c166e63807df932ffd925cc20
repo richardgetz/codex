@@ -1,0 +1,20 @@
+intent:
+  id: intent/2026-09-12/skills-executor-collision-fixture#28252c286
+  change_type: test
+  scope: skills
+  summary: Seed the executor catalog through world state before testing plain-name collision selection.
+  decision: Adapt the integration fixture to mirror production sampling-step ordering so turn-input selection receives ExecutorSkillsStepState and continues to prove executor precedence over a colliding host name.
+  constraints:
+    - Preserve executor-over-host plain-name selection and existing fragment/read-request assertions.
+    - Make no production/API behavior changes.
+    - Keep the host provider fixture lightweight; validation is owned by the main pr_validation worker.
+    - No Cargo, just, build, or formatter commands in this worker.
+  intent_priority: must
+  code_locations:
+    - codex-rs/ext/skills/tests/skills_extension.rs::plain_name_selection_prefers_executor_skill_over_host_name_collision
+    - codex-rs/ext/skills/src/world_state_catalogs.rs::CatalogContext::discover_executor_catalog
+    - codex-rs/ext/skills/src/extension.rs::TurnInputContributor::contribute
+  requested_by: @rick
+  recorded_by:
+    agent: Codex Worker
+    model: unknown
