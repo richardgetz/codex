@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-12/core-peer-root-matcher-diagnostic#b639c4475979"
+  change_type: "test"
+  scope: "core-subagent-notifications"
+  summary: "Capture bounded evidence when the peer completion root response matcher rejects a request."
+  decision: "Log only root-thread predicate booleans, endpoint presence, content encoding, and a capped relevant input excerpt while leaving the existing matcher, queue barrier, assertions, and turn waits unchanged."
+  constraints:
+    - "Use existing wiremock request helpers and do not expose private operation-capture APIs."
+    - "Keep diagnostic output bounded and restricted to the target root thread and relevant completion fields."
+    - "Preserve the exact root response predicate and all completion-routing behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/tests/suite/subagent_notifications.rs::request_has_agent_message_endpoint"
+    - "codex-rs/core/tests/suite/subagent_notifications.rs::multi_agent_v2_peer_followup_completion_notifies_initiating_turn"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
