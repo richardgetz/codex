@@ -14,6 +14,7 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::io;
 use std::io::ErrorKind;
+use std::io::Write;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
@@ -25,6 +26,10 @@ use uuid::Uuid;
 pub(super) const LEASES_DIR: &str = "leases";
 const SESSION_LOCKS_DIR: &str = ".locks";
 pub(super) const LEASE_STALE_AFTER: Duration = Duration::from_secs(90);
+/// Persistent coordination files are retained after a migration completes so
+/// a later open cannot race a fresh migration by recreating the same pathname.
+pub(super) const MIGRATION_LOCK_CONTENT: &[u8] =
+    b"codex session temporary migration lock\nschema_version=1\n";
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct SessionRecord {
@@ -67,6 +72,7 @@ pub(super) fn reap_sessions(
     if matches!(mode, ReapMode::OlderThan(age) if age.is_zero()) || !sessions_dir.is_dir() {
         return Ok(report);
     }
+    let legacy_transition_active = state.legacy_transition_active()?;
     for item in fs::read_dir(sessions_dir)? {
         let session_dir = item?.path();
         let is_real_directory = fs::symlink_metadata(&session_dir)
@@ -115,21 +121,29 @@ pub(super) fn reap_sessions(
         }) else {
             continue;
         };
-        let _legacy_lock = match try_lock_legacy_session(state.payload_root(), directory_session_id)? {
-            LegacyLock::Held(lock) => Some(lock),
-            LegacyLock::Absent => None,
-            LegacyLock::Unavailable => continue,
+        let _legacy_lock = if legacy_transition_active {
+            match try_lock_legacy_session(state.payload_root(), directory_session_id)? {
+                LegacyLock::Held(lock) => Some(lock),
+                LegacyLock::Absent => None,
+                LegacyLock::Unavailable => continue,
+            }
+        } else {
+            None
         };
         let Ok(record) = read_session_record(&record_path) else {
             continue;
         };
         let fresh_lease = match has_fresh_lease(&session_dir.join(LEASES_DIR), LEASE_STALE_AFTER)
             .and_then(|state_lease| {
-                has_fresh_lease(
-                    &state.legacy_session_dir(directory_session_id).join(LEASES_DIR),
-                    LEASE_STALE_AFTER,
-                )
-                .map(|legacy_lease| state_lease || legacy_lease)
+                if legacy_transition_active {
+                    has_fresh_lease(
+                        &state.legacy_session_dir(directory_session_id).join(LEASES_DIR),
+                        LEASE_STALE_AFTER,
+                    )
+                    .map(|legacy_lease| state_lease || legacy_lease)
+                } else {
+                    Ok(state_lease)
+                }
             })
         {
             Ok(fresh_lease) => fresh_lease,
@@ -630,6 +644,36 @@ pub(super) fn try_lock_existing_session(
         Err(std::fs::TryLockError::WouldBlock) => Ok(ExistingSessionLock::Unavailable),
         Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
     }
+}
+
+/// Wait for a migration barrier that already exists. Normal opens never
+/// create this file; they only honor a migration lock created by the
+/// consolidation pass so source-state retirement cannot race a new manager.
+pub(super) fn wait_for_migration_lock(path: &Path) -> Result<Option<File>, SessionTmpError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if file_type_is_link(metadata.file_type()) || !metadata.file_type().is_file() {
+        return Err(SessionTmpError::UnsafeManagedPath(path.to_path_buf()));
+    }
+    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    file.lock()?;
+    // Legacy inline barriers were created without a marker. Keep accepting
+    // those empty files during the upgrade, while external migration barriers
+    // write their durable ownership marker before release. A nonempty file
+    // with different contents is untrusted and must never be retired by name.
+    let file_len = file.metadata()?.len();
+    if file_len > 0 && fs::read(path)?.as_slice() != MIGRATION_LOCK_CONTENT {
+        return Err(SessionTmpError::UnsafeManagedPath(path.to_path_buf()));
+    }
+    // The caller retains this guard for the entire initialization phase.
+    if file_len == 0 {
+        file.write_all(MIGRATION_LOCK_CONTENT)?;
+        file.sync_data()?;
+    }
+    Ok(Some(file))
 }
 
 pub(super) enum ExistingSessionLock {

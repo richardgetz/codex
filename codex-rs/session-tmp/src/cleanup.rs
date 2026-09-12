@@ -34,6 +34,7 @@ impl SessionTmpManager {
         if !self.is_root_session {
             return Err(SessionTmpError::CleanupNotOwned);
         }
+        self.retry_recovery_migration()?;
         self.clean_paths()
     }
 
@@ -43,6 +44,7 @@ impl SessionTmpManager {
         if !self.is_root_session {
             return Err(SessionTmpError::CleanupNotOwned);
         }
+        self.retry_recovery_migration()?;
         self.ensure_session_layout()?;
         let _session_lock = storage::lock_session(&self.state_session_dir)?;
         let mut report = CleanupReport::default();
@@ -103,8 +105,14 @@ impl SessionTmpManager {
         if !self.is_root_session {
             return Err(SessionTmpError::CleanupNotOwned);
         }
+        self.retry_recovery_migration()?;
         self.ensure_root_identity()?;
         reap_sessions(&self.state, mode, Some(&self.session_id))
+    }
+
+    fn retry_recovery_migration(&self) -> Result<(), SessionTmpError> {
+        let default_root = self.state.default_root();
+        super::migration::consolidate_recovery(&self.state, &default_root)
     }
 
     fn clean_paths(&self) -> Result<CleanupReport, SessionTmpError> {
@@ -212,6 +220,7 @@ impl SessionTmpManager {
     fn active_agent_threads(&self) -> Result<HashSet<String>, SessionTmpError> {
         let agents_dir = self.session_dir.join(AGENTS_DIR);
         super::storage::ensure_directory_not_symlink(&agents_dir)?;
+        let legacy_transition_active = self.state.legacy_transition_active()?;
         let mut threads = HashSet::new();
         if agents_dir.is_dir() {
             for item in fs::read_dir(&agents_dir)? {
@@ -226,7 +235,11 @@ impl SessionTmpManager {
                         })
                         .unwrap_or(false)
                     && (storage::lease_is_fresh_for_thread(&self.state_session_dir, thread_id)
-                        || storage::lease_is_fresh_for_thread(&self.session_dir, thread_id))
+                        || (legacy_transition_active
+                            && storage::lease_is_fresh_for_thread(
+                                &self.session_dir,
+                                thread_id,
+                            )))
                 {
                     threads.insert(thread_id.to_string());
                 }
@@ -238,15 +251,17 @@ impl SessionTmpManager {
             &self.thread_id,
             &mut threads,
         )?;
-        add_fresh_lease_threads(
-            &self
-                .state
-                .legacy_session_dir(&self.session_id)
-                .join(super::storage::LEASES_DIR),
-            &self.session_id,
-            &self.thread_id,
-            &mut threads,
-        )?;
+        if legacy_transition_active {
+            add_fresh_lease_threads(
+                &self
+                    .state
+                    .legacy_session_dir(&self.session_id)
+                    .join(super::storage::LEASES_DIR),
+                &self.session_id,
+                &self.thread_id,
+                &mut threads,
+            )?;
+        }
         Ok(threads)
     }
 

@@ -375,9 +375,10 @@ release or merge rules.
     controls plus the old marker after inactive leases and locks drain. The historical
     `<codex_home>/session-tmp-recovery` tree is automatically merged into the
     normal default payload namespace with collision-safe, resumable moves;
-    live old-version sessions defer migration until a later open. Unknown
-    files remain untouched, and markerless nonempty custom roots are never
-    adopted.
+    live old-version sessions defer migration until a later open. Recognized
+    session payloads and controls move, while unknown recovery files stay at
+    their original paths outside managed cleanup, keeping that tree until it
+    is empty. Markerless nonempty custom roots are never adopted.
   - Slash command: `/tmp [status|list|clean|clear|reap [days|--force]]`. The
     current root session owns cleanup; `clear` also removes manual-retention
     entries. Age-limited `reap [days]` and explicit `reap --force` use managed
@@ -657,7 +658,9 @@ release or merge rules.
   Verify marker-era roots import exact records and retire their marker only
   after legacy leases and locks drain; recovery-root consolidation is
   collision-safe, resumable, preserves unknown files, defers live old-version
-  sessions, and retires obsolete recovery state automatically. Markerless
+  sessions, preserves unknown recovery paths outside managed cleanup, and
+  retires obsolete recovery state automatically once the source is empty.
+  Markerless
   nonempty custom roots must remain inert. Verify `/tmp reap --force` bypasses
   only the age cutoff, reports removed session/path counts, protects current
   and fresh-lease sessions, preserves unsafe state, and rejects an ambiguous

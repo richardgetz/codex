@@ -54,18 +54,14 @@ impl SessionLease {
                 }
             }
         } else {
-            match super::storage::try_lock_legacy_session(state.payload_root(), session_id)? {
-                super::storage::LegacyLock::Held(lock) => Some(lock),
-                super::storage::LegacyLock::Absent => None,
-                super::storage::LegacyLock::Unavailable => {
-                    return Err(SessionTmpError::SessionAlreadyOwned(thread_id.to_string()));
-                }
-            }
+            None
         };
         let legacy_lease_path = legacy_session_dir
             .join(LEASES_DIR)
             .join(format!("{thread_id}.json"));
-        if super::storage::lease_is_fresh(&legacy_lease_path, LEASE_STALE_AFTER) {
+        if legacy_transition_active
+            && super::storage::lease_is_fresh(&legacy_lease_path, LEASE_STALE_AFTER)
+        {
             return Err(SessionTmpError::SessionAlreadyOwned(thread_id.to_string()));
         }
         let leases_dir = session_dir.join(LEASES_DIR);
@@ -134,7 +130,7 @@ impl SessionLease {
                     let stop_for_thread = Arc::clone(&stop);
                     let path_for_thread = path.clone();
                     let state_root_for_thread = state.state_root().to_path_buf();
-                    let session_dir_for_thread = session_dir.to_path_buf();
+                    let state_session_dir_for_thread = session_dir.to_path_buf();
                     let legacy_path_for_thread = legacy_path.clone();
                     let legacy_marker_for_thread = state
                         .payload_root()
@@ -163,13 +159,13 @@ impl SessionLease {
                                 // lease or a partial control tree.
                                 if !state_session_is_live(
                                     &state_root_for_thread,
-                                    &session_dir_for_thread,
+                                    &state_session_dir_for_thread,
                                     &session_id_for_thread,
                                 ) {
                                     break;
                                 }
                                 let _session_lock = match super::storage::try_lock_existing_session(
-                                    &session_dir_for_thread,
+                                    &state_session_dir_for_thread,
                                 ) {
                                     Ok(super::storage::ExistingSessionLock::Held(lock)) => lock,
                                     Ok(super::storage::ExistingSessionLock::Absent) => break,
@@ -179,7 +175,7 @@ impl SessionLease {
                                     Err(error) => {
                                         tracing::debug!(
                                             error = %error,
-                                            session_dir = %session_dir_for_thread.display(),
+                                            session_dir = %state_session_dir_for_thread.display(),
                                             "session temporary lease lock probe failed"
                                         );
                                         continue;
@@ -187,7 +183,7 @@ impl SessionLease {
                                 };
                                 if !state_session_is_live(
                                     &state_root_for_thread,
-                                    &session_dir_for_thread,
+                                    &state_session_dir_for_thread,
                                     &session_id_for_thread,
                                 ) {
                                     break;
@@ -213,6 +209,11 @@ impl SessionLease {
                                         .as_deref()
                                         == Some(super::state::LEGACY_MARKER_CONTENT)
                                     && legacy_session_for_thread.is_dir()
+                                    && let Ok(super::storage::ExistingSessionLock::Held(
+                                        _legacy_lock,
+                                    )) = super::storage::try_lock_existing_session(
+                                        &legacy_session_for_thread,
+                                    )
                                     && let Err(error) = write_json_atomically_existing(legacy_path, &record)
                                 {
                                     tracing::debug!(
@@ -257,7 +258,7 @@ impl SessionLease {
     }
 }
 
-fn state_session_is_live(state_root: &Path, session_dir: &Path, session_id: &str) -> bool {
+fn state_session_is_live(state_root: &Path, state_session_dir: &Path, session_id: &str) -> bool {
     let root_metadata = fs::symlink_metadata(state_root).ok();
     if root_metadata
         .as_ref()
@@ -272,13 +273,13 @@ fn state_session_is_live(state_root: &Path, session_dir: &Path, session_id: &str
     {
         return false;
     }
-    if !fs::symlink_metadata(session_dir)
+    if !fs::symlink_metadata(state_session_dir)
         .map(|metadata| metadata.file_type().is_dir() && !file_type_is_link(metadata.file_type()))
         .unwrap_or(false)
     {
         return false;
     }
-    super::storage::read_session_record(&session_dir.join(super::SESSION_METADATA_FILE))
+    super::storage::read_session_record(&state_session_dir.join(super::SESSION_METADATA_FILE))
         .is_ok_and(|record| record.schema_version == 1 && record.session_id == session_id)
 }
 
@@ -288,14 +289,55 @@ impl Drop for SessionLease {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
-        let _ = fs::remove_file(&self.path);
+        remove_own_state_lease(&self.path);
         if let Some(path) = &self.legacy_path {
             remove_own_legacy_lease(path);
         }
     }
 }
 
+fn remove_own_state_lease(path: &Path) {
+    let Some(leases_dir) = path.parent() else {
+        return;
+    };
+    let Some(session_dir) = leases_dir.parent() else {
+        return;
+    };
+    let Ok(super::storage::ExistingSessionLock::Held(lock)) =
+        super::storage::try_lock_existing_session(session_dir)
+    else {
+        return;
+    };
+    let Some(session_id) = session_dir.file_name().and_then(|name| name.to_str()) else {
+        drop(lock);
+        return;
+    };
+    let Some(thread_id) = path.file_stem().and_then(|name| name.to_str()) else {
+        drop(lock);
+        return;
+    };
+    if super::storage::read_lease_record(path).is_ok_and(|record| {
+        record.process_id == std::process::id()
+            && record.session_id == session_id
+            && record.thread_id == thread_id
+    }) {
+        let _ = fs::remove_file(path);
+    }
+    drop(lock);
+}
+
 fn remove_own_legacy_lease(path: &Path) {
+    let Some(leases_dir) = path.parent() else {
+        return;
+    };
+    let Some(session_dir) = leases_dir.parent() else {
+        return;
+    };
+    let Ok(super::storage::ExistingSessionLock::Held(_session_lock)) =
+        super::storage::try_lock_existing_session(session_dir)
+    else {
+        return;
+    };
     if super::storage::read_lease_record(path)
         .is_ok_and(|record| record.process_id == std::process::id())
     {

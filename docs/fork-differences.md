@@ -312,9 +312,11 @@ navigation remain unchanged.
   The historical `<codex_home>/session-tmp-recovery` tree is merged
   automatically into the normal default root, with collision-safe paths and
   resumable migration; live old-version sessions remain in place until a later
-  open observes that they have released their legacy lease. Unknown files are
-  preserved. A markerless nonempty custom root remains inert and is never
-  adopted.
+  open observes that they have released their legacy lease. Recognized session
+  payloads and control records move, while unknown recovery files stay at
+  their original paths outside managed cleanup, so a recovery tree containing
+  such files remains until it is empty. A markerless nonempty custom root
+  remains inert and is never adopted.
 - Agents receive explicit guidance that every file under their managed agent
   directory is disposable, including untracked files created by shell commands.
   Source files, deliverables, checkpoints, credentials, and other durable data

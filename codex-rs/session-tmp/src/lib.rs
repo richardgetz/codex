@@ -132,6 +132,11 @@ impl SessionTmpManager {
 
         validate_component(session_id)?;
         validate_component(thread_id)?;
+        // Keep the per-root migration barrier through payload/session setup so
+        // a migration cannot retire this root between state discovery and the
+        // first manager-owned write. The guard is dropped once initialization
+        // and the initial session record are complete.
+        let _migration_lock = migration::lock_for_open(&state)?;
         let root = state.payload_root().to_path_buf();
         let canonical_root = state.canonical_payload_root().to_path_buf();
         let payload_namespace = state.payload_namespace().to_path_buf();
@@ -421,7 +426,8 @@ fn open_control_state(
         Err(error)
             if config.root.is_none()
                 && matches!(error, SessionTmpError::RootNotManaged(_))
-                && migration::recovery_is_enrolled(default_root) =>
+                && (migration::recovery_is_enrolled(default_root)
+                    || migration::recovery_manifest_pending(default_root)) =>
         {
             // The old recovery root is independently marker-validated. Enroll
             // a fresh managed namespace below the nonempty default root so
