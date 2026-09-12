@@ -1,16 +1,16 @@
 //! Legacy marker import and transition helpers.
 
-use super::identity::is_real_directory;
-use super::storage;
 use super::ControlState;
 use super::LEGACY_MARKER;
 use super::LEGACY_MARKER_CONTENT;
 use super::SessionTmpError;
+use super::identity::is_real_directory;
+use super::storage;
 use crate::EntryMetadata;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::Path;
 use std::path::Component;
+use std::path::Path;
 
 impl ControlState {
     pub(crate) fn legacy_transition_active(&self) -> Result<bool, SessionTmpError> {
@@ -33,7 +33,9 @@ impl ControlState {
         }
         for item in fs::read_dir(&legacy_sessions)? {
             let legacy_session_dir = item?.path();
-            let Some(session_id) = legacy_session_dir.file_name().and_then(|name| name.to_str())
+            let Some(session_id) = legacy_session_dir
+                .file_name()
+                .and_then(|name| name.to_str())
             else {
                 continue;
             };
@@ -49,11 +51,12 @@ impl ControlState {
             let Some(_state_lock) = storage::try_lock_session(&state_session_dir)? else {
                 continue;
             };
-            let _legacy_lock = match storage::try_lock_legacy_session(self.payload_root(), session_id)? {
-                storage::LegacyLock::Held(lock) => Some(lock),
-                storage::LegacyLock::Absent => None,
-                storage::LegacyLock::Unavailable => continue,
-            };
+            let _legacy_lock =
+                match storage::try_lock_legacy_session(self.payload_root(), session_id)? {
+                    storage::LegacyLock::Held(lock) => Some(lock),
+                    storage::LegacyLock::Absent => None,
+                    storage::LegacyLock::Unavailable => continue,
+                };
             let legacy_record_path = legacy_session_dir.join("session.json");
             let Ok(record) = storage::read_session_record(&legacy_record_path) else {
                 continue;
@@ -122,8 +125,7 @@ impl ControlState {
             if session_id == ".locks" {
                 continue;
             }
-            if storage::validate_component(session_id).is_err()
-                || !is_real_directory(&session_dir)
+            if storage::validate_component(session_id).is_err() || !is_real_directory(&session_dir)
             {
                 // Leave the marker in place when ownership of a payload
                 // subtree cannot be proven from a legacy session record.
@@ -144,9 +146,7 @@ impl ControlState {
                 &session_dir.join(storage::LEASES_DIR),
                 storage::LEASE_STALE_AFTER,
             )? || storage::has_fresh_lease(
-                &self
-                    .state_session_dir(session_id)
-                    .join(storage::LEASES_DIR),
+                &self.state_session_dir(session_id).join(storage::LEASES_DIR),
                 storage::LEASE_STALE_AFTER,
             )? {
                 return Ok(());
@@ -267,15 +267,17 @@ fn import_metadata(
     storage::set_private_directory(state_dir)?;
     for item in fs::read_dir(legacy_dir)? {
         let legacy_path = item?.path();
-        if legacy_path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+        if legacy_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("json")
+        {
             continue;
         }
         let Ok(metadata) = storage::read_metadata(&legacy_path) else {
             continue;
         };
-        if metadata.session_id != session_id
-            || !valid_metadata_path(&metadata)
-        {
+        if metadata.session_id != session_id || !valid_metadata_path(&metadata) {
             continue;
         }
         if storage::validate_component(&metadata.id).is_err()
@@ -290,9 +292,7 @@ fn import_metadata(
             }
             Ok(_) => {
                 let existing = storage::read_metadata(&state_path)?;
-                if existing != metadata
-                    && !metadata_matches_without_id(&existing, &metadata)
-                {
+                if existing != metadata && !metadata_matches_without_id(&existing, &metadata) {
                     // Keep a stable source-derived ID for a collision copy.
                     // A random ID here would append another record on every
                     // manager open because the legacy source remains intact.
@@ -355,7 +355,9 @@ fn metadata_matches_without_id(left: &EntryMetadata, right: &EntryMetadata) -> b
 
 fn valid_metadata_path(metadata: &EntryMetadata) -> bool {
     let mut components = metadata.path.components();
-    components.next().is_some_and(|component| component.as_os_str() == "agents")
+    components
+        .next()
+        .is_some_and(|component| component.as_os_str() == "agents")
         && components
             .next()
             .is_some_and(|component| component.as_os_str() == metadata.thread_id.as_str())
@@ -379,7 +381,11 @@ fn import_leases(
     storage::set_private_directory(state_dir)?;
     for item in fs::read_dir(legacy_dir)? {
         let legacy_path = item?.path();
-        if legacy_path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+        if legacy_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("json")
+        {
             continue;
         }
         let Ok(record) = storage::read_lease_record(&legacy_path) else {

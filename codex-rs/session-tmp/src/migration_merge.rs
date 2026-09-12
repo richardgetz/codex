@@ -1,16 +1,18 @@
 //! Payload and session merge operations for recovery migration.
 
-use super::liveness::{has_live_leases, session_is_live};
-use super::records::{
-    collision_path, merge_metadata, merge_session_record, merge_stale_leases,
-};
-use super::retire::retire_source_session;
-use super::storage;
 use super::ControlState;
-use crate::AGENTS_DIR;
 use super::Path;
 use super::PathBuf;
 use super::SessionTmpError;
+use super::liveness::has_live_leases;
+use super::liveness::session_is_live;
+use super::records::collision_path;
+use super::records::merge_metadata;
+use super::records::merge_session_record;
+use super::records::merge_stale_leases;
+use super::retire::retire_source_session;
+use super::storage;
+use crate::AGENTS_DIR;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -254,7 +256,8 @@ fn merge_payload_path(
     let target = mapped_target.as_deref().unwrap_or(target);
     if fs::symlink_metadata(target).is_ok() {
         let target_type = fs::symlink_metadata(target)?.file_type();
-        if source_type.is_dir() && target_type.is_dir() && !storage::file_type_is_link(target_type) {
+        if source_type.is_dir() && target_type.is_dir() && !storage::file_type_is_link(target_type)
+        {
             merge_existing_directory(
                 source,
                 target,
@@ -328,7 +331,8 @@ fn move_payload_path_no_replace(
     let source_type = fs::symlink_metadata(source)?.file_type();
     let mut destination = target.to_path_buf();
     for _ in 0..8 {
-        if let Ok(target_type) = fs::symlink_metadata(&destination).map(|metadata| metadata.file_type())
+        if let Ok(target_type) =
+            fs::symlink_metadata(&destination).map(|metadata| metadata.file_type())
         {
             if storage::file_type_is_link(source_type)
                 && storage::file_type_is_link(target_type)
@@ -359,9 +363,7 @@ fn move_payload_path_no_replace(
                 )?;
                 return Ok(());
             }
-            if source_type.is_file()
-                && target_type.is_file()
-                && files_equal(source, &destination)?
+            if source_type.is_file() && target_type.is_file() && files_equal(source, &destination)?
             {
                 record_move(
                     source_relative,
@@ -537,11 +539,7 @@ fn record_move(
     Ok(())
 }
 
-fn destination_relative(
-    target_session: &Path,
-    destination: &Path,
-    fallback: &Path,
-) -> PathBuf {
+fn destination_relative(target_session: &Path, destination: &Path, fallback: &Path) -> PathBuf {
     destination
         .strip_prefix(target_session)
         .map(Path::to_path_buf)

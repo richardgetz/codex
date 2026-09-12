@@ -1,17 +1,17 @@
 //! Validated session and entry records for recovery migration.
 
-use super::liveness::migration_limit_error;
-use super::storage;
 use super::ControlState;
-use crate::AGENTS_DIR;
-use crate::ENTRY_METADATA_DIR;
-use crate::LEASES_DIR;
 use super::MAX_MIGRATION_ENTRIES;
-use crate::SESSION_METADATA_FILE;
-use crate::EntryMetadata;
 use super::Path;
 use super::PathBuf;
 use super::SessionTmpError;
+use super::liveness::migration_limit_error;
+use super::storage;
+use crate::AGENTS_DIR;
+use crate::ENTRY_METADATA_DIR;
+use crate::EntryMetadata;
+use crate::LEASES_DIR;
+use crate::SESSION_METADATA_FILE;
 use std::fs;
 use std::io::ErrorKind;
 
@@ -20,7 +20,9 @@ pub(super) fn merge_session_record(
     target: &ControlState,
     session_id: &str,
 ) -> Result<(), SessionTmpError> {
-    let source_path = source.state_session_dir(session_id).join(SESSION_METADATA_FILE);
+    let source_path = source
+        .state_session_dir(session_id)
+        .join(SESSION_METADATA_FILE);
     let target_dir = target.state_session_dir(session_id);
     let target_path = target_dir.join(SESSION_METADATA_FILE);
     let source_record = match storage::read_session_record(&source_path) {
@@ -52,12 +54,16 @@ pub(super) fn merge_metadata(
     session_id: &str,
     moved_paths: &[(PathBuf, PathBuf)],
 ) -> Result<(), SessionTmpError> {
-    let source_dir = source.state_session_dir(session_id).join(ENTRY_METADATA_DIR);
+    let source_dir = source
+        .state_session_dir(session_id)
+        .join(ENTRY_METADATA_DIR);
     storage::ensure_directory_not_symlink(&source_dir)?;
     if !source_dir.is_dir() {
         return Ok(());
     }
-    let target_dir = target.state_session_dir(session_id).join(ENTRY_METADATA_DIR);
+    let target_dir = target
+        .state_session_dir(session_id)
+        .join(ENTRY_METADATA_DIR);
     storage::ensure_directory_not_symlink(&target_dir)?;
     fs::create_dir_all(&target_dir)?;
     storage::set_private_directory(&target_dir)?;
@@ -67,7 +73,11 @@ pub(super) fn merge_metadata(
             break;
         };
         let source_path = item?.path();
-        if source_path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+        if source_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("json")
+        {
             continue;
         }
         let Ok(mut metadata) = storage::read_metadata(&source_path) else {
@@ -225,7 +235,9 @@ pub(super) fn merge_stale_leases(
 
 pub(super) fn valid_metadata_path(metadata: &EntryMetadata) -> bool {
     let mut components = metadata.path.components();
-    components.next().is_some_and(|component| component.as_os_str() == AGENTS_DIR)
+    components
+        .next()
+        .is_some_and(|component| component.as_os_str() == AGENTS_DIR)
         && components
             .next()
             .is_some_and(|component| component.as_os_str() == metadata.thread_id.as_str())
@@ -237,9 +249,10 @@ pub(super) fn valid_metadata_path(metadata: &EntryMetadata) -> bool {
 
 pub(super) fn valid_manifest_path(path: &Path) -> bool {
     let mut components = path.components();
-    components.next().is_some_and(|component| {
-        component.as_os_str() == AGENTS_DIR
-    }) && matches!(components.next(), Some(std::path::Component::Normal(_)))
+    components
+        .next()
+        .is_some_and(|component| component.as_os_str() == AGENTS_DIR)
+        && matches!(components.next(), Some(std::path::Component::Normal(_)))
         && matches!(components.next(), Some(std::path::Component::Normal(_)))
         && components.all(|component| matches!(component, std::path::Component::Normal(_)))
 }

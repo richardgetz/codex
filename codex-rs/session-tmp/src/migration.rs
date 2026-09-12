@@ -7,11 +7,11 @@
 //! open observes that they have been released.
 
 use super::state;
+use super::state::ControlState;
 use super::storage;
 use super::types::SessionTmpError;
-use super::state::ControlState;
-use crate::SESSIONS_DIR;
 use crate::SESSION_METADATA_FILE;
+use crate::SESSIONS_DIR;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fs;
@@ -69,12 +69,14 @@ pub(super) fn recovery_is_enrolled(default_root: &Path) -> bool {
     }
     match state::inspect_payload_root(&recovery_root) {
         Ok(true) => true,
-        Ok(false) => state::payload_is_nonempty(&recovery_root)
-            .ok()
-            .unwrap_or(false)
-            && state::external_identity_present(default_root, &recovery_root)
+        Ok(false) => {
+            state::payload_is_nonempty(&recovery_root)
                 .ok()
-                .unwrap_or(false),
+                .unwrap_or(false)
+                && state::external_identity_present(default_root, &recovery_root)
+                    .ok()
+                    .unwrap_or(false)
+        }
         Err(_) => false,
     }
 }
@@ -83,9 +85,7 @@ pub(super) fn recovery_is_enrolled(default_root: &Path) -> bool {
 /// lease. An active old-version writer keeps the normal payload namespace as
 /// its compatibility destination; once released, the next open can use the
 /// hidden migration namespace or complete an existing external enrollment.
-pub(super) fn recovery_has_live_legacy_lease(
-    default_root: &Path,
-) -> Result<bool, SessionTmpError> {
+pub(super) fn recovery_has_live_legacy_lease(default_root: &Path) -> Result<bool, SessionTmpError> {
     let recovery_root = default_root.join(state::LEGACY_RECOVERY_ROOT);
     let sessions_dir = recovery_root.join(SESSIONS_DIR);
     storage::ensure_directory_not_symlink(&sessions_dir)?;
@@ -116,10 +116,7 @@ pub(super) fn recovery_has_live_legacy_lease(
         ) {
             return Ok(true);
         }
-        if storage::has_fresh_lease(
-            &path.join(storage::LEASES_DIR),
-            storage::LEASE_STALE_AFTER,
-        )? {
+        if storage::has_fresh_lease(&path.join(storage::LEASES_DIR), storage::LEASE_STALE_AFTER)? {
             return Ok(true);
         }
     }
@@ -183,17 +180,13 @@ pub(super) fn consolidate_recovery(
     let (_first_state_migration_lock, _second_state_migration_lock) =
         if target.root_id() < source_root_id.as_str() {
             (
-                storage::wait_for_migration_lock(
-                    &target.state_root().join(MIGRATION_LOCK_FILE),
-                )?,
+                storage::wait_for_migration_lock(&target.state_root().join(MIGRATION_LOCK_FILE))?,
                 storage::wait_for_migration_lock(&source_state_root.join(MIGRATION_LOCK_FILE))?,
             )
         } else {
             (
                 storage::wait_for_migration_lock(&source_state_root.join(MIGRATION_LOCK_FILE))?,
-                storage::wait_for_migration_lock(
-                    &target.state_root().join(MIGRATION_LOCK_FILE),
-                )?,
+                storage::wait_for_migration_lock(&target.state_root().join(MIGRATION_LOCK_FILE))?,
             )
         };
     if !recovery_root.exists()
@@ -235,7 +228,8 @@ pub(super) fn consolidate_recovery(
     ));
     let mut moved_paths = match fs::symlink_metadata(&manifest_path) {
         Ok(metadata)
-            if storage::file_type_is_link(metadata.file_type()) || !metadata.file_type().is_file() =>
+            if storage::file_type_is_link(metadata.file_type())
+                || !metadata.file_type().is_file() =>
         {
             return Err(SessionTmpError::UnsafeManagedPath(manifest_path));
         }
@@ -278,13 +272,7 @@ pub(super) fn consolidate_recovery(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(error.into()),
     };
-    write_manifest(
-        &manifest_path,
-        &source,
-        target,
-        "in_progress",
-        &moved_paths,
-    )?;
+    write_manifest(&manifest_path, &source, target, "in_progress", &moved_paths)?;
 
     let session_ids = match liveness::collect_session_ids(&source) {
         Ok(session_ids) => session_ids,
@@ -330,13 +318,7 @@ pub(super) fn consolidate_recovery(
                     });
                 }
             }
-            write_manifest(
-                &manifest_path,
-                &source,
-                target,
-                "in_progress",
-                &all_paths,
-            )
+            write_manifest(&manifest_path, &source, target, "in_progress", &all_paths)
         };
         let merge = match merge::merge_session(
             &source,
@@ -375,13 +357,7 @@ pub(super) fn consolidate_recovery(
                         });
                     }
                 }
-                write_manifest(
-                    &manifest_path,
-                    &source,
-                    target,
-                    "in_progress",
-                    &moved_paths,
-                )?;
+                write_manifest(&manifest_path, &source, target, "in_progress", &moved_paths)?;
             }
             deferred = true;
         } else {
@@ -398,13 +374,7 @@ pub(super) fn consolidate_recovery(
                     });
                 }
             }
-            write_manifest(
-                &manifest_path,
-                &source,
-                target,
-                "in_progress",
-                &moved_paths,
-            )?;
+            write_manifest(&manifest_path, &source, target, "in_progress", &moved_paths)?;
             if let Err(error) = merge.retire_source(&source, target, &session_id) {
                 tracing::debug!(
                     error = %error,
@@ -435,13 +405,7 @@ pub(super) fn consolidate_recovery(
             drop(_first_lock);
         }
         if payload_retired {
-            write_manifest(
-                &manifest_path,
-                &source,
-                target,
-                "complete",
-                &moved_paths,
-            )?;
+            write_manifest(&manifest_path, &source, target, "complete", &moved_paths)?;
         }
     }
     Ok(())
@@ -464,9 +428,12 @@ fn lock_migration_path(state_base: &Path, root_id: &str) -> Result<File, Session
     let path = state_base
         .join(".migration-locks")
         .join(format!("{root_id}.lock"));
-    let parent = path
-        .parent()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "migration lock has no parent"))?;
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "migration lock has no parent",
+        )
+    })?;
     storage::ensure_directory_not_symlink(parent)?;
     fs::create_dir_all(parent)?;
     storage::set_private_directory(parent)?;
@@ -573,11 +540,11 @@ fn pending_recovery_manifest(
             Err(error) => return Err(error.into()),
             Ok(_) => {}
         }
-        let Some(source_payload_root) = manifest
-            .source_payload_root
-            .clone()
-            .or_else(|| state::payload_root_from_state_root(&source_state_root, &manifest.source_root_id).ok().flatten())
-        else {
+        let Some(source_payload_root) = manifest.source_payload_root.clone().or_else(|| {
+            state::payload_root_from_state_root(&source_state_root, &manifest.source_root_id)
+                .ok()
+                .flatten()
+        }) else {
             continue;
         };
         let Ok(canonical_source) = state::canonicalize_for_identity(&source_payload_root) else {

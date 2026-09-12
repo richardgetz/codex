@@ -1,10 +1,10 @@
 //! Durable recovery migration manifest discovery.
 
-use super::state;
-use super::storage;
-use super::read_manifest;
 use super::MIGRATION_MANIFEST_PREFIX;
 use super::MIGRATION_MANIFEST_SUFFIX;
+use super::read_manifest;
+use super::state;
+use super::storage;
 use std::fs;
 use std::path::Path;
 

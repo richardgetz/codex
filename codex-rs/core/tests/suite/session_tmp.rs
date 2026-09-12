@@ -399,8 +399,7 @@ async fn session_tmp_consolidates_a_validated_recovery_root() -> anyhow::Result<
                 .join("session-tmp-recovery")
                 .join("sessions")
                 .join("legacy-session");
-            fs::create_dir_all(recovery_session.join("agents").join("legacy-thread"))
-                .unwrap();
+            fs::create_dir_all(recovery_session.join("agents").join("legacy-thread")).unwrap();
             fs::write(
                 home.join("session-tmp-recovery")
                     .join(".codex-managed-session-tmp"),
@@ -473,17 +472,20 @@ async fn session_tmp_consolidates_a_validated_recovery_root() -> anyhow::Result<
     let absolute_path = entry["absolute_path"]
         .as_str()
         .expect("recovered entry should have an absolute path");
-    assert!(std::path::Path::new(absolute_path)
-        .starts_with(test.codex_home_path().join("session-tmp")));
+    assert!(
+        std::path::Path::new(absolute_path).starts_with(test.codex_home_path().join("session-tmp"))
+    );
     assert!(!recovery_root.exists());
     assert_eq!(
         fs::read(test.codex_home_path().join("session-tmp/preserved.txt"))?,
         b"leave original data"
     );
-    assert!(!test
-        .codex_home_path()
-        .join("session-tmp/.codex-managed-session-tmp")
-        .exists());
+    assert!(
+        !test
+            .codex_home_path()
+            .join("session-tmp/.codex-managed-session-tmp")
+            .exists()
+    );
 
     Ok(())
 }

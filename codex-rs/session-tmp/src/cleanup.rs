@@ -231,15 +231,13 @@ impl SessionTmpManager {
                 if thread_id != self.thread_id
                     && fs::symlink_metadata(&path)
                         .map(|metadata| {
-                            metadata.file_type().is_dir() && !file_type_is_link(metadata.file_type())
+                            metadata.file_type().is_dir()
+                                && !file_type_is_link(metadata.file_type())
                         })
                         .unwrap_or(false)
                     && (storage::lease_is_fresh_for_thread(&self.state_session_dir, thread_id)
                         || (legacy_transition_active
-                            && storage::lease_is_fresh_for_thread(
-                                &self.session_dir,
-                                thread_id,
-                            )))
+                            && storage::lease_is_fresh_for_thread(&self.session_dir, thread_id)))
                 {
                     threads.insert(thread_id.to_string());
                 }
@@ -425,7 +423,9 @@ fn add_fresh_lease_threads(
     threads: &mut HashSet<String>,
 ) -> Result<(), SessionTmpError> {
     match fs::symlink_metadata(leases_dir) {
-        Ok(metadata) if file_type_is_link(metadata.file_type()) || !metadata.file_type().is_dir() => {
+        Ok(metadata)
+            if file_type_is_link(metadata.file_type()) || !metadata.file_type().is_dir() =>
+        {
             return Err(SessionTmpError::UnsafeManagedPath(leases_dir.to_path_buf()));
         }
         Ok(_) => {}

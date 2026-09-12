@@ -142,15 +142,16 @@ pub(super) fn reap_sessions(
             .and_then(|state_lease| {
                 if legacy_transition_active {
                     has_fresh_lease(
-                        &state.legacy_session_dir(directory_session_id).join(LEASES_DIR),
+                        &state
+                            .legacy_session_dir(directory_session_id)
+                            .join(LEASES_DIR),
                         LEASE_STALE_AFTER,
                     )
                     .map(|legacy_lease| state_lease || legacy_lease)
                 } else {
                     Ok(state_lease)
                 }
-            })
-        {
+            }) {
             Ok(fresh_lease) => fresh_lease,
             Err(error) if is_skippable_reap_error(mode, &error) => {
                 tracing::debug!(
@@ -383,7 +384,10 @@ pub(super) fn resolve_user_session_id(
         if record.session_id != session_id {
             continue;
         }
-        let agent_dir = state.payload_session_dir(session_id).join(AGENTS_DIR).join(thread_id);
+        let agent_dir = state
+            .payload_session_dir(session_id)
+            .join(AGENTS_DIR)
+            .join(thread_id);
         let payload_agent_exists = fs::symlink_metadata(&agent_dir)
             .map(|metadata| {
                 metadata.file_type().is_dir() && !file_type_is_link(metadata.file_type())
@@ -397,8 +401,9 @@ pub(super) fn resolve_user_session_id(
                 .flatten()
                 .filter_map(Result::ok)
                 .any(|item| {
-                    read_metadata(&item.path())
-                        .is_ok_and(|metadata| metadata.session_id == session_id && metadata.thread_id == thread_id)
+                    read_metadata(&item.path()).is_ok_and(|metadata| {
+                        metadata.session_id == session_id && metadata.thread_id == thread_id
+                    })
                 });
         let lease_path = session_dir
             .join(LEASES_DIR)
@@ -563,10 +568,7 @@ pub(super) fn try_lock_legacy_session(
     if !metadata.file_type().is_file() {
         return Err(SessionTmpError::UnsafeManagedPath(lock_path));
     }
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&lock_path)?;
+    let file = OpenOptions::new().read(true).write(true).open(&lock_path)?;
     match file.try_lock() {
         Ok(()) => Ok(LegacyLock::Held(file)),
         Err(std::fs::TryLockError::WouldBlock) => Ok(LegacyLock::Unavailable),
@@ -610,7 +612,9 @@ pub(super) fn try_lock_existing_session(
         Err(error) => return Err(error.into()),
     };
     if file_type_is_link(metadata.file_type()) || !metadata.file_type().is_dir() {
-        return Err(SessionTmpError::UnsafeManagedPath(session_dir.to_path_buf()));
+        return Err(SessionTmpError::UnsafeManagedPath(
+            session_dir.to_path_buf(),
+        ));
     }
     let sessions_dir = session_dir
         .parent()
@@ -640,10 +644,7 @@ pub(super) fn try_lock_existing_session(
     if file_type_is_link(metadata.file_type()) || !metadata.file_type().is_file() {
         return Err(SessionTmpError::UnsafeManagedPath(lock_path));
     }
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&lock_path)?;
+    let file = OpenOptions::new().read(true).write(true).open(&lock_path)?;
     match file.try_lock() {
         Ok(()) => Ok(ExistingSessionLock::Held(file)),
         Err(std::fs::TryLockError::WouldBlock) => Ok(ExistingSessionLock::Unavailable),
@@ -719,7 +720,9 @@ pub(super) fn write_json_atomically_existing<T: Serialize>(
     })?;
     ensure_directory_not_symlink(parent)?;
     if !parent.is_dir() {
-        return Err(io::Error::new(ErrorKind::NotFound, "metadata parent directory is missing").into());
+        return Err(
+            io::Error::new(ErrorKind::NotFound, "metadata parent directory is missing").into(),
+        );
     }
     write_json_atomically_in_existing_parent(path, value)
 }

@@ -1,21 +1,22 @@
 //! Exact-owned source cleanup for recovery migration.
 
-use super::liveness::{collect_session_ids, session_is_live};
-use super::state;
-use super::storage;
 use super::ControlState;
-use crate::AGENTS_DIR;
-use crate::ENTRY_METADATA_DIR;
-use crate::LEASES_DIR;
 use super::MIGRATION_LOCK_FILE;
 use super::MIGRATION_MANIFEST_PREFIX;
 use super::MIGRATION_MANIFEST_SUFFIX;
-use crate::SESSIONS_DIR;
-use crate::SESSION_METADATA_FILE;
-use super::SessionTmpError;
-use super::read_manifest;
 use super::Path;
 use super::PathBuf;
+use super::SessionTmpError;
+use super::liveness::collect_session_ids;
+use super::liveness::session_is_live;
+use super::read_manifest;
+use super::state;
+use super::storage;
+use crate::AGENTS_DIR;
+use crate::ENTRY_METADATA_DIR;
+use crate::LEASES_DIR;
+use crate::SESSION_METADATA_FILE;
+use crate::SESSIONS_DIR;
 use std::fs;
 use std::fs::File;
 use std::io::ErrorKind;
@@ -57,8 +58,12 @@ fn remove_moved_payload_paths(
         {
             continue;
         }
-        let source_path = source.payload_session_dir(session_id).join(&source_relative);
-        let target_path = target.payload_session_dir(session_id).join(&target_relative);
+        let source_path = source
+            .payload_session_dir(session_id)
+            .join(&source_relative);
+        let target_path = target
+            .payload_session_dir(session_id)
+            .join(&target_relative);
         let source_type = match fs::symlink_metadata(&source_path) {
             Ok(metadata) => metadata.file_type(),
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
@@ -75,7 +80,9 @@ fn remove_moved_payload_paths(
         } else if source_type.is_file() {
             target_type.is_file() && files_equal(&source_path, &target_path)?
         } else {
-            source_type.is_dir() && target_type.is_dir() && !storage::file_type_is_link(target_type)
+            source_type.is_dir()
+                && target_type.is_dir()
+                && !storage::file_type_is_link(target_type)
                 && fs::read_dir(&source_path)?.next().transpose()?.is_none()
         };
         if !equivalent {
@@ -111,7 +118,9 @@ fn prune_empty_payload_dirs(path: &Path) -> Result<(), SessionTmpError> {
     for item in fs::read_dir(path)? {
         let child = item?.path();
         let child_metadata = fs::symlink_metadata(&child)?;
-        if child_metadata.file_type().is_dir() && !storage::file_type_is_link(child_metadata.file_type()) {
+        if child_metadata.file_type().is_dir()
+            && !storage::file_type_is_link(child_metadata.file_type())
+        {
             prune_empty_payload_dirs(&child)?;
         }
     }
@@ -146,10 +155,7 @@ fn files_equal(left: &Path, right: &Path) -> Result<bool, SessionTmpError> {
     }
 }
 
-fn remove_known_control_files(
-    session_dir: &Path,
-    session_id: &str,
-) -> Result<(), SessionTmpError> {
+fn remove_known_control_files(session_dir: &Path, session_id: &str) -> Result<(), SessionTmpError> {
     if !state::is_real_directory(session_dir) {
         return Ok(());
     }
@@ -213,7 +219,9 @@ pub(super) fn source_root_is_retirable(source: &ControlState) -> Result<bool, Se
             if storage::file_type_is_link(metadata.file_type())
                 || !metadata.file_type().is_dir() =>
         {
-            return Err(SessionTmpError::UnsafeManagedPath(source.payload_root().to_path_buf()));
+            return Err(SessionTmpError::UnsafeManagedPath(
+                source.payload_root().to_path_buf(),
+            ));
         }
         Ok(_) => root_has_only_managed_entries(source.payload_root(), true),
         Err(error) if error.kind() == ErrorKind::NotFound => true,
@@ -305,9 +313,7 @@ pub(super) fn retire_source_payload(source: &ControlState) -> Result<bool, Sessi
     match fs::remove_dir(root) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(true),
-        Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => {
-            Ok(false)
-        }
+        Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => Ok(false),
         Err(error) => Err(error.into()),
     }
 }
@@ -350,9 +356,7 @@ pub(super) fn retire_source_state(source: &ControlState) -> Result<bool, Session
             }
             match fs::remove_dir(&path) {
                 Ok(()) => {}
-                Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => {
-                    return Ok(false)
-                }
+                Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => return Ok(false),
                 Err(error) if error.kind() == ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }

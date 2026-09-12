@@ -94,22 +94,20 @@ impl SessionLease {
             .owner_token
             .clone()
             .expect("newly acquired leases always have an owner token");
-        let legacy_path = if legacy_transition_active
-            && legacy_lock.is_some()
-            && legacy_session_dir.is_dir()
-        {
-            let legacy_leases_dir = legacy_session_dir.join(LEASES_DIR);
-            ensure_directory_not_symlink(&legacy_session_dir)?;
-            ensure_directory_not_symlink(&legacy_leases_dir)?;
-            if legacy_leases_dir.is_dir() {
-                super::storage::set_private_directory(&legacy_leases_dir)?;
-                Some(legacy_leases_dir.join(format!("{thread_id}.json")))
+        let legacy_path =
+            if legacy_transition_active && legacy_lock.is_some() && legacy_session_dir.is_dir() {
+                let legacy_leases_dir = legacy_session_dir.join(LEASES_DIR);
+                ensure_directory_not_symlink(&legacy_session_dir)?;
+                ensure_directory_not_symlink(&legacy_leases_dir)?;
+                if legacy_leases_dir.is_dir() {
+                    super::storage::set_private_directory(&legacy_leases_dir)?;
+                    Some(legacy_leases_dir.join(format!("{thread_id}.json")))
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
         for _ in 0..2 {
             if fs::symlink_metadata(&path)
@@ -124,7 +122,7 @@ impl SessionLease {
                     file.sync_all()?;
                     set_private_file(&path)?;
                     if let Some(legacy_path) = legacy_path.as_ref()
-                        && fs::symlink_metadata(&legacy_path)
+                        && fs::symlink_metadata(legacy_path)
                             .map(|metadata| file_type_is_link(metadata.file_type()))
                             .unwrap_or(false)
                     {
@@ -150,10 +148,9 @@ impl SessionLease {
                     let state_session_dir_for_thread = session_dir.to_path_buf();
                     let legacy_path_for_thread = legacy_path.clone();
                     let owner_token_for_thread = owner_token.clone();
-                    let legacy_marker_for_thread = state
-                        .payload_root()
-                        .join(super::state::LEGACY_MARKER);
-                    let legacy_session_for_thread = legacy_session_dir.clone();
+                    let legacy_marker_for_thread =
+                        state.payload_root().join(super::state::LEGACY_MARKER);
+                    let legacy_session_for_thread = legacy_session_dir;
                     let session_id_for_thread = session_id.to_string();
                     let thread_id_for_thread = thread_id.to_string();
                     let thread = match std::thread::Builder::new()
@@ -247,7 +244,8 @@ impl SessionLease {
                                         &session_id_for_thread,
                                         &thread_id_for_thread,
                                     )
-                                    && let Err(error) = write_json_atomically_existing(legacy_path, &record)
+                                    && let Err(error) =
+                                        write_json_atomically_existing(legacy_path, &record)
                                 {
                                     tracing::debug!(
                                         error = %error,
@@ -294,15 +292,14 @@ impl SessionLease {
 
 fn state_session_is_live(state_root: &Path, state_session_dir: &Path, session_id: &str) -> bool {
     let root_metadata = fs::symlink_metadata(state_root).ok();
-    if root_metadata
-        .as_ref()
-        .is_none_or(|metadata| {
-            file_type_is_link(metadata.file_type()) || !metadata.file_type().is_dir()
-        })
-    {
+    if root_metadata.as_ref().is_none_or(|metadata| {
+        file_type_is_link(metadata.file_type()) || !metadata.file_type().is_dir()
+    }) {
         return false;
     }
-    if fs::read_to_string(state_root.join(super::state::STATE_MARKER)).ok().as_deref()
+    if fs::read_to_string(state_root.join(super::state::STATE_MARKER))
+        .ok()
+        .as_deref()
         != Some(super::state::STATE_MARKER_CONTENT)
     {
         return false;

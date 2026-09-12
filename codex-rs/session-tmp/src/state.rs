@@ -4,8 +4,8 @@
 //! metadata, leases, and coordination files in a per-payload-root state tree
 //! under the Codex home so deleting a payload root cannot erase liveness data.
 
-use super::storage;
 use super::SessionTmpError;
+use super::storage;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fs;
@@ -31,11 +31,14 @@ mod identity;
 #[path = "state_legacy.rs"]
 mod legacy;
 
-pub(super) use identity::{
-    canonicalize_for_identity, ensure_existing_ancestors_for_runtime, external_identity_present,
-    inspect_payload_root, is_real_directory, payload_is_nonempty, payload_root_from_state_root,
-    root_id,
-};
+pub(super) use identity::canonicalize_for_identity;
+pub(super) use identity::ensure_existing_ancestors_for_runtime;
+pub(super) use identity::external_identity_present;
+pub(super) use identity::inspect_payload_root;
+pub(super) use identity::is_real_directory;
+pub(super) use identity::payload_is_nonempty;
+pub(super) use identity::payload_root_from_state_root;
+pub(super) use identity::root_id;
 
 #[derive(Clone, Debug)]
 pub(super) struct ControlState {
@@ -58,10 +61,7 @@ struct RootRecord {
 }
 
 impl ControlState {
-    pub(super) fn open(
-        default_root: &Path,
-        payload_root: &Path,
-    ) -> Result<Self, SessionTmpError> {
+    pub(super) fn open(default_root: &Path, payload_root: &Path) -> Result<Self, SessionTmpError> {
         Self::open_with_options(
             default_root,
             payload_root,
@@ -170,7 +170,8 @@ impl ControlState {
             }
             result => result?,
         };
-        let existing_state = identity::inspect_state_root(&state_root, &root_id, &canonical_payload_root)?;
+        let existing_state =
+            identity::inspect_state_root(&state_root, &root_id, &canonical_payload_root)?;
         let payload_namespace = match existing_state {
             Some(namespace) => {
                 // A valid external identity enrolls the payload path even when its

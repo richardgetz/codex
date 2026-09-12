@@ -77,7 +77,12 @@ fn deleting_payload_recreates_the_same_namespace_from_external_state() {
     fs::remove_dir_all(&payload_root).unwrap();
 
     let entry = manager
-        .create(None, "recreate after manual deletion", Retention::Manual, TempKind::File)
+        .create(
+            None,
+            "recreate after manual deletion",
+            Retention::Manual,
+            TempKind::File,
+        )
         .unwrap();
 
     assert_eq!(manager.root(), payload_root.as_path());
@@ -118,12 +123,19 @@ fn external_heartbeat_survives_payload_deletion() {
     fs::remove_dir_all(payload_root).unwrap();
     std::thread::sleep(Duration::from_millis(100));
 
-    assert!(crate::storage::read_lease_record(&lease_path)
-        .unwrap()
-        .updated_at
-        > 0);
+    assert!(
+        crate::storage::read_lease_record(&lease_path)
+            .unwrap()
+            .updated_at
+            > 0
+    );
     manager
-        .create(None, "resume after heartbeat", Retention::Manual, TempKind::File)
+        .create(
+            None,
+            "resume after heartbeat",
+            Retention::Manual,
+            TempKind::File,
+        )
         .unwrap();
 }
 
@@ -170,7 +182,12 @@ fn missing_payload_keeps_other_live_agent_metadata_reclaimable() {
     .unwrap()
     .unwrap();
     let entry = agent_manager
-        .create(None, "live agent output", Retention::Session, TempKind::File)
+        .create(
+            None,
+            "live agent output",
+            Retention::Session,
+            TempKind::File,
+        )
         .unwrap();
     fs::remove_dir_all(root_manager.root()).unwrap();
 
@@ -191,9 +208,7 @@ fn missing_payload_keeps_other_live_agent_metadata_reclaimable() {
 fn deleting_legacy_payload_does_not_resurrect_heartbeat_control_files() {
     let root = tempfile::tempdir().unwrap();
     let configured_root = root.path().join("managed");
-    let legacy_session = configured_root
-        .join(SESSIONS_DIR)
-        .join("session-1");
+    let legacy_session = configured_root.join(SESSIONS_DIR).join("session-1");
     fs::create_dir_all(legacy_session.join(AGENTS_DIR).join("old-thread")).unwrap();
     fs::create_dir_all(legacy_session.join(LEASES_DIR)).unwrap();
     fs::create_dir_all(legacy_session.parent().unwrap().join(".locks")).unwrap();
@@ -254,7 +269,12 @@ fn deleting_legacy_payload_does_not_resurrect_heartbeat_control_files() {
     std::thread::sleep(Duration::from_millis(100));
 
     assert!(!configured_root.exists());
-    assert!(state_session.join(LEASES_DIR).join("thread-1.json").exists());
+    assert!(
+        state_session
+            .join(LEASES_DIR)
+            .join("thread-1.json")
+            .exists()
+    );
 }
 
 #[test]
@@ -286,9 +306,7 @@ fn recovery_root_is_merged_into_a_hidden_default_namespace() {
     let recovery_root = home.path().join("session-tmp-recovery");
     fs::create_dir_all(&normal_root).unwrap();
     fs::write(normal_root.join("preserved.txt"), b"keep").unwrap();
-    let recovery_session = recovery_root
-        .join(SESSIONS_DIR)
-        .join("legacy-session");
+    let recovery_session = recovery_root.join(SESSIONS_DIR).join("legacy-session");
     let recovery_agent = recovery_session.join(AGENTS_DIR).join("legacy-thread");
     fs::create_dir_all(&recovery_agent).unwrap();
     fs::write(
@@ -311,7 +329,7 @@ fn recovery_root_is_merged_into_a_hidden_default_namespace() {
     .unwrap();
     fs::write(recovery_agent.join("artifact.txt"), b"migrated").unwrap();
 
-    let manager = SessionTmpManager::open(
+    let _manager = SessionTmpManager::open(
         &default_config(),
         home.path(),
         "new-session",
@@ -322,7 +340,10 @@ fn recovery_root_is_merged_into_a_hidden_default_namespace() {
     .unwrap();
 
     assert!(!recovery_root.exists());
-    assert_eq!(fs::read(normal_root.join("preserved.txt")).unwrap(), b"keep");
+    assert_eq!(
+        fs::read(normal_root.join("preserved.txt")).unwrap(),
+        b"keep"
+    );
     assert_eq!(
         fs::read(
             normal_root
@@ -404,9 +425,18 @@ fn malformed_default_marker_uses_hidden_namespace_and_ignores_foreign_controls()
     let home = tempfile::tempdir().unwrap();
     let normal_root = home.path().join("session-tmp");
     let recovery_root = home.path().join("session-tmp-recovery");
-    fs::create_dir_all(normal_root.join(SESSIONS_DIR).join("foreign").join(LEASES_DIR))
-        .unwrap();
-    fs::write(normal_root.join(crate::state::LEGACY_MARKER), b"operator marker\n").unwrap();
+    fs::create_dir_all(
+        normal_root
+            .join(SESSIONS_DIR)
+            .join("foreign")
+            .join(LEASES_DIR),
+    )
+    .unwrap();
+    fs::write(
+        normal_root.join(crate::state::LEGACY_MARKER),
+        b"operator marker\n",
+    )
+    .unwrap();
     fs::write(
         normal_root
             .join(SESSIONS_DIR)
@@ -497,9 +527,8 @@ fn corrupt_recovery_manifest_is_preserved_for_retry() {
     )
     .unwrap();
     let target = crate::state::ControlState::open(home.path(), &normal_root).unwrap();
-    let source_id = crate::state::root_id(
-        &crate::state::canonicalize_for_identity(&recovery_root).unwrap(),
-    );
+    let source_id =
+        crate::state::root_id(&crate::state::canonicalize_for_identity(&recovery_root).unwrap());
     let manifest_path = target
         .state_root()
         .join(format!(".migration-{source_id}.json"));
@@ -517,9 +546,8 @@ fn recovery_manifest_completes_after_both_source_roots_were_retired() {
     let normal_root = home.path().join("session-tmp");
     let recovery_root = home.path().join("session-tmp-recovery");
     let target = crate::state::ControlState::open(home.path(), &normal_root).unwrap();
-    let source_root_id = crate::state::root_id(
-        &crate::state::canonicalize_for_identity(&recovery_root).unwrap(),
-    );
+    let source_root_id =
+        crate::state::root_id(&crate::state::canonicalize_for_identity(&recovery_root).unwrap());
     let manifest_path = target
         .state_root()
         .join(format!(".migration-{source_root_id}.json"));
@@ -551,9 +579,8 @@ fn unsafe_recovery_manifest_is_not_completed_without_source_roots() {
     let normal_root = home.path().join("session-tmp");
     let recovery_root = home.path().join("session-tmp-recovery");
     let target = crate::state::ControlState::open(home.path(), &normal_root).unwrap();
-    let source_root_id = crate::state::root_id(
-        &crate::state::canonicalize_for_identity(&recovery_root).unwrap(),
-    );
+    let source_root_id =
+        crate::state::root_id(&crate::state::canonicalize_for_identity(&recovery_root).unwrap());
     let manifest_path = target
         .state_root()
         .join(format!(".migration-{source_root_id}.json"));
@@ -731,7 +758,10 @@ fn recovery_merge_preserves_collisions_and_mixes_session_ids() {
     .unwrap();
 
     assert!(!recovery_root.exists());
-    assert_eq!(fs::read(normal_session.join("artifact.txt")).unwrap(), b"normal");
+    assert_eq!(
+        fs::read(normal_session.join("artifact.txt")).unwrap(),
+        b"normal"
+    );
     let migrated_collision = fs::read_dir(
         normal_root
             .join(SESSIONS_DIR)
@@ -749,16 +779,21 @@ fn recovery_merge_preserves_collisions_and_mixes_session_ids() {
     })
     .expect("recovery collision should receive a unique destination");
     assert_eq!(fs::read(migrated_collision).unwrap(), b"recovery");
-    assert_eq!(fs::read(normal_session.join("same.txt")).unwrap(), b"identical");
-    assert!(!fs::read_dir(&normal_session)
-        .unwrap()
-        .filter_map(Result::ok)
-        .any(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.starts_with("same.txt-migrated-"))
-        }));
+    assert_eq!(
+        fs::read(normal_session.join("same.txt")).unwrap(),
+        b"identical"
+    );
+    assert!(
+        !fs::read_dir(&normal_session)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("same.txt-migrated-"))
+            })
+    );
     assert_eq!(
         fs::read(
             normal_root
@@ -848,15 +883,17 @@ fn recovery_merge_scopes_mappings_to_each_session() {
         fs::read(session_two_agent.join("artifact.txt")).unwrap(),
         b"source-two"
     );
-    assert!(!fs::read_dir(session_two_agent)
-        .unwrap()
-        .filter_map(Result::ok)
-        .any(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.starts_with("artifact.txt-migrated-"))
-        }));
+    assert!(
+        !fs::read_dir(session_two_agent)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("artifact.txt-migrated-"))
+            })
+    );
     drop(manager);
 }
 
@@ -888,7 +925,10 @@ fn recovery_merge_preserves_foreign_migrated_prefix_directory() {
     )
     .unwrap();
     fs::write(
-        recovery_agent.join("nested").join("deep").join("artifact.txt"),
+        recovery_agent
+            .join("nested")
+            .join("deep")
+            .join("artifact.txt"),
         b"replayed",
     )
     .unwrap();
@@ -997,8 +1037,13 @@ fn recovery_merge_preserves_foreign_migrated_prefix_directory() {
         .expect("migrated metadata should remain discoverable");
     let migrated_metadata = crate::storage::read_metadata(&migrated_metadata_path).unwrap();
     assert_eq!(
-        fs::read(manager.state.payload_session_dir("same-session").join(migrated_metadata.path))
-            .unwrap(),
+        fs::read(
+            manager
+                .state
+                .payload_session_dir("same-session")
+                .join(migrated_metadata.path)
+        )
+        .unwrap(),
         b"replayed"
     );
     drop(manager);
@@ -1009,9 +1054,7 @@ fn recovery_merge_defers_a_live_legacy_lease_and_retries_after_release() {
     let home = tempfile::tempdir().unwrap();
     let normal_root = home.path().join("session-tmp");
     let recovery_root = home.path().join("session-tmp-recovery");
-    let recovery_session = recovery_root
-        .join(SESSIONS_DIR)
-        .join("live-session");
+    let recovery_session = recovery_root.join(SESSIONS_DIR).join("live-session");
     let recovery_agent = recovery_session.join(AGENTS_DIR).join("live-thread");
     let recovery_leases = recovery_session.join(LEASES_DIR);
     fs::create_dir_all(&recovery_agent).unwrap();
@@ -1151,9 +1194,7 @@ fn legacy_inline_control_files_are_imported_without_moving_payloads() {
     .unwrap();
     fs::create_dir_all(session_dir.join(LEASES_DIR)).unwrap();
     fs::write(
-        session_dir
-            .join(LEASES_DIR)
-            .join("legacy-thread.json"),
+        session_dir.join(LEASES_DIR).join("legacy-thread.json"),
         serde_json::to_vec(&crate::storage::LeaseRecord {
             schema_version: 1,
             session_id: "legacy-session".to_string(),
@@ -1174,14 +1215,10 @@ fn legacy_inline_control_files_are_imported_without_moving_payloads() {
     let mut config = config(&root);
     config.root = Some(configured_root.clone());
 
-    let manager = SessionTmpManager::open_for_user(
-        &config,
-        root.path(),
-        "legacy-session",
-        "legacy-thread",
-    )
-    .unwrap()
-    .unwrap();
+    let manager =
+        SessionTmpManager::open_for_user(&config, root.path(), "legacy-session", "legacy-thread")
+            .unwrap()
+            .unwrap();
 
     assert_eq!(manager.root(), configured_root.as_path());
     assert!(!configured_root.join(crate::state::LEGACY_MARKER).exists());
@@ -1190,7 +1227,12 @@ fn legacy_inline_control_files_are_imported_without_moving_payloads() {
     assert!(!session_dir.join(ENTRY_METADATA_DIR).exists());
     assert!(!session_dir.join(LEASES_DIR).exists());
     assert!(legacy_lock_path.exists());
-    assert!(manager.state_session_dir.join(SESSION_METADATA_FILE).exists());
+    assert!(
+        manager
+            .state_session_dir
+            .join(SESSION_METADATA_FILE)
+            .exists()
+    );
 }
 
 #[test]
@@ -1198,7 +1240,10 @@ fn legacy_metadata_collision_reuses_a_stable_id_on_retry() {
     let root = tempfile::tempdir().unwrap();
     let configured_root = root.path().join("managed");
     let session_dir = configured_root.join(SESSIONS_DIR).join("legacy-session");
-    let payload = session_dir.join(AGENTS_DIR).join("legacy-thread").join("legacy.txt");
+    let payload = session_dir
+        .join(AGENTS_DIR)
+        .join("legacy-thread")
+        .join("legacy.txt");
     fs::create_dir_all(payload.parent().unwrap()).unwrap();
     fs::write(&payload, b"legacy payload").unwrap();
     fs::write(
@@ -1241,7 +1286,7 @@ fn legacy_metadata_collision_reuses_a_stable_id_on_retry() {
     let state_metadata_dir = state
         .state_session_dir("legacy-session")
         .join(ENTRY_METADATA_DIR);
-    let mut conflicting = metadata.clone();
+    let mut conflicting = metadata;
     conflicting.purpose = "operator replacement".to_string();
     fs::write(
         state_metadata_dir.join("entry.json"),
@@ -1266,14 +1311,10 @@ fn legacy_metadata_collision_reuses_a_stable_id_on_retry() {
 fn reaping_missing_payload_removes_external_records_without_a_path_count() {
     let root = tempfile::tempdir().unwrap();
     let config = config(&root);
-    let old_manager = SessionTmpManager::open_for_user(
-        &config,
-        root.path(),
-        "old-session",
-        "old-thread",
-    )
-    .unwrap()
-    .unwrap();
+    let old_manager =
+        SessionTmpManager::open_for_user(&config, root.path(), "old-session", "old-thread")
+            .unwrap()
+            .unwrap();
     let old_payload = old_manager.session_root().to_path_buf();
     let old_state = old_manager.state_session_dir.clone();
     fs::remove_dir_all(old_payload).unwrap();
@@ -2146,9 +2187,7 @@ fn live_lease_protects_a_session_with_an_old_record() {
     .unwrap()
     .unwrap();
     fs::write(
-        live_manager
-            .state_session_dir
-            .join(SESSION_METADATA_FILE),
+        live_manager.state_session_dir.join(SESSION_METADATA_FILE),
         serde_json::to_vec(&SessionRecord {
             schema_version: 1,
             session_id: "old-session".to_string(),

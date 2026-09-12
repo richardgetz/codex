@@ -8,8 +8,8 @@
 mod cleanup;
 mod lease;
 mod migration;
-mod storage;
 mod state;
+mod storage;
 mod types;
 
 use std::fs;
@@ -158,14 +158,7 @@ impl SessionTmpManager {
         fs::create_dir_all(session_dir.join(AGENTS_DIR))?;
         set_private_directory(&session_dir.join(AGENTS_DIR))?;
         let lease = (cleanup_policy == CleanupPolicy::OnDrop)
-            .then(|| {
-                SessionLease::acquire(
-                    &state,
-                    &state_session_dir,
-                    session_id,
-                    thread_id,
-                )
-            })
+            .then(|| SessionLease::acquire(&state, &state_session_dir, session_id, thread_id))
             .transpose()?;
         ensure_directory_not_symlink(&agent_dir)?;
         fs::create_dir_all(&agent_dir)?;

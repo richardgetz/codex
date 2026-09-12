@@ -1,12 +1,12 @@
 //! Liveness and bounded discovery helpers for legacy migration.
 
+use super::ControlState;
+use super::MAX_MIGRATION_SESSIONS;
+use super::SessionTmpError;
 use super::state;
 use super::storage;
-use super::ControlState;
 use crate::LEASES_DIR;
-use super::MAX_MIGRATION_SESSIONS;
 use crate::SESSION_METADATA_FILE;
-use super::SessionTmpError;
 use std::collections::HashSet;
 use std::fs;
 use std::io::ErrorKind;
@@ -25,8 +25,7 @@ pub(super) fn collect_session_ids(source: &ControlState) -> Result<Vec<String>, 
             let Some(session_id) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
-            if storage::validate_component(session_id).is_err()
-                || !state::is_real_directory(&path)
+            if storage::validate_component(session_id).is_err() || !state::is_real_directory(&path)
             {
                 continue;
             }
@@ -57,8 +56,7 @@ pub(super) fn collect_session_ids(source: &ControlState) -> Result<Vec<String>, 
             let Some(session_id) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
-            if storage::validate_component(session_id).is_err()
-                || !state::is_real_directory(&path)
+            if storage::validate_component(session_id).is_err() || !state::is_real_directory(&path)
             {
                 continue;
             }
@@ -82,7 +80,10 @@ pub(super) fn migration_limit_error(message: &str) -> SessionTmpError {
     SessionTmpError::Io(std::io::Error::new(ErrorKind::InvalidData, message))
 }
 
-pub(super) fn session_is_live(source: &ControlState, session_id: &str) -> Result<bool, SessionTmpError> {
+pub(super) fn session_is_live(
+    source: &ControlState,
+    session_id: &str,
+) -> Result<bool, SessionTmpError> {
     let state_session = source.state_session_dir(session_id);
     let _state_lock = match storage::try_lock_existing_session(&state_session)? {
         storage::ExistingSessionLock::Held(lock) => Some(lock),
@@ -101,7 +102,10 @@ pub(super) fn session_is_live(source: &ControlState, session_id: &str) -> Result
     has_live_leases(source, session_id)
 }
 
-pub(super) fn has_live_leases(state: &ControlState, session_id: &str) -> Result<bool, SessionTmpError> {
+pub(super) fn has_live_leases(
+    state: &ControlState,
+    session_id: &str,
+) -> Result<bool, SessionTmpError> {
     let external = storage::has_fresh_lease(
         &state.state_session_dir(session_id).join(LEASES_DIR),
         storage::LEASE_STALE_AFTER,

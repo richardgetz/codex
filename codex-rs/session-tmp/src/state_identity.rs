@@ -1,16 +1,16 @@
 //! Path identity and state-layout helpers.
 
-use super::storage;
 use super::LEGACY_MARKER;
 use super::LEGACY_MARKER_CONTENT;
 use super::RootRecord;
+use super::STATE_DIR;
 use super::STATE_MARKER;
 use super::STATE_MARKER_CONTENT;
 use super::STATE_ROOT_RECORD;
-use super::STATE_DIR;
 use super::STATE_SESSION_TMP_DIR;
-use super::V2_PAYLOAD_NAMESPACE;
 use super::SessionTmpError;
+use super::V2_PAYLOAD_NAMESPACE;
+use super::storage;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
@@ -131,7 +131,11 @@ pub(super) fn initialize_state_root(
     storage::ensure_directory_not_symlink(state_root)?;
     storage::set_private_directory(state_root)?;
     let marker = state_root.join(STATE_MARKER);
-    match OpenOptions::new().write(true).create_new(true).open(&marker) {
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&marker)
+    {
         Ok(mut file) => {
             use std::io::Write;
             file.write_all(STATE_MARKER_CONTENT.as_bytes())?;
@@ -200,7 +204,9 @@ pub(crate) fn payload_root_from_state_root(
     if storage::file_type_is_link(metadata.file_type()) || !metadata.file_type().is_dir() {
         return Err(SessionTmpError::UnsafeManagedPath(state_root.to_path_buf()));
     }
-    if fs::read_to_string(state_root.join(STATE_MARKER)).ok().as_deref()
+    if fs::read_to_string(state_root.join(STATE_MARKER))
+        .ok()
+        .as_deref()
         != Some(STATE_MARKER_CONTENT)
     {
         return Ok(None);
@@ -234,7 +240,9 @@ pub(crate) fn payload_root_from_state_root(
 
 pub(crate) fn is_real_directory(path: &Path) -> bool {
     fs::symlink_metadata(path)
-        .map(|metadata| metadata.file_type().is_dir() && !storage::file_type_is_link(metadata.file_type()))
+        .map(|metadata| {
+            metadata.file_type().is_dir() && !storage::file_type_is_link(metadata.file_type())
+        })
         .unwrap_or(false)
 }
 
@@ -249,9 +257,9 @@ pub(crate) fn canonicalize_for_identity(path: &Path) -> Result<PathBuf, SessionT
             break;
         };
         missing.push(name.to_os_string());
-        cursor = cursor.parent().ok_or_else(|| {
-            SessionTmpError::RootNotAbsolute(path.to_path_buf())
-        })?;
+        cursor = cursor
+            .parent()
+            .ok_or_else(|| SessionTmpError::RootNotAbsolute(path.to_path_buf()))?;
     }
     let mut canonical = fs::canonicalize(cursor)?;
     for component in missing.iter().rev() {
@@ -300,13 +308,15 @@ pub(crate) fn external_identity_present(
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error.into()),
     }
-    Ok(inspect_state_root(&state_root, &root_id(&canonical_payload_root), &canonical_payload_root)
-        .is_ok_and(|namespace| namespace.is_some()))
+    Ok(inspect_state_root(
+        &state_root,
+        &root_id(&canonical_payload_root),
+        &canonical_payload_root,
+    )
+    .is_ok_and(|namespace| namespace.is_some()))
 }
 
-pub(crate) fn ensure_existing_ancestors_for_runtime(
-    path: &Path,
-) -> Result<(), SessionTmpError> {
+pub(crate) fn ensure_existing_ancestors_for_runtime(path: &Path) -> Result<(), SessionTmpError> {
     let mut cursor = Some(path);
     while let Some(candidate) = cursor {
         match fs::symlink_metadata(candidate) {
