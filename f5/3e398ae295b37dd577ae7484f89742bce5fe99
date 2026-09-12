@@ -1,0 +1,26 @@
+intent:
+  id: "intent/2026-09-12/session-tmp-recovery-force-reap-followup"
+  change_type: fix
+  scope: session-tmp
+  summary: "Align command-path recovery and force-reap safety reporting."
+  decision: "Retry the deterministic recovery root after later managed-layout failures, reject non-directory or non-regular lease state before force removal, and report only removed sessions in the user-facing reap result."
+  constraints:
+    - "Never adopt, marker-repair, or delete untrusted original roots; preserve their contents."
+    - "Keep ordinary age-based reap fail-closed on unsafe state."
+    - "Force reap bypasses heartbeat age only; current, live, and unsafe sessions remain protected."
+    - "Keep age-plus-force syntax unambiguous and bounded."
+    - "Do not alter sandbox environment variables."
+  intent_priority: must
+  code_locations:
+    - "codex-rs/core/src/session/session.rs"
+    - "codex-rs/session-tmp/src/lib.rs"
+    - "codex-rs/session-tmp/src/storage.rs"
+    - "codex-rs/session-tmp/src/lib_tests.rs"
+    - "codex-rs/tui/src/chatwidget/session_tmp_command.rs"
+    - "codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__session_tmp_reap_force_slash_command.snap"
+    - "docs/fork-differences.md"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5.6-luna"
