@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-12/core-peer-routing-diagnostic-cleanup#b36880c53f"
+  change_type: "test"
+  scope: "core-subagent-notifications"
+  summary: "Remove temporary peer routing diagnostics after causal proof."
+  decision: "Restore the peer fixture's original matcher and assertion surface, retaining only bounded send/receive communication-ID synchronization needed to serialize mailbox materialization."
+  constraints:
+    - "Preserve worker follow-up, initiating-turn activity, and root payload assertions."
+    - "Parse complete telemetry lines for IDs without retaining diagnostic previews or emitting test logs."
+    - "Keep the barrier bounded to four send IDs and a five-second wait."
+    - "Do not change production routing, queue semantics, or public APIs."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/tests/suite/subagent_notifications.rs::multi_agent_v2_peer_followup_completion_notifies_initiating_turn"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
