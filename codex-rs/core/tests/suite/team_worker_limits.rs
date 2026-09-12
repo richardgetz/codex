@@ -54,6 +54,7 @@ async fn team_worker_limit_admits_shell_task_while_worker_idle(
             request_has_model(request, LEAD_MODEL)
                 && request_has_function_call_output(request, SHELL_LIMIT_SPAWN_CALL_ID)
                 && !request_has_function_call_output(request, SHELL_LIMIT_SECOND_SPAWN_CALL_ID)
+                && !body_contains(request, "worker initial complete")
         },
         sse(vec![
             ev_response_created("worker-limit-shell-root-2"),
@@ -69,8 +70,28 @@ async fn team_worker_limit_admits_shell_task_while_worker_idle(
         },
         sse(vec![
             ev_response_created("worker-limit-shell-worker"),
-            ev_assistant_message("worker-limit-shell-message", "worker started"),
+            ev_assistant_message("worker-limit-shell-message", "worker initial complete"),
             ev_completed("worker-limit-shell-worker"),
+        ]),
+    )
+    .await;
+    // The completion watcher wakes a parked Team Lead once the initial Worker
+    // turn finishes; answer that review turn before exercising shell capacity.
+    let root_after_worker_completion = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, SHELL_LIMIT_SPAWN_CALL_ID)
+                && !request_has_function_call_output(request, SHELL_LIMIT_SECOND_SPAWN_CALL_ID)
+                && body_contains(request, "worker initial complete")
+        },
+        sse(vec![
+            ev_response_created("worker-limit-shell-root-worker-completion"),
+            ev_assistant_message(
+                "worker-limit-shell-root-worker-completion-message",
+                "worker completion reviewed",
+            ),
+            ev_completed("worker-limit-shell-root-worker-completion"),
         ]),
     )
     .await;
@@ -128,6 +149,16 @@ async fn team_worker_limit_admits_shell_task_while_worker_idle(
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    let _root_after_worker_completion_request = wait_for_captured_request(
+        &root_after_worker_completion,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, SHELL_LIMIT_SPAWN_CALL_ID)
+                && request.body_contains_text("worker initial complete")
+        },
+        "shell test worker completion wake",
+    )
+    .await;
 
     let shell_command = match codex_core::shell::default_user_shell().name() {
         "powershell" => "Write-Output worker-limit-shell-ready; Start-Sleep -Seconds 60",
@@ -184,7 +215,19 @@ async fn team_worker_limit_admits_shell_task_while_worker_idle(
         ThreadSettingsOverrides::default(),
     )
     .await?;
-    let second_output = root_after_second
+    let second_request = wait_for_captured_request(
+        &root_after_second,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(
+                    request,
+                    SHELL_LIMIT_SECOND_SPAWN_CALL_ID,
+                )
+        },
+        "shell test second spawn",
+    )
+    .await;
+    let second_output = second_request
         .function_call_output_text(SHELL_LIMIT_SECOND_SPAWN_CALL_ID)
         .expect("second worker spawn output");
     assert!(

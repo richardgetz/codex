@@ -6,6 +6,8 @@
 use super::*;
 use crate::AppServerTarget;
 use crate::app_backtrack::SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE;
+use crate::keymap::bindings_for_action;
+use crate::keymap::keymap_action_ids;
 use crate::realtime_voice::DEFAULT_REALTIME_HOTKEY;
 use crate::realtime_voice::RealtimeVoiceDebugCommand;
 use crate::realtime_voice::RealtimeVoiceEffectCommand;
@@ -138,6 +140,46 @@ impl App {
         }
     }
 
+    pub(super) fn should_recover_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
+        let active_contexts = self.active_keymap_contexts();
+        // Legacy terminals encode Alt+character and Escape+character identically. Active
+        // bindings and either stroke of a chord win; inactive bindings do not consume input.
+        cfg!(unix)
+            && !self.enhanced_keys_supported
+            && self.overlay.is_none()
+            && self.chat_widget.no_modal_or_popup_active()
+            && matches!(key_event.code, KeyCode::Char(_))
+            && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && (key_event.modifiers == KeyModifiers::ALT
+                || key_event.modifiers == (KeyModifiers::ALT | KeyModifiers::SHIFT))
+            && self
+                .chat_widget
+                .should_handle_vim_insert_escape(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            // ChatWidget's fixed image-paste shortcut is not in the configurable keymap.
+            && !(key_event.kind == KeyEventKind::Press
+                && matches!(key_event.code, KeyCode::Char('v' | 'V')))
+            // Empty-draft agent navigation also has fixed legacy-terminal fallbacks.
+            && !(self.chat_widget.composer_text_with_pending().is_empty()
+                && (previous_agent_shortcut_matches(key_event, /*allow_word_motion_fallback*/ true)
+                    || next_agent_shortcut_matches(key_event, /*allow_word_motion_fallback*/ true)))
+            && !keymap_action_ids()
+                .filter(|action| active_contexts.contains(action.context))
+                .any(|action| {
+                    bindings_for_action(&self.keymap, action.context.config_name(), action.action)
+                        .is_some_and(|bindings| bindings.is_pressed(key_event))
+                })
+            && !matches!(
+                self.key_chord_matcher.clone().advance(
+                    key_event,
+                    &self.keymap.chords,
+                    active_contexts,
+                    tokio::time::Instant::now(),
+                ),
+                crate::keymap::KeyChordMatch::Pending(_)
+                    | crate::keymap::KeyChordMatch::Completed(_)
+            )
+    }
+
     pub(super) fn route_key_chord_event(
         &mut self,
         tui: &mut tui::Tui,
@@ -153,7 +195,7 @@ impl App {
         ) {
             crate::keymap::KeyChordMatch::PassThrough => {
                 if was_pending && !self.key_chord_matcher.is_pending() {
-                    self.chat_widget.set_footer_hint_override(/*items*/ None);
+                    self.set_key_chord_hint_override(/*items*/ None);
                 }
                 Some(key_event)
             }
@@ -161,7 +203,7 @@ impl App {
                 if self.backtrack.primed {
                     self.reset_backtrack_state();
                 }
-                self.chat_widget.set_footer_hint_override(Some(vec![
+                self.set_key_chord_hint_override(Some(vec![
                     (
                         format!("{} …", prefix.display_label()),
                         "waiting for next key".to_string(),
@@ -173,11 +215,11 @@ impl App {
                 None
             }
             crate::keymap::KeyChordMatch::Completed(dispatch_event) => {
-                self.chat_widget.set_footer_hint_override(/*items*/ None);
+                self.set_key_chord_hint_override(/*items*/ None);
                 Some(dispatch_event)
             }
             crate::keymap::KeyChordMatch::Cancelled => {
-                self.chat_widget.set_footer_hint_override(/*items*/ None);
+                self.set_key_chord_hint_override(/*items*/ None);
                 None
             }
             crate::keymap::KeyChordMatch::Ignored => None,
@@ -190,14 +232,23 @@ impl App {
             .key_chord_matcher
             .expire(contexts, tokio::time::Instant::now())
         {
-            self.chat_widget.set_footer_hint_override(/*items*/ None);
+            self.set_key_chord_hint_override(/*items*/ None);
         }
     }
 
     pub(super) fn cancel_pending_key_chord(&mut self) {
         if self.key_chord_matcher.cancel() {
-            self.chat_widget.set_footer_hint_override(/*items*/ None);
+            self.set_key_chord_hint_override(/*items*/ None);
         }
+    }
+
+    fn set_key_chord_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        self.agents_overview
+            .view_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .key_chord_hint = items.clone();
+        self.chat_widget.set_footer_hint_override(items);
     }
 
     fn active_keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
@@ -320,6 +371,44 @@ impl App {
             return;
         }
 
+        if self.chat_widget.is_external_writer_view()
+            && self.overlay.is_none()
+            && self.chat_widget.no_modal_or_popup_active()
+            && key_event.kind == KeyEventKind::Press
+        {
+            let modifiers = key_event.modifiers;
+            let quit = match key_event.code {
+                KeyCode::Esc => modifiers == KeyModifiers::NONE,
+                KeyCode::Char('q' | 'Q') => {
+                    modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT
+                }
+                KeyCode::Char('c' | 'C') => {
+                    modifiers == KeyModifiers::CONTROL
+                        || modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+                }
+                _ => false,
+            };
+            if quit {
+                self.app_event_tx.send(AppEvent::Exit(ExitMode::Immediate));
+                return;
+            }
+            if matches!(key_event.code, KeyCode::Char('r' | 'R'))
+                && (modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT)
+                && let Some(thread_id) = self.current_displayed_thread_id()
+            {
+                let target = SessionTarget {
+                    path: self
+                        .primary_session_configured
+                        .as_ref()
+                        .and_then(|session| session.rollout_path.clone()),
+                    thread_id,
+                    cwd: None,
+                    history_mode: None,
+                };
+                let _ = self.resume_target_session(tui, app_server, target).await;
+                return;
+            }
+        }
         // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
         // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
         // agent-switch shortcuts when the composer is empty so we never steal the expected
@@ -446,42 +535,11 @@ impl App {
         }
 
         let app_keymap_shortcuts_available = self.app_keymap_shortcuts_available();
-
-        let side_toggle_bindings = &self.keymap.app.toggle_side_conversation;
         if app_keymap_shortcuts_available
-            && (side_toggle_bindings.is_pressed(key_event)
-                || side_toggle_bindings.contains(&crate::key_hint::ctrl(KeyCode::Char('/')))
-                    && crate::key_hint::ctrl(KeyCode::Char('7')).is_press(key_event))
+            && self
+                .handle_shared_app_keymap_action(tui, app_server, key_event)
+                .await
         {
-            if let Err(err) = self.toggle_side_conversation(tui, app_server).await {
-                self.chat_widget
-                    .add_error_message(format!("Failed to switch side conversation: {err}"));
-            }
-            return;
-        }
-
-        if app_keymap_shortcuts_available && self.keymap.app.toggle_vim_mode.is_pressed(key_event) {
-            self.chat_widget.toggle_vim_mode_and_notify();
-            return;
-        }
-
-        if app_keymap_shortcuts_available
-            && self.keymap.app.toggle_fast_mode.is_pressed(key_event)
-            && self.chat_widget.can_toggle_fast_mode_from_keybinding()
-        {
-            self.chat_widget.toggle_fast_mode_from_ui();
-            return;
-        }
-
-        if app_keymap_shortcuts_available && self.keymap.app.toggle_raw_output.is_pressed(key_event)
-        {
-            let enabled = !self.chat_widget.raw_output_mode();
-            self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
-            return;
-        }
-
-        if app_keymap_shortcuts_available && self.keymap.app.open_agents.is_pressed(key_event) {
-            self.open_agents_overview(app_server);
             return;
         }
 
@@ -494,27 +552,14 @@ impl App {
             return;
         }
 
-        if app_keymap_shortcuts_available
-            && self.keymap.app.open_external_editor.is_pressed(key_event)
+        if self.chat_widget.is_external_writer_view()
+            && self.overlay.is_none()
+            && self.chat_widget.no_modal_or_popup_active()
         {
-            // Only launch the external editor if there is no overlay and the bottom pane is not in use.
-            // Note that it can be launched while a task is running to enable editing while the previous turn is ongoing.
-            if self.overlay.is_none()
-                && self.chat_widget.can_launch_external_editor()
-                && self.chat_widget.external_editor_state() == ExternalEditorState::Closed
-            {
-                self.request_external_editor_launch(tui);
-            }
             return;
         }
 
-        if !self.chat_widget.has_active_view()
-            && self
-                .current_displayed_thread_id()
-                .is_some_and(|id| self.thread_unavailable(id))
-            && !(key_event.modifiers.contains(KeyModifiers::CONTROL)
-                && matches!(key_event.code, KeyCode::Char('c' | 'd')))
-        {
+        if self.should_handle_unavailable_thread_key(key_event) {
             self.chat_widget.handle_disconnected_key(key_event);
             return;
         }
@@ -537,22 +582,6 @@ impl App {
         }
 
         match key_event {
-            _ if app_keymap_shortcuts_available
-                && self.keymap.app.clear_terminal.is_pressed(key_event) =>
-            {
-                if !self.chat_widget.can_run_ctrl_l_clear_now() {
-                    return;
-                }
-                if let Err(err) = self.clear_terminal_ui(tui, /*redraw_header*/ false) {
-                    tracing::warn!(error = %err, "failed to clear terminal UI");
-                    self.chat_widget
-                        .add_error_message(format!("Failed to clear terminal UI: {err}"));
-                } else {
-                    self.reset_app_ui_state_after_clear();
-                    self.queue_clear_ui_header(tui);
-                    tui.frame_requester().schedule_frame();
-                }
-            }
             // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
             KeyEvent {
                 code: KeyCode::Enter,
@@ -2490,6 +2519,89 @@ impl App {
         self.realtime_output_debug_response_id = None;
         self.realtime_output_debug_audio_chunk_count = 0;
         self.realtime_output_debug_transcript_delta_count = 0;
+    }
+
+    pub(crate) async fn handle_shared_app_keymap_action(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        key_event: KeyEvent,
+    ) -> bool {
+        let side_toggle_bindings = &self.keymap.app.toggle_side_conversation;
+        if side_toggle_bindings.is_pressed(key_event)
+            || side_toggle_bindings.contains(&crate::key_hint::ctrl(KeyCode::Char('/')))
+                && crate::key_hint::ctrl(KeyCode::Char('7')).is_press(key_event)
+        {
+            if let Err(err) = self.toggle_side_conversation(tui, app_server).await {
+                self.chat_widget
+                    .add_error_message(format!("Failed to switch side conversation: {err}"));
+            }
+            return true;
+        }
+
+        if self.keymap.app.toggle_vim_mode.is_pressed(key_event) {
+            self.chat_widget.toggle_vim_mode_and_notify();
+            return true;
+        }
+
+        if self.keymap.app.toggle_fast_mode.is_pressed(key_event)
+            && self.chat_widget.can_toggle_fast_mode_from_keybinding()
+        {
+            self.chat_widget.toggle_fast_mode_from_ui();
+            return true;
+        }
+
+        if self.keymap.app.toggle_raw_output.is_pressed(key_event) {
+            let enabled = !self.chat_widget.raw_output_mode();
+            self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
+            return true;
+        }
+
+        if self.keymap.app.open_agents.is_pressed(key_event) {
+            self.open_agents_overview(app_server);
+            return true;
+        }
+
+        if self.keymap.app.open_external_editor.is_pressed(key_event) {
+            if self.overlay.is_none()
+                && self.chat_widget.can_launch_external_editor()
+                && self.chat_widget.external_editor_state() == ExternalEditorState::Closed
+            {
+                self.request_external_editor_launch(tui);
+            }
+            return true;
+        }
+
+        if self.keymap.app.clear_terminal.is_pressed(key_event) {
+            // Leave cached history intact and let the unavailable-thread input path handle this key.
+            if self.should_handle_unavailable_thread_key(key_event) {
+                return false;
+            }
+            if !self.chat_widget.can_run_ctrl_l_clear_now() {
+                return true;
+            }
+            if let Err(err) = self.clear_terminal_ui(tui, /*redraw_header*/ false) {
+                tracing::warn!(error = %err, "failed to clear terminal UI");
+                self.chat_widget
+                    .add_error_message(format!("Failed to clear terminal UI: {err}"));
+            } else {
+                self.reset_app_ui_state_after_clear();
+                self.queue_clear_ui_header(tui);
+                tui.frame_requester().schedule_frame();
+            }
+            return true;
+        }
+
+        false
+    }
+
+    fn should_handle_unavailable_thread_key(&self, key_event: KeyEvent) -> bool {
+        !self.chat_widget.has_active_view()
+            && self
+                .current_displayed_thread_id()
+                .is_some_and(|id| self.thread_unavailable(id))
+            && !(key_event.modifiers.contains(KeyModifiers::CONTROL)
+                && matches!(key_event.code, KeyCode::Char('c' | 'd')))
     }
 
     pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {

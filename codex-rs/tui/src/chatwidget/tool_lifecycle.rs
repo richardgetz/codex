@@ -74,7 +74,7 @@ impl ChatWidget {
         self.transcript.active_cell = Some(Box::new(history_cell::new_active_web_search_call(
             call_id,
             String::new(),
-            self.config.animations,
+            self.local_settings.tui.animations,
         )));
         self.bump_active_cell_revision();
         self.request_redraw();
@@ -118,9 +118,9 @@ impl ChatWidget {
         self.active_collab_wait_calls.insert(call_id.to_string());
         self.update_task_running_state();
         self.bottom_pane.ensure_status_indicator();
+        self.set_status_header(String::from("Waiting on agents"));
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ false);
-        self.set_status_header(String::from("Waiting on agents"));
     }
 
     fn end_collab_waiting(&mut self, call_id: &str) {
@@ -217,7 +217,7 @@ impl ChatWidget {
                 tool,
                 arguments: Some(arguments),
             },
-            self.config.animations,
+            self.local_settings.tui.animations,
         )));
         self.bump_active_cell_revision();
         self.request_redraw();
@@ -269,8 +269,11 @@ impl ChatWidget {
             Some(cell) if cell.call_id() == id => cell.complete(duration, result),
             _ => {
                 self.flush_active_cell();
-                let mut cell =
-                    history_cell::new_active_mcp_tool_call(id, invocation, self.config.animations);
+                let mut cell = history_cell::new_active_mcp_tool_call(
+                    id,
+                    invocation,
+                    self.local_settings.tui.animations,
+                );
                 let extra_cell = cell.complete(duration, result);
                 self.transcript.active_cell = Some(Box::new(cell));
                 extra_cell

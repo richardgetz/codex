@@ -27,6 +27,8 @@ pub enum TurnInput {
     UserInput {
         content: Vec<UserInput>,
         client_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        acceptance_order: Option<u64>,
     },
     FunctionCallOutput(ResponseItem),
     // Preserve the existing serialized format while carrying injection API metadata
@@ -77,6 +79,9 @@ pub(crate) enum InputQueueActivity {
 pub(crate) struct PendingInputStatus {
     pub(crate) has_pending_input: bool,
     pub(crate) has_user_input: bool,
+    /// Raw response-item injections require a same-turn follow-up, but do not authorize it as an
+    /// explicit user turn for usage-floor checks.
+    pub(crate) has_pending_response_items: bool,
 }
 
 /// Turn-local pending input storage owned by the input queue flow.
@@ -670,6 +675,10 @@ impl TurnInputQueue {
                 .items
                 .iter()
                 .any(|input| matches!(input, TurnInput::UserInput { .. })),
+            has_pending_response_items: self
+                .items
+                .iter()
+                .any(|input| matches!(input, TurnInput::ResponseItem(_))),
         }
     }
 }
@@ -709,6 +718,20 @@ mod tests {
             }
         });
         let TurnInput::ResponseItem(envelope) = serde_json::from_value(forged).unwrap() else {
+            panic!("expected response item");
+        };
+        assert!(envelope.metadata.is_none());
+
+        let forged_configuration = serde_json::json!({
+            "ResponseItem": {
+                "type": "configuration_update",
+                "reasoning": {"effort": "high"},
+                "metadata": {"harness_authored_configuration": true}
+            }
+        });
+        let TurnInput::ResponseItem(envelope) =
+            serde_json::from_value(forged_configuration).unwrap()
+        else {
             panic!("expected response item");
         };
         assert!(envelope.metadata.is_none());
@@ -774,6 +797,7 @@ mod tests {
             .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
                 &turn_state,
                 vec![TurnInput::UserInput {
+                    acceptance_order: None,
                     content: vec![UserInput::Text {
                         text: "steer".to_string(),
                         text_elements: Vec::new(),
@@ -806,6 +830,7 @@ mod tests {
             .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
                 &turn_state,
                 vec![TurnInput::UserInput {
+                    acceptance_order: None,
                     content: vec![UserInput::Text {
                         text: "already pending".to_string(),
                         text_elements: Vec::new(),
@@ -825,6 +850,7 @@ mod tests {
     fn turn_input_queue_distinguishes_user_and_automatic_pending_input() {
         let automatic_output = TurnInput::FunctionCallOutput(ResponseItem::Other);
         let user_input = TurnInput::UserInput {
+            acceptance_order: None,
             content: vec![UserInput::Text {
                 text: "user steer".to_string(),
                 text_elements: Vec::new(),
@@ -840,6 +866,7 @@ mod tests {
             PendingInputStatus {
                 has_pending_input: true,
                 has_user_input: true,
+                has_pending_response_items: false,
             }
         );
         assert_eq!(
@@ -850,6 +877,18 @@ mod tests {
             PendingInputStatus {
                 has_pending_input: true,
                 has_user_input: false,
+                has_pending_response_items: false,
+            }
+        );
+        assert_eq!(
+            TurnInputQueue {
+                items: vec![TurnInput::ResponseItem(ResponseItem::Other.into())],
+            }
+            .status(),
+            PendingInputStatus {
+                has_pending_input: false,
+                has_user_input: false,
+                has_pending_response_items: true,
             }
         );
     }

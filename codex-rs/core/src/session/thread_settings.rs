@@ -101,7 +101,13 @@ pub(super) async fn apply_update(
 ) -> ConstraintResult<()> {
     let _settings_guard = acquire_persistence_lock(session).await;
     let commit = session.update_settings(updates).await?;
-    emit_applied(session, submission_id, commit.snapshot).await;
+    emit_applied(
+        session,
+        submission_id,
+        commit.snapshot,
+        commit.usage_policy_changed,
+    )
+    .await;
     Ok(())
 }
 
@@ -110,6 +116,7 @@ pub(super) async fn emit_applied(
     session: &Session,
     submission_id: String,
     snapshot: ThreadSettingsSnapshot,
+    usage_policy_changed: bool,
 ) {
     let msg = EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
         thread_id: Some(session.thread_id()),
@@ -122,7 +129,8 @@ pub(super) async fn emit_applied(
     let EventMsg::ThreadSettingsApplied(applied) = &event.msg else {
         unreachable!("usage policy persistence only receives thread settings events");
     };
-    if applied.thread_settings.usage_policy != ThreadUsagePolicy::default()
+    if usage_policy_changed
+        || applied.thread_settings.usage_policy != ThreadUsagePolicy::default()
         || applied.thread_settings.team.is_some()
     {
         // Usage policy and team state are thread-owned durable state. Materialize a lazy thread

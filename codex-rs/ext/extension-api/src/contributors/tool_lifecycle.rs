@@ -10,6 +10,7 @@ use codex_protocol::mcp::CallToolResult;
 use codex_tools::ToolCallSource;
 use codex_tools::ToolName;
 use codex_tools::ToolPayload;
+use codex_tools::ToolWaitHandle;
 use codex_utils_path_uri::PathUri;
 
 use crate::ConversationHistorySnapshot;
@@ -181,4 +182,25 @@ pub struct ToolFinishInput<'a> {
     pub source: ToolCallSource,
     /// Host-observed result of the tool call.
     pub outcome: ToolCallOutcome,
+}
+
+/// Input supplied when a successful tool output reports external work that
+/// remains live after the tool call returns.
+pub struct ToolWaitInput<'a> {
+    /// Store scoped to the host session runtime.
+    pub session_store: &'a ExtensionData,
+    /// Store scoped to this thread runtime.
+    pub thread_store: &'a ExtensionData,
+    /// Store scoped to this turn runtime.
+    pub turn_store: &'a ExtensionData,
+    /// Current turn submission id.
+    pub turn_id: &'a str,
+    /// Model-visible tool call id.
+    pub call_id: &'a str,
+    /// Tool name as routed by the host.
+    pub tool_name: &'a ToolName,
+    /// Source that issued the tool call.
+    pub source: ToolCallSource,
+    /// Opaque host-owned identity for the live external work.
+    pub wait_handle: &'a ToolWaitHandle,
 }

@@ -230,17 +230,25 @@ impl ToolCallRuntime {
         async move {
             let _tool_call_timing_guard = tool_call_timing_guard;
             tokio::select! {
-                res = &mut dispatch_handle => res.map_err(Self::tool_task_join_error)?,
+                biased;
                 _ = cancellation_token.cancelled() => {
-                    if terminal_outcome_reached.load(Ordering::Acquire) || dispatch_handle.is_finished() {
+                    // Cancellation owns a ready/ready race at the pre-admission boundary. For
+                    // runtimes that wait for cancellation cleanup, atomically claim the terminal
+                    // outcome before emitting the normal aborted response. Other runtimes keep
+                    // the registry's finish callback authoritative: a dispatch can complete
+                    // between this branch and its callback, and aborting/awaiting it lets that
+                    // callback claim the result without leaving stale lifecycle state.
+                    let terminal_outcome_claimed = if wait_for_runtime_cancellation {
+                        terminal_outcome_reached.swap(true, Ordering::AcqRel)
+                    } else {
+                        terminal_outcome_reached.load(Ordering::Acquire)
+                    };
+                    if terminal_outcome_claimed {
                         dispatch_handle.await.map_err(Self::tool_task_join_error)?
                     } else {
                         let secs = started.elapsed().as_secs_f32().max(0.1);
                         abort_dispatch_span.record("aborted", true);
                         if wait_for_runtime_cancellation {
-                            if terminal_outcome_reached.swap(true, Ordering::AcqRel) {
-                                return dispatch_handle.await.map_err(Self::tool_task_join_error)?;
-                            }
                             // The abort owns the terminal outcome; await only so
                             // the runtime can finish process teardown.
                             match dispatch_handle.await {
@@ -251,7 +259,13 @@ impl ToolCallRuntime {
                         } else {
                             dispatch_handle.abort();
                             match dispatch_handle.await {
-                                Ok(result) => return result,
+                                // A dispatch that is still waiting at an activity boundary can
+                                // observe the same cancellation and return TurnAborted as a
+                                // fatal tool error. The outer cancellation branch owns this
+                                // terminal outcome, so preserve the normal aborted response
+                                // instead of surfacing that internal boundary error.
+                                Ok(Ok(result)) => return Ok(result),
+                                Ok(Err(_)) => {}
                                 Err(err) if err.is_cancelled() => {}
                                 Err(err) => return Err(Self::tool_task_join_error(err)),
                             }
@@ -268,6 +282,7 @@ impl ToolCallRuntime {
                         Ok(response)
                     }
                 },
+                res = &mut dispatch_handle => res.map_err(Self::tool_task_join_error)?,
             }
         }
         .in_current_span()
@@ -591,6 +606,78 @@ mod tests {
         execution_gate_task
             .await
             .expect("execution gate task should join");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancellation_wins_when_pre_admission_dispatch_is_already_finished()
+    -> anyhow::Result<()> {
+        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let tool_name = codex_tools::ToolName::plain("test_tool");
+        let handler = Arc::new(ImmediateHandler {
+            tool_name: tool_name.clone(),
+        }) as Arc<dyn CoreToolRuntime>;
+        let step_context = StepContext::for_test(Arc::clone(&turn_context));
+        let router = Arc::new(ToolRouter::from_parts(
+            ToolRegistry::from_tools([handler]),
+            Vec::new(),
+            ToolMode::Direct,
+            BTreeMap::new(),
+            /*tool_namespaces_info*/ None,
+            &[],
+        ));
+        let step_context = step_context.with_tool_router_for_test(router);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let runtime = ToolCallRuntime::new(
+            Arc::clone(&session),
+            Arc::clone(&step_context),
+            Arc::clone(&step_context.tool_router),
+            tracker,
+        );
+        session
+            .services
+            .agent_control
+            .pause_activity_for_subtree()
+            .await;
+
+        // Establish both sides of the race before polling the outer future: the dispatch task
+        // observes cancellation at the paused activity boundary and exits, while the caller's
+        // cancellation future is already ready. The old unbiased select can choose the finished
+        // dispatch and leak its internal TurnAborted error; repeat the ready/ready check to make
+        // that random arbitration overwhelmingly visible without relying on sleeps.
+        for attempt in 0..32 {
+            let cancellation_token = CancellationToken::new();
+            let call = ToolCall {
+                tool_name: tool_name.clone(),
+                call_id: format!("cancel-race-{attempt}"),
+                payload: ToolPayload::Function {
+                    arguments: "{}".to_string(),
+                },
+                encrypted_function_args: None,
+            };
+            let response = runtime
+                .clone()
+                .handle_tool_call(call, cancellation_token.clone());
+            cancellation_token.cancel();
+
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    if session.pending_handoff_dispatches() == 0 {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("pre-admission dispatch should finish before arbitration");
+
+            response
+                .await
+                .expect("cancellation should own a finished pre-admission dispatch");
+        }
 
         Ok(())
     }

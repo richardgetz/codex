@@ -296,6 +296,43 @@ async fn load_config_applies_optional_mcp_startup_grace() -> std::io::Result<()>
 }
 
 #[tokio::test]
+async fn load_config_resolves_thread_unload_delay() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    for (toml, seconds) in [
+        ("", 60),
+        ("thread_unload_delay_secs = 0", 0),
+        ("thread_unload_delay_secs = 1800", 1800),
+    ] {
+        let config = Config::load_from_base_config_with_overrides(
+            toml::from_str(toml)?,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await?;
+        assert_eq!(config.thread_unload_delay, Duration::from_secs(seconds));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_thread_unload_delay_overflow() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let error = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            thread_unload_delay_secs: Some(u64::MAX),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("idle timeout must fit in a monotonic deadline");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(error.to_string(), "thread_unload_delay_secs is too large");
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_toml_parsing() {
     let history_with_persistence = r#"
 [history]
@@ -2043,10 +2080,12 @@ fn config_toml_deserializes_model_availability_nux() {
         Tui {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
+            whimsy: true,
             show_tooltips: true,
             auto_recap: true,
             disable_paste_burst: None,
             vim_mode_default: false,
+            question_esc_back: true,
             raw_output_mode: false,
             alternate_screen: AltScreenMode::default(),
             status_line: None,
@@ -3209,7 +3248,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
         !config
             .permissions
             .file_system_sandbox_policy()
-            .can_write_path_with_cwd(&cwd.path().join(".git"), cwd.path())
+            .can_write_local_path_with_cwd(&cwd.path().join(".git"), cwd.path())
     );
     assert_eq!(
         config.permissions.network_sandbox_policy(),
@@ -3598,7 +3637,7 @@ async fn permission_profile_override_keeps_memories_root_out_of_legacy_projectio
         !config
             .permissions
             .file_system_sandbox_policy()
-            .can_write_path_with_cwd(memories_root.as_path(), cwd.path())
+            .can_write_local_path_with_cwd(memories_root.as_path(), cwd.path())
     );
     assert_eq!(
         &config.legacy_sandbox_policy(),
@@ -3838,11 +3877,11 @@ async fn default_permissions_can_select_builtin_profile_without_permissions_tabl
         Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE)
     );
     assert!(
-        policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+        policy.can_write_local_path_with_cwd(cwd.path(), cwd.path()),
         "expected :workspace to allow writing the project root, policy: {policy:?}"
     );
     assert!(
-        !policy.can_write_path_with_cwd(&cwd.path().join(".git"), cwd.path()),
+        !policy.can_write_local_path_with_cwd(&cwd.path().join(".git"), cwd.path()),
         "expected :workspace to protect project metadata, policy: {policy:?}"
     );
     Ok(())
@@ -3871,7 +3910,7 @@ async fn default_permissions_read_only_keeps_add_dir_read_only() -> std::io::Res
 
     let policy = config.permissions.file_system_sandbox_policy();
     assert!(
-        !policy.can_write_path_with_cwd(extra_root.as_path(), cwd.path()),
+        !policy.can_write_local_path_with_cwd(extra_root.as_path(), cwd.path()),
         "expected :read-only to stay read-only for runtime workspace roots, policy: {policy:?}"
     );
     assert_eq!(
@@ -3960,15 +3999,15 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
     let policy = config.permissions.file_system_sandbox_policy();
     for root in [cwd_abs, runtime_root_abs, profile_root_abs.clone()] {
         assert!(
-            policy.can_write_path_with_cwd(root.as_path(), cwd.as_path()),
+            policy.can_write_local_path_with_cwd(root.as_path(), cwd.as_path()),
             "expected workspace root to be writable, policy: {policy:?}"
         );
         assert!(
-            !policy.can_write_path_with_cwd(&root.join(".git"), cwd.as_path()),
+            !policy.can_write_local_path_with_cwd(&root.join(".git"), cwd.as_path()),
             "expected .git carveout under {root:?}, policy: {policy:?}"
         );
         assert!(
-            !policy.can_write_path_with_cwd(&root.join(".codex"), cwd.as_path()),
+            !policy.can_write_local_path_with_cwd(&root.join(".codex"), cwd.as_path()),
             "expected .codex carveout under {root:?}, policy: {policy:?}"
         );
     }
@@ -4067,11 +4106,11 @@ async fn default_permissions_profile_can_extend_builtin_workspace() -> std::io::
 
     let policy = config.permissions.file_system_sandbox_policy();
     assert!(
-        policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+        policy.can_write_local_path_with_cwd(cwd.path(), cwd.path()),
         "expected profile extending :workspace to keep project-root writes, policy: {policy:?}"
     );
     assert!(
-        !policy.can_write_path_with_cwd(&cwd.path().join(".git"), cwd.path()),
+        !policy.can_write_local_path_with_cwd(&cwd.path().join(".git"), cwd.path()),
         "expected profile extending :workspace to keep metadata carveouts, policy: {policy:?}"
     );
     assert!(
@@ -4162,11 +4201,11 @@ async fn default_permissions_profile_can_extend_builtin_read_only() -> std::io::
 
     let policy = config.permissions.file_system_sandbox_policy();
     assert!(
-        policy.can_read_path_with_cwd(cwd.path(), cwd.path()),
+        policy.can_read_local_path_with_cwd(cwd.path(), cwd.path()),
         "expected profile extending :read-only to keep read access, policy: {policy:?}"
     );
     assert!(
-        !policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+        !policy.can_write_local_path_with_cwd(cwd.path(), cwd.path()),
         "expected profile extending :read-only to stay non-writable, policy: {policy:?}"
     );
     assert_eq!(
@@ -4222,16 +4261,16 @@ async fn empty_config_defaults_to_builtin_profile_for_trusted_project() -> std::
     );
     if cfg!(target_os = "windows") {
         assert!(
-            !policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+            !policy.can_write_local_path_with_cwd(cwd.path(), cwd.path()),
             "expected trusted project fallback to stay read-only without Windows sandbox support, policy: {policy:?}"
         );
     } else {
         assert!(
-            policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+            policy.can_write_local_path_with_cwd(cwd.path(), cwd.path()),
             "expected trusted project fallback to use :workspace, policy: {policy:?}"
         );
         assert!(
-            !policy.can_write_path_with_cwd(&cwd.path().join(".codex"), cwd.path()),
+            !policy.can_write_local_path_with_cwd(&cwd.path().join(".codex"), cwd.path()),
             "expected :workspace metadata carveouts, policy: {policy:?}"
         );
     }
@@ -4276,21 +4315,21 @@ async fn empty_config_defaults_to_builtin_profile_for_untrusted_project() -> std
         })
     );
     assert!(
-        policy.can_read_path_with_cwd(cwd.path(), cwd.path()),
+        policy.can_read_local_path_with_cwd(cwd.path(), cwd.path()),
         "expected untrusted project fallback to allow reads, policy: {policy:?}"
     );
     if cfg!(target_os = "windows") {
         assert!(
-            !policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+            !policy.can_write_local_path_with_cwd(cwd.path(), cwd.path()),
             "expected untrusted project fallback to stay read-only without Windows sandbox support, policy: {policy:?}"
         );
     } else {
         assert!(
-            policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+            policy.can_write_local_path_with_cwd(cwd.path(), cwd.path()),
             "expected untrusted project fallback to use :workspace, policy: {policy:?}"
         );
         assert!(
-            !policy.can_write_path_with_cwd(&cwd.path().join(".codex"), cwd.path()),
+            !policy.can_write_local_path_with_cwd(&cwd.path().join(".codex"), cwd.path()),
             "expected :workspace metadata carveouts, policy: {policy:?}"
         );
     }
@@ -4336,7 +4375,7 @@ async fn implicit_builtin_workspace_profile_preserves_sandbox_workspace_write_se
 
     let policy = config.permissions.file_system_sandbox_policy();
     assert!(
-        policy.can_write_path_with_cwd(extra_root.as_path(), cwd.path()),
+        policy.can_write_local_path_with_cwd(extra_root.as_path(), cwd.path()),
         "expected implicit :workspace to preserve sandbox_workspace_write.writable_roots, policy: {policy:?}"
     );
     assert_eq!(
@@ -4403,12 +4442,12 @@ async fn implicit_builtin_workspace_profile_preserves_add_dir_metadata_carveouts
     let policy = config.permissions.file_system_sandbox_policy();
     let extra_root = extra_root.path().abs();
     assert!(
-        policy.can_write_path_with_cwd(extra_root.as_path(), cwd.path()),
+        policy.can_write_local_path_with_cwd(extra_root.as_path(), cwd.path()),
         "expected implicit :workspace to preserve additional writable roots, policy: {policy:?}"
     );
     for subpath in [".git", ".agents", ".codex"] {
         assert!(
-            !policy.can_write_path_with_cwd(&extra_root.join(subpath), cwd.path()),
+            !policy.can_write_local_path_with_cwd(&extra_root.join(subpath), cwd.path()),
             "expected implicit :workspace to preserve legacy metadata carveout for {subpath}, \
              policy: {policy:?}"
         );
@@ -4434,11 +4473,11 @@ async fn empty_config_defaults_to_builtin_read_only_without_trust_decision() -> 
 
     let policy = config.permissions.file_system_sandbox_policy();
     assert!(
-        policy.can_read_path_with_cwd(cwd.path(), cwd.path()),
+        policy.can_read_local_path_with_cwd(cwd.path(), cwd.path()),
         "expected :read-only to allow reads, policy: {policy:?}"
     );
     assert!(
-        !policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+        !policy.can_write_local_path_with_cwd(cwd.path(), cwd.path()),
         "expected :read-only to deny writes, policy: {policy:?}"
     );
     Ok(())
@@ -4628,7 +4667,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
         config
             .permissions
             .file_system_sandbox_policy()
-            .can_write_path_with_cwd(external_write_path.as_path(), cwd.path())
+            .can_write_local_path_with_cwd(external_write_path.as_path(), cwd.path())
     );
     assert_eq!(
         &config.legacy_sandbox_policy(),
@@ -5061,10 +5100,12 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
         Tui {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
+            whimsy: true,
             show_tooltips: true,
             auto_recap: true,
             disable_paste_burst: None,
             vim_mode_default: false,
+            question_esc_back: true,
             raw_output_mode: false,
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
@@ -6873,8 +6914,12 @@ async fn memory_tool_makes_memories_root_readable_without_creating_or_widening_w
         memories_root.display()
     );
     let file_system_policy = config.permissions.file_system_sandbox_policy();
-    assert!(file_system_policy.can_read_path_with_cwd(memories_root_abs.as_path(), cwd.path()));
-    assert!(!file_system_policy.can_write_path_with_cwd(memories_root_abs.as_path(), cwd.path()));
+    assert!(
+        file_system_policy.can_read_local_path_with_cwd(memories_root_abs.as_path(), cwd.path())
+    );
+    assert!(
+        !file_system_policy.can_write_local_path_with_cwd(memories_root_abs.as_path(), cwd.path())
+    );
 
     if cfg!(target_os = "windows") {
         match &config.legacy_sandbox_policy() {
@@ -10950,6 +10995,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         default_permissions: None,
         remote_sandbox_config: None,
         allowed_web_search_modes: Some(vec![codex_config::WebSearchModeRequirement::Cached]),
+        application: None,
         allow_managed_hooks_only: None,
 
         allow_appshots: None,
@@ -11986,7 +12032,7 @@ async fn permission_profile_override_preserves_split_write_roots() -> std::io::R
         config
             .permissions
             .file_system_sandbox_policy()
-            .can_write_path_with_cwd(outside_root.as_path(), config.cwd.as_path())
+            .can_write_local_path_with_cwd(outside_root.as_path(), config.cwd.as_path())
     );
     assert!(matches!(
         &config.legacy_sandbox_policy(),

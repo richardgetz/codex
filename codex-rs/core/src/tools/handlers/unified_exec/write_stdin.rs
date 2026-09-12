@@ -2,7 +2,7 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
-use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::parse_arguments_with_integral_float_fallback;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
@@ -78,7 +78,7 @@ impl WriteStdinHandler {
             }
         };
 
-        let args: WriteStdinArgs = parse_arguments(&arguments)?;
+        let args: WriteStdinArgs = parse_arguments_with_integral_float_fallback(&arguments)?;
         let context =
             UnifiedExecContext::new(session.clone(), step_context, cancellation_token, call_id);
         let response = session

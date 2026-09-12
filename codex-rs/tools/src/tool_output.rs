@@ -7,6 +7,29 @@ use serde_json::Value as JsonValue;
 
 use crate::ToolPayload;
 
+/// Identifies external work that may outlive the tool call and should wake a
+/// waiting continuation when it reaches a terminal state.
+///
+/// The identifier is intentionally opaque to the shared tool contract. Hosts
+/// may attach process, job, or other waitable-resource identities without
+/// coupling this crate to a particular execution backend.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolWaitHandle {
+    id: String,
+}
+
+impl ToolWaitHandle {
+    /// Creates a wait handle for a host-owned resource identifier.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self { id: id.into() }
+    }
+
+    /// Returns the opaque resource identifier.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 /// Model-facing output contract returned by executable tool runtimes.
 pub trait ToolOutput: Send {
     /// Returns a deliberately lossy diagnostic representation, before telemetry size limits.
@@ -60,6 +83,15 @@ pub trait ToolOutput: Send {
     fn tool_result_sources(&self) -> Option<codex_protocol::models::ToolResultSources> {
         None
     }
+
+    /// Returns external work that remains live after this output is returned.
+    ///
+    /// A host may use this signal to defer an automatic continuation until the
+    /// identified resource reaches a terminal state. Implementations should
+    /// return `None` for ordinary completed outputs.
+    fn wait_handle(&self) -> Option<ToolWaitHandle> {
+        None
+    }
 }
 
 impl<T> ToolOutput for Box<T>
@@ -104,6 +136,10 @@ where
 
     fn tool_result_sources(&self) -> Option<codex_protocol::models::ToolResultSources> {
         (**self).tool_result_sources()
+    }
+
+    fn wait_handle(&self) -> Option<ToolWaitHandle> {
+        (**self).wait_handle()
     }
 }
 

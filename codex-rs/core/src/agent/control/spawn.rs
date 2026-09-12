@@ -6,6 +6,7 @@ use crate::config::PermissionProfileSnapshot;
 use crate::context::ContextualUserFragment;
 use crate::context::CurrentTimeReminder;
 use crate::context::DeveloperInstructions;
+use crate::context::GuardianContextMode;
 use crate::context::ManagedDeveloperInstructions;
 use crate::context::MultiAgentModeInstructions;
 use crate::context::MultiAgentRoleInstructions;
@@ -15,9 +16,11 @@ use crate::tools::handlers::multi_agents_common::build_agent_resume_config;
 use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
 use codex_extension_api::ExtensionDataInit;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::intersect_effective_permission_profiles;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
+use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_utils_path_uri::PathUri;
 
 const AGENT_NAMES: &str = include_str!("../../../assets/agent/agent_names.txt");
@@ -69,7 +72,8 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
                 "assistant" => *phase == Some(MessagePhase::FinalAnswer),
                 _ => false,
             },
-            ResponseItem::FunctionCallOutput { call_id: None, .. } => true,
+            ResponseItem::FunctionCallOutput { call_id: None, .. }
+            | ResponseItem::ConfigurationUpdate { .. } => true,
             ResponseItem::AdditionalTools { .. }
             | ResponseItem::AgentMessage { .. }
             | ResponseItem::Reasoning { .. }
@@ -92,6 +96,7 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
         RolloutItem::RealtimeItem(_)
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }
+        | RolloutItem::RetainedContext(_)
         | RolloutItem::SecurityRiskScore(_) => false,
         // Full-history forks preserve the cached prompt prefix and can keep diffing
         // from the parent's durable baseline. Truncated forks drop part of that prompt,
@@ -103,7 +108,11 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
     }
 }
 
-fn retain_forked_developer_message(item: &mut ResponseItem, usage_hint_texts: &[String]) -> bool {
+fn retain_forked_developer_message(
+    item: &mut ResponseItem,
+    usage_hint_texts: &[String],
+    context_mode: GuardianContextMode,
+) -> bool {
     if !matches!(item, ResponseItem::Message { role, .. } if role == "developer") {
         return true;
     }
@@ -112,11 +121,20 @@ fn retain_forked_developer_message(item: &mut ResponseItem, usage_hint_texts: &[
         return false;
     };
     content.retain(|content_item| {
+        if context_mode == GuardianContextMode::ThreadOwned
+            && content_item.kind().0 == "guardian.approved_action"
+        {
+            return false;
+        }
         let ContentItem::InputText { text } = content_item.content() else {
             return true;
         };
 
         !(MultiAgentRoleInstructions::matches_text(text)
+            || (context_mode == GuardianContextMode::ThreadOwned
+                && text.starts_with(
+                    crate::guardian::AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX,
+                ))
             || MultiAgentModeInstructions::matches_text(text)
             || CurrentTimeReminder::matches_text(text)
             || usage_hint_texts
@@ -564,8 +582,11 @@ impl AgentControl {
                 if let Some(parent_thread_id) = owner_thread_id {
                     self.validate_loaded_v2_child(&reloaded_thread.thread, parent_thread_id)?;
                 }
-                self.reconcile_spawned_usage_auto_resume(&reloaded_thread.thread.session)
-                    .await;
+                self.reconcile_spawned_usage_auto_resume(
+                    &reloaded_thread.thread.session,
+                    /*inherited_root_auto_resume*/ None,
+                )
+                .await;
                 self.reconcile_spawned_activity(&reloaded_thread.thread.session)
                     .await;
                 self.state.clear_evicted_environments(thread_id);
@@ -596,6 +617,7 @@ impl AgentControl {
         options: SpawnAgentOptions,
     ) -> CodexResult<LiveAgent> {
         let state = self.upgrade()?;
+        let root_usage_auto_resume_at_spawn = self.root_usage_auto_resume();
         let multi_agent_version = state
             .effective_multi_agent_version_for_spawn(
                 &InitialHistory::New,
@@ -661,48 +683,63 @@ impl AgentControl {
         let notification_source = session_source.clone();
 
         // The same `AgentControl` is sent to spawn the thread.
-        let new_thread = match (session_source, options.fork_mode.as_ref(), inheritance) {
-            (Some(session_source), Some(_), inheritance) => {
-                Box::pin(self.spawn_forked_thread(
-                    &state,
-                    config,
-                    session_source,
-                    &options,
-                    inheritance,
-                    multi_agent_version,
-                ))
-                .await?
-            }
-            (Some(session_source), None, inheritance) => {
-                let history_mode = if let Some(parent_thread_id) = options.parent_thread_id
-                    && let Ok(parent_thread) = state.get_thread(parent_thread_id).await
-                {
-                    matches!(
-                        parent_thread.config_snapshot().await.history_mode,
-                        ThreadHistoryMode::Paginated
-                    )
-                    .then_some(ThreadHistoryMode::Paginated)
-                } else {
-                    None
-                };
-                Box::pin(state.spawn_new_thread_with_source(
-                    config.clone(),
-                    self.clone(),
-                    session_source,
-                    options.initial_collaboration_mode.clone(),
-                    history_mode,
-                    options.parent_thread_id,
-                    /*forked_from_thread_id*/ None,
-                    /*thread_source*/ Some(ThreadSource::Subagent),
-                    /*metrics_service_name*/ None,
-                    inheritance.environments,
-                    inheritance.exec_policy,
-                    options.environments.clone(),
-                ))
-                .await?
-            }
-            (None, _, _) => Box::pin(state.spawn_new_thread(config.clone(), self.clone())).await?,
-        };
+        let (new_thread, inherited_usage_policy) =
+            match (session_source, options.fork_mode.as_ref(), inheritance) {
+                (Some(session_source), Some(_), inheritance) => {
+                    let (new_thread, inherited_usage_policy) = Box::pin(self.spawn_forked_thread(
+                        &state,
+                        config,
+                        session_source,
+                        &options,
+                        inheritance,
+                        multi_agent_version,
+                    ))
+                    .await?;
+                    (new_thread, Some(inherited_usage_policy))
+                }
+                (Some(session_source), None, inheritance) => {
+                    let (history_mode, inherited_usage_policy) = if let Some(parent_thread_id) =
+                        options.parent_thread_id
+                        && let Ok(parent_thread) = state.get_thread(parent_thread_id).await
+                    {
+                        let parent_thread_settings =
+                            parent_thread.session.thread_settings_snapshot().await;
+                        (
+                            matches!(
+                                parent_thread.config_snapshot().await.history_mode,
+                                ThreadHistoryMode::Paginated
+                            )
+                            .then_some(ThreadHistoryMode::Paginated),
+                            Some(parent_thread_settings.usage_policy),
+                        )
+                    } else {
+                        (None, None)
+                    };
+                    let new_thread = Box::pin(state.spawn_new_thread_with_source_and_settings(
+                        config.clone(),
+                        self.clone(),
+                        session_source,
+                        options.initial_collaboration_mode.clone(),
+                        history_mode,
+                        options.parent_thread_id,
+                        /*forked_from_thread_id*/ None,
+                        /*thread_source*/ Some(ThreadSource::Subagent),
+                        /*metrics_service_name*/ None,
+                        inheritance.environments,
+                        inheritance.exec_policy,
+                        options.environments.clone(),
+                        inherited_usage_policy,
+                        None,
+                    ))
+                    .await?;
+                    (new_thread, inherited_usage_policy)
+                }
+                (None, _, _) => {
+                    let new_thread =
+                        Box::pin(state.spawn_new_thread(config.clone(), self.clone())).await?;
+                    (new_thread, None)
+                }
+            };
         agent_metadata.agent_id = Some(new_thread.thread_id);
         reservation.commit(agent_metadata.clone());
         if let Some(team_worker_lease) = _team_worker_lease.as_mut() {
@@ -760,8 +797,11 @@ impl AgentControl {
             notification_source.as_ref(),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }))
         ) {
-            self.reconcile_spawned_usage_auto_resume(&new_thread.thread.session)
-                .await;
+            self.reconcile_spawned_usage_auto_resume(
+                &new_thread.thread.session,
+                inherited_usage_policy.map(|_| root_usage_auto_resume_at_spawn),
+            )
+            .await;
             self.reconcile_spawned_activity(&new_thread.thread.session)
                 .await;
         }
@@ -823,7 +863,7 @@ impl AgentControl {
         options: &SpawnAgentOptions,
         inheritance: SpawnAgentThreadInheritance,
         multi_agent_version: MultiAgentVersion,
-    ) -> CodexResult<crate::thread_manager::NewThread> {
+    ) -> CodexResult<(crate::thread_manager::NewThread, ThreadUsagePolicy)> {
         let SpawnAgentThreadInheritance {
             environments: inherited_environments,
             exec_policy: inherited_exec_policy,
@@ -885,12 +925,14 @@ impl AgentControl {
 
         let destination_history_mode = matches!(parent_history_mode, ThreadHistoryMode::Paginated)
             .then_some(ThreadHistoryMode::Paginated);
+        let parent_thread_settings = parent_thread.session.thread_settings_snapshot().await;
+        let inherited_usage_policy = parent_thread_settings.usage_policy;
         let inherited_thread_settings = if destination_history_mode.is_some()
             || matches!(fork_mode, SpawnAgentForkMode::LastNTurns(_))
         {
             Some(ThreadSettingsAppliedEvent {
                 thread_id: Some(parent_thread_id),
-                thread_settings: parent_thread.session.thread_settings_snapshot().await,
+                thread_settings: parent_thread_settings.clone(),
             })
         } else {
             None
@@ -948,17 +990,31 @@ impl AgentControl {
                 break;
             }
         }
+        let context_mode = GuardianContextMode::from_features(&config.features);
         let mut replaced_parent_developer_instructions = false;
         // Scrub inherited hints and replace only the parent's developer-instruction fragment.
         // Compaction stores response items separately, so sanitize both top-level messages and
         // compacted replacement histories with the same policy.
-        let retain_forked_item = |response_item: &mut ResponseItem, replaced: &mut bool| {
+        let retain_forked_item = |envelope: &mut ResponseItemEnvelope, replaced: &mut bool| {
+            if context_mode == GuardianContextMode::ThreadOwned
+                && multi_agent_version == MultiAgentVersion::V2
+                && matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "user")
+            {
+                // Persist the scope of every inherited user message, including the suffix
+                // after a checkpoint. Resume must not recapture it as local authorization.
+                envelope
+                    .metadata
+                    .get_or_insert_default()
+                    .inherited_user_message = true;
+            }
+            let response_item = &mut envelope.item;
             if matches!(response_item, ResponseItem::AgentMessage { .. }) {
                 return false;
             }
             if !retain_forked_developer_message(
                 response_item,
                 &multi_agent_v2_usage_hint_texts_to_filter,
+                context_mode,
             ) {
                 return false;
             }
@@ -1035,6 +1091,11 @@ impl AgentControl {
                     // Parent-local review evidence must not become the child's authorization.
                     // Root user authorization is collected separately by the host.
                     compacted.guardian_history = None;
+                    // Only V2 fetches root authorization live. Its local scope starts known-empty;
+                    // V1 must remain incomplete when inherited authorization has been stripped.
+                    compacted.retained_context = (context_mode == GuardianContextMode::ThreadOwned
+                        && multi_agent_version == MultiAgentVersion::V2)
+                        .then(codex_history::RetainedContext::default);
                     if let Some(replacement_history) = compacted.replacement_history.as_mut() {
                         // Matches before this checkpoint cannot survive its replacement history.
                         replaced_parent_developer_instructions = false;
@@ -1059,15 +1120,17 @@ impl AgentControl {
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::InterAgentCommunication(_)
                 | RolloutItem::InterAgentCommunicationMetadata { .. } => true,
-                RolloutItem::TokenUsageRecord(_) | RolloutItem::SecurityRiskScore(_) => false,
+                RolloutItem::RetainedContext(_)
+                | RolloutItem::TokenUsageRecord(_)
+                | RolloutItem::SecurityRiskScore(_) => false,
             }
         });
-        if let Some(inherited_thread_settings) = inherited_thread_settings {
+        if let Some(inherited_thread_settings) = inherited_thread_settings.as_ref() {
             // Truncated and paginated child prefixes may omit parent metadata. Carry the
             // effective settings through the in-memory fork so startup can persist a child-owned
             // snapshot.
             forked_rollout_items.push(RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(
-                inherited_thread_settings,
+                inherited_thread_settings.clone(),
             )));
         }
         // Full forks reuse the parent's reference context instead of rebuilding it. If that
@@ -1111,7 +1174,7 @@ impl AgentControl {
         let mut thread_extension_init = ExtensionDataInit::new();
         thread_extension_init.insert(selected_capability_roots);
 
-        state
+        let new_thread = state
             .fork_thread_with_source(
                 config.clone(),
                 InitialHistory::Forked(forked_rollout_items),
@@ -1126,8 +1189,13 @@ impl AgentControl {
                 inherited_exec_policy,
                 options.environments.clone(),
                 thread_extension_init,
+                Some(inherited_usage_policy),
+                inherited_thread_settings
+                    .as_ref()
+                    .map(|event| event.thread_settings.clone()),
             )
-            .await
+            .await?;
+        Ok((new_thread, inherited_usage_policy))
     }
 
     /// Resume an existing agent thread from a recorded rollout file.
@@ -1312,8 +1380,11 @@ impl AgentControl {
             Some(&notification_source),
         )
         .await;
-        self.reconcile_spawned_usage_auto_resume(&resumed_thread.thread.session)
-            .await;
+        self.reconcile_spawned_usage_auto_resume(
+            &resumed_thread.thread.session,
+            /*inherited_root_auto_resume*/ None,
+        )
+        .await;
         self.reconcile_spawned_activity(&resumed_thread.thread.session)
             .await;
 

@@ -8,6 +8,8 @@ use super::step_settings::StepSettingsConstraints;
 use super::step_settings::StepSettingsUpdate;
 use super::*;
 use crate::agents_md_manager::AgentsMdManager;
+use crate::config::ConstraintError;
+use crate::context::GuardianContextMode;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::hook_mcp_executor::CoreHookMcpExecutor;
@@ -77,6 +79,7 @@ pub(crate) struct Session {
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     pub(super) features: ManagedFeatures,
+    pub(crate) guardian_context_mode: GuardianContextMode,
     pub(crate) windows_sandbox_proxy_settings_mode:
         codex_sandboxing::WindowsSandboxProxySettingsMode,
     pub(super) multi_agent_version: OnceLock<MultiAgentVersion>,
@@ -824,6 +827,7 @@ impl Session {
 pub(crate) struct SessionSettingsCommit {
     pub(crate) configuration: SessionConfiguration,
     pub(crate) snapshot: ThreadSettingsSnapshot,
+    pub(crate) usage_policy_changed: bool,
 }
 
 #[derive(Default, Clone)]
@@ -1073,17 +1077,6 @@ impl Session {
             .parent_thread_id
             .or_else(|| initial_history.get_resumed_parent_thread_id());
         session_configuration.parent_thread_id = parent_thread_id;
-        if parent_thread_id.is_none() {
-            agent_control
-                .set_root_usage_auto_resume(session_configuration.usage_policy.auto_resume);
-            agent_control.set_root_service_tier(
-                session_configuration
-                    .step_settings
-                    .service_tier
-                    .clone()
-                    .or_else(|| config.service_tier.clone()),
-            );
-        }
         let is_paginated_subagent = matches!(
             session_configuration.history_mode,
             ThreadHistoryMode::Paginated
@@ -1112,7 +1105,7 @@ impl Session {
                 ));
             }
         };
-        if let Some(usage_policy) =
+        let persisted_usage_policy =
             initial_history
                 .get_rollout_items()
                 .iter()
@@ -1124,18 +1117,43 @@ impl Session {
                         Some(event.thread_settings.usage_policy)
                     }
                     _ => None,
-                })
-        {
+                });
+        if let Some(usage_policy) = persisted_usage_policy {
             session_configuration.usage_policy = usage_policy;
+        } else {
+            match &fork_persistence {
+                ForkPersistence::Copied {
+                    inherited_usage_policy: Some(inherited_usage_policy),
+                    ..
+                } => {
+                    // A copied fork may resume a source history whose settings event belongs to
+                    // the source thread. Apply the trusted inherited policy unless the child
+                    // already has a matching persisted settings event.
+                    session_configuration.usage_policy = *inherited_usage_policy;
+                }
+                ForkPersistence::Referenced {
+                    inherited_usage_policy,
+                    ..
+                } => {
+                    // Reference-backed paginated forks may not include the source settings event
+                    // in their model-context prefix. Carry the source snapshot explicitly.
+                    session_configuration.usage_policy = *inherited_usage_policy;
+                }
+                ForkPersistence::Copied {
+                    inherited_usage_policy: None,
+                    ..
+                } => {}
+            }
         }
-        if let ForkPersistence::Referenced {
-            inherited_usage_policy,
-            ..
-        } = &fork_persistence
-        {
-            // Reference-backed paginated forks may not include the source settings event in
-            // their model-context prefix. Carry the source snapshot explicitly in that case.
-            session_configuration.usage_policy = *inherited_usage_policy;
+        if parent_thread_id.is_none() {
+            agent_control.set_root_usage_policy(session_configuration.usage_policy);
+            agent_control.set_root_service_tier(
+                session_configuration
+                    .step_settings
+                    .service_tier
+                    .clone()
+                    .or_else(|| config.service_tier.clone()),
+            );
         }
         let resumed_session_id = match &initial_history {
             InitialHistory::Resumed(resumed) => {
@@ -1224,11 +1242,19 @@ impl Session {
         thread_extension_init.insert(codex_extension_api::ThreadOriginator(
             session_configuration.originator.clone(),
         ));
+        // Publish the already resolved model before extensions make startup decisions.
+        // Turn construction refreshes this attachment when the selected model changes.
+        thread_extension_init.insert(model_info);
         let mcp_thread_init = thread_extension_init.clone();
         let thread_extension_data = codex_extension_api::ExtensionData::new_with_init(
             thread_id.to_string(),
             thread_extension_init,
         );
+        // Resolve once for live history, replay, and all reviewer consumers.
+        let guardian_context_mode = GuardianContextMode::from_features(&config.features);
+        thread_extension_data.insert(crate::context::GuardianReviewEvidence::new(
+            guardian_context_mode,
+        ));
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize thread persistence with new or resumed session info
@@ -1654,6 +1680,10 @@ impl Session {
             let mut state = SessionState::new_with_auto_compact_window_ids(
                 session_configuration.clone(),
                 initial_auto_compact_window_ids,
+                ContextManager::with_guardian_context_mode(
+                    guardian_context_mode,
+                    &session_configuration.session_source,
+                ),
             );
             if let Some(state_db_ctx) = state_db_ctx.as_ref() {
                 let active_thread_control = state_db_ctx
@@ -1772,6 +1802,7 @@ impl Session {
                     | RolloutItem::WorldState(_)
                     | RolloutItem::RealtimeItem(_)
                     | RolloutItem::TokenUsageRecord(_)
+                    | RolloutItem::RetainedContext(_)
                     | RolloutItem::SecurityRiskScore(_) => {}
                 }
             }
@@ -1903,6 +1934,7 @@ impl Session {
                 thread_settings_persistence: Semaphore::new(/*permits*/ 1),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),
+                guardian_context_mode,
                 windows_sandbox_proxy_settings_mode,
                 multi_agent_version,
                 mcp_refresh: McpRefresh::new(),

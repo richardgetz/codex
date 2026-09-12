@@ -75,6 +75,7 @@ async fn first_request_item_types_roles_and_content_annotations() -> Result<()> 
     test.codex
         .submit(Op::ApproveGuardianDeniedAction {
             event: GuardianAssessmentEvent {
+                review_reason: None,
                 id: "guardian-review".to_string(),
                 target_item_id: None,
                 plugin_id: None,
@@ -202,7 +203,7 @@ async fn first_request_item_types_roles_and_content_annotations() -> Result<()> 
         .join("\n");
     insta::assert_snapshot!(items, @r#"
     message developer ["guardian.approved_action"]
-    message developer ["generic.developer_instructions","token_budget.context_window_guidance","permissions.instructions","environments.instructions"]
+    message developer ["git.conventional_commits","git.intent_notes","generic.developer_instructions","scratchpad.instructions","fork.help","token_budget.context_window_guidance","permissions.instructions","environments.instructions"]
     message developer ["token_budget.context_window"]
     message developer ["multi_agent.usage_hint"]
     message developer ["multi_agent.mode_instructions"]

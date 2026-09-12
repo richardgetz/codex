@@ -2051,12 +2051,14 @@ url = "ws://127.0.0.1:8765"
         remote.add_local_writable_root(&root);
         let remote_snapshot = remote.snapshot().await;
         let remote_environment = remote_snapshot.primary().expect("remote environment");
+        // Remote environments retain their read-only owner profile; the local session root
+        // must not be added as a writable exception.
         assert_eq!(
             remote_environment
                 .permission_profile()
                 .file_system_sandbox_policy()
                 .resolve_access_with_cwd(root.as_path(), cwd.as_path()),
-            FileSystemAccessMode::None
+            FileSystemAccessMode::Read
         );
     }
 

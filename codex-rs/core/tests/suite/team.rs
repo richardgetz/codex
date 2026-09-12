@@ -390,6 +390,8 @@ async fn team_toggle_pins_lead_and_restores_original_model() -> Result<()> {
     let active_fragments = team_instruction_fragments(&requests[0]);
     assert_eq!(active_fragments.len(), 1);
     assert!(active_fragments[0].contains("You are the Lead"));
+    assert!(active_fragments[0].contains("Team On is the user's opt-in authorization"));
+    assert!(active_fragments[0].contains("delegate substantive in-scope work"));
     assert!(active_fragments[0].contains("Dynamic lookup handoff is enabled"));
     assert_eq!(
         team_instruction_fragments(&requests[1]),
@@ -1090,11 +1092,31 @@ async fn team_worker_limit_rejects_second_direct_spawn_and_reuses_completed_slot
         |request: &wiremock::Request| {
             request_has_model(request, LEAD_MODEL)
                 && request_has_function_call_output(request, ROOT_DIRECT_GATE_CALL_ID)
+                && !body_contains(request, "first worker complete")
         },
         sse(vec![
             ev_response_created("team-limit-root-4"),
             ev_assistant_message("team-limit-root-message", "direct worker limit checked"),
             ev_completed("team-limit-root-4"),
+        ]),
+    )
+    .await;
+    // A completed Worker now wakes a parked Team Lead for review. Keep that
+    // notification turn separate from the barrier continuation below.
+    let root_after_worker_completion = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, ROOT_DIRECT_GATE_CALL_ID)
+                && body_contains(request, "first worker complete")
+        },
+        sse(vec![
+            ev_response_created("team-limit-root-worker-completion"),
+            ev_assistant_message(
+                "team-limit-root-worker-completion-message",
+                "worker completion reviewed",
+            ),
+            ev_completed("team-limit-root-worker-completion"),
         ]),
     )
     .await;
@@ -1158,7 +1180,16 @@ async fn team_worker_limit_rejects_second_direct_spawn_and_reuses_completed_slot
         ThreadSettingsOverrides::default(),
     )
     .await?;
-    let _ = root_after_gate.single_request();
+    let _root_after_gate_request = wait_for_captured_request(
+        &root_after_gate,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, ROOT_DIRECT_GATE_CALL_ID)
+                && !request.body_contains_text("first worker complete")
+        },
+        "root direct limit gate continuation",
+    )
+    .await;
 
     let first_output = root_after_first
         .function_call_output_text(FIRST_DIRECT_CALL_ID)
@@ -1193,6 +1224,16 @@ async fn team_worker_limit_rejects_second_direct_spawn_and_reuses_completed_slot
     })
     .await;
     let _ = first_worker_after_gate.single_request();
+    let _root_after_worker_completion_request = wait_for_captured_request(
+        &root_after_worker_completion,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, ROOT_DIRECT_GATE_CALL_ID)
+                && request.body_contains_text("first worker complete")
+        },
+        "root direct limit worker completion wake",
+    )
+    .await;
 
     let followup_response = mount_sse_once_match(
         &server,
@@ -1271,7 +1312,16 @@ async fn team_worker_limit_rejects_second_direct_spawn_and_reuses_completed_slot
         ThreadSettingsOverrides::default(),
     )
     .await?;
-    let third_output = root_after_third_output
+    let replacement_request = wait_for_captured_request(
+        &root_after_third_output,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, THIRD_DIRECT_CALL_ID)
+        },
+        "replacement direct spawn output",
+    )
+    .await;
+    let third_output = replacement_request
         .function_call_output_text(THIRD_DIRECT_CALL_ID)
         .expect("replacement direct spawn output");
     let third_result: Value = serde_json::from_str(&third_output)?;

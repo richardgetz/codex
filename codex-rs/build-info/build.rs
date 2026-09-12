@@ -6,7 +6,7 @@ mod versioning;
 const OPENAI_CODEX_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/openai/codex/releases/latest";
 
-fn main() {
+fn main() -> Result<(), std::env::VarError> {
     println!("cargo:rerun-if-env-changed=CODEX_SOURCE_BASE_VERSION");
     println!("cargo:rerun-if-env-changed=CODEX_SOURCE_VERSION_SUFFIX");
 
@@ -60,6 +60,11 @@ fn main() {
         "cargo:rustc-env=CODEX_IS_SOURCE_BUILD={}",
         derived.is_source_build
     );
+
+    let target = std::env::var("TARGET")?;
+    println!("cargo:rustc-env=CODEX_BUILD_TARGET={target}");
+    println!("cargo:rerun-if-changed=build.rs");
+    Ok(())
 }
 
 fn in_git_worktree() -> bool {

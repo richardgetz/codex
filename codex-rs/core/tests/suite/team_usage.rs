@@ -144,8 +144,13 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
     let child_initial_response = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
-            latest_user_message_text(request).as_deref() == Some(USAGE_CHILD_TASK)
+            // V2 delivers the spawn task as an assistant AgentMessage; V1 uses
+            // a user message. Match the persisted task text for both forms.
+            body_contains(request, USAGE_CHILD_TASK)
                 && request_has_model(request, WORKER_MODEL)
+                // The full-history grandchild retains the parent's task text;
+                // reserve this response for the child's initial turn.
+                && !body_contains(request, USAGE_GRANDCHILD_TASK)
                 && !request_has_function_call_output(request, USAGE_CHILD_SPAWN_CALL_ID)
         },
         sse(vec![
@@ -163,8 +168,11 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
     let grandchild_response = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
-            latest_user_message_text(request).as_deref() == Some(USAGE_GRANDCHILD_TASK)
+            body_contains(request, USAGE_GRANDCHILD_TASK)
                 && request_has_model(request, WORKER_MODEL)
+                // Forked child context intentionally drops call-id outputs; this
+                // keeps the grandchild request disjoint from child completion.
+                && !request_has_function_call_output(request, USAGE_CHILD_SPAWN_CALL_ID)
         },
         sse(vec![
             ev_response_created(USAGE_GRANDCHILD_RESPONSE),
@@ -176,7 +184,7 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
     let child_completion_response = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
-            latest_user_message_text(request).as_deref() == Some(USAGE_CHILD_TASK)
+            body_contains(request, USAGE_CHILD_TASK)
                 && request_has_model(request, WORKER_MODEL)
                 && request_has_function_call_output(request, USAGE_CHILD_SPAWN_CALL_ID)
         },
@@ -193,7 +201,7 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
     let root_completion_response = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
-            latest_user_message_text(request).as_deref() == Some(USAGE_ROOT_PROMPT)
+            body_contains(request, USAGE_ROOT_PROMPT)
                 && request_has_model(request, LEAD_MODEL)
                 && request_has_function_call_output(request, USAGE_ROOT_SPAWN_CALL_ID)
         },
@@ -233,7 +241,7 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
     )
     .await?;
 
-    let root_request = wait_for_captured_request(
+    let _root_request = wait_for_captured_request(
         &root_initial_response,
         |request| {
             request
@@ -249,11 +257,11 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
     let child_request = wait_for_captured_request(
         &child_initial_response,
         |request| {
-            request
-                .message_input_texts("user")
-                .last()
-                .is_some_and(|text| text == USAGE_CHILD_TASK)
+            request.body_contains_text(USAGE_CHILD_TASK)
                 && response_request_has_model(request, WORKER_MODEL)
+                // Keep a full-history grandchild request from being selected
+                // as the child's initial turn in captured-request order.
+                && !request.body_contains_text(USAGE_GRANDCHILD_TASK)
                 && !response_request_has_function_call_output(request, USAGE_CHILD_SPAWN_CALL_ID)
         },
         "usage projection child",
@@ -262,11 +270,11 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
     let grandchild_request = wait_for_captured_request(
         &grandchild_response,
         |request| {
-            request
-                .message_input_texts("user")
-                .last()
-                .is_some_and(|text| text == USAGE_GRANDCHILD_TASK)
+            request.body_contains_text(USAGE_GRANDCHILD_TASK)
                 && response_request_has_model(request, WORKER_MODEL)
+                // The child completion request retains the grandchild spawn
+                // arguments, but is not the forked grandchild turn itself.
+                && !response_request_has_function_call_output(request, USAGE_CHILD_SPAWN_CALL_ID)
         },
         "usage projection grandchild",
     )
@@ -274,10 +282,7 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
     let _child_completion_request = wait_for_captured_request(
         &child_completion_response,
         |request| {
-            request
-                .message_input_texts("user")
-                .last()
-                .is_some_and(|text| text == USAGE_CHILD_TASK)
+            request.body_contains_text(USAGE_CHILD_TASK)
                 && response_request_has_model(request, WORKER_MODEL)
                 && response_request_has_function_call_output(request, USAGE_CHILD_SPAWN_CALL_ID)
         },
@@ -287,10 +292,7 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
     let _root_completion_request = wait_for_captured_request(
         &root_completion_response,
         |request| {
-            request
-                .message_input_texts("user")
-                .last()
-                .is_some_and(|text| text == USAGE_ROOT_PROMPT)
+            request.body_contains_text(USAGE_ROOT_PROMPT)
                 && response_request_has_model(request, LEAD_MODEL)
                 && response_request_has_function_call_output(request, USAGE_ROOT_SPAWN_CALL_ID)
         },

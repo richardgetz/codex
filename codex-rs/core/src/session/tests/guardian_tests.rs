@@ -786,6 +786,7 @@ async fn network_approval_uses_published_task_authority_within_same_turn(
                 exec_policy_hint: None,
                 execution_id: None,
                 disconnect: None,
+                cancellation: None,
             },
         );
     tokio::pin!(decision);
@@ -1207,7 +1208,10 @@ async fn exec_command_allows_sticky_turn_permissions_without_inline_request_perm
     match resp {
         Ok(output) => {
             let output = expect_text_output(&output);
-            assert!(output.contains("hi"));
+            assert!(
+                output.contains("hi"),
+                "exec_command returned unexpected output: {output:?}"
+            );
         }
         Err(FunctionCallError::RespondToModel(output)) => {
             assert!(

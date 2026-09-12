@@ -122,6 +122,7 @@ impl GoalService {
             .goal_state_permit()
             .await
             .map_err(GoalServiceError::Internal)?;
+        runtime.invalidate_background_wait_locked().await;
         runtime
             .prepare_external_goal_mutation()
             .await
@@ -185,6 +186,11 @@ impl GoalService {
             ),
             None => None,
         };
+        if objective.is_some()
+            && let Some(runtime) = runtime.as_ref()
+        {
+            runtime.invalidate_background_wait_locked().await;
+        }
         if let Some(runtime) = runtime.as_ref()
             && let Err(err) = runtime.prepare_external_goal_mutation().await
         {
@@ -306,6 +312,9 @@ impl GoalService {
             ),
             None => None,
         };
+        if let Some(runtime) = runtime.as_ref() {
+            runtime.invalidate_background_wait_locked().await;
+        }
         if let Some(runtime) = runtime.as_ref()
             && let Err(err) = runtime.prepare_external_goal_mutation().await
         {

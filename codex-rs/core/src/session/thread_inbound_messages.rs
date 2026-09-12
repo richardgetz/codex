@@ -94,6 +94,7 @@ mod tests {
             .expect("timestamp");
         runtime
             .upsert_thread(&codex_state::ThreadMetadata {
+                originator: None,
                 id: thread_id,
                 rollout_path: codex_home.join(format!("rollout-{thread_id}.jsonl")),
                 created_at: now,
@@ -117,6 +118,7 @@ mod tests {
                 section_position: None,
                 section_entered_at: None,
                 project_id: None,
+                daybreak_enabled: None,
                 sandbox_policy: "read-only".to_string(),
                 approval_mode: "on-request".to_string(),
                 tokens_used: 0,

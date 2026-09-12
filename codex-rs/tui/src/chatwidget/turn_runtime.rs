@@ -45,6 +45,12 @@ impl ChatWidget {
             self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Working;
         }
         self.refresh_plan_mode_nudge();
+        if self.mcp_startup_status.is_some()
+            && !self.turn_lifecycle.agent_turn_running
+            && !self.review.is_review_mode
+        {
+            self.bottom_pane.hide_status_indicator();
+        }
         self.refresh_status_surfaces();
         self.bottom_pane.set_slash_command_task_running(
             self.turn_lifecycle.agent_turn_running || self.review.is_review_mode,
@@ -81,6 +87,7 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     pub(super) fn on_task_started(&mut self) {
+        self.clear_context_compaction();
         self.input_queue.user_turn_pending_start = false;
         self.reset_safety_buffering_for_turn_start();
         self.turn_lifecycle.start(Instant::now());
@@ -95,6 +102,7 @@ impl ChatWidget {
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
         self.update_task_running_state();
+        self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.reset_status_timer(Duration::ZERO);
         self.status_state.retry_status_header = None;
         self.clear_active_hook_cell();
@@ -189,6 +197,7 @@ impl ChatWidget {
             self.refresh_thread_usage_after_turn();
         }
         // Mark task stopped and request redraw now that all content is in history.
+        self.clear_context_compaction();
         self.status_state.pending_status_indicator_restore = false;
         self.input_queue.user_turn_pending_start = false;
         self.active_collab_wait_calls.clear();
@@ -327,6 +336,7 @@ impl ChatWidget {
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
     /// and should continue to drive the bottom-pane running indicator while it is in progress.
     pub(super) fn finalize_turn(&mut self) {
+        self.clear_context_compaction();
         self.clear_safety_buffering();
         // Drop preview-only stream tail content on any termination path before
         // failed-cell finalization, so transient tail cells are never persisted.
@@ -400,12 +410,16 @@ impl ChatWidget {
     pub(super) fn on_cyber_policy_error(&mut self) {
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
-        let plan_type = if self.has_chatgpt_account {
-            self.plan_type
+        let notice = if self.config.model_provider_id == "openai" {
+            self.cyber_policy_notice
+                .get()
+                .copied()
+                .unwrap_or_default()
+                .for_model(self.current_model())
         } else {
-            None
+            crate::daybreak::Notice::Limited
         };
-        self.add_to_history(history_cell::new_cyber_policy_error_event(plan_type));
+        self.add_to_history(history_cell::new_cyber_policy_error_event(notice));
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
@@ -413,6 +427,7 @@ impl ChatWidget {
     }
 
     pub(super) fn on_rate_limit_error(&mut self, error_kind: RateLimitErrorKind, message: String) {
+        self.invalidate_ordinary_usage_recovery();
         // on_error can drain queued input, before the asynchronous recovery read completes.
         self.input_queue.rate_limit_recovery_pending = self.has_chatgpt_account;
         let usage_limit_error = matches!(error_kind, RateLimitErrorKind::UsageLimit);

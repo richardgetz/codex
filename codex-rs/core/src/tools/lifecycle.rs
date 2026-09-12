@@ -6,13 +6,44 @@ use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolCallSource as ExtensionToolCallSource;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolStartInput;
+use codex_extension_api::ToolWaitInput;
 use codex_protocol::mcp::CallToolResult;
 use codex_tools::ToolName;
+use codex_tools::ToolWaitHandle;
 
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
+
+/// Notifies extensions when a successful tool output leaves external work live.
+pub(crate) async fn notify_tool_wait(
+    invocation: &ToolInvocation,
+    wait_handle: Option<ToolWaitHandle>,
+) {
+    let Some(wait_handle) = wait_handle else {
+        return;
+    };
+    for contributor in invocation
+        .session
+        .services
+        .extensions
+        .tool_lifecycle_contributors()
+    {
+        contributor
+            .on_tool_wait(ToolWaitInput {
+                session_store: &invocation.session.services.session_extension_data,
+                thread_store: &invocation.session.services.thread_extension_data,
+                turn_store: invocation.turn.extension_data.as_ref(),
+                turn_id: invocation.turn.sub_id.as_str(),
+                call_id: invocation.call_id.as_str(),
+                tool_name: &invocation.tool_name,
+                source: extension_tool_call_source(invocation.source.clone()),
+                wait_handle: &wait_handle,
+            })
+            .await;
+    }
+}
 
 pub(crate) async fn notify_tool_start(
     invocation: &ToolInvocation,

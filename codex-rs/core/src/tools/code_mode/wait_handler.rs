@@ -5,6 +5,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
+use crate::tools::handlers::parse_arguments_with_integral_float_fallback;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
@@ -34,15 +35,6 @@ struct ExecWaitArgs {
 
 fn default_wait_yield_time_ms() -> u64 {
     DEFAULT_WAIT_YIELD_TIME_MS
-}
-
-fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    serde_json::from_str(arguments).map_err(|err| {
-        FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err}"))
-    })
 }
 
 impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
@@ -89,9 +81,9 @@ impl CodeModeWaitHandler {
                 if tool_name.is_default_namespace()
                     && tool_name.name.as_str() == WAIT_TOOL_NAME =>
             {
-                let args: ExecWaitArgs = parse_arguments(&arguments).inspect_err(|_error| {
-                    telemetry.finish(/*success*/ false);
-                })?;
+                let args: ExecWaitArgs =
+                    parse_arguments_with_integral_float_fallback(&arguments)
+                        .inspect_err(|_error| telemetry.finish(/*success*/ false))?;
                 let exec = ExecContext { session, turn };
                 let started_at = std::time::Instant::now();
                 telemetry.cell_id = Some(args.cell_id.clone());

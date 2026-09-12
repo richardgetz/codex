@@ -21,6 +21,8 @@ use crate::ThreadStoreResult;
 const PROJECTION_BATCH_BYTES: u64 = 256 * 1024;
 const MAX_ROLLOUT_LINE_BYTES: usize = 16 * 1024 * 1024;
 const ROLLOUT_RECORD_DISCARD_CHUNK_BYTES: u64 = 8 * 1024;
+const SQLITE_PROJECTION_METRIC: &str = "codex.thread_history.sqlite_projection";
+const SQLITE_PROJECTION_ANOMALY_METRIC: &str = "codex.thread_history.sqlite_projection.anomaly";
 
 pub(super) async fn materialize_to_sqlite(
     store: &LocalThreadStore,
@@ -30,6 +32,16 @@ pub(super) async fn materialize_to_sqlite(
     if store.state_db.is_none() {
         return Ok(());
     }
+    let result = materialize_to_sqlite_with_state_db(store, thread_id, rollout_path).await;
+    record_projection_outcome(&result);
+    result
+}
+
+async fn materialize_to_sqlite_with_state_db(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    rollout_path: &Path,
+) -> ThreadStoreResult<()> {
     let projection_state = super::thread_history::projection_state(store, thread_id).await?;
     let start_offset = projection_state
         .as_ref()
@@ -237,14 +249,15 @@ async fn read_projection_steps(
                     line_end_byte_offset = line_end_offset,
                     expected_ordinal = next_ordinal,
                     error = %err,
-                    "deferring rejected rollout line until a later ordinal resolves it"
+                    "skipping malformed rollout line during projection"
                 );
+                record_projection_anomaly(ProjectionAnomaly::MalformedJson);
                 pending_rejected_line_count = pending_rejected_line_count.saturating_add(1);
                 line_start_offset = line_end_offset;
                 continue;
             }
         };
-        let value_ordinal = value.get("ordinal").and_then(serde_json::Value::as_u64);
+        let raw_ordinal = value.get("ordinal").and_then(serde_json::Value::as_u64);
         let line = match codex_rollout::decode_rollout_line(value) {
             Ok(line) => Some(line),
             Err(err) => {
@@ -254,18 +267,15 @@ async fn read_projection_steps(
                     line_start_byte_offset = line_start_offset,
                     line_end_byte_offset = line_end_offset,
                     expected_ordinal = next_ordinal,
-                    line_ordinal = ?value_ordinal,
+                    line_ordinal = ?raw_ordinal,
                     error = %err,
-                    "deferring unknown rollout line until a later ordinal resolves it"
+                    "skipping unknown rollout line during projection"
                 );
+                record_projection_anomaly(ProjectionAnomaly::UnknownLine);
                 None
             }
         };
-        let ordinal = match line
-            .as_ref()
-            .and_then(|line| line.ordinal)
-            .or(value_ordinal)
-        {
+        let ordinal = match line.as_ref().and_then(|line| line.ordinal).or(raw_ordinal) {
             Some(ordinal) => ordinal,
             None if line.is_none() => {
                 pending_rejected_line_count = pending_rejected_line_count.saturating_add(1);
@@ -273,6 +283,15 @@ async fn read_projection_steps(
                 continue;
             }
             None => {
+                warn!(
+                    thread_id = %thread_id,
+                    rollout_path = %rollout_path.display(),
+                    line_start_byte_offset = line_start_offset,
+                    line_end_byte_offset = line_end_offset,
+                    expected_ordinal = next_ordinal,
+                    "skipping paginated rollout line without an ordinal"
+                );
+                record_projection_anomaly(ProjectionAnomaly::MissingOrdinal);
                 return Err(ThreadStoreError::Internal {
                     message: format!(
                         "paginated rollout line for {thread_id} is missing an ordinal"
@@ -281,6 +300,7 @@ async fn read_projection_steps(
             }
         };
         if ordinal < next_ordinal {
+            record_projection_anomaly(ProjectionAnomaly::DuplicateOrRegressedOrdinal);
             return Err(ThreadStoreError::Internal {
                 message: format!(
                     "thread history projection for {thread_id} expected ordinal {next_ordinal}, got {ordinal}"
@@ -325,8 +345,9 @@ async fn read_projection_steps(
                         expected_ordinal = next_ordinal,
                         line_ordinal = ordinal,
                         error = %err,
-                        "deferring rollout line with invalid timestamp until a later ordinal resolves it"
+                        "skipping rollout line with invalid timestamp during projection"
                     );
+                    record_projection_anomaly(ProjectionAnomaly::InvalidTimestamp);
                     pending_rejected_line_count = pending_rejected_line_count.saturating_add(1);
                     line_start_offset = line_end_offset;
                     continue;
@@ -345,8 +366,9 @@ async fn read_projection_steps(
                 line_ordinal = ordinal,
                 skipped_ordinal_start = next_ordinal,
                 skipped_ordinal_end_exclusive = ordinal,
-                "skipping rollout ordinal range after rejected lines"
+                "skipping missing rollout ordinal range during projection"
             );
+            record_projection_anomaly(ProjectionAnomaly::ForwardOrdinalGap);
             projections.push(RolloutProjectionStep::SkippedOrdinalRange {
                 start_ordinal: next_ordinal,
                 end_ordinal_exclusive: ordinal,
@@ -466,6 +488,52 @@ async fn read_rollout_record(
             oversized,
         }))
     }
+}
+
+#[derive(Clone, Copy)]
+enum ProjectionAnomaly {
+    MalformedJson,
+    UnknownLine,
+    MissingOrdinal,
+    DuplicateOrRegressedOrdinal,
+    ForwardOrdinalGap,
+    InvalidTimestamp,
+}
+
+impl ProjectionAnomaly {
+    fn tag(self) -> &'static str {
+        match self {
+            Self::MalformedJson => "malformed_json",
+            Self::UnknownLine => "unknown_line",
+            Self::MissingOrdinal => "missing_ordinal",
+            Self::DuplicateOrRegressedOrdinal => "duplicate_or_regressed_ordinal",
+            Self::ForwardOrdinalGap => "forward_ordinal_gap",
+            Self::InvalidTimestamp => "invalid_timestamp",
+        }
+    }
+}
+
+fn record_projection_outcome(result: &ThreadStoreResult<()>) {
+    let Some(metrics) = codex_otel::global() else {
+        return;
+    };
+    let outcome = if result.is_ok() { "success" } else { "error" };
+    let _ = metrics.counter(
+        SQLITE_PROJECTION_METRIC,
+        /*inc*/ 1,
+        &[("outcome", outcome)],
+    );
+}
+
+fn record_projection_anomaly(anomaly: ProjectionAnomaly) {
+    let Some(metrics) = codex_otel::global() else {
+        return;
+    };
+    let _ = metrics.counter(
+        SQLITE_PROJECTION_ANOMALY_METRIC,
+        /*inc*/ 1,
+        &[("kind", anomaly.tag())],
+    );
 }
 
 fn thread_store_io_error(err: std::io::Error) -> ThreadStoreError {

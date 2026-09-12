@@ -7,7 +7,6 @@ use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
 use codex_features::Feature;
 use codex_history::RolloutItem;
-use codex_history::RolloutLine;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
@@ -112,7 +111,7 @@ fn count_user_turn_context_entries(text: &str) -> usize {
         if trimmed.is_empty() {
             continue;
         }
-        let Ok(entry): Result<RolloutLine, _> = serde_json::from_str(trimmed) else {
+        let Ok(entry) = codex_rollout::parse_rollout_line(trimmed) else {
             continue;
         };
         match entry.item {
@@ -137,6 +136,7 @@ fn count_user_turn_context_entries(text: &str) -> usize {
             | RolloutItem::SessionMeta(_)
             | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::RealtimeItem(_)
+            | RolloutItem::RetainedContext(_)
             | RolloutItem::TokenUsageRecord(_) => {}
         }
     }
@@ -449,7 +449,7 @@ fn replacement_history_from_rollout(path: &Path) -> Result<Vec<Value>> {
         .map(str::trim)
         .filter(|line| !line.is_empty())
     {
-        let entry: RolloutLine = serde_json::from_str(line)?;
+        let entry = codex_rollout::parse_rollout_line(line)?;
         if let RolloutItem::Compacted(compacted) = entry.item
             && let Some(items) = compacted.replacement_history
         {
@@ -810,7 +810,7 @@ async fn summarize_context_three_requests_and_instructions(
         if trimmed.is_empty() {
             continue;
         }
-        let Ok(entry): Result<RolloutLine, _> = serde_json::from_str(trimmed) else {
+        let Ok(entry) = codex_rollout::parse_rollout_line(trimmed) else {
             continue;
         };
         match entry.item {
@@ -1141,7 +1141,7 @@ async fn manual_compact_records_durable_and_local_token_usage() {
     let rollout_items = fs::read_to_string(rollout_path)
         .expect("read rollout")
         .lines()
-        .filter_map(|line| serde_json::from_str::<RolloutLine>(line).ok())
+        .filter_map(|line| codex_rollout::parse_rollout_line(line).ok())
         .map(|line| line.item)
         .collect::<Vec<_>>();
     let records = rollout_items
@@ -3625,7 +3625,7 @@ async fn pre_sampling_compact_recovers_comp_hash_after_resume() {
     let rollout = fs::read_to_string(&rollout_path).expect("read rollout");
     let persisted_comp_hash = rollout
         .lines()
-        .filter_map(|line| serde_json::from_str::<RolloutLine>(line).ok())
+        .filter_map(|line| codex_rollout::parse_rollout_line(line).ok())
         .find_map(|line| match line.item {
             RolloutItem::TurnContext(context) => context.comp_hash,
             _ => None,
@@ -3908,7 +3908,7 @@ async fn auto_compact_persists_rollout_entries() {
         if trimmed.is_empty() {
             continue;
         }
-        let Ok(entry): Result<RolloutLine, _> = serde_json::from_str(trimmed) else {
+        let Ok(entry) = codex_rollout::parse_rollout_line(trimmed) else {
             continue;
         };
         match entry.item {

@@ -11,6 +11,7 @@ use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_fake_rollout_with_token_usage;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
+use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::rollout_path;
 use app_test_support::test_absolute_path;
@@ -206,6 +207,7 @@ async fn thread_resume_paginated_model_context_preserves_original_metadata() -> 
         &RolloutItem::Compacted(CompactedItem {
             message: "compacted history".to_string(),
             replacement_history: Some(Vec::new()),
+            retained_context: None,
             guardian_history: None,
             mcp_resource_origins: None,
             window_number: Some(1),
@@ -2777,8 +2779,25 @@ async fn thread_resume_rejects_archived_session_by_id() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_keeps_paused_goal_paused() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
+async fn thread_resume_keeps_tool_paused_goal_paused() -> Result<()> {
+    let server = create_mock_responses_server_sequence(vec![
+        responses::sse(vec![
+            responses::ev_response_created("create-goal"),
+            responses::ev_function_call(
+                "create-goal-call",
+                "create_goal",
+                r#"{"objective":"keep polishing"}"#,
+            ),
+            responses::ev_completed("create-goal"),
+        ]),
+        responses::sse(vec![
+            responses::ev_response_created("pause-goal"),
+            responses::ev_function_call("pause-goal-call", "update_goal", r#"{"status":"paused"}"#),
+            responses::ev_completed("pause-goal"),
+        ]),
+        create_final_assistant_message_sse_response("The goal is paused.")?,
+    ])
+    .await;
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri()).write(codex_home.path())?;
     let config_path = codex_home.path().join("config.toml");
@@ -2808,7 +2827,7 @@ async fn thread_resume_keeps_paused_goal_paused() -> Result<()> {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
             input: vec![UserInput::Text {
-                text: "materialize this thread".to_string(),
+                text: "Create a goal to keep polishing, then pause it.".to_string(),
                 text_elements: Vec::new(),
             }],
             ..Default::default()
@@ -2826,22 +2845,14 @@ async fn thread_resume_keeps_paused_goal_paused() -> Result<()> {
     .await??;
 
     let goal_id = mcp
-        .send_raw_request(
-            "thread/goal/set",
-            Some(json!({
-                "threadId": thread.id,
-                "objective": "keep polishing",
-                "status": "paused",
-            })),
-        )
+        .send_raw_request("thread/goal/get", Some(json!({ "threadId": thread.id })))
         .await?;
-    let _goal: ThreadGoalSetResponse =
+    let goal: ThreadGoalGetResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(goal_id)).await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("thread/goal/updated"),
-    )
-    .await??;
+    assert_eq!(
+        goal.goal.expect("goal should exist").status,
+        ThreadGoalStatus::Paused
+    );
     mcp.clear_message_buffer();
 
     let resume_id = mcp
@@ -3444,11 +3455,11 @@ async fn thread_goal_keeps_original_root_until_external_objective_edit() -> Resu
     );
     responses::assert_root_turn(&reopened_request, Some(original_turn.turn.id.as_str()))?;
     let continuation_request = serde_json::from_slice::<serde_json::Value>(&requests[7])?;
-    assert_ne!(
-        continuation_request["client_metadata"]["turn_id"].as_str(),
-        Some(edited_turn_id)
-    );
-    responses::assert_root_turn(&continuation_request, /*expected*/ None)?;
+    let continuation_turn_id = continuation_request["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("independent continuation turn ID");
+    assert_ne!(continuation_turn_id, edited_turn_id);
+    responses::assert_root_turn(&continuation_request, Some(continuation_turn_id))?;
     responses::assert_parent_turn(&continuation_request, /*expected*/ None)?;
 
     server.shutdown().await;
@@ -3616,7 +3627,7 @@ async fn thread_goal_lifecycle_emits_analytics_and_clear_deletes_goal() -> Resul
         goal_request_body["client_metadata"]["turn_id"],
         causal_turn_id
     );
-    responses::assert_root_turn(&goal_request_body, /*expected*/ None)?;
+    responses::assert_root_turn(&goal_request_body, Some(causal_turn_id))?;
     responses::assert_parent_turn(&goal_request_body, /*expected*/ None)?;
 
     let clear_id = mcp
@@ -3804,6 +3815,7 @@ async fn cold_paginated_resume_restores_usage_without_loading_turns() -> Result<
         &RolloutItem::Compacted(CompactedItem {
             message: "usage checkpoint".to_string(),
             replacement_history: Some(Vec::new()),
+            retained_context: None,
             guardian_history: None,
             mcp_resource_origins: None,
             window_number: Some(1),
@@ -4418,6 +4430,7 @@ async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Res
         .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
             thread_id: thread_id.clone(),
             project_id: None,
+            daybreak_enabled: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: Some(Some("feature/pr-branch".to_string())),

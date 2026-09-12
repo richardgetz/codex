@@ -26,6 +26,7 @@ use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::lifecycle::notify_tool_finish;
 use crate::tools::lifecycle::notify_tool_start;
+use crate::tools::lifecycle::notify_tool_wait;
 use crate::tools::router::tool_log_payload;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use crate::util::error_or_panic;
@@ -292,6 +293,10 @@ impl ToolOutput for PostToolUseFeedbackOutput {
 
     fn tool_result_sources(&self) -> Option<codex_protocol::models::ToolResultSources> {
         self.original.tool_result_sources()
+    }
+
+    fn wait_handle(&self) -> Option<codex_tools::ToolWaitHandle> {
+        self.original.wait_handle()
     }
 }
 
@@ -778,6 +783,10 @@ impl ToolRegistry {
             Ok(result) => result.result.success_for_logging(),
             Err(_) => false,
         };
+        if success && let Some(result) = result.as_ref().ok() {
+            let wait_handle = result.result.wait_handle();
+            notify_tool_wait(&invocation, wait_handle).await;
+        }
         if let Some(analytics) = control_tool_analytics.as_mut() {
             analytics.finish(if success {
                 ControlToolCallStatus::Completed

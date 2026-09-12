@@ -83,6 +83,9 @@ fn running_in_wsl() -> bool {
 }
 
 pub(super) fn running_in_vscode_terminal() -> bool {
+    if term_program_is_vscode(std::env::var("TERM_PROGRAM").ok().as_deref()) {
+        return true;
+    }
     vscode_terminal_detected(
         std::env::var("TERM_PROGRAM").ok().as_deref(),
         windows_term_program().as_deref(),
@@ -118,7 +121,11 @@ fn windows_term_program() -> Option<String> {
 
 #[cfg(target_os = "linux")]
 fn read_windows_term_program() -> Option<String> {
-    let output = std::process::Command::new("cmd.exe")
+    if !running_in_wsl() {
+        return None;
+    }
+    let executable = codex_utils_path::system_executable("cmd.exe")?;
+    let output = std::process::Command::new(executable)
         .args(["/d", "/s", "/c", "set TERM_PROGRAM"])
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -203,12 +210,10 @@ fn keyboard_enhancement_flags(
     if realtime_voice_enabled && all_keys_supported {
         flags |= KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
         flags | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-    } else if running_in_tmux_session && matches!(tmux_extended_keys_format, Some("xterm")) {
-        if realtime_voice_enabled {
-            flags | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-        } else {
-            flags
-        }
+    } else if running_in_tmux_session && !matches!(tmux_extended_keys_format, Some("csi-u")) {
+        // xterm-format, unavailable, and unrecognized tmux probes are unsafe for
+        // release-event reporting (for example, Shift-Enter can be lost).
+        flags
     } else if matches!(terminal_name, TerminalName::Ghostty | TerminalName::Iterm2) {
         if realtime_voice_enabled {
             flags | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
@@ -288,11 +293,14 @@ fn read_tmux_extended_keys_format() -> Option<String> {
         return None;
     }
 
+    let executable = codex_utils_path::system_executable("tmux")?;
+    let path = codex_utils_path::system_path().ok()?;
     for args in [
         ["display-message", "-p", "#{extended-keys-format}"],
         ["show-options", "-gqv", "extended-keys-format"],
     ] {
-        let output = std::process::Command::new("tmux")
+        let output = std::process::Command::new(&executable)
+            .env("PATH", &path)
             .args(args)
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -533,7 +541,7 @@ mod tests {
     fn keyboard_enhancement_preserves_shift_enter_for_xterm_tmux() {
         assert_eq!(
             ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
-                TerminalName::Ghostty,
+                TerminalName::Kitty,
                 /*all_keys_supported*/ false,
                 /*running_in_tmux_session*/ true,
                 Some("xterm"),
@@ -637,7 +645,21 @@ mod tests {
                 /*tmux_extended_keys_format*/ None,
                 /*realtime_voice_enabled*/ true,
             ))),
-            "\x1b[>7u"
+            "\x1b[>5u"
+        );
+    }
+
+    #[test]
+    fn keyboard_enhancement_uses_conservative_flags_when_tmux_format_is_unknown() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Unknown,
+                /*all_keys_supported*/ false,
+                /*running_in_tmux_session*/ true,
+                /*tmux_extended_keys_format*/ None,
+                /*realtime_voice_enabled*/ false,
+            ))),
+            "\x1b[>5u"
         );
     }
 
@@ -665,7 +687,7 @@ mod tests {
                 Some("xterm"),
                 /*realtime_voice_enabled*/ true,
             ))),
-            "\x1b[>7u"
+            "\x1b[>5u"
         );
     }
 

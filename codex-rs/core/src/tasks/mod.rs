@@ -312,6 +312,12 @@ impl Session {
                 return Err(err);
             }
         };
+        // Standalone spawned tasks own their root unless the context already carries
+        // an inherited or recovered root. The metadata state is write-once, so this
+        // preserves inherited identity while covering background tasks.
+        turn_context
+            .turn_metadata_state
+            .set_root_turn_id(turn_context.sub_id.clone());
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
         self.start_task_with_active_turn_mode(
@@ -333,6 +339,11 @@ impl Session {
         input: Vec<TurnInput>,
         task: T,
     ) {
+        // Inherited or recovered roots are applied before task start. Otherwise this
+        // task owns its turn, including background work. Later mail cannot change it.
+        turn_context
+            .turn_metadata_state
+            .set_root_turn_id(turn_context.sub_id.clone());
         let _ = self.try_start_task(turn_context, input, task).await;
     }
 
@@ -353,6 +364,11 @@ impl Session {
         initial_pending_input: Vec<TurnInput>,
         task: T,
     ) -> CodexResult<()> {
+        // Explicit starts own their root; inherited roots are already present in the
+        // context and are preserved by the write-once metadata state.
+        turn_context
+            .turn_metadata_state
+            .set_root_turn_id(turn_context.sub_id.clone());
         self.start_task_with_active_turn_mode(
             turn_context,
             input,
@@ -492,12 +508,6 @@ impl Session {
             if let Some(id) = start_options.root_turn_id.clone() {
                 turn_context.turn_metadata_state.set_root_turn_id(id);
             }
-        } else if turn_context.turn_metadata_state.root_turn_id().is_none()
-            && let Some(root_turn_id) = start_options.root_turn_id.clone()
-        {
-            turn_context
-                .turn_metadata_state
-                .set_root_turn_id(root_turn_id);
         }
         let turn_state = if let Some(provisional_turn_state) = provisional_turn_state {
             provisional_turn_state
@@ -1300,6 +1310,13 @@ impl Session {
 
     pub(crate) async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
         self.services.unified_exec_manager.list_processes().await
+    }
+
+    pub(crate) async fn wait_for_background_terminal(&self, process_id: i32) {
+        self.services
+            .unified_exec_manager
+            .wait_for_process_exit(process_id)
+            .await;
     }
 
     pub(crate) async fn terminate_background_terminal(&self, process_id: i32) -> bool {

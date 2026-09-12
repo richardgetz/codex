@@ -2636,10 +2636,15 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Keep this fixture on one runtime thread so the scoped tracing subscriber also
+// observes events emitted by the spawned session loops. A thread-local
+// subscriber is not inherited by Tokio worker threads, and this test only uses
+// tracing as a queue-admission barrier.
+#[tokio::test(flavor = "current_thread")]
 async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> Result<()> {
     const SPAWN_WORKER_PROMPT: &str = "spawn the completion-routing worker";
     const SPAWN_REQUESTER_PROMPT: &str = "spawn the completion-routing requester";
+    const PRELUDE_PROMPT: &str = "acknowledge the completion-routing mailbox";
     const READ_RESULT_PROMPT: &str = "read the completion-routing worker result";
     const WORKER_INITIAL_TASK: &str = "finish the worker initial task";
     const REQUESTER_TASK: &str = "ask the sibling worker to do more";
@@ -2647,6 +2652,14 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
     const WORKER_CALL_ID: &str = "spawn-routing-worker";
     const REQUESTER_CALL_ID: &str = "spawn-routing-requester";
     const FOLLOWUP_CALL_ID: &str = "request-peer-followup";
+
+    let output: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(Level::INFO)
+        .with_writer(MockWriter::new(output))
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
 
     let server = start_mock_server().await;
     let mut builder = test_codex()
@@ -2888,17 +2901,88 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
         )
     );
 
-    // Fresh turn input is sampled before queued mail is drained. Let that first
-    // request complete successfully so the next request can include the result.
-    mount_sse_once_match(
+    // `TurnComplete` is broadcast before the child completion is forwarded to its
+    // parent. Send telemetry is emitted when the queue-only operation is accepted,
+    // while receive telemetry is emitted after the parent mailbox enqueues it. Wait
+    // for both distinct result submissions to reach that receive point before the
+    // root request below, so this assertion does not race mailbox materialization.
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let logs = String::from_utf8(output.lock().expect("buffer lock").clone())
+                .expect("logs should be UTF-8");
+            let result_send_ids = logs
+                .lines()
+                .filter(|line| {
+                    line.contains("kind=\"result\"")
+                        && line.contains("state=\"send\"")
+                        && line.contains(&format!("sender_thread_id={worker_thread_id}"))
+                        && line.contains(&format!("receiver_thread_id={root_thread_id}"))
+                })
+                .filter_map(|line| log_field(line, "communication_id").map(str::to_owned))
+                .take(4)
+                .collect::<Vec<_>>();
+            if result_send_ids.len() >= 2 {
+                let first_id = &result_send_ids[0];
+                let second_id = &result_send_ids[1];
+                let has_distinct_ids = first_id != second_id;
+                let all_submissions_received = if has_distinct_ids {
+                    let mut received_first = false;
+                    let mut received_second = false;
+                    for line in logs
+                        .lines()
+                        .filter(|line| line.contains("state=\"receive\""))
+                    {
+                        let Some(communication_id) = log_field(line, "communication_id") else {
+                            continue;
+                        };
+                        received_first |= communication_id == first_id.as_str();
+                        received_second |= communication_id == second_id.as_str();
+                        if received_first && received_second {
+                            break;
+                        }
+                    }
+                    received_first && received_second
+                } else {
+                    false
+                };
+                if all_submissions_received {
+                    break;
+                }
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("worker completion should be queued for the root");
+
+    // Queue-only child mail that arrives while the root is idle is recorded at the end of the
+    // next explicit turn, then becomes part of a subsequent model request. This preserves the
+    // final-answer boundary: the prelude consumes the queued mail without restarting its turn,
+    // while the original READ prompt below proves that the next request sees the follow-up text.
+    let prelude_result_request = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
-            body_contains(request, READ_RESULT_PROMPT)
+            body_contains(request, PRELUDE_PROMPT)
                 && !body_contains(request, "peer follow-up finished")
         },
-        sse(vec![ev_completed("resp-routing-root-before-mail")]),
+        sse(vec![
+            ev_response_created("resp-routing-root-prelude"),
+            ev_assistant_message("msg-routing-root-prelude", "mailbox acknowledged"),
+            ev_completed("resp-routing-root-prelude"),
+        ]),
     )
     .await;
+    test.submit_turn(PRELUDE_PROMPT).await?;
+    let prelude_request = prelude_result_request
+        .requests()
+        .into_iter()
+        .find(|request| {
+            request.body_json()["client_metadata"]["thread_id"] == json!(root_thread_id)
+                && request.body_contains_text(PRELUDE_PROMPT)
+        })
+        .expect("root prelude request");
+    assert!(!prelude_request.body_contains_text("peer follow-up finished"));
+
     let root_result_request = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {

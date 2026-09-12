@@ -20,6 +20,8 @@ use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
+use codex_extension_api::ToolStartInput;
+use codex_extension_api::ToolWaitInput;
 use codex_extension_api::TurnAbortInput;
 use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnLifecycleContributor;
@@ -27,6 +29,7 @@ use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_otel::MetricsClient;
 use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -190,6 +193,7 @@ where
     fn on_thread_stop<'a>(&'a self, input: ThreadStopInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             if let Some(runtime) = goal_runtime_handle(input.thread_store) {
+                runtime.cancel_background_wait().await;
                 self.goal_service.unregister_runtime(&runtime);
             }
         })
@@ -229,6 +233,8 @@ where
                 return;
             }
 
+            let intent_generation = runtime.begin_background_wait_turn(input.turn_id).await;
+
             if let Err(err) = self
                 .state_dbs
                 .thread_goals()
@@ -244,6 +250,7 @@ where
                 input.collaboration_mode.mode,
                 input.token_usage_at_turn_start,
             );
+            accounting.set_turn_intent_generation(input.turn_id, intent_generation);
             if matches!(
                 input.collaboration_mode.mode,
                 codex_protocol::config_types::ModeKind::Plan
@@ -271,6 +278,23 @@ where
         })
     }
 
+    fn on_item_completed<'a>(
+        &'a self,
+        thread_store: &'a ExtensionData,
+        turn_store: &'a ExtensionData,
+        item: &'a TurnItem,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if let Some(runtime) = goal_runtime_handle(thread_store)
+                && runtime.is_enabled()
+            {
+                runtime
+                    .accounting_state()
+                    .record_item(turn_store.level_id(), item);
+            }
+        })
+    }
+
     fn on_turn_stop<'a>(&'a self, input: TurnStopInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
@@ -281,6 +305,9 @@ where
             }
 
             let turn_id = input.turn_store.level_id();
+            let intent_generation = runtime
+                .accounting_state()
+                .intent_generation_for_turn(turn_id);
             if let Some(expected_goal_id) =
                 runtime.accounting_state().execution_failure_goal(turn_id)
                 && let Err(err) = runtime
@@ -297,8 +324,17 @@ where
                 return;
             }
             if let Err(err) = runtime
-                .account_active_goal_progress(
+                .stop_active_goal_for_turn(turn_id, ActiveGoalStopReason::EmptyResponse)
+                .await
+            {
+                input.thread_store.remove::<TurnStartOptions>();
+                tracing::warn!("failed to stop goal after empty responses for {turn_id}: {err}");
+                return;
+            }
+            if let Err(err) = runtime
+                .account_active_goal_progress_for_intent(
                     turn_id,
+                    intent_generation,
                     &format!("{turn_id}:turn-stop"),
                     codex_state::GoalAccountingMode::ActiveOnly,
                     BudgetLimitedGoalDisposition::ClearActive,
@@ -334,11 +370,13 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
+            runtime.accounting_state().reset_empty_responses();
             if !runtime.is_enabled() {
                 return;
             }
 
             let turn_id = input.turn_store.level_id();
+            runtime.invalidate_background_wait().await;
             input.thread_store.remove::<TurnStartOptions>();
             if let Err(err) = runtime
                 .account_active_goal_progress(
@@ -364,6 +402,7 @@ where
                 return;
             };
 
+            runtime.accounting_state().reset_empty_responses();
             let reason = match input.error {
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
                 // The turn has ended because the error was non-retryable or its
@@ -418,6 +457,38 @@ impl<C> ToolLifecycleContributor for GoalExtension<C>
 where
     C: Send + Sync + 'static,
 {
+    fn on_tool_start<'a>(&'a self, input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+                return;
+            };
+            if runtime.is_enabled() {
+                runtime
+                    .capture_tool_wait_scope(input.turn_store, input.call_id)
+                    .await;
+            }
+        })
+    }
+
+    fn on_tool_wait<'a>(&'a self, input: ToolWaitInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+                return;
+            };
+            if !runtime.is_enabled() {
+                return;
+            }
+            runtime
+                .register_background_wait(
+                    input.turn_id,
+                    input.turn_store,
+                    input.call_id,
+                    input.wait_handle,
+                )
+                .await;
+        })
+    }
+
     fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(async move {
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {

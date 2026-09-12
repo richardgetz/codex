@@ -26,6 +26,7 @@ codex-backend-client = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
+codex-attachment-store = { workspace = true }
 codex-client = { workspace = true }
 codex-code-mode = { workspace = true }
 codex-connectors = { workspace = true }
@@ -105,7 +106,7 @@ rmcp = { workspace = true, default-features = false, features = [
     "server",
 ] }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 sha1 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }

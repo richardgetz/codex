@@ -29,6 +29,7 @@ pub(crate) mod request_plugin_install_spec;
 mod request_user_input;
 mod request_user_input_async;
 pub(crate) mod request_user_input_spec;
+mod send_message_to_user_async;
 mod send_user_message_async;
 pub(crate) mod shell_spec;
 mod sleep;
@@ -41,6 +42,10 @@ mod view_image;
 pub(crate) mod view_image_spec;
 mod wait_for_environment;
 
+#[cfg(test)]
+#[path = "argument_parser_tests.rs"]
+mod argument_parser_tests;
+
 use codex_file_system::FileSystemSandboxContext;
 use codex_sandboxing::policy_transforms::materialize_additional_permissions_with_context;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
@@ -48,9 +53,11 @@ use codex_sandboxing::policy_transforms::normalize_additional_permissions_with_c
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use codex_utils_path_uri::PathUri;
-use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::Map;
 use serde_json::Value;
+use serde_json::value::RawValue;
+use std::collections::BTreeMap;
 
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::function_tool::FunctionCallError;
@@ -76,6 +83,7 @@ pub use request_permissions::RequestPermissionsHandler;
 pub use request_plugin_install::RequestPluginInstallHandler;
 pub use request_user_input::RequestUserInputHandler;
 pub use request_user_input_async::RequestUserInputAsyncHandler;
+pub use send_message_to_user_async::SendMessageToUserAsyncHandler;
 pub use send_user_message_async::SendUserMessageAsyncHandler;
 pub use sleep::SleepHandler;
 pub use test_sync::TestSyncHandler;
@@ -87,13 +95,158 @@ pub use view_image::ViewImageHandler;
 pub(crate) use wait_for_environment::WaitForEnvironmentHandler;
 pub use wait_for_environment::WaitForEnvironmentToolConfig;
 
+const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_992;
+
 pub(crate) fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>
 where
-    T: for<'de> Deserialize<'de>,
+    T: DeserializeOwned,
 {
     serde_json::from_str(arguments).map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err}"))
     })
+}
+
+/// Parses tool arguments while accepting decimal/exponent spellings that are
+/// exactly integral for selected integer fields. This is scoped to tools whose schemas
+/// advertise a generic JSON number while their Rust arguments require an
+/// integer (for example, sleep and unified exec wait durations).
+pub(crate) fn parse_arguments_with_integral_float_fallback<T>(
+    arguments: &str,
+) -> Result<T, FunctionCallError>
+where
+    T: DeserializeOwned,
+{
+    match serde_json::from_str(arguments) {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            let error_message = error.to_string();
+            let Ok(mut values) = serde_json::from_str::<BTreeMap<String, Box<RawValue>>>(arguments)
+            else {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "failed to parse function arguments: {error_message}"
+                )));
+            };
+            normalize_integral_float_values(&mut values);
+            let Ok(normalized) = serde_json::to_string(&values) else {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "failed to parse function arguments: {error_message}"
+                )));
+            };
+            serde_json::from_str(&normalized).map_err(|_| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to parse function arguments: {error_message}"
+                ))
+            })
+        }
+    }
+}
+
+fn normalize_integral_float_values(values: &mut BTreeMap<String, Box<RawValue>>) {
+    for (key, value) in values.iter_mut() {
+        if !integer_argument_key(key) {
+            continue;
+        }
+        let Some(normalized) = normalize_integral_number_text(value.get()) else {
+            continue;
+        };
+        let Some(magnitude) = normalized
+            .strip_prefix('-')
+            .unwrap_or(&normalized)
+            .parse::<u64>()
+            .ok()
+        else {
+            continue;
+        };
+        if magnitude > MAX_SAFE_INTEGER {
+            continue;
+        }
+        let Ok(raw) = RawValue::from_string(normalized) else {
+            continue;
+        };
+        *value = raw;
+    }
+}
+
+fn integer_argument_key(key: &str) -> bool {
+    matches!(
+        key,
+        "duration_ms"
+            | "yield_time_ms"
+            | "timeout_ms"
+            | "session_id"
+            | "max_output_tokens"
+            | "max_tokens"
+    )
+}
+
+/// Returns a canonical integer spelling only when the JSON number is exactly
+/// integral. Decimal/exponent parsing stays textual so rounded f64 values do
+/// not silently turn unsafe model output into a different integer.
+fn normalize_integral_number_text(text: &str) -> Option<String> {
+    let (mantissa, exponent) = match text.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().ok()?),
+        None => (text, 0),
+    };
+    let (negative, mantissa) = mantissa
+        .strip_prefix('-')
+        .map_or((false, mantissa), |mantissa| (true, mantissa));
+    let (integer, fraction) = mantissa
+        .split_once('.')
+        .map_or((mantissa, ""), |parts| parts);
+    if integer.is_empty()
+        || !integer.chars().all(|character| character.is_ascii_digit())
+        || !fraction.chars().all(|character| character.is_ascii_digit())
+    {
+        return None;
+    }
+    let mut digits = String::with_capacity(integer.len() + fraction.len());
+    digits.push_str(integer);
+    digits.push_str(fraction);
+    let decimal_position = integer.len() as i64 + i64::from(exponent);
+    let Some(first_nonzero) = digits
+        .as_bytes()
+        .iter()
+        .position(|character| *character != b'0')
+    else {
+        return Some("0".to_string());
+    };
+    let significant_digits = &digits[first_nonzero..];
+    let significant_decimal_position = decimal_position - first_nonzero as i64;
+    if significant_decimal_position <= 0 {
+        return None;
+    }
+    // Integral values above 2^53 are rejected by the safe integer check below,
+    // so avoid allocating an unbounded zero suffix for huge exponents here.
+    if significant_decimal_position > 16 {
+        return None;
+    }
+    let decimal_position = usize::try_from(significant_decimal_position).ok()?;
+    if decimal_position < significant_digits.len()
+        && significant_digits[decimal_position..]
+            .chars()
+            .any(|character| character != '0')
+    {
+        return None;
+    }
+    let integer_end = decimal_position.min(significant_digits.len());
+    let mut integer_digits = significant_digits[..integer_end].to_string();
+    if decimal_position > significant_digits.len() {
+        integer_digits.extend(std::iter::repeat_n(
+            '0',
+            decimal_position - significant_digits.len(),
+        ));
+    }
+    let normalized = if negative {
+        format!("-{integer_digits}")
+    } else {
+        integer_digits
+    };
+    let magnitude = normalized
+        .strip_prefix('-')
+        .unwrap_or(&normalized)
+        .parse::<u64>()
+        .ok()?;
+    (magnitude <= MAX_SAFE_INTEGER).then_some(normalized)
 }
 
 fn resolve_sandbox_permissions(
@@ -155,10 +308,10 @@ fn parse_arguments_with_base_path<T>(
     base_path: &AbsolutePathBuf,
 ) -> Result<T, FunctionCallError>
 where
-    T: for<'de> Deserialize<'de>,
+    T: DeserializeOwned,
 {
     let _guard = AbsolutePathBufGuard::new(base_path);
-    parse_arguments(arguments)
+    parse_arguments_with_integral_float_fallback(arguments)
 }
 
 fn resolve_tool_environment<'a>(
@@ -413,7 +566,7 @@ mod tests {
     use codex_protocol::permissions::FileSystemSpecialPath;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::GranularApprovalConfig;
-    use codex_sandboxing::policy_transforms::intersect_permission_profiles;
+    use codex_sandboxing::policy_transforms::intersect_permission_profiles_with_context;
     use codex_sandboxing::policy_transforms::merge_permission_profiles;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_path_uri::PathUri;
@@ -583,21 +736,21 @@ mod tests {
             }),
             ..Default::default()
         };
-        let stored_grant = intersect_permission_profiles(
+        let cwd_uri = PathUri::from_host_native_path(cwd.path()).expect("cwd URI");
+        let stored_grant = intersect_permission_profiles_with_context(
             requested_permissions.clone(),
             requested_permissions.clone(),
-            cwd.path(),
+            &local_context(&cwd_uri),
         );
         let effective_permissions =
             merge_permission_profiles(Some(&requested_permissions), Some(&stored_grant))
                 .expect("merged permissions");
-        let cwd = PathUri::from_host_native_path(cwd.path()).expect("cwd URI");
 
         assert_eq!(
             preapproved_permission_profile(
                 &effective_permissions,
                 &stored_grant,
-                &local_context(&cwd),
+                &local_context(&cwd_uri),
             ),
             Some(stored_grant)
         );

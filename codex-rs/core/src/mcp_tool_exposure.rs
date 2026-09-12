@@ -37,6 +37,7 @@ impl McpHandlerCache {
     pub(crate) fn append_mcp_tools(
         &self,
         binding: &McpBinding,
+        mcp_tools: &[McpToolInfo],
         config: &Config,
         apps_enabled: bool,
         mcp_server_catalog: &codex_mcp::ResolvedMcpCatalog,
@@ -60,7 +61,7 @@ impl McpHandlerCache {
             handlers: HashMap::new(),
         });
         append_mcp_tools(
-            binding.tools(),
+            mcp_tools,
             config,
             apps_enabled,
             mcp_server_catalog,

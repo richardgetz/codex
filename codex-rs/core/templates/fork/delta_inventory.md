@@ -20,7 +20,52 @@ release or merge rules.
 
 ## Unreleased
 
+- Fork distribution and release contract:
+  `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
+  tags, stable-triggered releases, Apple Silicon lane, and migration-number
+  policy remain fork-owned (see the release and migration docs).
+- macOS Seatbelt GPU/Metal base-policy allowances preserve focused IOKit,
+  service, and sysctl access for sandboxed MPS/MLX/PyTorch workloads with
+  deny-wildcard regression coverage.
+- Rick-owned `enable_mcp_approvals` feature toggles and `(rick)` owner labels
+  remain on fork-only experimental help and announcements.
+- Native GPT-Live voice in the TUI remains fork-owned: WebRTC V3 transport,
+  microphone/speaker controls, voice rotation, handoff classification and
+  preamble policy, bounded diagnostics/history, and realtime configuration.
+- Named exec-policy rulesets (`overlay`/`exclusive`) remain selectable through
+  app-server `execPolicy` and server config.
+- Fork-aware help context and fork-only feature labeling keep
+  `docs/fork-differences.md` current and identify Rick-owned metadata.
+- Bounded fork-help context keeps a compact `/account <alias>` and
+  `/orchestrator-memory-forget <needle>` command index ahead of the
+  8,000-token middle-truncated inventory so essential fork commands remain
+  discoverable while the full inventory stays the source of truth.
+- Initial developer context keeps extension Skills world-state sections ahead of
+  Apps and Plugins usage guidance, while preserving the existing App enablement,
+  model-capability, and connector filtering rules.
+- Cancellation at a tool activity or parallel-dispatch boundary returns the
+  normal aborted response; when cancellation and a pre-admission dispatch are
+  both ready, cancellation claims the terminal outcome first while already
+  claimed completions and genuine task-join failures remain observable.
+- TUI team waits publish the waiting header before updating interruption hints,
+  and collaboration-mode discovery keeps an empty server catalog empty instead
+  of synthesizing built-in presets; visible modes still follow server filtering.
+- Main-checkout Rust build coordination: one designated build owner runs
+  serialized Cargo/`just` validation against one shared target/cache after
+  source integration; worker worktrees remain source-only, and active
+  targets/worktrees are preserved.
+- Fork-preserved update-plan surface:
+  `[tools.update_plan].enabled` remains default-on for stable compatibility;
+  explicit `false` still removes `update_plan` from registered and visible
+  tools, while explicit `true` retains it. The schema and config tests pin
+  this default so upstream opt-in refreshes do not silently change the fork.
+
 - Opt-in Lead/Worker model teams:
+  - Team On is the user's explicit in-thread authorization to delegate
+    substantive in-scope implementation, testing, research, and applicable
+    skill work; Lead balance `1` favors Worker handoff with minimal optional
+    Lead oversight while task-specific user, AGENTS.md, skill, scope,
+    concurrency, depth, and approval restrictions remain authoritative.
   - `[team]` can define exactly one Lead and one Worker model/effort profile;
     profiles remain disabled for new sessions unless `team.enabled = true`.
   - `/team on`, `/team off`, and `/team status` switch and report the live
@@ -94,6 +139,27 @@ release or merge rules.
     finish with their captured settings. The legacy V1 `multi_agents.send_input`
     surface retains its explicit turn-input semantics and can wake a target;
     those task inputs are not reclassified as routine progress.
+  - Automatic Goal continuations use the same Lead admission boundary and stay
+    parked while direct Workers remain active; completion or actionable input
+    rechecks the Goal without adding a polling turn.
+  - Ordinary Goal continuations park while the active Goal turn owns tracked
+    unified-exec processes, wake once exact processes terminate or are
+    released. A monotonic intent generation rejects stale terminal callbacks
+    after same-ID objective edits or Goal replacement, while turn/Goal
+    cancellation and user input invalidate waiters without stopping the
+    external process.
+  - Selected integer-valued wait arguments accept exactly integral decimal or
+    exponent spellings using their raw numeric lexemes; nested `Value` fields,
+    fractional values, unsafe integers, and handler bounds remain unchanged.
+  - Backports upstream Goal empty-continuation protection from PR #44320:
+    automatically admitted Goal turns with no non-commentary activity block
+    after three consecutive empty responses, while tool, reasoning, user,
+    objective, and error activity resets the streak. Tracked external waits
+    remain event-driven and do not admit a continuation until their wake.
+  - Backports upstream explicit pause semantics from PR #44290: `update_goal`
+    accepts `paused` only for an explicit user request, accounts final progress
+    with budget limits taking precedence, and keeps resume and system-limit
+    statuses host-controlled.
   - A Team Worker entering `wait_agent` with no active child dependency or
     queued activity queues one bounded handoff to its immediate parent. The
     handoff requests review or follow-up without marking the Worker complete;
@@ -145,6 +211,9 @@ release or merge rules.
     `minimumRemainingPercent` stops automatic continuation, loopbacks, hooks,
     and queued automatic work before the configured provider-window floor is
     crossed. Explicit user turns remain allowed.
+  - Raw response-item injections received after a final answer still reopen the
+    active turn for one follow-up request, while remaining automatic input for
+    usage-floor admission and never bypassing `minimumRemainingPercent`.
   - The model receives bounded advisory status for provider usage windows,
     including remaining percentage and reset time for 5-hour, weekly, and
     other known windows.
@@ -180,6 +249,9 @@ release or merge rules.
     may finish at a cooperative boundary; external subprocesses or remote jobs
     are not suspended or replayed. Waiting for approval, user input, usage, or
     another agent is quiescent and reports `paused`.
+  - Cancellation that arrives while a tool is waiting at an activity or
+    parallel-dispatch boundary returns the normal aborted tool response instead
+    of leaking the internal `TurnAborted` boundary error.
   - App-server v2 exposes `thread/activity/pause`,
     `thread/activity/continue`, `thread/activity/read`, and the ephemeral
     `thread/activity/updated` notification with structured activity, pause
@@ -212,6 +284,12 @@ release or merge rules.
     only for the selected loaded tree, ignores `NotLoaded`, ephemeral, or
     temporary helper threads, and rejects unknown/unloaded child activity until
     a fresh `thread/started`/`turn/started` admits it.
+  - Collab spawn and V2 `SubAgentActivity` start/completion events locally admit
+    their parent edges before persisted metadata arrives. Same-root metadata
+    refreshes retain a provisional edge for a bounded grace window, then keep it
+    only while an active direct or nested Worker entry remains; idle or absent
+    omitted edges are pruned without polling. This keeps unfinished direct and
+    nested Workers visible when `ThreadStarted` metadata is delayed.
 
 - Recursive per-response usage accounting:
   - App-server v2 sends the legacy context-window counters through
@@ -382,6 +460,9 @@ release or merge rules.
     servers plus unstarted lazy servers, not only successful tool listings, so
     eager MCPs remain visible even when their current tool list is temporarily
     unavailable.
+  - Cached normal tool-plan construction registers the complete per-step MCP
+    inventory, including recovered placeholders, while retaining handler reuse
+    keyed to the immutable MCP binding.
 - Built-in scratchpad:
   - Namespace: `scratchpad`
   - Default mode exposes it by default; Plan mode does not.
@@ -520,6 +601,30 @@ release or merge rules.
 
 ## Merge Checklist
 
+- Verify upstream refreshes preserve the main-checkout, single-owner,
+  serialized Cargo workflow, source-only worker worktrees, integrated-source
+  freeze with exact-revision handoff, and preservation of active
+  targets/worktrees.
+
+- Verify the fork distribution/release contract (`@rickgetz/codex`,
+  `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
+  Apple Silicon releases) and migration-number policy remain intact.
+- Verify the macOS Seatbelt GPU/Metal base-policy allowances and focused
+  regression tests survive upstream policy changes without wildcard access.
+- Verify `enable_mcp_approvals` remains a Rick-owned toggle and fork-only
+  experimental help/announcements retain the `(rick)` owner label.
+- Verify GPT-Live voice/device controls, WebRTC V3 handoff classification,
+  preamble behavior, bounded diagnostics/history, and realtime config remain
+  available in the native TUI.
+- Verify named exec-policy rulesets retain their `overlay`/`exclusive`
+  semantics and app-server `execPolicy` selection.
+- Verify fork-aware help continues to load the checked-in fork differences and
+  `(rick)` feature labeling remains applied to fork-only metadata.
+- Verify fork-help remains bounded at 8,000 tokens while its compact command
+  index survives middle truncation and the checked-in inventory remains the
+  source of truth.
+- Verify initial context preserves Skills → Apps → Plugins ordering without
+  changing App enablement or connector filtering.
 - Verify `[team]` rejects enabled configurations without both complete profiles,
   remains disabled by default, and `/team` state survives resume/fork without
   mutating global config. Verify Lead routing, Worker routing for all delegated
@@ -529,6 +634,14 @@ release or merge rules.
   supported catalog pairs, Team Off remains unchanged during profile edits,
   updated profiles apply to newly spawned Workers, and in-flight Workers stay
   pinned to their captured profile.
+  Verify Team On authorizes substantive in-scope delegation by default and
+  balance `1` favors Worker handoff without weakening explicit task-specific
+  delegation restrictions or Worker completeness, required checks, approvals,
+  scope, concurrency, and depth limits.
+- Verify collab spawn and `SubAgentActivity` start/completion edges admit direct
+  and nested Worker activity before persisted metadata, preserve active lineages
+  through delayed `ThreadStarted` delivery, and prune omitted idle/absent edges
+  after the 30-second grace window without adding polling.
 - Verify `[team.lead].balance` defaults to `3`, accepts only `1..5`, rejects
   Worker updates, and persists through session snapshots, resume, and fork.
   Verify `/team balance` renders all five approved labels and typed values,
@@ -563,6 +676,27 @@ release or merge rules.
   idle/deadline state. Verify Team Off serializes the final automatic-turn
   admission boundary, drops stale trigger mail while retaining queue-only
   communication, and permits already-admitted in-flight turns to finish.
+- Verify automatic Goal continuations share the Lead admission boundary, remain
+  parked while direct Workers are active, and recheck after Worker completion or
+  actionable input without introducing a polling turn.
+- Verify ordinary Goal external-wait parking attributes only exact managed
+  unified-exec process IDs to the active Goal turn, wakes once on terminal or
+  released processes, deduplicates concurrent continuations, and uses a
+  monotonic intent generation to ignore stale terminal errors after same-ID
+  objective edits or Goal replacement. Turn/Goal replacement, cancellation,
+  and user input invalidate stale waiters while leaving external processes
+  alive.
+- Verify selected integer wait arguments accept only exactly integral decimal or
+  exponent spellings from preserved raw lexemes, while nested `Value` fields,
+  fractional/unsafe/overflow values, and existing handler bounds remain
+  unchanged.
+- Verify the upstream Goal empty-response breaker (PR #44320) counts only
+  host-admitted automatic Goal turns, blocks after three consecutive empty
+  final responses, resets on non-commentary activity/user input/objective or
+  error changes, and preserves tracked external wait parking and wake behavior.
+- Verify the upstream explicit pause semantics (PR #44290): `update_goal`
+  accepts `paused` only for an explicit user request, accounts final progress
+  with budget-limited precedence, and rejects resume and system-limit statuses.
 - Verify a dependency-free Team Worker `wait_agent` queues one bounded handoff
   to its immediate parent without marking completion, suppresses repeated
   waits in one turn, rearms after meaningful parent input or new work, queues
@@ -626,7 +760,11 @@ release or merge rules.
 - Verify cancelled MCP startup can retry, a plain unavailable MCP placeholder
   call can recover the configured server namespace instead of permanently
   reporting the tool unavailable, and eager MCP servers remain listed in the
-  model-visible inventory even if tool listing is temporarily unavailable.
+  model-visible inventory even if tool listing is temporarily unavailable;
+  confirm the cached normal tool-plan path retains recovered placeholders.
+- Verify the fork-preserved `update_plan` default remains enabled when omitted
+  or given an empty table, while explicit `enabled = false` removes the tool
+  from both registered and model-visible sets.
 - Verify app-server `thread/control/set` rejects Orchestrator mode.
 - Verify built-in `scratchpad` remains available in Default mode, omitted from
   Plan mode by default, and `open_scratchpad` uses the thread id when no id is
@@ -653,7 +791,10 @@ release or merge rules.
 - Verify per-thread `usagePolicy` remains disabled by default, persists through
   resume and all fork modes, exposes bounded provider-window status to models,
   and only auto-resumes resettable provider limits while respecting the
-  configured continuation floor. Verify the TUI default and interval bounds,
+  configured continuation floor. Verify raw response-item injections reopen an
+  active turn after a final answer without being treated as explicit-user
+  authorization that bypasses the continuation floor. Verify the TUI default
+  and interval bounds,
   known-reset scheduling, hourly fallback account refresh, floor-paused work,
   `/continue` wake/report behavior, and cancellation/manual-stop preservation.
 - Verify `/pause` and `/continue` affect only the selected Lead tree, reconcile
@@ -668,7 +809,15 @@ release or merge rules.
   root, keeps the title aligned with that projection, animates only actual
   work (and in-flight Pausing), honors reduced-motion settings, and renders
   the static `Paused · Lead + N workers · /continue to resume` row. Verify
-  the running two-row Team/Workers/Subagents layout, direct Worker cap
+  cancellation before activity or parallel-dispatch admission returns one
+  normal aborted tool response without surfacing an internal `TurnAborted`
+  fatal error, including the ready/ready arbitration boundary; verify a
+  terminal completion claimed before cancellation is preserved and genuine
+  dispatch join failures still surface.
+- Verify the TUI sets its waiting header before interrupt-hint updates, and
+  leaves an empty server collaboration-mode catalog empty while retaining only
+  visible server-provided modes.
+  Verify the running two-row Team/Workers/Subagents layout, direct Worker cap
   denominator, nested parent metadata hydration, and 30-second ordinary-wait
   grace: repeated waits must not extend it, expiry must redraw without a new
   event or animation, and approval/user-input/usage-limit/error/completion,
@@ -676,6 +825,10 @@ release or merge rules.
   over delayed activity until the next `turn/started`, metadata-only root
   removal prunes descendants, reset/reconnect rebuilds only the selected loaded
   tree, and ephemeral/temporary helper threads do not enter the projection.
+  Verify collab spawn and V2 `SubAgentActivity` start/completion events admit
+  parent edges before metadata refresh, same-root refreshes retain a provisional
+  edge for a bounded grace window, and later omissions prune stale/unloaded
+  edges.
   Verify `codex-mcp-server`
   handles `ThreadActivityUpdated` exhaustively, forwards the notification, and
   continues waiting for real turn completion.

@@ -1,21 +1,30 @@
+//! Server collaboration-mode discovery and TUI-visible selection. Missing discovery adds no presets.
+
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
+
+use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CollaborationModeListParams;
+use codex_app_server_protocol::CollaborationModeListResponse;
+use codex_app_server_protocol::RequestId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
+use std::time::Duration;
 
 use crate::model_catalog::ModelCatalog;
 
 fn filtered_presets(
-    _model_catalog: &ModelCatalog,
-    collaboration_modes_config: CollaborationModesConfig,
+    model_catalog: &ModelCatalog,
+    _collaboration_modes_config: CollaborationModesConfig,
 ) -> Vec<CollaborationModeMask> {
-    builtin_collaboration_mode_presets(collaboration_modes_config)
-        .into_iter()
+    model_catalog
+        .collaboration_modes
+        .iter()
         .filter(|mask| mask.mode.is_some_and(ModeKind::is_tui_visible))
+        .cloned()
         .collect()
 }
 
-#[cfg(test)]
 pub(crate) fn default_mask(model_catalog: &ModelCatalog) -> Option<CollaborationModeMask> {
     default_mask_with_config(model_catalog, CollaborationModesConfig::default())
 }
@@ -32,7 +41,6 @@ pub(crate) fn default_mask_with_config(
         .or_else(|| presets.into_iter().next())
 }
 
-#[cfg(test)]
 pub(crate) fn mask_for_kind(
     model_catalog: &ModelCatalog,
     kind: ModeKind,
@@ -90,4 +98,48 @@ pub(crate) fn plan_mask_with_config(
     collaboration_modes_config: CollaborationModesConfig,
 ) -> Option<CollaborationModeMask> {
     mask_for_kind_with_config(model_catalog, ModeKind::Plan, collaboration_modes_config)
+}
+
+/// Cycle to the next server-discovered or configured collaboration mode.
+pub(crate) fn next_mask(
+    model_catalog: &ModelCatalog,
+    current: Option<&CollaborationModeMask>,
+) -> Option<CollaborationModeMask> {
+    next_mask_with_config(model_catalog, current, CollaborationModesConfig::default())
+}
+
+/// Discovery is optional even on servers that accept the rest of TUI bootstrap.
+pub(crate) async fn list(request_handle: AppServerRequestHandle) -> Vec<CollaborationModeMask> {
+    let response = tokio::time::timeout(
+        Duration::from_secs(/*secs*/ 2),
+        request_handle.request_typed::<CollaborationModeListResponse>(
+            ClientRequest::CollaborationModeList {
+                request_id: RequestId::String(format!(
+                    "collaboration-mode-list-{}",
+                    uuid::Uuid::new_v4()
+                )),
+                params: CollaborationModeListParams::default(),
+            },
+        ),
+    )
+    .await;
+    match response {
+        Ok(Ok(response)) => response
+            .data
+            .into_iter()
+            .map(|mask| CollaborationModeMask {
+                name: mask.name,
+                mode: mask.mode,
+                model: mask.model,
+                reasoning_effort: mask.reasoning_effort,
+                // The RPC intentionally omits prompts. Clear restored overrides so the server
+                // supplies its current instructions when this mode is selected.
+                developer_instructions: Some(None),
+            })
+            .collect(),
+        _ => {
+            tracing::warn!("optional collaborationMode/list discovery unavailable");
+            Vec::new()
+        }
+    }
 }
