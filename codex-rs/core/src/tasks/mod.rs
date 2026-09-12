@@ -1312,6 +1312,13 @@ impl Session {
         self.services.unified_exec_manager.list_processes().await
     }
 
+    pub(crate) async fn wait_for_background_terminal(&self, process_id: i32) {
+        self.services
+            .unified_exec_manager
+            .wait_for_process_exit(process_id)
+            .await;
+    }
+
     pub(crate) async fn terminate_background_terminal(&self, process_id: i32) -> bool {
         self.services
             .unified_exec_manager

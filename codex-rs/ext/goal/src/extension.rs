@@ -20,6 +20,8 @@ use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
+use codex_extension_api::ToolStartInput;
+use codex_extension_api::ToolWaitInput;
 use codex_extension_api::TurnAbortInput;
 use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnLifecycleContributor;
@@ -190,6 +192,7 @@ where
     fn on_thread_stop<'a>(&'a self, input: ThreadStopInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             if let Some(runtime) = goal_runtime_handle(input.thread_store) {
+                runtime.cancel_background_wait().await;
                 self.goal_service.unregister_runtime(&runtime);
             }
         })
@@ -228,6 +231,8 @@ where
             if !runtime.is_enabled() {
                 return;
             }
+
+            runtime.begin_background_wait_turn(input.turn_id).await;
 
             if let Err(err) = self
                 .state_dbs
@@ -339,6 +344,7 @@ where
             }
 
             let turn_id = input.turn_store.level_id();
+            runtime.invalidate_background_wait().await;
             input.thread_store.remove::<TurnStartOptions>();
             if let Err(err) = runtime
                 .account_active_goal_progress(
@@ -364,6 +370,7 @@ where
                 return;
             };
 
+            runtime.invalidate_background_wait().await;
             let reason = match input.error {
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
                 // The turn has ended because the error was non-retryable or its
@@ -418,6 +425,38 @@ impl<C> ToolLifecycleContributor for GoalExtension<C>
 where
     C: Send + Sync + 'static,
 {
+    fn on_tool_start<'a>(&'a self, input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+                return;
+            };
+            if runtime.is_enabled() {
+                runtime
+                    .capture_tool_wait_scope(input.turn_store, input.call_id)
+                    .await;
+            }
+        })
+    }
+
+    fn on_tool_wait<'a>(&'a self, input: ToolWaitInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+                return;
+            };
+            if !runtime.is_enabled() {
+                return;
+            }
+            runtime
+                .register_background_wait(
+                    input.turn_id,
+                    input.turn_store,
+                    input.call_id,
+                    input.wait_handle,
+                )
+                .await;
+        })
+    }
+
     fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(async move {
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {

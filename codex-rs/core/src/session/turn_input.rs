@@ -393,6 +393,29 @@ async fn start_if_idle(
         }
     }
 
+    // Goal continuations share the Team Lead's idle admission boundary with
+    // assignment updates. Keep a Lead parked while direct Workers are still
+    // active; actionable Worker or user input uses a different trigger path.
+    let _team_lead_goal_admission =
+        if kind == TurnStartKind::Automatic && start.turn_trigger.as_deref() == Some("goal") {
+            let guard = session.team_lead_turn_admission.lock().await;
+            if session.is_team_lead().await
+                && session
+                    .services
+                    .agent_control
+                    .active_direct_worker_count(session.thread_id)
+                    .await
+                    > 0
+            {
+                return Ok(TurnInputSubmission::NotSubmitted {
+                    reason: NotSubmittedReason::NotIdle,
+                });
+            }
+            Some(guard)
+        } else {
+            None
+        };
+
     let turn_state = {
         let mut active_turn = session.active_turn.lock().await;
         if active_turn.is_some() {

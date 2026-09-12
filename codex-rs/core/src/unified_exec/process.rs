@@ -196,6 +196,19 @@ impl UnifiedExecProcess {
         }
     }
 
+    /// Waits until this process reaches a terminal state.
+    ///
+    /// A cloned watch receiver avoids a missed notification when the process
+    /// exits between the initial state check and waiter registration.
+    pub(super) async fn wait_for_exit(&self) {
+        let mut state_rx = self.state_rx.clone();
+        while !self.has_exited() {
+            if state_rx.changed().await.is_err() {
+                break;
+            }
+        }
+    }
+
     pub(super) fn exit_code(&self) -> Option<i32> {
         if self.timed_out() {
             return Some(124);

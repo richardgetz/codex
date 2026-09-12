@@ -1,13 +1,17 @@
+use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use codex_core::CodexThread;
 use codex_core::StartIfIdleSubmission;
 use codex_core::ThreadManager;
 use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
+use codex_extension_api::ExtensionData;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ThreadGoal;
@@ -21,8 +25,12 @@ use crate::metrics::GoalMetrics;
 use crate::steering::continuation_steering_item;
 use crate::steering::objective_updated_steering_item;
 use crate::tool::protocol_goal_from_state;
+use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio::sync::SemaphorePermit;
+use tokio::sync::watch;
+
+use codex_tools::ToolWaitHandle;
 
 #[derive(Clone)]
 pub struct GoalRuntimeHandle {
@@ -54,6 +62,73 @@ struct GoalRuntimeInner {
     enabled: AtomicBool,
     tools_available_for_thread: bool,
     goal_state_lock: Semaphore,
+    background_wait: Mutex<GoalBackgroundWait>,
+}
+
+/// Tracks background work emitted by the active goal turn. The generation and
+/// cancellation channel invalidate watchers when a new turn or goal state
+/// wins the race with an exit notification.
+struct GoalBackgroundWait {
+    generation: u64,
+    turn_id: Option<String>,
+    process_ids: BTreeSet<i32>,
+    watcher_started: bool,
+    cancellation: watch::Sender<bool>,
+}
+
+/// Captures the background-wait generation at tool admission. A tool that
+/// started before an external goal mutation cannot attach its late output to
+/// the replacement goal, while tools admitted afterward can still wait.
+#[derive(Debug, Default)]
+pub(crate) struct GoalToolWaitScopes {
+    values: std::sync::Mutex<HashMap<String, u64>>,
+}
+
+impl GoalToolWaitScopes {
+    fn record(&self, call_id: &str, generation: u64) {
+        self.values
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(call_id.to_string(), generation);
+    }
+
+    fn take(&self, call_id: &str) -> Option<u64> {
+        self.values
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(call_id)
+    }
+}
+
+impl Default for GoalBackgroundWait {
+    fn default() -> Self {
+        Self {
+            generation: 0,
+            turn_id: None,
+            process_ids: BTreeSet::new(),
+            watcher_started: false,
+            cancellation: watch::channel(false).0,
+        }
+    }
+}
+
+struct GoalBackgroundWaitSnapshot {
+    generation: u64,
+    process_ids: Vec<i32>,
+    cancellation: watch::Receiver<bool>,
+}
+
+enum GoalBackgroundWaitClaim {
+    Start(GoalBackgroundWaitSnapshot),
+    AlreadyWaiting,
+}
+
+async fn wait_for_background_wait_cancellation(mut cancellation: watch::Receiver<bool>) {
+    while !*cancellation.borrow() {
+        if cancellation.changed().await.is_err() {
+            return;
+        }
+    }
 }
 
 pub(crate) struct AccountedGoalProgress {
@@ -107,6 +182,7 @@ impl GoalRuntimeHandle {
                 enabled: AtomicBool::new(config.enabled),
                 tools_available_for_thread: config.tools_available_for_thread,
                 goal_state_lock: Semaphore::new(/*permits*/ 1),
+                background_wait: Mutex::new(GoalBackgroundWait::default()),
             }),
         }
     }
@@ -151,6 +227,175 @@ impl GoalRuntimeHandle {
             .acquire()
             .await
             .map_err(|err| err.to_string())
+    }
+
+    /// Records a process emitted by the active Goal turn as external work that
+    /// must finish before an automatic continuation is admitted.
+    pub(crate) async fn register_background_wait(
+        &self,
+        turn_id: &str,
+        turn_store: &ExtensionData,
+        call_id: &str,
+        wait_handle: &ToolWaitHandle,
+    ) {
+        let Some(process_id) = wait_handle.id().parse::<i32>().ok() else {
+            return;
+        };
+        let Some(tool_generation) = turn_store
+            .get::<GoalToolWaitScopes>()
+            .and_then(|scopes| scopes.take(call_id))
+        else {
+            return;
+        };
+        let mut wait = self.inner.background_wait.lock().await;
+        if wait.generation != tool_generation
+            || self
+                .inner
+                .accounting_state
+                .current_active_goal_id_for_turn(turn_id)
+                .is_none()
+        {
+            return;
+        }
+        if wait.turn_id.as_deref() != Some(turn_id) {
+            wait.generation = wait.generation.wrapping_add(1);
+            wait.turn_id = Some(turn_id.to_string());
+            wait.process_ids.clear();
+            wait.watcher_started = false;
+            let _ = wait.cancellation.send(true);
+            wait.cancellation = watch::channel(false).0;
+        }
+        wait.process_ids.insert(process_id);
+    }
+
+    /// Records the wait-generation for a tool before its handler runs.
+    pub(crate) async fn capture_tool_wait_scope(&self, turn_store: &ExtensionData, call_id: &str) {
+        // External goal writes hold this permit through their prepare/write
+        // window. Taking it here makes the generation snapshot an admission
+        // boundary: a tool that starts before a mutation keeps the old
+        // generation, while a tool that starts afterward sees the new one.
+        let Ok(_goal_state_permit) = self.goal_state_permit().await else {
+            return;
+        };
+        let wait = self.inner.background_wait.lock().await;
+        let generation = wait.generation;
+        drop(wait);
+        turn_store
+            .get_or_init(GoalToolWaitScopes::default)
+            .record(call_id, generation);
+    }
+
+    /// Cancels any watcher and advances the wait generation.
+    pub(crate) async fn invalidate_background_wait(&self) {
+        let Ok(_goal_state_permit) = self.goal_state_permit().await else {
+            return;
+        };
+        self.invalidate_background_wait_locked().await;
+    }
+
+    /// Invalidates a wait while the caller already owns the goal-state permit.
+    pub(crate) async fn invalidate_background_wait_locked(&self) {
+        let mut wait = self.inner.background_wait.lock().await;
+        wait.generation = wait.generation.wrapping_add(1);
+        wait.turn_id = None;
+        wait.process_ids.clear();
+        wait.watcher_started = false;
+        let _ = wait.cancellation.send(true);
+        wait.cancellation = watch::channel(false).0;
+    }
+
+    /// Starts a fresh turn's wait scope and cancels any stale watcher.
+    pub(crate) async fn begin_background_wait_turn(&self, turn_id: &str) {
+        let mut wait = self.inner.background_wait.lock().await;
+        wait.generation = wait.generation.wrapping_add(1);
+        wait.turn_id = None;
+        wait.process_ids.clear();
+        wait.watcher_started = false;
+        let _ = wait.cancellation.send(true);
+        wait.cancellation = watch::channel(false).0;
+        wait.turn_id = Some(turn_id.to_string());
+    }
+
+    pub(crate) async fn cancel_background_wait(&self) {
+        self.invalidate_background_wait().await;
+    }
+
+    async fn claim_background_wait(&self) -> Option<GoalBackgroundWaitClaim> {
+        let mut wait = self.inner.background_wait.lock().await;
+        if wait.process_ids.is_empty() {
+            return None;
+        }
+        if wait.watcher_started {
+            return Some(GoalBackgroundWaitClaim::AlreadyWaiting);
+        }
+        wait.watcher_started = true;
+        Some(GoalBackgroundWaitClaim::Start(GoalBackgroundWaitSnapshot {
+            generation: wait.generation,
+            process_ids: wait.process_ids.iter().copied().collect(),
+            cancellation: wait.cancellation.subscribe(),
+        }))
+    }
+
+    async fn current_background_wait_processes(&self, generation: u64) -> Option<Vec<i32>> {
+        let wait = self.inner.background_wait.lock().await;
+        (wait.generation == generation && wait.watcher_started)
+            .then(|| wait.process_ids.iter().copied().collect())
+    }
+
+    async fn complete_background_wait(&self, generation: u64, process_ids: &[i32]) -> bool {
+        let mut wait = self.inner.background_wait.lock().await;
+        if wait.generation != generation
+            || !wait.watcher_started
+            || wait.process_ids.iter().copied().collect::<Vec<_>>() != process_ids
+        {
+            return false;
+        }
+        wait.generation = wait.generation.wrapping_add(1);
+        wait.turn_id = None;
+        wait.process_ids.clear();
+        wait.watcher_started = false;
+        wait.cancellation = watch::channel(false).0;
+        true
+    }
+
+    fn spawn_background_wait_watcher(
+        &self,
+        thread: Arc<CodexThread>,
+        snapshot: GoalBackgroundWaitSnapshot,
+    ) {
+        let runtime = self.clone();
+        tokio::spawn(async move {
+            let mut process_ids = snapshot.process_ids;
+            loop {
+                for process_id in &process_ids {
+                    tokio::select! {
+                        _ = wait_for_background_wait_cancellation(snapshot.cancellation.clone()) => return,
+                        _ = thread.wait_for_background_terminal(*process_id) => {}
+                    }
+                }
+                if *snapshot.cancellation.borrow() {
+                    return;
+                }
+                let Some(current_process_ids) = runtime
+                    .current_background_wait_processes(snapshot.generation)
+                    .await
+                else {
+                    return;
+                };
+                if current_process_ids == process_ids {
+                    break;
+                }
+                process_ids = current_process_ids;
+            }
+
+            if runtime
+                .complete_background_wait(snapshot.generation, &process_ids)
+                .await
+                && let Err(err) = runtime.continue_if_idle().await
+            {
+                tracing::debug!(%err, "failed to resume Goal after background work exited");
+            }
+        });
     }
 
     pub async fn prepare_external_goal_mutation(&self) -> Result<(), String> {
@@ -231,6 +476,7 @@ impl GoalRuntimeHandle {
             }
             codex_state::ThreadGoalStatus::BudgetLimited => {
                 if self.inner.accounting_state.current_turn_id().is_none() {
+                    self.cancel_background_wait().await;
                     self.inner.accounting_state.clear_active_goal();
                 }
             }
@@ -238,6 +484,7 @@ impl GoalRuntimeHandle {
             | codex_state::ThreadGoalStatus::Blocked
             | codex_state::ThreadGoalStatus::UsageLimited
             | codex_state::ThreadGoalStatus::Complete => {
+                self.invalidate_background_wait().await;
                 self.inner.accounting_state.clear_active_goal();
             }
         }
@@ -253,6 +500,7 @@ impl GoalRuntimeHandle {
         }
 
         self.inner.analytics.cleared(&goal);
+        self.invalidate_background_wait().await;
         self.inner.accounting_state.clear_active_goal();
         Ok(())
     }
@@ -275,6 +523,7 @@ impl GoalRuntimeHandle {
         // Hold this through accounting and the status update so external goal
         // mutations and idle continuation cannot interleave between them.
         let _goal_state_permit = self.goal_state_permit().await?;
+        self.invalidate_background_wait_locked().await;
         let Some(accounting_goal_id) = self
             .inner
             .accounting_state
@@ -319,6 +568,7 @@ impl GoalRuntimeHandle {
             .await
             .map_err(|err| err.to_string())?
         else {
+            self.invalidate_background_wait_locked().await;
             self.inner.accounting_state.clear_active_goal();
             return Ok(());
         };
@@ -398,6 +648,7 @@ impl GoalRuntimeHandle {
 
     pub(crate) async fn continue_if_idle(&self) -> Result<(), String> {
         if !self.tools_visible() {
+            self.cancel_background_wait().await;
             self.inner.accounting_state.clear_active_goal();
             return Ok(());
         }
@@ -433,11 +684,22 @@ impl GoalRuntimeHandle {
             .await
             .map_err(|err| err.to_string())?
         else {
+            self.invalidate_background_wait_locked().await;
             self.inner.accounting_state.clear_active_goal();
             return Ok(());
         };
         if goal.status != codex_state::ThreadGoalStatus::Active {
+            self.invalidate_background_wait_locked().await;
             self.inner.accounting_state.clear_active_goal();
+            return Ok(());
+        }
+        if let Some(wait) = self.claim_background_wait().await {
+            match wait {
+                GoalBackgroundWaitClaim::Start(wait) => {
+                    self.spawn_background_wait_watcher(thread, wait);
+                }
+                GoalBackgroundWaitClaim::AlreadyWaiting => {}
+            }
             return Ok(());
         }
         let start_options = thread
@@ -450,28 +712,37 @@ impl GoalRuntimeHandle {
             thread.config().await.update_plan_enabled,
         );
 
-        match thread
+        let submission = thread
             .start_turn_if_idle(
                 TurnInputRequest::new(TurnInput::ResponseItem(item)).on_start(TurnStartOptions {
                     turn_trigger: Some("goal".to_string()),
                     ..start_options
                 }),
             )
-            .await
-        {
-            Ok(StartIfIdleSubmission::Started { .. }) => {}
+            .await;
+        let started = match submission {
+            Ok(StartIfIdleSubmission::Started { .. }) => true,
             Ok(StartIfIdleSubmission::NotSubmitted { reason }) => {
                 tracing::debug!(
                     ?reason,
                     "skipping goal continuation because automatic idle work was rejected"
                 );
+                false
             }
             Err(error) => {
                 tracing::debug!(
                     %error,
                     "skipping goal continuation because turn input submission failed"
                 );
+                false
             }
+        };
+
+        // A Team Lead may be parked behind a direct Worker. Keep the active
+        // Goal accounting state intact when admission declines this automatic
+        // continuation; the Worker completion path will call us again.
+        if !started {
+            return Ok(());
         }
 
         let current_turn_is_goal_active = self

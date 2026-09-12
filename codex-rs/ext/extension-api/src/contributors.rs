@@ -51,6 +51,7 @@ pub use tool_lifecycle::ToolCallOutcome;
 pub use tool_lifecycle::ToolFinishInput;
 pub use tool_lifecycle::ToolLifecycleFuture;
 pub use tool_lifecycle::ToolStartInput;
+pub use tool_lifecycle::ToolWaitInput;
 pub use turn_input::TurnInputContext;
 pub use turn_input::TurnInputEnvironment;
 pub use turn_lifecycle::TurnAbortInput;
@@ -343,6 +344,14 @@ pub trait ToolLifecycleContributor: Send + Sync {
     /// A matching start callback does not exist when execution is blocked,
     /// hook-provided input cannot be applied, or cancellation wins first.
     fn on_tool_finish<'a>(&'a self, _input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(std::future::ready(()))
+    }
+
+    /// Called after a tool returns a successful output with live external work.
+    ///
+    /// The host reports this separately from completion so contributors can
+    /// park an automatic continuation while waiting for the identified work.
+    fn on_tool_wait<'a>(&'a self, _input: ToolWaitInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(std::future::ready(()))
     }
 }

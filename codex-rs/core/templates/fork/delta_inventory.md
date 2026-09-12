@@ -111,6 +111,9 @@ release or merge rules.
     finish with their captured settings. The legacy V1 `multi_agents.send_input`
     surface retains its explicit turn-input semantics and can wake a target;
     those task inputs are not reclassified as routine progress.
+  - Automatic Goal continuations use the same Lead admission boundary and stay
+    parked while direct Workers remain active; completion or actionable input
+    rechecks the Goal without adding a polling turn.
   - A Team Worker entering `wait_agent` with no active child dependency or
     queued activity queues one bounded handoff to its immediate parent. The
     handoff requests review or follow-up without marking the Worker complete;
@@ -594,6 +597,9 @@ release or merge rules.
   idle/deadline state. Verify Team Off serializes the final automatic-turn
   admission boundary, drops stale trigger mail while retaining queue-only
   communication, and permits already-admitted in-flight turns to finish.
+- Verify automatic Goal continuations share the Lead admission boundary, remain
+  parked while direct Workers are active, and recheck after Worker completion or
+  actionable input without introducing a polling turn.
 - Verify a dependency-free Team Worker `wait_agent` queues one bounded handoff
   to its immediate parent without marking completion, suppresses repeated
   waits in one turn, rearms after meaningful parent input or new work, queues

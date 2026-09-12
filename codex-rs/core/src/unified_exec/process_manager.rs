@@ -1759,6 +1759,23 @@ impl UnifiedExecProcessManager {
             .collect()
     }
 
+    /// Waits for one process managed by this session to exit.
+    ///
+    /// A process that was already released is treated as terminal. The
+    /// returned future does not hold the process-store mutex while waiting.
+    pub(crate) async fn wait_for_process_exit(&self, process_id: i32) {
+        let process = {
+            let store = self.process_store.lock().await;
+            store
+                .processes
+                .get(&process_id)
+                .map(|entry| Arc::clone(&entry.process))
+        };
+        if let Some(process) = process {
+            process.wait_for_exit().await;
+        }
+    }
+
     pub(crate) async fn terminate_process(&self, process_id: i32) -> bool {
         let (process, already_exited) = {
             let store = self.process_store.lock().await;

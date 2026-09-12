@@ -754,6 +754,11 @@ impl CodexThread {
         self.session.list_background_terminals().await
     }
 
+    /// Waits until a session-owned background terminal exits or is released.
+    pub async fn wait_for_background_terminal(&self, process_id: i32) {
+        self.session.wait_for_background_terminal(process_id).await;
+    }
+
     pub async fn terminate_background_terminal(&self, process_id: i32) -> bool {
         self.session.terminate_background_terminal(process_id).await
     }
