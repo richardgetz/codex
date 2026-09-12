@@ -233,7 +233,7 @@ where
                 return;
             }
 
-            let goal_generation = runtime.begin_background_wait_turn(input.turn_id).await;
+            let intent_generation = runtime.begin_background_wait_turn(input.turn_id).await;
 
             if let Err(err) = self
                 .state_dbs
@@ -250,7 +250,7 @@ where
                 input.collaboration_mode.mode,
                 input.token_usage_at_turn_start,
             );
-            accounting.set_turn_goal_generation(input.turn_id, goal_generation);
+            accounting.set_turn_intent_generation(input.turn_id, intent_generation);
             if matches!(
                 input.collaboration_mode.mode,
                 codex_protocol::config_types::ModeKind::Plan
@@ -305,6 +305,9 @@ where
             }
 
             let turn_id = input.turn_store.level_id();
+            let intent_generation = runtime
+                .accounting_state()
+                .intent_generation_for_turn(turn_id);
             if let Some(expected_goal_id) =
                 runtime.accounting_state().execution_failure_goal(turn_id)
                 && let Err(err) = runtime
@@ -329,8 +332,9 @@ where
                 return;
             }
             if let Err(err) = runtime
-                .account_active_goal_progress(
+                .account_active_goal_progress_for_intent(
                     turn_id,
+                    intent_generation,
                     &format!("{turn_id}:turn-stop"),
                     codex_state::GoalAccountingMode::ActiveOnly,
                     BudgetLimitedGoalDisposition::ClearActive,

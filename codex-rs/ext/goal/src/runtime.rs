@@ -65,13 +65,15 @@ struct GoalRuntimeInner {
     tools_available_for_thread: bool,
     goal_state_lock: Semaphore,
     /// Monotonic intent generation used to reject terminal callbacks from a
-    /// turn that predates an external goal mutation.
-    goal_generation: AtomicU64,
+    /// turn that predates an external goal mutation. This is deliberately
+    /// separate from the background wait generation: process completion must
+    /// not suppress valid terminal handling for the unchanged Goal.
+    intent_generation: AtomicU64,
     background_wait: Mutex<GoalBackgroundWait>,
 }
 
-/// Tracks background work emitted by the active goal turn. The generation and
-/// cancellation channel invalidate watchers when a new turn or goal state
+/// Tracks background work emitted by the active goal turn. The wait generation
+/// and cancellation channel invalidate watchers when a new turn or goal state
 /// wins the race with an exit notification.
 struct GoalBackgroundWait {
     generation: u64,
@@ -187,7 +189,7 @@ impl GoalRuntimeHandle {
                 enabled: AtomicBool::new(config.enabled),
                 tools_available_for_thread: config.tools_available_for_thread,
                 goal_state_lock: Semaphore::new(/*permits*/ 1),
-                goal_generation: AtomicU64::new(0),
+                intent_generation: AtomicU64::new(0),
                 background_wait: Mutex::new(GoalBackgroundWait::default()),
             }),
         }
@@ -235,9 +237,9 @@ impl GoalRuntimeHandle {
             .map_err(|err| err.to_string())
     }
 
-    fn next_goal_generation(&self) -> u64 {
+    fn next_intent_generation(&self) -> u64 {
         self.inner
-            .goal_generation
+            .intent_generation
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1)
     }
@@ -271,7 +273,7 @@ impl GoalRuntimeHandle {
             return;
         }
         if wait.turn_id.as_deref() != Some(turn_id) {
-            wait.generation = self.next_goal_generation();
+            wait.generation = wait.generation.wrapping_add(1);
             wait.turn_id = Some(turn_id.to_string());
             wait.process_ids.clear();
             wait.watcher_started = false;
@@ -298,7 +300,7 @@ impl GoalRuntimeHandle {
             .record(call_id, generation);
     }
 
-    /// Cancels any watcher and advances the wait generation.
+    /// Cancels any watcher and advances both the wait and intent generations.
     pub(crate) async fn invalidate_background_wait(&self) {
         let Ok(_goal_state_permit) = self.goal_state_permit().await else {
             return;
@@ -309,7 +311,8 @@ impl GoalRuntimeHandle {
     /// Invalidates a wait while the caller already owns the goal-state permit.
     pub(crate) async fn invalidate_background_wait_locked(&self) {
         let mut wait = self.inner.background_wait.lock().await;
-        wait.generation = self.next_goal_generation();
+        let _ = self.next_intent_generation();
+        wait.generation = wait.generation.wrapping_add(1);
         wait.turn_id = None;
         wait.process_ids.clear();
         wait.watcher_started = false;
@@ -320,15 +323,15 @@ impl GoalRuntimeHandle {
     /// Starts a fresh turn's wait scope and cancels any stale watcher.
     pub(crate) async fn begin_background_wait_turn(&self, turn_id: &str) -> u64 {
         let mut wait = self.inner.background_wait.lock().await;
-        let generation = self.next_goal_generation();
-        wait.generation = generation;
+        let intent_generation = self.next_intent_generation();
+        wait.generation = wait.generation.wrapping_add(1);
         wait.turn_id = None;
         wait.process_ids.clear();
         wait.watcher_started = false;
         let _ = wait.cancellation.send(true);
         wait.cancellation = watch::channel(false).0;
         wait.turn_id = Some(turn_id.to_string());
-        generation
+        intent_generation
     }
 
     pub(crate) async fn cancel_background_wait(&self) {
@@ -365,7 +368,7 @@ impl GoalRuntimeHandle {
         {
             return false;
         }
-        wait.generation = self.next_goal_generation();
+        wait.generation = wait.generation.wrapping_add(1);
         wait.turn_id = None;
         wait.process_ids.clear();
         wait.watcher_started = false;
@@ -540,15 +543,15 @@ impl GoalRuntimeHandle {
         // Hold this through accounting and the status update so external goal
         // mutations and idle continuation cannot interleave between them.
         let _goal_state_permit = self.goal_state_permit().await?;
-        let Some(turn_generation) = self
+        let Some(turn_intent_generation) = self
             .inner
             .accounting_state
-            .goal_generation_for_turn(turn_id)
+            .intent_generation_for_turn(turn_id)
         else {
             return Ok(());
         };
-        let current_generation = self.inner.goal_generation.load(Ordering::Acquire);
-        if turn_generation != current_generation {
+        let current_generation = self.inner.intent_generation.load(Ordering::Acquire);
+        if turn_intent_generation != current_generation {
             return Ok(());
         }
         let is_empty_response = matches!(&reason, ActiveGoalStopReason::EmptyResponse);
@@ -896,6 +899,37 @@ impl GoalRuntimeHandle {
             }
             codex_state::GoalAccountingOutcome::Unchanged(_) => None,
         })
+    }
+
+    /// Accounts progress from a turn only while its captured intent is still current.
+    ///
+    /// External goal mutations serialize through the goal-state permit and advance the intent
+    /// generation before changing the persisted goal. Holding that permit through the accounting
+    /// write prevents a stale turn from charging progress to a replacement objective that keeps
+    /// the same goal id. Background-wait completion deliberately advances only its own generation,
+    /// so a legitimate terminal result for the unchanged goal still gets accounted.
+    pub(crate) async fn account_active_goal_progress_for_intent(
+        &self,
+        turn_id: &str,
+        expected_intent_generation: Option<u64>,
+        event_id: &str,
+        mode: codex_state::GoalAccountingMode,
+        budget_limited_goal_disposition: BudgetLimitedGoalDisposition,
+    ) -> Result<Option<AccountedGoalProgress>, String> {
+        let Some(expected_intent_generation) = expected_intent_generation else {
+            return Ok(None);
+        };
+        let _goal_state_permit = self.goal_state_permit().await?;
+        if self.inner.intent_generation.load(Ordering::Acquire) != expected_intent_generation {
+            return Ok(None);
+        }
+        self.account_active_goal_progress(
+            turn_id,
+            event_id,
+            mode,
+            budget_limited_goal_disposition,
+        )
+        .await
     }
 
     async fn account_idle_goal_progress(

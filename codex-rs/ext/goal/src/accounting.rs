@@ -41,7 +41,7 @@ struct GoalTurnAccounting {
     current_token_usage: TokenUsage,
     last_accounted_token_usage: TokenUsage,
     active_goal_id: Option<String>,
-    goal_generation: u64,
+    intent_generation: u64,
     account_tokens: bool,
     failed_execution: bool,
     successful_tool: bool,
@@ -103,15 +103,18 @@ impl GoalAccountingState {
         );
     }
 
-    pub(crate) fn set_turn_goal_generation(&self, turn_id: &str, generation: u64) {
+    pub(crate) fn set_turn_intent_generation(&self, turn_id: &str, generation: u64) {
         let mut inner = self.inner();
         if let Some(turn) = inner.turns.get_mut(turn_id) {
-            turn.goal_generation = generation;
+            turn.intent_generation = generation;
         }
     }
 
-    pub(crate) fn goal_generation_for_turn(&self, turn_id: &str) -> Option<u64> {
-        self.inner().turns.get(turn_id).map(|turn| turn.goal_generation)
+    pub(crate) fn intent_generation_for_turn(&self, turn_id: &str) -> Option<u64> {
+        self.inner()
+            .turns
+            .get(turn_id)
+            .map(|turn| turn.intent_generation)
     }
 
     pub(crate) fn current_turn_id(&self) -> Option<String> {
@@ -576,7 +579,7 @@ impl GoalTurnAccounting {
             last_accounted_token_usage: current_token_usage.clone(),
             current_token_usage,
             active_goal_id: None,
-            goal_generation: 0,
+            intent_generation: 0,
             account_tokens,
             failed_execution: false,
             successful_tool: false,
