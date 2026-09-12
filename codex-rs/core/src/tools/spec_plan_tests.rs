@@ -909,7 +909,7 @@ async fn built_in_scratchpad_and_schedule_follow_mode_config() {
         } else {
             ToolExposure::Hidden
         };
-        let registered_name = ToolName::namespaced(namespace.name.clone(), tool_name).to_string();
+        let registered_name = ToolName::namespaced(namespace.name.clone(), &tool_name).to_string();
         default_plan.assert_registered_contains(&[registered_name.as_str()]);
         default_plan.assert_resolved_contains(&[registered_name.as_str()]);
         assert_eq!(default_plan.exposure(&registered_name), expected_exposure);
