@@ -60,6 +60,7 @@ use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::WaitForEnvironmentHandler;
 use crate::tools::handlers::builtin_scratchpad_spec::TOOL_OPEN;
 use crate::tools::handlers::builtin_scratchpad_spec::scratchpad_namespace_spec;
+use crate::tools::handlers::builtin_session_tmp_spec::TOOL_CREATE;
 use crate::tools::handlers::builtin_session_tmp_spec::session_tmp_namespace_spec;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::registry::CoreToolRuntime;
@@ -960,7 +961,7 @@ async fn built_in_session_tmp_tools_are_opt_in_and_lineage_tools_are_hidden() {
         let registered_name = ToolName::namespaced(namespace.name.clone(), tool_name).to_string();
         enabled.assert_registered_contains(&[registered_name.as_str()]);
         enabled.assert_resolved_contains(&[registered_name.as_str()]);
-        let expected_exposure = if registered_name == "session_tmp.create" {
+        let expected_exposure = if tool_name == TOOL_CREATE {
             ToolExposure::Direct
         } else {
             ToolExposure::Hidden
@@ -971,7 +972,12 @@ async fn built_in_session_tmp_tools_are_opt_in_and_lineage_tools_are_hidden() {
 
 #[tokio::test]
 async fn update_plan_tool_respects_config_gate() {
-    let disabled = probe(|_| {}).await;
+    let disabled = probe(|turn| {
+        update_config(turn, |config| {
+            config.update_plan_enabled = false;
+        });
+    })
+    .await;
     disabled.assert_visible_lacks(&["update_plan"]);
     disabled.assert_registered_lacks(&["update_plan"]);
 

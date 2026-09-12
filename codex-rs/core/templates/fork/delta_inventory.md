@@ -50,6 +50,11 @@ release or merge rules.
   serialized Cargo/`just` validation against one shared target/cache after
   source integration; worker worktrees remain source-only, and active
   targets/worktrees are preserved.
+- Fork-preserved update-plan surface:
+  `[tools.update_plan].enabled` remains default-on for stable compatibility;
+  explicit `false` still removes `update_plan` from registered and visible
+  tools, while explicit `true` retains it. The schema and config tests pin
+  this default so upstream opt-in refreshes do not silently change the fork.
 
 - Opt-in Lead/Worker model teams:
   - Team On is the user's explicit in-thread authorization to delegate
@@ -448,6 +453,9 @@ release or merge rules.
     servers plus unstarted lazy servers, not only successful tool listings, so
     eager MCPs remain visible even when their current tool list is temporarily
     unavailable.
+  - Cached normal tool-plan construction registers the complete per-step MCP
+    inventory, including recovered placeholders, while retaining handler reuse
+    keyed to the immutable MCP binding.
 - Built-in scratchpad:
   - Namespace: `scratchpad`
   - Default mode exposes it by default; Plan mode does not.
@@ -745,7 +753,11 @@ release or merge rules.
 - Verify cancelled MCP startup can retry, a plain unavailable MCP placeholder
   call can recover the configured server namespace instead of permanently
   reporting the tool unavailable, and eager MCP servers remain listed in the
-  model-visible inventory even if tool listing is temporarily unavailable.
+  model-visible inventory even if tool listing is temporarily unavailable;
+  confirm the cached normal tool-plan path retains recovered placeholders.
+- Verify the fork-preserved `update_plan` default remains enabled when omitted
+  or given an empty table, while explicit `enabled = false` removes the tool
+  from both registered and model-visible sets.
 - Verify app-server `thread/control/set` rejects Orchestrator mode.
 - Verify built-in `scratchpad` remains available in Default mode, omitted from
   Plan mode by default, and `open_scratchpad` uses the thread id when no id is

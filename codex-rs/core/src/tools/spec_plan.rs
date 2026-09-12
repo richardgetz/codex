@@ -249,6 +249,7 @@ pub(crate) fn build_tool_router_with_mcp_tools(
         } else {
             session.services.mcp_handler_cache.append_mcp_tools(
                 mcp,
+                mcp_tools,
                 &turn_context.config,
                 apps_enabled,
                 &mcp.config().mcp_server_catalog,
