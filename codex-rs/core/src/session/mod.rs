@@ -5273,28 +5273,6 @@ impl Session {
         if !separate_guardian_developer_message {
             developer_sections.push(ForkHelpInstructions::new().render_fragment());
             let mcp_runtime = &self.services.mcp_runtime;
-            if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
-                let mcp_tools = match mcp {
-                    Some(mcp) => mcp.tools().to_vec(),
-                    None => mcp_runtime.latest_list_all_tools().await,
-                };
-                let accessible_connectors =
-                    connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
-                let accessible_and_enabled_connectors =
-                    AppToolPolicyEvaluator::new(&turn_context.config.config_layer_stack)
-                        .apply_app_enabled_state(accessible_connectors);
-                let accessible_and_enabled_connectors = filter_connectors_for_mode(
-                    &turn_context.config,
-                    turn_context.mode,
-                    &accessible_and_enabled_connectors,
-                );
-                if let Some(apps_instructions) =
-                    AppsInstructions::from_connectors(&accessible_and_enabled_connectors)
-                {
-                    developer_sections.push(apps_instructions.render_fragment());
-                }
-            }
-
             let direct_mcp_server_names = mcp
                 .map(McpBinding::direct_server_names)
                 .unwrap_or_else(|| mcp_runtime.latest_direct_server_names())
@@ -5381,6 +5359,31 @@ impl Session {
                 .await
             {
                 developer_sections.push(fragment.into());
+            }
+        }
+        if !separate_guardian_developer_message
+            && turn_context.config.include_apps_instructions
+            && turn_context.apps_enabled()
+        {
+            let mcp_runtime = &self.services.mcp_runtime;
+            let mcp_tools = match mcp {
+                Some(mcp) => mcp.tools().to_vec(),
+                None => mcp_runtime.latest_list_all_tools().await,
+            };
+            let accessible_connectors =
+                connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+            let accessible_and_enabled_connectors =
+                AppToolPolicyEvaluator::new(&turn_context.config.config_layer_stack)
+                    .apply_app_enabled_state(accessible_connectors);
+            let accessible_and_enabled_connectors = filter_connectors_for_mode(
+                &turn_context.config,
+                turn_context.mode,
+                &accessible_and_enabled_connectors,
+            );
+            if let Some(apps_instructions) =
+                AppsInstructions::from_connectors(&accessible_and_enabled_connectors)
+            {
+                developer_sections.push(apps_instructions.render_fragment());
             }
         }
         // This is full-context metadata. Steady-state context diffs should not re-emit it.

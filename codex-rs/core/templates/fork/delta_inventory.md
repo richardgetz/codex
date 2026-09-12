@@ -36,6 +36,13 @@ release or merge rules.
   app-server `execPolicy` and server config.
 - Fork-aware help context and fork-only feature labeling keep
   `docs/fork-differences.md` current and identify Rick-owned metadata.
+- Bounded fork-help context keeps a compact `/account <alias>` and
+  `/orchestrator-memory-forget <needle>` command index ahead of the
+  8,000-token middle-truncated inventory so essential fork commands remain
+  discoverable while the full inventory stays the source of truth.
+- Initial developer context keeps extension Skills ahead of static Apps usage
+  guidance and world-state Plugins guidance, while preserving the existing App
+  enablement and connector filtering rules.
 - Main-checkout Rust build coordination: one designated build owner runs
   serialized Cargo/`just` validation against one shared target/cache after
   source integration; worker worktrees remain source-only, and active
@@ -592,6 +599,11 @@ release or merge rules.
   semantics and app-server `execPolicy` selection.
 - Verify fork-aware help continues to load the checked-in fork differences and
   `(rick)` feature labeling remains applied to fork-only metadata.
+- Verify fork-help remains bounded at 8,000 tokens while its compact command
+  index survives middle truncation and the checked-in inventory remains the
+  source of truth.
+- Verify initial context preserves Skills → Apps → Plugins ordering without
+  changing App enablement or connector filtering.
 - Verify `[team]` rejects enabled configurations without both complete profiles,
   remains disabled by default, and `/team` state survives resume/fork without
   mutating global config. Verify Lead routing, Worker routing for all delegated
