@@ -1,0 +1,25 @@
+intent:
+  id: intent/2026-09-12/goal-empty-continuation-breaker#b7c6220fbd
+  change_type: fix
+  scope: goal-continuation
+  summary: Bound automatic Goal no-activity continuation loops.
+  decision: Observe completed turn items through the lifecycle extension hook, count only host-admitted automatic Goal turns with empty final responses, and block after three consecutive empty turns while resetting on activity, user input, goal changes, and errors.
+  constraints:
+    - Preserve event-driven tracked-process waits and exact process attribution.
+    - Preserve explicit Goal completion, pause, cancellation, replacement, and actionable input behavior.
+    - Do not add polling, generic sleeps, or disable Goals or Continuous mode.
+    - Keep app-server behavior deterministic with mock responses and preserve wire compatibility.
+  intent_priority: must
+  code_locations:
+    - codex-rs/ext/extension-api/src/contributors.rs
+    - codex-rs/core/src/session/mod.rs
+    - codex-rs/ext/goal/src/accounting.rs
+    - codex-rs/ext/goal/src/extension.rs
+    - codex-rs/ext/goal/src/runtime.rs
+    - codex-rs/ext/goal/tests/accounting.rs
+    - codex-rs/app-server/tests/suite/v2/thread_goal_empty_responses.rs
+    - codex-rs/core/templates/fork/delta_inventory.md
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: unknown
