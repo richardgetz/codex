@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-12/core-app-mode-filter#29bf00cd0e"
+  change_type: "fix"
+  scope: "core-context"
+  summary: "Apply collaboration-mode connector filtering when deriving Apps guidance availability."
+  decision: "Filter accessible connectors by the active mode before and after AppToolPolicyEvaluator so Apps instructions cannot appear for connectors excluded from the selected mode while preserving policy and model gates."
+  constraints:
+    - "Keep existing Apps enablement, connector accessibility, AppToolPolicy, and model capability gates."
+    - "Do not alter MCP tool exposure or app-server wire contracts."
+    - "Preserve Skills before Apps before Plugins world-state ordering."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session/world_state.rs::Session::build_world_state_for_step"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
