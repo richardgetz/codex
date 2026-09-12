@@ -1,0 +1,23 @@
+intent:
+  id: intent/2026-09-12/goal-stale-generation#0137b72cb2
+  change_type: fix
+  scope: goal-continuation
+  summary: Reject stale terminal callbacks after goal intent replacement.
+  decision: Capture a monotonic generation when a turn starts and require it to match before applying terminal error, usage-limit, empty-response, or execution-unavailable handling. Advance the generation with every wait lifecycle boundary and external goal mutation so same-ID objective edits invalidate callbacks without holding the goal permit across inline turn-start lifecycle hooks.
+  constraints:
+    - Preserve terminal error and usage-limit enforcement for an unchanged active Goal.
+    - Treat same-ID objective updates as replacement of the active intent.
+    - Keep tracked process waits event-driven and leave external processes alive on replacement or cancellation.
+    - Avoid acquiring goal_state_permit from on_turn_start because automatic continuation emits that hook while holding the permit.
+    - Cover both terminal error variants before and after replacement runtime effects.
+  intent_priority: must
+  code_locations:
+    - codex-rs/ext/goal/src/runtime.rs
+    - codex-rs/ext/goal/src/accounting.rs
+    - codex-rs/ext/goal/src/extension.rs
+    - codex-rs/ext/goal/tests/goal_extension_backend.rs
+    - codex-rs/core/templates/fork/delta_inventory.md
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: unknown
