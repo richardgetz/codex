@@ -1,7 +1,5 @@
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::protocol::EventMsg;
-use codex_session_tmp::SessionTmpConfig;
-use codex_session_tmp::SessionTmpOwner;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -19,9 +17,10 @@ use core_test_support::wait_for_event;
 use serde_json::Value;
 use serde_json::json;
 use std::fs;
-use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
-const SESSION_TMP_UNAVAILABLE_WARNING: &str = "Session temporary storage is unavailable; continuing without it for this runtime. The configured and recovery roots could not be opened safely; use a new empty root or repair a managed marker after verifying its contents.";
+const SESSION_TMP_UNAVAILABLE_WARNING: &str = "Session temporary storage is unavailable; continuing without it for this runtime. Verify the configured root and external control state before enabling it again.";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_tmp_tool_records_current_session_and_thread_lineage() -> anyhow::Result<()> {
@@ -387,7 +386,7 @@ async fn unavailable_session_tmp_fails_open_on_resume_and_preserves_data() -> an
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unavailable_session_tmp_recovers_into_validated_runtime_root() -> anyhow::Result<()> {
+async fn session_tmp_consolidates_a_validated_recovery_root() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -396,27 +395,47 @@ async fn unavailable_session_tmp_recovers_into_validated_runtime_root() -> anyho
             let root = home.join("session-tmp");
             fs::create_dir_all(root.join("sessions")).unwrap();
             fs::write(root.join("preserved.txt"), b"leave original data").unwrap();
+            let recovery_session = home
+                .join("session-tmp-recovery")
+                .join("sessions")
+                .join("legacy-session");
+            fs::create_dir_all(recovery_session.join("agents").join("legacy-thread")).unwrap();
+            fs::write(
+                home.join("session-tmp-recovery")
+                    .join(".codex-managed-session-tmp"),
+                "codex managed session temporary storage\nschema_version=1\n",
+            )
+            .unwrap();
+            let updated_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            fs::write(
+                recovery_session.join("session.json"),
+                serde_json::json!({
+                    "schema_version": 1,
+                    "session_id": "legacy-session",
+                    "created_at": updated_at,
+                    "updated_at": updated_at,
+                    "status": "active"
+                })
+                .to_string(),
+            )
+            .unwrap();
+            fs::write(
+                recovery_session
+                    .join("agents")
+                    .join("legacy-thread")
+                    .join("legacy.txt"),
+                b"legacy data",
+            )
+            .unwrap();
         })
         .with_config(|config| {
             config.session_tmp.enabled = true;
         });
     let test = builder.build(&server).await?;
     let recovery_root = test.codex_home_path().join("session-tmp-recovery");
-    let warning = wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
-            EventMsg::Warning(warning)
-                if warning.message.contains("using recovery root")
-                    && warning.message.contains(recovery_root.to_str().unwrap())
-        )
-    })
-    .await;
-    assert!(matches!(
-        warning,
-        EventMsg::Warning(warning)
-            if warning.message.contains("using recovery root")
-                && warning.message.contains(recovery_root.to_str().unwrap())
-    ));
 
     let call_id = "recovered-session-tmp-create";
     let arguments = json!({
@@ -453,8 +472,10 @@ async fn unavailable_session_tmp_recovers_into_validated_runtime_root() -> anyho
     let absolute_path = entry["absolute_path"]
         .as_str()
         .expect("recovered entry should have an absolute path");
-    assert!(std::path::Path::new(absolute_path).starts_with(&recovery_root));
-    assert!(recovery_root.join(".codex-managed-session-tmp").exists());
+    assert!(
+        std::path::Path::new(absolute_path).starts_with(test.codex_home_path().join("session-tmp"))
+    );
+    assert!(!recovery_root.exists());
     assert_eq!(
         fs::read(test.codex_home_path().join("session-tmp/preserved.txt"))?,
         b"leave original data"
@@ -465,66 +486,6 @@ async fn unavailable_session_tmp_recovers_into_validated_runtime_root() -> anyho
             .join("session-tmp/.codex-managed-session-tmp")
             .exists()
     );
-
-    Ok(())
-}
-
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn inaccessible_stale_session_lock_does_not_block_provenance_startup() -> anyhow::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_pre_build_hook(|home| {
-            let session_tmp_config = SessionTmpConfig {
-                enabled: true,
-                root: Some(home.join("session-tmp")),
-                stale_after: Duration::from_secs(60),
-            };
-            let old_session_root = {
-                let manager = codex_session_tmp::SessionTmpManager::open(
-                    &session_tmp_config,
-                    home,
-                    "old-session",
-                    "old-thread",
-                    SessionTmpOwner::RootSession,
-                )
-                .unwrap()
-                .unwrap();
-                manager.session_root().to_path_buf()
-            };
-            fs::write(
-                old_session_root.join("session.json"),
-                serde_json::json!({
-                    "schema_version": 1,
-                    "session_id": "old-session",
-                    "created_at": 0,
-                    "updated_at": 0,
-                    "status": "active"
-                })
-                .to_string(),
-            )
-            .unwrap();
-            let lock_path = old_session_root
-                .parent()
-                .unwrap()
-                .join(".locks")
-                .join("old-session.lock");
-            let mut permissions = fs::metadata(&lock_path).unwrap().permissions();
-            permissions.set_mode(0o400);
-            fs::set_permissions(&lock_path, permissions).unwrap();
-        })
-        .with_config(|config| {
-            config.session_tmp.enabled = true;
-            config.decision_provenance.enabled = true;
-            config.decision_provenance.git_intent_bridge = true;
-        });
-
-    let test = builder.build(&server).await?;
-    assert!(test.session_configured.rollout_path.is_some());
 
     Ok(())
 }

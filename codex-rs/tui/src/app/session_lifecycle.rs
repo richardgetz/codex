@@ -199,7 +199,10 @@ impl App {
                 let uuid = thread_id.to_string();
                 SelectionItem {
                     name: name.clone(),
-                    name_prefix_spans: agent_picker_status_dot_spans(entry.is_closed),
+                    name_prefix_spans: agent_picker_status_dot_spans(
+                        /*is_closed*/ entry.is_closed,
+                        /*is_running*/ entry.is_running,
+                    ),
                     description: Some(uuid.clone()),
                     is_current: self.active_thread_id == Some(thread_id),
                     actions: vec![Box::new(move |tx| {

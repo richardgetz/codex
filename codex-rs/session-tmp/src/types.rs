@@ -155,7 +155,7 @@ pub enum SessionTmpError {
     Disabled,
     #[error("managed session temporary storage root must be absolute: {0}")]
     RootNotAbsolute(PathBuf),
-    #[error("managed session temporary storage root is not marker-protected: {0}")]
+    #[error("managed session temporary storage root is not enrolled: {0}")]
     RootNotManaged(PathBuf),
     #[error("managed session temporary storage contains an unsafe path component: {0}")]
     UnsafeManagedPath(PathBuf),

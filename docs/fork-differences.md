@@ -273,6 +273,15 @@ App-server clients can switch modes through `thread/settings/update` and read
 the effective assignment in thread responses. See the
 [Lead/Worker API example](../codex-rs/app-server/README.md#example-configure-and-toggle-leadworker-routing).
 
+### Slash agent picker status markers
+
+The legacy `/agent` and `/subagents` picker keeps its spawn-order navigation and
+uses each row's cached active-turn signal for the status marker: a larger green
+`●` marks an active turn, a dim `·` marks an idle open thread, and the existing
+plain `•` marks a closed thread. This is display-only; it does not infer
+waiting or paused state or add polling, and labels, row width, and keyboard
+navigation remain unchanged.
+
 ### Session-owned temporary storage
 
 - Managed temporary storage is opt-in so existing use of the operating system's
@@ -289,36 +298,36 @@ the effective assignment in thread responses. See the
 
 - When enabled, Codex gives the root session and each spawned agent an isolated
   managed directory and durable metadata for created or registered paths. The
-  configured parent is treated as managed storage, not as a general deletion
-  target; cleanup is restricted to the managed layout and its ownership data.
-- If the configured root cannot be opened safely (for example, an existing
-  unmarked directory), startup and resume first try the deterministic
-  `<codex_home>/session-tmp-recovery` root. That fallback is created or opened
-  only through the same marker and symlink checks; the original root is not
-  adopted, marker-repaired, or deleted (the safety check may tighten its
-  permissions). A warning names the recovery root used for that runtime. If
-  both roots fail those checks, startup continues with this feature disabled
-  and a warning; choose a new empty root or repair the
-  `.codex-managed-session-tmp` marker after verifying its contents before
-  enabling the feature again.
-- The safest recovery is a new absolute root, for example:
-
-  ```toml
-  [session_tmp]
-  enabled = true
-  root = "/Users/me/.codex/session-tmp-new"
-  ```
-
-  For a one-time launch, use:
-
-  ```sh
-  codex -c 'session_tmp.enabled=true' \
-    -c 'session_tmp.root="/Users/me/.codex/session-tmp-new"'
-  ```
-
-  Codex creates the managed marker only when that new root is empty; it leaves
-  the old root and its data alone. A configured recovery takes effect on the
-  next start.
+  configured parent is treated as payload storage, not as a general deletion
+  target; cleanup is restricted to state-validated session and agent paths.
+  Ownership, metadata, leases, and locks live in the per-root state directory
+  `<codex_home>/state/session-tmp`, outside the disposable payload. Deleting a
+  payload root while Codex is running therefore recreates the same configured
+  path from its durable state without a recovery warning.
+  If the configured root or its external control state is unsafe or unavailable,
+  startup and resume continue for that runtime with session temporary storage
+  disabled; unknown files are never adopted.
+- New roots enroll only when empty (or when a validated legacy migration has
+  supplied exact session records) and do not need a payload marker. Existing
+  `.codex-managed-session-tmp` roots are imported into external state; once old
+  leases are inactive and any held legacy locks have drained, validated legacy
+  control records and the marker are retired while payload agents and unknown
+  files remain in place. Legacy lock pathnames may remain as tiny compatibility
+  residues so waiting old processes cannot be split onto a replacement lock;
+  they do not prevent marker retirement or later use of external state. The
+  historical `<codex_home>/session-tmp-recovery` tree is merged
+  automatically into the normal default root, with collision-safe paths and
+  resumable migration; live old-version sessions remain in place until a later
+  open observes that they have released their legacy lease and lock. Legacy lock
+  pathnames are retained when an old process could still be waiting on their
+  inode; in that case the source may remain as a tiny lock-only residue while
+  recognized session payload and control data have already been retired.
+  Recognized session
+  payloads and control records move, while unknown recovery files stay at
+  their original paths outside managed cleanup, so a recovery tree containing
+  such files remains until it is empty. A small external source identity is
+  retained as a durable migration tombstone so interrupted cleanup can resume
+  safely. A markerless nonempty custom root remains inert and is never adopted.
 - Agents receive explicit guidance that every file under their managed agent
   directory is disposable, including untracked files created by shell commands.
   Source files, deliverables, checkpoints, credentials, and other durable data
@@ -334,8 +343,8 @@ the effective assignment in thread responses. See the
   cannot be combined with a day count. The result reports removed sessions and
   the preserved safety policy without treating retained session directories as
   removable entry paths.
-  When startup selected the recovery root, `/tmp status` reports that managed
-  agent path rather than the rejected original root.
+  `/tmp status` reports the configured payload path; control-state paths remain
+  outside model-visible agent roots and temporary-directory listings.
 
 ### Local token usage and spend tracking
 

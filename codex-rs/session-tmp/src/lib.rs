@@ -1,11 +1,14 @@
 //! Persistent, session-owned temporary storage for Codex processes.
 //!
-//! The managed root is deliberately opt-in and marker-protected. Every path
-//! this crate removes must be below `<root>/sessions/<session-id>`, so cleanup
-//! never treats an arbitrary user-selected directory as a temporary directory.
+//! The managed root is deliberately opt-in. Payload paths stay below the
+//! configured root, while ownership, metadata, leases, and locks live in a
+//! per-root control tree outside the disposable payload. Every path this crate
+//! removes is either an exact registered entry or a validated session subtree.
 
 mod cleanup;
 mod lease;
+mod migration;
+mod state;
 mod storage;
 mod types;
 
@@ -30,7 +33,6 @@ use lease::SessionLease;
 use storage::LEASES_DIR;
 use storage::collect_paths;
 use storage::ensure_directory_not_symlink;
-use storage::ensure_managed_root;
 use storage::now_seconds;
 use storage::read_metadata;
 use storage::reap_sessions;
@@ -42,23 +44,22 @@ use storage::validate_name;
 use storage::write_json_atomically;
 use types::MAX_PURPOSE_BYTES;
 
-const MANAGED_ROOT_MARKER: &str = ".codex-managed-session-tmp";
-const MANAGED_ROOT_MARKER_CONTENT: &str =
-    "codex managed session temporary storage\nschema_version=1\n";
 const SESSIONS_DIR: &str = "sessions";
 const SESSION_METADATA_FILE: &str = "session.json";
 const ENTRY_METADATA_DIR: &str = "metadata";
 const AGENTS_DIR: &str = "agents";
 const MAX_LIST_ENTRIES: usize = 2_000;
-const RECOVERY_ROOT: &str = "session-tmp-recovery";
 
 /// The process-local handle for one session and one agent thread.
 pub struct SessionTmpManager {
     root: PathBuf,
     canonical_root: PathBuf,
+    payload_namespace: PathBuf,
+    state: state::ControlState,
     session_id: String,
     thread_id: String,
     session_dir: PathBuf,
+    state_session_dir: PathBuf,
     agent_dir: PathBuf,
     is_root_session: bool,
     cleanup_on_drop: bool,
@@ -75,9 +76,15 @@ impl SessionTmpManager {
         thread_id: &str,
         owner: SessionTmpOwner,
     ) -> Result<Option<Self>, SessionTmpError> {
-        Self::open_inner(
+        if !config.enabled {
+            return Ok(None);
+        }
+        validate_component(session_id)?;
+        validate_component(thread_id)?;
+        let state = open_control_state(config, default_root)?;
+        Self::open_inner_with_state(
             config,
-            default_root,
+            state,
             session_id,
             thread_id,
             owner,
@@ -99,58 +106,21 @@ impl SessionTmpManager {
 
         validate_component(session_id)?;
         validate_component(thread_id)?;
-        let root = config
-            .root
-            .clone()
-            .unwrap_or_else(|| default_root.join("session-tmp"));
-        let recovery_root = default_root.join(RECOVERY_ROOT);
-        let mut recovery_attempted = false;
-        let mut root = root;
-        loop {
-            let result = if root.is_absolute() {
-                ensure_managed_root(&root).and_then(|()| {
-                    let config = SessionTmpConfig {
-                        root: Some(root.clone()),
-                        ..config.clone()
-                    };
-                    resolve_user_session_id(&root, session_id, thread_id).and_then(|session_id| {
-                        Self::open_inner(
-                            &config,
-                            default_root,
-                            &session_id,
-                            thread_id,
-                            SessionTmpOwner::RootSession,
-                            CleanupPolicy::ManualOnly,
-                        )
-                    })
-                })
-            } else {
-                Err(SessionTmpError::RootNotAbsolute(root.clone()))
-            };
-            match result {
-                Ok(manager) => return Ok(manager),
-                Err(error)
-                    if !recovery_attempted
-                        && root != recovery_root
-                        && matches!(
-                            &error,
-                            SessionTmpError::Io(_)
-                                | SessionTmpError::RootNotAbsolute(_)
-                                | SessionTmpError::RootNotManaged(_)
-                                | SessionTmpError::UnsafeManagedPath(_)
-                        ) =>
-                {
-                    root = recovery_root.clone();
-                    recovery_attempted = true;
-                }
-                Err(error) => return Err(error),
-            }
-        }
+        let state = open_control_state(config, default_root)?;
+        let session_id = resolve_user_session_id(&state, session_id, thread_id)?;
+        Self::open_inner_with_state(
+            config,
+            state,
+            &session_id,
+            thread_id,
+            SessionTmpOwner::RootSession,
+            CleanupPolicy::ManualOnly,
+        )
     }
 
-    fn open_inner(
+    fn open_inner_with_state(
         config: &SessionTmpConfig,
-        default_root: &Path,
+        state: state::ControlState,
         session_id: &str,
         thread_id: &str,
         owner: SessionTmpOwner,
@@ -162,18 +132,22 @@ impl SessionTmpManager {
 
         validate_component(session_id)?;
         validate_component(thread_id)?;
-        let root = config
-            .root
-            .clone()
-            .unwrap_or_else(|| default_root.join("session-tmp"));
-        if !root.is_absolute() {
-            return Err(SessionTmpError::RootNotAbsolute(root));
-        }
-        ensure_managed_root(&root)?;
-        let canonical_root = fs::canonicalize(&root)?;
-        let sessions_dir = root.join(SESSIONS_DIR);
-        let session_dir = sessions_dir.join(session_id);
+        // Keep the per-root migration barrier through payload/session setup so
+        // a migration cannot retire this root between state discovery and the
+        // first manager-owned write. The guard is dropped once initialization
+        // and the initial session record are complete.
+        let _migration_lock = migration::lock_for_open(&state)?;
+        let root = state.payload_root().to_path_buf();
+        let canonical_root = state.canonical_payload_root().to_path_buf();
+        let payload_namespace = state.payload_namespace().to_path_buf();
+        let session_dir = state.payload_session_dir(session_id);
+        let state_session_dir = state.state_session_dir(session_id);
         let agent_dir = session_dir.join(AGENTS_DIR).join(thread_id);
+        state.ensure_state_layout()?;
+        ensure_directory_not_symlink(&payload_namespace)?;
+        fs::create_dir_all(&payload_namespace)?;
+        set_private_directory(&payload_namespace)?;
+        let sessions_dir = payload_namespace.join(SESSIONS_DIR);
         ensure_directory_not_symlink(&sessions_dir)?;
         fs::create_dir_all(&sessions_dir)?;
         set_private_directory(&sessions_dir)?;
@@ -183,11 +157,8 @@ impl SessionTmpManager {
         ensure_directory_not_symlink(&session_dir.join(AGENTS_DIR))?;
         fs::create_dir_all(session_dir.join(AGENTS_DIR))?;
         set_private_directory(&session_dir.join(AGENTS_DIR))?;
-        ensure_directory_not_symlink(&session_dir.join(LEASES_DIR))?;
-        fs::create_dir_all(session_dir.join(LEASES_DIR))?;
-        set_private_directory(&session_dir.join(LEASES_DIR))?;
         let lease = (cleanup_policy == CleanupPolicy::OnDrop)
-            .then(|| SessionLease::acquire(&session_dir, session_id, thread_id))
+            .then(|| SessionLease::acquire(&state, &state_session_dir, session_id, thread_id))
             .transpose()?;
         ensure_directory_not_symlink(&agent_dir)?;
         fs::create_dir_all(&agent_dir)?;
@@ -195,7 +166,7 @@ impl SessionTmpManager {
         let is_root_session = owner == SessionTmpOwner::RootSession;
         if is_root_session {
             reap_sessions(
-                &root,
+                &state,
                 types::ReapMode::OlderThan(config.stale_after),
                 Some(session_id),
             )?;
@@ -203,9 +174,12 @@ impl SessionTmpManager {
         let manager = Self {
             root,
             canonical_root,
+            payload_namespace,
+            state,
             session_id: session_id.to_string(),
             thread_id: thread_id.to_string(),
             session_dir,
+            state_session_dir,
             agent_dir,
             is_root_session,
             cleanup_on_drop: is_root_session && cleanup_policy == CleanupPolicy::OnDrop,
@@ -215,7 +189,7 @@ impl SessionTmpManager {
         Ok(Some(manager))
     }
 
-    /// The configured, marker-protected parent root.
+    /// The configured disposable payload parent root.
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -344,7 +318,7 @@ impl SessionTmpManager {
         self.ensure_session_layout()?;
         validate_component(entry_id)?;
         let metadata_path = self
-            .session_dir
+            .state_session_dir
             .join(ENTRY_METADATA_DIR)
             .join(format!("{entry_id}.json"));
         let mut metadata = read_metadata(&metadata_path)?;
@@ -369,7 +343,7 @@ impl SessionTmpManager {
     pub fn list(&self) -> Result<SessionTmpListing, SessionTmpError> {
         self.ensure_session_layout()?;
         let mut entries = Vec::new();
-        let metadata_dir = self.session_dir.join(ENTRY_METADATA_DIR);
+        let metadata_dir = self.state_session_dir.join(ENTRY_METADATA_DIR);
         ensure_directory_not_symlink(&metadata_dir)?;
         if metadata_dir.is_dir() {
             for item in fs::read_dir(&metadata_dir)? {
@@ -423,6 +397,54 @@ impl SessionTmpManager {
 enum CleanupPolicy {
     OnDrop,
     ManualOnly,
+}
+
+fn open_control_state(
+    config: &SessionTmpConfig,
+    default_root: &Path,
+) -> Result<state::ControlState, SessionTmpError> {
+    let root = config
+        .root
+        .clone()
+        .unwrap_or_else(|| default_root.join("session-tmp"));
+    if !root.is_absolute() {
+        return Err(SessionTmpError::RootNotAbsolute(root));
+    }
+    // When a validated recovery root is present, bootstrap a fresh hidden
+    // namespace under an un-enrolled default root before the ordinary open
+    // can claim that root's top-level payload tree. A valid legacy marker on
+    // the normal root remains authoritative and keeps its existing layout.
+    if config.root.is_none()
+        && (migration::recovery_is_enrolled(default_root)
+            || migration::recovery_manifest_pending(default_root))
+        && !migration::recovery_has_live_legacy_lease(default_root).unwrap_or(true)
+        && !matches!(state::inspect_payload_root(&root), Ok(true))
+    {
+        let control = state::ControlState::open_for_validated_migration(default_root, &root)?;
+        migration::consolidate_recovery(&control, default_root)?;
+        return Ok(control);
+    }
+    match state::ControlState::open(default_root, &root) {
+        Ok(control) => {
+            control.retire_legacy_marker_if_inactive()?;
+            migration::consolidate_recovery(&control, default_root)?;
+            Ok(control)
+        }
+        Err(error)
+            if config.root.is_none()
+                && matches!(error, SessionTmpError::RootNotManaged(_))
+                && (migration::recovery_is_enrolled(default_root)
+                    || migration::recovery_manifest_pending(default_root)) =>
+        {
+            // The old recovery root is independently marker-validated. Enroll
+            // a fresh managed namespace below the nonempty default root so
+            // unknown files there remain outside all cleanup traversal.
+            let control = state::ControlState::open_for_validated_migration(default_root, &root)?;
+            migration::consolidate_recovery(&control, default_root)?;
+            Ok(control)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]
