@@ -1,0 +1,20 @@
+intent:
+  id: pr134-team-delegation-and-worker-counts
+change_type: fix
+scope: team-mode
+summary: Treat enabled Team mode as delegation opt-in and count active direct and nested Workers from live spawn notifications.
+decision: Select proactive delegation guidance for Team On and preserve observed active Worker ancestry while expiring unconfirmed stale edges.
+constraints:
+  - Preserve explicit user delegation restrictions and Team Off behavior.
+  - Balance level 1 prioritizes substantive Worker handoff.
+  - Keep active descendants and their ancestor edges beyond provisional metadata grace.
+  - Do not infer deterministic model obedience from prompt-contract tests.
+intent_priority: must
+code_locations:
+  - codex-rs/core/src/context/team_instructions.rs
+  - codex-rs/tui/src/app/team_activity.rs
+  - codex-rs/tui/src/app/thread_routing.rs
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: GPT-6
