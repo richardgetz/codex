@@ -1,5 +1,5 @@
 intent:
-  id: intent/2026-09-11/goal-background-wait
+  id: intent/2026-09-11/goal-background-wait#5063ed442abe
   change_type: fix
   scope: goal-continuation
   summary: Park automatic Goal continuations while tracked unified-exec processes run and serialize Team Lead admission.
@@ -10,7 +10,7 @@ intent:
     - Attribute waits to an active Goal turn and exact managed process IDs; invalidate stale callbacks on turn or goal mutation.
     - Preserve external process lifecycle when a Goal is replaced or cleared; cancel only the old Goal waiter.
     - Keep app-server wire APIs unchanged and use deterministic mock responses only.
-  intent_priority: high
+  intent_priority: must
   code_locations:
     - codex-rs/ext/goal/src/runtime.rs
     - codex-rs/ext/goal/src/extension.rs
@@ -20,7 +20,7 @@ intent:
     - codex-rs/core/src/unified_exec/process_manager.rs
     - codex-rs/app-server/tests/suite/v2/goal_wait.rs
     - codex-rs/core/templates/fork/delta_inventory.md
-  requested_by: user
+  requested_by: "@richardgetz"
   recorded_by:
     agent: Codex Worker
-    model: gpt-5
+    model: unknown
