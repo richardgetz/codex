@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-09-12/pending-response-item-follow-up"
+  change_type: "fix"
+  scope: "core-usage"
+  summary: "Preserve same-turn follow-up for injected response items without bypassing usage floors."
+  decision: "Track pending raw ResponseItem injections separately from explicit user input, include the response-item bit in turn follow-up admission, and keep usage-floor authorization limited to explicit user input."
+  constraints:
+    - "Preserve the c287 final-answer boundary contract for explicit response-item injections."
+    - "Queue-only inter-agent mail remains deferred after final answers."
+    - "Minimum remaining usage floors continue to block automatic continuation."
+    - "Do not change sandbox environment-variable handling."
+    - "Update the fork delta inventory for the preserved usage behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session/input_queue.rs"
+    - "codex-rs/core/src/session/turn.rs"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-6-astra"
