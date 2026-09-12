@@ -5087,7 +5087,7 @@ impl Session {
                     session_store: &self.services.session_extension_data,
                     thread_store: &self.services.thread_extension_data,
                     turn_store: turn_context.extension_data.as_ref(),
-                    model_context_window: turn_context.model_context_window(),
+                    model_context_window: step_context.settings.model_info.usable_context_window(),
                 })
                 .await
             {
@@ -5119,6 +5119,22 @@ impl Session {
             turn_context,
             world_state,
             /*mcp*/ None,
+            turn_context.model_context_window(),
+        )
+        .await
+    }
+
+    async fn build_initial_context_with_world_state_for_step(
+        &self,
+        step_context: &StepContext,
+        world_state: &WorldState,
+    ) -> Vec<ResponseItem> {
+        let turn_context = step_context.turn.as_ref();
+        self.build_initial_context_with_world_state_impl(
+            turn_context,
+            world_state,
+            /*mcp*/ None,
+            step_context.settings.model_info.usable_context_window(),
         )
         .await
     }
@@ -5129,8 +5145,29 @@ impl Session {
         world_state: &WorldState,
         mcp: &McpBinding,
     ) -> Vec<ResponseItem> {
-        self.build_initial_context_with_world_state_impl(turn_context, world_state, Some(mcp))
-            .await
+        self.build_initial_context_with_world_state_impl(
+            turn_context,
+            world_state,
+            Some(mcp),
+            turn_context.model_context_window(),
+        )
+        .await
+    }
+
+    pub(crate) async fn build_initial_context_with_world_state_from_mcp_binding_for_step(
+        &self,
+        step_context: &StepContext,
+        world_state: &WorldState,
+        mcp: &McpBinding,
+    ) -> Vec<ResponseItem> {
+        let turn_context = step_context.turn.as_ref();
+        self.build_initial_context_with_world_state_impl(
+            turn_context,
+            world_state,
+            Some(mcp),
+            step_context.settings.model_info.usable_context_window(),
+        )
+        .await
     }
 
     async fn build_initial_context_with_world_state_impl(
@@ -5138,6 +5175,7 @@ impl Session {
         turn_context: &TurnContext,
         world_state: &WorldState,
         mcp: Option<&McpBinding>,
+        model_context_window: Option<i64>,
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<RenderedFragment>::with_capacity(8);
         let mut contextual_user_sections = Vec::<RenderedFragment>::with_capacity(2);
@@ -5338,7 +5376,7 @@ impl Session {
                     session_store: &self.services.session_extension_data,
                     thread_store: &self.services.thread_extension_data,
                     turn_store: turn_context.extension_data.as_ref(),
-                    model_context_window: turn_context.model_context_window(),
+                    model_context_window,
                 })
                 .await
             {
@@ -5347,7 +5385,7 @@ impl Session {
         }
         // This is full-context metadata. Steady-state context diffs should not re-emit it.
         if turn_context.config.features.enabled(Feature::TokenBudget)
-            && turn_context.model_context_window().is_some()
+            && model_context_window.is_some()
         {
             // Keep the legacy bridge hint when native Notes is disabled.
             if !turn_context
@@ -5632,8 +5670,8 @@ impl Session {
         };
         let (window_number, window_ids) = window;
         let context_items = self
-            .build_initial_context_with_world_state_from_mcp_binding(
-                turn_context,
+            .build_initial_context_with_world_state_from_mcp_binding_for_step(
+                step_context,
                 world_state.as_ref(),
                 step_context.mcp.as_ref(),
             )
@@ -5699,8 +5737,8 @@ impl Session {
         // Full initial context resets the baseline; later turns persist only its changes.
         let (mut context_items, world_state_item) = if should_inject_full_context {
             let context_items = self
-                .build_initial_context_with_world_state_from_mcp_binding(
-                    turn_context,
+                .build_initial_context_with_world_state_from_mcp_binding_for_step(
+                    step_context,
                     world_state.as_ref(),
                     step_context.mcp.as_ref(),
                 )

@@ -89,6 +89,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -13956,6 +13957,123 @@ async fn record_context_updates_and_set_reference_context_item_persists_split_fi
                 .expect("serializable split policy"),
         )
     );
+}
+
+#[tokio::test]
+async fn build_initial_context_uses_retained_step_after_model_change() {
+    let (mut session, mut turn_context, _rx_event) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config.features.enable(Feature::Personality).unwrap();
+                config.features.enable(Feature::TokenBudget).unwrap();
+                config.personality = Some(Personality::Friendly);
+            },
+        )
+        .await;
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    builder.prompt_contributor(Arc::new(TurnContextExtensionTestContributor));
+    Arc::get_mut(&mut session)
+        .expect("unshared test session")
+        .services
+        .extensions = Arc::new(builder.build());
+    turn_context
+        .extension_data
+        .insert(TurnContextExtensionTestState {
+            expected_model_context_window: Some(64_000),
+        });
+    update_turn_settings_for_test(Arc::get_mut(&mut turn_context).unwrap(), |settings| {
+        let model_info = Arc::make_mut(&mut settings.model_info);
+        model_info.slug = "model-a".to_string();
+        model_info.context_window = None;
+        model_info.max_context_window = None;
+        let messages = model_info.model_messages.as_mut().unwrap();
+        messages.instructions_template = Some("A instructions: {{ personality }}".to_string());
+        messages.instructions_variables = Some(ModelInstructionsVariables {
+            personality_default: Some("default".to_string()),
+            personality_friendly: Some("friendly".to_string()),
+            personality_pragmatic: Some("pragmatic".to_string()),
+        });
+    });
+    session
+        .set_previous_turn_settings(Some(PreviousTurnSettings {
+            model: "base-model".to_string(),
+            comp_hash: None,
+            realtime_active: None,
+        }))
+        .await;
+    let step_a = session
+        .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())
+        .await
+        .unwrap();
+    let world_a = Arc::new(session.build_world_state_for_step(&step_a).await.unwrap());
+    let retained = crate::compact::InitialContextInjection::BeforeLastUserMessage {
+        world_state: Arc::clone(&world_a),
+        step_context: Arc::clone(&step_a),
+    };
+    let (initial_a, _) =
+        crate::compact::build_compaction_initial_context(&session, &retained).await;
+
+    let mut selected_b = step_a.settings.selected().clone();
+    selected_b.collaboration_mode.settings.model = "model-b".to_string();
+    selected_b.personality = Some(Personality::Pragmatic);
+    let mut model_b = step_a.settings.model_info.as_ref().clone();
+    model_b.slug = "model-b".to_string();
+    model_b.context_window = Some(128_000);
+    model_b.effective_context_window_percent = 50;
+    model_b
+        .model_messages
+        .as_mut()
+        .unwrap()
+        .instructions_template = Some("B instructions: {{ personality }}".to_string());
+    turn_context
+        .current_settings
+        .store(Arc::new(ResolvedStepSettings::new(
+            Arc::new(selected_b),
+            Arc::new(model_b),
+            /*fast_mode_enabled*/ false,
+        )));
+    let step_b = session
+        .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())
+        .await
+        .unwrap();
+    let world_b = session.build_world_state_for_step(&step_b).await.unwrap();
+    let initial_b = session
+        .build_initial_context_with_world_state_for_step(&step_b, &world_b)
+        .await;
+    let turn_contributions_b = session.build_turn_context_contribution_items(&step_b).await;
+    let (restored_a, restored_world) =
+        crate::compact::build_compaction_initial_context(&session, &retained).await;
+
+    assert_eq!(restored_a, initial_a);
+    assert!(Arc::ptr_eq(restored_world.as_ref().unwrap(), &world_a));
+    let initial_a = initial_a
+        .into_iter()
+        .map(ResponseItemEnvelope::into_item)
+        .collect::<Vec<_>>();
+    let a_text = developer_input_texts(&initial_a).join("\n");
+    let b_text = developer_input_texts(&initial_b).join("\n");
+    assert!(a_text.contains("A instructions: friendly"));
+    assert!(!a_text.contains("<context_window>"));
+    assert!(b_text.contains("B instructions: pragmatic"));
+    assert!(!b_text.contains("A instructions:"));
+    assert!(!a_text.contains("turn context extension enabled"));
+    assert!(b_text.contains("turn context extension enabled"));
+    assert!(
+        developer_input_texts(&turn_contributions_b)
+            .join("\n")
+            .contains("turn context extension enabled")
+    );
+    assert!(
+        b_text.contains("<context_window>"),
+        "full-context metadata must use B's window even though the turn started without one"
+    );
+    assert_eq!(
+        step_b.environments.to_selections(),
+        step_a.environments.to_selections()
+    );
+    assert!(Arc::ptr_eq(&step_b.turn.config, &step_a.turn.config));
 }
 
 #[tokio::test]
