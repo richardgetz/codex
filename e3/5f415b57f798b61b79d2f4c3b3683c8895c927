@@ -1,0 +1,16 @@
+intent:
+  id: tui-cached-legacy-resume-phase-trace-20260912
+  change_type: test
+  scope: codex-rs/tui
+  summary: Add temporary phase diagnostics to the cached legacy resume fixture.
+  decision: Log the feature combination and each maintenance-lock, thread-read, thread-resume, and history-hydration phase so a timeout identifies the stalled await without changing assertions or timeout behavior.
+  constraints:
+    - test-only diagnostics; remove after the bounded run
+    - preserve existing lock contention and resume assertions
+    - do not log paths, credentials, request bodies, or other sensitive state
+  intent_priority: normal
+  code_locations:
+    - codex-rs/tui/src/app_server_session/rollout_history.rs
+    - codex-rs/tui/src/app_server_session/rollout_history_tests.rs
+  requested_by: /root/stable_refresh
+  recorded_by: codex
