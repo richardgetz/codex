@@ -257,9 +257,10 @@ release or merge rules.
     a fresh `thread/started`/`turn/started` admits it.
   - Collab spawn and V2 `SubAgentActivity` start/completion events locally admit
     their parent edges before persisted metadata arrives. Same-root metadata
-    refreshes retain a provisional edge for a bounded grace window, then prune
-    an omitted edge, keeping unfinished direct and nested Workers visible without
-    polling.
+    refreshes retain a provisional edge for a bounded grace window, then keep it
+    only while an active direct or nested Worker entry remains; idle or absent
+    omitted edges are pruned without polling. This keeps unfinished direct and
+    nested Workers visible when `ThreadStarted` metadata is delayed.
 
 - Recursive per-response usage accounting:
   - App-server v2 sends the legacy context-window counters through
@@ -595,6 +596,10 @@ release or merge rules.
   balance `1` favors Worker handoff without weakening explicit task-specific
   delegation restrictions or Worker completeness, required checks, approvals,
   scope, concurrency, and depth limits.
+- Verify collab spawn and `SubAgentActivity` start/completion edges admit direct
+  and nested Worker activity before persisted metadata, preserve active lineages
+  through delayed `ThreadStarted` delivery, and prune omitted idle/absent edges
+  after the 30-second grace window without adding polling.
 - Verify `[team.lead].balance` defaults to `3`, accepts only `1..5`, rejects
   Worker updates, and persists through session snapshots, resume, and fork.
   Verify `/team balance` renders all five approved labels and typed values,
