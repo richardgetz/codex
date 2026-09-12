@@ -545,12 +545,16 @@ impl GoalRuntimeHandle {
 
         let (event_name, status, expected_goal_id) = match reason {
             ActiveGoalStopReason::TurnError => {
-                ("turn-error", codex_state::ThreadGoalStatus::Blocked, None)
+                (
+                    "turn-error",
+                    codex_state::ThreadGoalStatus::Blocked,
+                    Some(accounting_goal_id.clone()),
+                )
             }
             ActiveGoalStopReason::UsageLimit => (
                 "usage-limit",
                 codex_state::ThreadGoalStatus::UsageLimited,
-                None,
+                Some(accounting_goal_id.clone()),
             ),
             ActiveGoalStopReason::EmptyResponse => {
                 let Some(expected_goal_id) =
