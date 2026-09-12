@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-12/guardian-sticky-exec-output-diagnostic#b58179b5e0"
+  change_type: test
+  scope: core guardian execution
+  summary: "Expose returned exec output when the sticky-permission Guardian regression assertion fails."
+  decision: "Keep the existing echo-hi assertion and attach a bounded debug message containing only the test command's returned output."
+  constraints:
+    - "Do not alter production permission, sandbox, or handler behavior."
+    - "Use the existing test-only echo hi command; do not include secrets or environment dumps."
+    - "Preserve the test's existing permission and output assertions."
+  intent_priority: must
+  code_locations:
+    - "codex-rs/core/src/session/tests/guardian_tests.rs"
+  requested_by: Rick
+  recorded_by:
+    agent: Codex
+    model: GPT-5
