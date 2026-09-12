@@ -1,0 +1,16 @@
+intent:
+  id: team-edge-retention-inventory-2026-09-12
+  change_type: docs
+  scope: fork delta inventory Team activity admission
+  summary: Document that active local Worker lineages survive delayed metadata while idle or absent edges expire.
+  decision: Update the Unreleased behavior and merge checklist to describe the 30-second provisional grace, active-lineage retention, nested protection, and event-driven cleanup.
+  constraints:
+    - Keep inventory synchronized with fork-only TUI behavior.
+    - Avoid promising polling or unbounded retention for idle/absent edges.
+  intent_priority: high
+  code_locations:
+    - codex-rs/core/templates/fork/delta_inventory.md
+  requested_by: user
+  recorded_by: codex
+  agent: /root/stable_refresh
+  model: gpt-5.6-sol
