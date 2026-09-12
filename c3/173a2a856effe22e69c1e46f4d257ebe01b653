@@ -1,0 +1,18 @@
+intent:
+  id: tui-cursor-forced-color-snapshots-20260912
+  change_type: test
+  scope: codex-rs/tui
+  summary: Refresh cursor snapshots for deterministic forced-color capture tests.
+  decision: Accept the exact single-column and owned-wide frame bytes emitted after the test-only CaptureBackend forces crossterm color output under NO_COLOR; preserve glyph, hyperlink, cursor, and frame assertions.
+  constraints:
+    - test snapshots only; no production cursor behavior changes
+    - update only the two generated snapshots
+    - preserve existing semantic assertions and frame ordering
+  intent_priority: normal
+  code_locations:
+    - codex-rs/tui/src/custom_terminal/tests/snapshots/codex_tui__custom_terminal__tests__cursor__cursor_style_single_column_frames.snap
+    - codex-rs/tui/src/custom_terminal/tests/snapshots/codex_tui__custom_terminal__tests__cursor__cursor_style_owned_wide_frames.snap
+  requested_by: /root/stable_refresh
+  recorded_by: codex
+  agent: /root/stable_refresh
+  model: gpt-5.6-sol
