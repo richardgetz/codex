@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-12/team-response-capture-disambiguation#5f89f85b73"
+  change_type: test
+  scope: team
+  summary: Disambiguate asynchronous direct-spawn and recursive usage response captures.
+  decision: Await the replacement Lead response before reading its output and require captured grandchild requests to omit the child spawn output; exclude grandchild task text from child-initial captures.
+  constraints:
+    - Preserve direct Worker limit rejection, slot reuse, and recursive usage assertions.
+    - Keep the original Team delegation and TUI proof tests unchanged.
+    - Use main-only validation for Cargo tests.
+  intent_priority: should
+  code_locations:
+    - codex-rs/core/tests/suite/team.rs::team_worker_limit_rejects_second_direct_spawn_and_reuses_completed_slot
+    - codex-rs/core/tests/suite/team_usage.rs::team_usage_projection_reconstructs_recursive_worker_sources
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex stable_refresh Worker"
+    model: "gpt-5.6"
