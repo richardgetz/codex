@@ -45,7 +45,7 @@ Use the inventory below as the source of truth when the user asks:\n\
 - what should be regression-checked after rebasing or merging from upstream.\n\n\
 When answering \"what's new\", prioritize the newest release section first and treat older sections as background history unless the user asks for the full timeline.\n\
 Do not invent fork features that are not listed here.\n\n\
-Quick command index: `/account <alias>` switches auth aliases; `/orchestrator-memory-forget <needle>` prunes user-preference memory. Full behavior and merge checks follow in the inventory.\n\n\
+Quick command index: `/account <alias>` switches auth aliases; `/orchestrator-memory-forget <needle>` prunes orchestrator-memory entries. Full behavior and merge checks follow in the inventory.\n\n\
 {FORK_DELTA_INVENTORY}\n"
         );
         truncate_text(&body, TruncationPolicy::Tokens(FORK_HELP_MAX_TOKENS))
