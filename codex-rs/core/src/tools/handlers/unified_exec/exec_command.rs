@@ -18,6 +18,7 @@ use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
+use crate::tools::handlers::parse_arguments_with_integral_float_fallback;
 use crate::tools::handlers::resolve_sandbox_permissions;
 use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::rewrite_function_string_argument;
@@ -242,7 +243,7 @@ impl ExecCommandHandler {
             None => {
                 // Foreign executor cwd values cannot seed this host's AbsolutePathBufGuard.
                 // Sandbox intent and URI-native roots are still sent to the executor.
-                parse_arguments(&arguments)?
+                parse_arguments_with_integral_float_fallback(&arguments)?
             }
         };
         if args.tty && !session.features().enabled(Feature::UnifiedExecTty) {
@@ -558,7 +559,7 @@ impl CoreToolRuntime for ExecCommandHandler {
             return None;
         };
 
-        parse_arguments::<ExecCommandArgs>(arguments)
+        parse_arguments_with_integral_float_fallback::<ExecCommandArgs>(arguments)
             .ok()
             .map(|args| PreToolUsePayload {
                 tool_name: HookToolName::bash(),

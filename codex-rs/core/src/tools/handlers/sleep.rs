@@ -3,7 +3,7 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
-use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::parse_arguments_with_integral_float_fallback;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_extension_items::ExtensionItem;
@@ -90,7 +90,7 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
                     "{TOOL_NAME} handler received unsupported payload"
                 )));
             };
-            let args: SleepArgs = parse_arguments(&arguments)?;
+            let args: SleepArgs = parse_arguments_with_integral_float_fallback(&arguments)?;
             if !(1..=MAX_SLEEP_DURATION_MS).contains(&args.duration_ms) {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "duration_ms must be between 1 and {MAX_SLEEP_DURATION_MS}"
