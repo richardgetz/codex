@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-09-12/team-fixture-compatibility#20b7fecbbb"
+  change_type: "test"
+  scope: "team"
+  summary: "Keep Team integration fixtures aligned with completion wakes and mixed V1/V2 task inputs."
+  decision: "Answer the intentional Lead completion-wake turn explicitly and match persisted task text across user and assistant AgentMessage history while retaining direct-cap rejection and recursive usage assertions."
+  constraints:
+    - "Do not weaken the direct Worker concurrency ceiling or slot-reuse assertions."
+    - "Keep recursive usage source and response identity assertions unchanged."
+    - "Preserve the original Team delegation proof tests and explicit per-task restrictions."
+    - "Use main-only validation for Cargo tests."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/tests/suite/team.rs::team_worker_limit_rejects_second_direct_spawn_and_reuses_completed_slot"
+    - "codex-rs/core/tests/suite/team_worker_limits.rs::team_worker_limit_admits_shell_task_while_worker_idle"
+    - "codex-rs/core/tests/suite/team_usage.rs::team_usage_projection_reconstructs_recursive_worker_sources"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex stable_refresh Worker"
+    model: "gpt-5.6"
