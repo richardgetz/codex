@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-12/tui-hook-activity-snapshot#3ba3bf7026"
+  change_type: test
+  scope: tui
+  summary: Record the intentional hook activity rendering after team status integration.
+  decision: Accept the generated snapshot that omits the interrupt hint when a hook-only status row is active, matching the status indicator's local-task interrupt semantics.
+  constraints:
+    - Keep the snapshot limited to the observed team status rendering change.
+    - Do not accept path leaks or unrelated snapshot churn.
+  intent_priority: should
+  code_locations:
+    - "codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__hook_runs_while_exec_active_snapshot.snap"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5"
