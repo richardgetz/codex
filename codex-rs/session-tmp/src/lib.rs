@@ -18,6 +18,7 @@ pub use types::CleanupReport;
 pub use types::DEFAULT_STALE_AFTER_SECONDS;
 pub use types::EntryMetadata;
 pub use types::Retention;
+pub use types::ReapMode;
 pub use types::SessionTmpConfig;
 pub use types::SessionTmpError;
 pub use types::SessionTmpListing;
@@ -32,7 +33,7 @@ use storage::ensure_directory_not_symlink;
 use storage::ensure_managed_root;
 use storage::now_seconds;
 use storage::read_metadata;
-use storage::reap_stale_sessions;
+use storage::reap_sessions;
 use storage::resolve_user_session_id;
 use storage::set_private_directory;
 use storage::set_private_file;
@@ -49,6 +50,7 @@ const SESSION_METADATA_FILE: &str = "session.json";
 const ENTRY_METADATA_DIR: &str = "metadata";
 const AGENTS_DIR: &str = "agents";
 const MAX_LIST_ENTRIES: usize = 2_000;
+const RECOVERY_ROOT: &str = "session-tmp-recovery";
 
 /// The process-local handle for one session and one agent thread.
 pub struct SessionTmpManager {
@@ -101,19 +103,49 @@ impl SessionTmpManager {
             .root
             .clone()
             .unwrap_or_else(|| default_root.join("session-tmp"));
-        if !root.is_absolute() {
-            return Err(SessionTmpError::RootNotAbsolute(root));
+        let recovery_root = default_root.join(RECOVERY_ROOT);
+        let mut recovery_attempted = false;
+        let mut root = root;
+        loop {
+            let result = if root.is_absolute() {
+                ensure_managed_root(&root).and_then(|()| {
+                    let config = SessionTmpConfig {
+                        root: Some(root.clone()),
+                        ..config.clone()
+                    };
+                    resolve_user_session_id(&root, session_id, thread_id).and_then(|session_id| {
+                        Self::open_inner(
+                            config,
+                            default_root,
+                            &session_id,
+                            thread_id,
+                            SessionTmpOwner::RootSession,
+                            CleanupPolicy::ManualOnly,
+                        )
+                    })
+                })
+            } else {
+                Err(SessionTmpError::RootNotAbsolute(root.clone()))
+            };
+            match result {
+                Ok(manager) => return Ok(manager),
+                Err(error)
+                    if !recovery_attempted
+                        && root != recovery_root
+                        && matches!(
+                            &error,
+                            SessionTmpError::Io(_)
+                                | SessionTmpError::RootNotAbsolute(_)
+                                | SessionTmpError::RootNotManaged(_)
+                                | SessionTmpError::UnsafeManagedPath(_)
+                        ) =>
+                {
+                    root = recovery_root.clone();
+                    recovery_attempted = true;
+                }
+                Err(error) => return Err(error),
+            }
         }
-        ensure_managed_root(&root)?;
-        let session_id = resolve_user_session_id(&root, session_id, thread_id)?;
-        Self::open_inner(
-            config,
-            default_root,
-            &session_id,
-            thread_id,
-            SessionTmpOwner::RootSession,
-            CleanupPolicy::ManualOnly,
-        )
     }
 
     fn open_inner(
@@ -162,7 +194,11 @@ impl SessionTmpManager {
         set_private_directory(&agent_dir)?;
         let is_root_session = owner == SessionTmpOwner::RootSession;
         if is_root_session {
-            reap_stale_sessions(&root, config.stale_after, Some(session_id))?;
+            reap_sessions(
+                &root,
+                types::ReapMode::OlderThan(config.stale_after),
+                Some(session_id),
+            )?;
         }
         let manager = Self {
             root,

@@ -22,7 +22,7 @@ use std::fs;
 use std::time::Duration;
 
 const SESSION_TMP_UNAVAILABLE_WARNING: &str =
-    "Session temporary storage is unavailable; continuing without it for this runtime. Use a new empty root or repair its managed marker after verifying its contents.";
+    "Session temporary storage is unavailable; continuing without it for this runtime. The configured and recovery roots could not be opened safely; use a new empty root or repair a managed marker after verifying its contents.";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_tmp_tool_records_current_session_and_thread_lineage() -> anyhow::Result<()> {
@@ -206,6 +206,9 @@ async fn unavailable_session_tmp_fails_open_and_disables_runtime_consumers() -> 
             let root = home.join("session-tmp");
             fs::create_dir_all(root.join("sessions")).unwrap();
             fs::write(root.join("preserved.txt"), b"keep this file").unwrap();
+            let recovery_root = home.join("session-tmp-recovery");
+            fs::create_dir_all(recovery_root.join("sessions")).unwrap();
+            fs::write(recovery_root.join("preserved.txt"), b"keep recovery data").unwrap();
         })
         .with_config(|config| {
             config.session_tmp.enabled = true;
@@ -244,6 +247,12 @@ async fn unavailable_session_tmp_fails_open_and_disables_runtime_consumers() -> 
     let root = test.codex_home_path().join("session-tmp");
     assert_eq!(fs::read(root.join("preserved.txt"))?, b"keep this file");
     assert!(!root.join(".codex-managed-session-tmp").exists());
+    let recovery_root = test.codex_home_path().join("session-tmp-recovery");
+    assert_eq!(
+        fs::read(recovery_root.join("preserved.txt"))?,
+        b"keep recovery data"
+    );
+    assert!(!recovery_root.join(".codex-managed-session-tmp").exists());
 
     let snapshot = test.codex.config_snapshot().await;
     let invalid_root_in_sandbox = snapshot
@@ -320,6 +329,9 @@ async fn unavailable_session_tmp_fails_open_on_resume_and_preserves_data() -> an
             let root = home.join("session-tmp-custom");
             fs::create_dir_all(root.join("sessions")).unwrap();
             fs::write(root.join("preserved.txt"), b"keep this file").unwrap();
+            let recovery_root = home.join("session-tmp-recovery");
+            fs::create_dir_all(recovery_root.join("sessions")).unwrap();
+            fs::write(recovery_root.join("preserved.txt"), b"keep recovery data").unwrap();
         })
         .with_config(|config| {
             config.session_tmp.enabled = true;
@@ -362,6 +374,93 @@ async fn unavailable_session_tmp_fails_open_on_resume_and_preserves_data() -> an
     let root = resumed.codex_home_path().join("session-tmp-custom");
     assert_eq!(fs::read(root.join("preserved.txt"))?, b"keep this file");
     assert!(!root.join(".codex-managed-session-tmp").exists());
+    let recovery_root = resumed.codex_home_path().join("session-tmp-recovery");
+    assert_eq!(
+        fs::read(recovery_root.join("preserved.txt"))?,
+        b"keep recovery data"
+    );
+    assert!(!recovery_root.join(".codex-managed-session-tmp").exists());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unavailable_session_tmp_recovers_into_validated_runtime_root() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            let root = home.join("session-tmp");
+            fs::create_dir_all(root.join("sessions")).unwrap();
+            fs::write(root.join("preserved.txt"), b"leave original data").unwrap();
+        })
+        .with_config(|config| {
+            config.session_tmp.enabled = true;
+        });
+    let test = builder.build(&server).await?;
+    let recovery_root = test.codex_home_path().join("session-tmp-recovery");
+    let warning = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::Warning(warning)
+                if warning.message.contains("using recovery root")
+                    && warning.message.contains(recovery_root.to_str().unwrap())
+        )
+    })
+    .await;
+    assert!(matches!(
+        warning,
+        EventMsg::Warning(warning)
+            if warning.message.contains("using recovery root")
+                && warning.message.contains(recovery_root.to_str().unwrap())
+    ));
+
+    let call_id = "recovered-session-tmp-create";
+    let arguments = json!({
+        "name": "recovered.txt",
+        "purpose": "recovery test",
+        "retention": "session",
+        "kind": "file",
+    })
+    .to_string();
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("recovered-resp"),
+            ev_function_call_with_namespace(call_id, "session_tmp", "create", &arguments),
+            ev_completed("recovered-resp"),
+        ]),
+    )
+    .await;
+    let completion = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("recovered-msg", "saved"),
+            ev_completed("recovered-final-resp"),
+        ]),
+    )
+    .await;
+    test.submit_text_turn("create an artifact in the recovered temporary root")
+        .await?;
+
+    let entry = completion
+        .function_call_output_text(call_id)
+        .expect("session_tmp output should be captured");
+    let entry: Value = serde_json::from_str(entry)?;
+    let absolute_path = entry["absolute_path"]
+        .as_str()
+        .expect("recovered entry should have an absolute path");
+    assert!(std::path::Path::new(absolute_path).starts_with(&recovery_root));
+    assert!(recovery_root.join(".codex-managed-session-tmp").exists());
+    assert_eq!(
+        fs::read(test.codex_home_path().join("session-tmp/preserved.txt"))?,
+        b"leave original data"
+    );
+    assert!(!test
+        .codex_home_path()
+        .join("session-tmp/.codex-managed-session-tmp")
+        .exists());
 
     Ok(())
 }

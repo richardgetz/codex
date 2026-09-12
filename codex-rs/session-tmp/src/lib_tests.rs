@@ -29,6 +29,69 @@ fn disabled_storage_is_inert() {
 }
 
 #[test]
+fn user_open_recovers_to_a_validated_sibling_root() {
+    let root = tempfile::tempdir().unwrap();
+    let invalid_root = root.path().join("managed");
+    fs::create_dir_all(invalid_root.join("sessions")).unwrap();
+    fs::write(invalid_root.join("preserved.txt"), b"keep").unwrap();
+    let config = config(&root);
+
+    let manager = SessionTmpManager::open_for_user(
+        &config,
+        root.path(),
+        "session-1",
+        "thread-1",
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(
+        manager.root(),
+        root.path().join(RECOVERY_ROOT).as_path()
+    );
+    assert!(manager.root().join(MANAGED_ROOT_MARKER).exists());
+    assert_eq!(fs::read(invalid_root.join("preserved.txt")).unwrap(), b"keep");
+    assert!(!invalid_root.join(MANAGED_ROOT_MARKER).exists());
+}
+
+#[test]
+fn user_open_recovers_when_original_session_layout_is_unsafe() {
+    let root = tempfile::tempdir().unwrap();
+    let config = config(&root);
+    let original_manager = SessionTmpManager::open(
+        &config,
+        root.path(),
+        "session-1",
+        "thread-1",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+    let original_session_root = original_manager.session_root().to_path_buf();
+    drop(original_manager);
+
+    let agents_dir = original_session_root.join(AGENTS_DIR);
+    fs::remove_dir_all(&agents_dir).unwrap();
+    fs::write(&agents_dir, b"preserve unsafe state").unwrap();
+
+    let manager = SessionTmpManager::open_for_user(
+        &config,
+        root.path(),
+        "session-1",
+        "thread-1",
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(
+        manager.root(),
+        root.path().join(RECOVERY_ROOT).as_path()
+    );
+    assert!(manager.root().join(MANAGED_ROOT_MARKER).exists());
+    assert!(agents_dir.is_file());
+}
+
+#[test]
 fn create_records_session_and_thread_lineage() {
     let root = tempfile::tempdir().unwrap();
     let manager = SessionTmpManager::open(
@@ -903,6 +966,107 @@ fn live_lease_protects_a_session_with_an_old_record() {
     assert!(live_manager.session_root().exists());
     drop(reaping_manager);
     drop(live_manager);
+}
+
+#[test]
+fn force_reap_removes_inactive_sessions_but_preserves_live_leases() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = config(&root);
+    config.stale_after = Duration::ZERO;
+
+    let live_manager = SessionTmpManager::open(
+        &config,
+        root.path(),
+        "live-session",
+        "live-thread",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+    let inactive_session_root = {
+        let manager = SessionTmpManager::open(
+            &config,
+            root.path(),
+            "inactive-session",
+            "inactive-thread",
+            SessionTmpOwner::RootSession,
+        )
+        .unwrap()
+        .unwrap();
+        manager.session_root().to_path_buf()
+    };
+    let current_manager = SessionTmpManager::open(
+        &config,
+        root.path(),
+        "current-session",
+        "current-thread",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+
+    let report = current_manager
+        .reap_with_mode(ReapMode::Force)
+        .unwrap();
+
+    assert_eq!(report.removed_paths, 1);
+    assert_eq!(report.removed_sessions, 1);
+    assert!(!inactive_session_root.exists());
+    assert!(live_manager.session_root().exists());
+    assert!(current_manager.session_root().exists());
+}
+
+#[test]
+fn force_reap_preserves_unsafe_session_state_and_continues() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = config(&root);
+    config.stale_after = Duration::ZERO;
+
+    let current_manager = SessionTmpManager::open(
+        &config,
+        root.path(),
+        "current-session",
+        "current-thread",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+    let unsafe_session_root = {
+        let manager = SessionTmpManager::open(
+            &config,
+            root.path(),
+            "unsafe-session",
+            "unsafe-thread",
+            SessionTmpOwner::RootSession,
+        )
+        .unwrap()
+        .unwrap();
+        manager.session_root().to_path_buf()
+    };
+    fs::remove_dir_all(unsafe_session_root.join(LEASES_DIR)).unwrap();
+    fs::write(unsafe_session_root.join(LEASES_DIR), b"preserve unsafe state").unwrap();
+    let inactive_session_root = {
+        let manager = SessionTmpManager::open(
+            &config,
+            root.path(),
+            "inactive-session",
+            "inactive-thread",
+            SessionTmpOwner::RootSession,
+        )
+        .unwrap()
+        .unwrap();
+        manager.session_root().to_path_buf()
+    };
+
+    let report = current_manager
+        .reap_with_mode(ReapMode::Force)
+        .unwrap();
+
+    assert_eq!(report.removed_paths, 1);
+    assert_eq!(report.removed_sessions, 1);
+    assert!(!inactive_session_root.exists());
+    assert!(unsafe_session_root.exists());
+    assert!(unsafe_session_root.join(LEASES_DIR).is_file());
 }
 
 #[test]

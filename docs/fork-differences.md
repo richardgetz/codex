@@ -292,9 +292,13 @@ the effective assignment in thread responses. See the
   configured parent is treated as managed storage, not as a general deletion
   target; cleanup is restricted to the managed layout and its ownership data.
 - If the configured root cannot be opened safely (for example, an existing
-  unmarked directory), startup and resume continue with this feature disabled
-  for the runtime and emit a warning. Codex never adopts or rewrites an
-  untrusted root; choose a new empty root or repair the
+  unmarked directory), startup and resume first try the deterministic
+  `<codex_home>/session-tmp-recovery` root. That fallback is created or opened
+  only through the same marker and symlink checks; the original root is not
+  adopted, marker-repaired, or deleted (the safety check may tighten its
+  permissions). A warning names the recovery root used for that runtime. If
+  both roots fail those checks, startup continues with this feature disabled
+  and a warning; choose a new empty root or repair the
   `.codex-managed-session-tmp` marker after verifying its contents before
   enabling the feature again.
 - The safest recovery is a new absolute root, for example:
@@ -320,10 +324,16 @@ the effective assignment in thread responses. See the
   Source files, deliverables, checkpoints, credentials, and other durable data
   must stay in the workspace or another explicitly persistent location.
 - `/tmp` (an alias for the fork-only session-temp command) supports `status`,
-  `list`, `clean`, `clear`, and `reap [days]`. `clean` removes session-retained
-  and expired entries while preserving manual-retention entries; `clear` removes
-  all entries belonging to the current session; `reap` force-cleans sessions
-  older than the selected age while protecting the current session.
+  `list`, `clean`, `clear`, and `reap [days|--force]`. `clean` removes
+  session-retained and expired entries while preserving manual-retention
+  entries; `clear` removes all entries belonging to the current session; the
+  age-limited `reap [days]` and the explicit `reap --force` both require the
+  managed lock and lease checks, protect the current and genuinely live
+  sessions, and report the preserved safety reasons. `--force` bypasses only
+  the heartbeat age cutoff, skips entries with unsafe lock or lease state, and
+  cannot be combined with a day count.
+  When startup selected the recovery root, `/tmp status` reports that managed
+  agent path rather than the rejected original root.
 
 ### Local token usage and spend tracking
 

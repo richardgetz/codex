@@ -5,6 +5,7 @@ use super::MANAGED_ROOT_MARKER;
 use super::MANAGED_ROOT_MARKER_CONTENT;
 use super::SESSION_METADATA_FILE;
 use super::SESSIONS_DIR;
+use super::ReapMode;
 use super::SessionTmpError;
 use serde::Deserialize;
 use serde::Serialize;
@@ -94,17 +95,16 @@ pub(super) fn ensure_managed_root(root: &Path) -> Result<(), SessionTmpError> {
     Ok(())
 }
 
-pub(super) fn reap_stale_sessions(
+pub(super) fn reap_sessions(
     root: &Path,
-    max_age: std::time::Duration,
+    mode: ReapMode,
     excluded_session_id: Option<&str>,
 ) -> Result<CleanupReport, SessionTmpError> {
     let sessions_dir = root.join(SESSIONS_DIR);
     ensure_directory_not_symlink(&sessions_dir)?;
     let now = now_seconds();
-    let max_age = max_age.as_secs();
     let mut report = CleanupReport::default();
-    if max_age == 0 || !sessions_dir.is_dir() {
+    if matches!(mode, ReapMode::OlderThan(age) if age.is_zero()) || !sessions_dir.is_dir() {
         return Ok(report);
     }
     for item in fs::read_dir(sessions_dir)? {
@@ -129,15 +129,16 @@ pub(super) fn reap_stale_sessions(
         let Ok(record) = read_session_record(&record_path) else {
             continue;
         };
-        if record.schema_version != 1
-            || record.session_id != directory_session_id
-            || now.saturating_sub(record.updated_at) < max_age
-        {
+        let heartbeat_is_old_enough = match mode {
+            ReapMode::OlderThan(max_age) => now.saturating_sub(record.updated_at) >= max_age.as_secs(),
+            ReapMode::Force => true,
+        };
+        if record.schema_version != 1 || record.session_id != directory_session_id || !heartbeat_is_old_enough {
             continue;
         }
         let Some(_session_lock) = (match try_lock_session(&session_dir) {
             Ok(lock) => lock,
-            Err(error) if is_skippable_reap_error(&error) => {
+            Err(error) if is_skippable_reap_error(mode, &error) => {
                 tracing::debug!(
                     error = %error,
                     session_dir = %session_dir.display(),
@@ -154,7 +155,7 @@ pub(super) fn reap_stale_sessions(
         };
         let fresh_lease = match has_fresh_lease(&session_dir.join(LEASES_DIR), LEASE_STALE_AFTER) {
             Ok(fresh_lease) => fresh_lease,
-            Err(error) if is_skippable_reap_error(&error) => {
+            Err(error) if is_skippable_reap_error(mode, &error) => {
                 tracing::debug!(
                     error = %error,
                     session_dir = %session_dir.display(),
@@ -164,15 +165,22 @@ pub(super) fn reap_stale_sessions(
             }
             Err(error) => return Err(error),
         };
+        let heartbeat_is_old_enough = match mode {
+            ReapMode::OlderThan(max_age) => now.saturating_sub(record.updated_at) >= max_age.as_secs(),
+            ReapMode::Force => true,
+        };
         if record.schema_version != 1
             || record.session_id != directory_session_id
-            || now.saturating_sub(record.updated_at) < max_age
+            || !heartbeat_is_old_enough
             || fresh_lease
         {
             continue;
         }
         match remove_path(&session_dir) {
-            Ok(true) => report.removed_sessions += 1,
+            Ok(true) => {
+                report.removed_paths += 1;
+                report.removed_sessions += 1;
+            }
             Ok(false) => {}
             Err(error) if is_skippable_reap_error(&error) => {
                 tracing::debug!(
@@ -187,8 +195,14 @@ pub(super) fn reap_stale_sessions(
     Ok(report)
 }
 
-fn is_skippable_reap_error(error: &SessionTmpError) -> bool {
-    matches!(error, SessionTmpError::Io(_))
+fn is_skippable_reap_error(mode: ReapMode, error: &SessionTmpError) -> bool {
+    match mode {
+        ReapMode::OlderThan(_) => matches!(error, SessionTmpError::Io(_)),
+        ReapMode::Force => matches!(
+            error,
+            SessionTmpError::Io(_) | SessionTmpError::UnsafeManagedPath(_)
+        ),
+    }
 }
 
 pub(super) fn resolve_user_session_id(

@@ -2,4 +2,4 @@
 source: tui/src/chatwidget/tests/slash_commands.rs
 expression: rendered
 ---
-• Session temporary storage is disabled. Add `[session_tmp].enabled = true` to config.toml to enable it. Usage: /tmp [status|list|clean|clear|reap [days]]
+• Session temporary storage is disabled. Add `[session_tmp].enabled = true` to config.toml to enable it. Usage: /tmp [status|list|clean|clear|reap [days|--force]]

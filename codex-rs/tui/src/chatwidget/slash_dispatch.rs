@@ -46,7 +46,7 @@ const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const CONTINUOUS_USAGE: &str = "Usage: /continuous [on|off|status]";
 const OUTCOMES_USAGE: &str = "Usage: /outcomes [on|off|status|report]";
 const SPEND_USAGE: &str = "Usage: /spend [days|YYYY-MM|YYYY-MM-DD..YYYY-MM-DD]";
-const SESSION_TMP_REAP_USAGE: &str = "Usage: /tmp reap [days]";
+const SESSION_TMP_REAP_USAGE: &str = "Usage: /tmp reap [days|--force]";
 const SCRATCHPAD_ABSORB_USAGE: &str = "Usage: /scratchpad-absorb <scratchpad_id> [--exclude-pending] [--exclude-blocked] [--exclude-notes] [--exclude-outcomes] [--exclude-delegations] [--exclude-artifacts] [--exclude-worktrees] [--exclude-completed] [--exclude-next-steps] [--exclude-git-refs]";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
 const MIC_USAGE: &str = "Usage: /mic [help|on|off|status|hot|push|hotkey|change|devices|aliases|alias <name> [device]|device <name>|speakers|speaker change|speaker aliases|speaker alias <name> [device]|speaker <name>]";
@@ -629,11 +629,19 @@ impl ChatWidget {
                     self.add_error_message(format!("Could not clear session temporary files: {error}"));
                 }
             },
-            ["reap"] => self.reap_session_tmp(&manager, config.stale_after),
+            ["reap"] => self.reap_session_tmp(
+                &manager,
+                codex_session_tmp::ReapMode::OlderThan(config.stale_after),
+            ),
+            ["reap", "--force"] => {
+                self.reap_session_tmp(&manager, codex_session_tmp::ReapMode::Force)
+            }
             ["reap", days] => match days.parse::<u64>() {
                 Ok(days) => self.reap_session_tmp(
                     &manager,
-                    Duration::from_secs(days.saturating_mul(24 * 60 * 60)),
+                    codex_session_tmp::ReapMode::OlderThan(Duration::from_secs(
+                        days.saturating_mul(24 * 60 * 60),
+                    )),
                 ),
                 Err(_) => self.add_error_message(SESSION_TMP_REAP_USAGE.to_string()),
             },
@@ -644,12 +652,12 @@ impl ChatWidget {
     fn reap_session_tmp(
         &mut self,
         manager: &codex_session_tmp::SessionTmpManager,
-        max_age: Duration,
+        mode: codex_session_tmp::ReapMode,
     ) {
-        match manager.reap(max_age) {
+        match manager.reap_with_mode(mode) {
             Ok(report) => self.add_info_message(
-                crate::chatwidget::session_tmp_command::cleanup_message("stale-session reap", &report),
-                Some("Only sessions older than the selected age were force-removed; the current session was protected.".to_string()),
+                crate::chatwidget::session_tmp_command::reap_message(&report, mode),
+                Some("Reaping uses managed locks and leases to protect the current and genuinely live sessions.".to_string()),
             ),
             Err(error) => {
                 self.add_error_message(format!("Could not reap stale session temporary files: {error}"));
