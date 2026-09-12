@@ -605,6 +605,76 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn cancellation_wins_when_pre_admission_dispatch_is_already_finished()
+    -> anyhow::Result<()> {
+        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let tool_name = codex_tools::ToolName::plain("test_tool");
+        let handler = Arc::new(ImmediateHandler {
+            tool_name: tool_name.clone(),
+        }) as Arc<dyn CoreToolRuntime>;
+        let step_context = StepContext::for_test(Arc::clone(&turn_context));
+        let router = Arc::new(ToolRouter::from_parts(
+            ToolRegistry::from_tools([handler]),
+            Vec::new(),
+            ToolMode::Direct,
+            BTreeMap::new(),
+            /*tool_namespaces_info*/ None,
+            &[],
+        ));
+        let step_context = step_context.with_tool_router_for_test(router);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let runtime = ToolCallRuntime::new(
+            Arc::clone(&session),
+            Arc::clone(&step_context),
+            Arc::clone(&step_context.tool_router),
+            tracker,
+        );
+        session
+            .services
+            .agent_control
+            .pause_activity_for_subtree()
+            .await;
+
+        // Establish both sides of the race before polling the outer future: the dispatch task
+        // observes cancellation at the paused activity boundary and exits, while the caller's
+        // cancellation future is already ready. The old unbiased select can choose the finished
+        // dispatch and leak its internal TurnAborted error; repeat the ready/ready check to make
+        // that random arbitration overwhelmingly visible without relying on sleeps.
+        for attempt in 0..32 {
+            let cancellation_token = CancellationToken::new();
+            let call = ToolCall {
+                tool_name: tool_name.clone(),
+                call_id: format!("cancel-race-{attempt}"),
+                payload: ToolPayload::Function {
+                    arguments: "{}".to_string(),
+                },
+                encrypted_function_args: None,
+            };
+            let response = runtime.handle_tool_call(call, cancellation_token.clone());
+            cancellation_token.cancel();
+
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    if session.pending_handoff_dispatches() == 0 {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("pre-admission dispatch should finish before arbitration");
+
+            response
+                .await
+                .expect("cancellation should own a finished pre-admission dispatch");
+        }
+
+        Ok(())
+    }
+
     struct ImmediateHandler {
         tool_name: codex_tools::ToolName,
     }
