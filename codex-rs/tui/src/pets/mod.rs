@@ -374,7 +374,7 @@ mod tests {
         assert!(!output.contains("a=T,t=d,"));
         let payload = output
             .split_once("a=T,t=f,f=100,c=4,r=2,q=2,i=49374;")
-            .and_then(|(_, output)| output.split_once("\x1b\\").map(|(payload, _)| payload))
+            .and_then(|(_, output)| output.split_once('\x1b').map(|(payload, _)| payload))
             .expect("file reference payload");
         assert_eq!(
             base64::engine::general_purpose::STANDARD
