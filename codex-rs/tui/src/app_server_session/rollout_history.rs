@@ -20,6 +20,18 @@ use codex_protocol::ThreadId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 
+#[cfg(test)]
+fn trace_resume_phase(
+    thread_id: ThreadId,
+    phase: &str,
+    request_id: Option<i64>,
+    exclude_turns: Option<bool>,
+) {
+    eprintln!(
+        "[cached-legacy-resume] thread={thread_id} phase={phase} request_id={request_id:?} exclude_turns={exclude_turns:?}"
+    );
+}
+
 impl AppServerSession {
     /// Read a conflicting thread without taking its writer lease. This is a snapshot, not an
     /// attachment: the caller must not route turns through this session.
@@ -115,6 +127,8 @@ impl AppServerSession {
         );
         self.thread_tool_transport()
             .configure_mcp(&mut params.config);
+        #[cfg(test)]
+        trace_resume_phase(thread_id, "params-built", None, None);
         let mut rollout_maintenance_guard = None;
         params.exclude_turns = if self.history_support == ThreadHistorySupport::Paginated {
             let known_legacy_history = self
@@ -131,11 +145,22 @@ impl AppServerSession {
                             )
                             .ok()
                             .flatten();
+                        #[cfg(test)]
+                        trace_resume_phase(
+                            thread_id,
+                            "maintenance-lock-attempted",
+                            None,
+                            Some(true),
+                        );
                         rollout_maintenance_guard.is_some()
-                    } && self
-                        .thread_read(thread_id, /*include_turns*/ false)
-                        .await
-                        .is_ok_and(|thread| thread.history_mode == ThreadHistoryMode::Legacy)));
+                    } && {
+                        #[cfg(test)]
+                        trace_resume_phase(thread_id, "thread-read-issued", None, Some(true));
+                        let read = self.thread_read(thread_id, /*include_turns*/ false).await;
+                        #[cfg(test)]
+                        trace_resume_phase(thread_id, "thread-read-completed", None, Some(true));
+                        read.is_ok_and(|thread| thread.history_mode == ThreadHistoryMode::Legacy)
+                    }));
             !known_legacy_history
         } else {
             false
@@ -144,6 +169,13 @@ impl AppServerSession {
             rollout_maintenance_guard = None;
         }
         let request_id = self.next_request_id();
+        #[cfg(test)]
+        trace_resume_phase(
+            thread_id,
+            "thread-resume-issued",
+            Some(request_id),
+            Some(params.exclude_turns),
+        );
         let resume_response = self
             .client
             .request_typed(ClientRequest::ThreadResume {
@@ -151,6 +183,13 @@ impl AppServerSession {
                 params: params.clone(),
             })
             .await;
+        #[cfg(test)]
+        trace_resume_phase(
+            thread_id,
+            "thread-resume-completed",
+            Some(request_id),
+            Some(params.exclude_turns),
+        );
         drop(rollout_maintenance_guard);
         let mut response: ThreadResumeResponse = match resume_response {
             Ok(response) => response,
@@ -183,6 +222,13 @@ impl AppServerSession {
             HistoryHydrationScope::Initial,
         )
         .await?;
+        #[cfg(test)]
+        trace_resume_phase(
+            thread_id,
+            "history-hydration-completed",
+            Some(request_id),
+            Some(params.exclude_turns),
+        );
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;
