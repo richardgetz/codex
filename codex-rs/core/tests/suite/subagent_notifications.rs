@@ -2968,15 +2968,66 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
     )
     .await;
     test.submit_turn(READ_RESULT_PROMPT).await?;
-    let root_request = root_result_request
-        .requests()
+    let root_requests = root_result_request.requests();
+    let candidate_summaries = root_requests
+        .iter()
+        .filter(|request| {
+            request.body_json()["client_metadata"]["thread_id"] == json!(root_thread_id)
+                && request.body_contains_text(READ_RESULT_PROMPT)
+        })
+        .take(4)
+        .map(|request| {
+            let agent_messages = request.inputs_of_type("agent_message");
+            let summaries = agent_messages
+                .iter()
+                .take(8)
+                .map(|item| {
+                    let author = item
+                        .get("author")
+                        .and_then(Value::as_str)
+                        .map(|author| author.chars().take(128).collect::<String>())
+                        .unwrap_or_else(|| "<missing>".to_string());
+                    let recipient = item
+                        .get("recipient")
+                        .and_then(Value::as_str)
+                        .map(|recipient| recipient.chars().take(128).collect::<String>())
+                        .unwrap_or_else(|| "<missing>".to_string());
+                    let content_preview = item
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .and_then(|content| {
+                            content.iter().find_map(|part| {
+                                part.get("text")
+                                    .and_then(Value::as_str)
+                                    .map(|text| text.chars().take(256).collect::<String>())
+                            })
+                        })
+                        .unwrap_or_else(|| "<missing>".to_string());
+                    let has_followup_text = content_preview.contains("peer follow-up finished");
+                    format!(
+                        "author={author} recipient={recipient} followup_text={has_followup_text} content={content_preview:?}"
+                    )
+            })
+            .collect::<Vec<_>>();
+            format!(
+                "read_result={} sender_text={} final_text={} agent_messages={} summaries={summaries:?}",
+                request.body_contains_text(READ_RESULT_PROMPT),
+                request.body_contains_text("Sender: /root/worker"),
+                request.body_contains_text("peer follow-up finished"),
+                agent_messages.len(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let root_request = root_requests
         .into_iter()
         .find(|request| {
             request.body_json()["client_metadata"]["thread_id"] == json!(root_thread_id)
                 && request.body_contains_text(READ_RESULT_PROMPT)
                 && request.body_contains_text("peer follow-up finished")
         })
-        .expect("root result request");
+        .unwrap_or_else(|| {
+            panic!("root result request; candidates={candidate_summaries:?}");
+        });
     assert!(
         root_request
             .inputs_of_type("agent_message")
