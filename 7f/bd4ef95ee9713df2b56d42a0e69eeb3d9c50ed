@@ -1,0 +1,19 @@
+intent:
+  id: tui-cached-legacy-resume-trace-cleanup-20260912
+  change_type: test
+  scope: codex-rs/tui
+  summary: Remove temporary cached legacy resume phase diagnostics after bounded diagnosis.
+  decision: Restore the original resume implementation and fixture output while retaining the StateDb preinitialization ordering fix that prevents startup deadlock under the maintenance guard.
+  constraints:
+    - remove only temporary trace helper/call sites and eprintln phase diagnostics
+    - preserve c931 StateDb preinitialization and picker startup call
+    - preserve all migration combinations, lock contention, resume assertions, and timeout
+    - no production behavior changes
+  intent_priority: normal
+  code_locations:
+    - codex-rs/tui/src/app_server_session/rollout_history.rs
+    - codex-rs/tui/src/app_server_session/rollout_history_tests.rs
+  requested_by: /root/stable_refresh
+  recorded_by: codex
+  agent: /root/stable_refresh
+  model: gpt-5.6-sol
