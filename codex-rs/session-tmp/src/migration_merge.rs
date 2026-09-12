@@ -44,18 +44,15 @@ impl SessionMerge {
     pub(super) fn retire_source(
         mut self,
         source: &ControlState,
+        target: &ControlState,
         session_id: &str,
     ) -> Result<(), SessionTmpError> {
-        retire_source_session(source, session_id)?;
+        retire_source_session(source, target, session_id, &self.moved_paths)?;
         self.source_legacy_lock.take();
         self.target_legacy_lock.take();
         self.target_state_lock.take();
-        // Remove the source lock name while its descriptor is still held.
-        // The root migration barrier prevents a new manager from opening a
-        // replacement between this unlink and the final guard drop.
-        let result = storage::remove_session_lock(&source.state_sessions_dir(), session_id);
         self.source_state_lock.take();
-        result
+        Ok(())
     }
 }
 
@@ -63,6 +60,8 @@ pub(super) fn merge_session(
     source: &ControlState,
     target: &ControlState,
     session_id: &str,
+    persisted_moved_paths: &[(PathBuf, PathBuf)],
+    persist_moves: &mut dyn FnMut(&[(PathBuf, PathBuf)]) -> Result<(), SessionTmpError>,
 ) -> Result<SessionMerge, SessionTmpError> {
     if session_is_live(source, session_id)? {
         return Ok(SessionMerge::deferred(Vec::new()));
@@ -140,13 +139,18 @@ pub(super) fn merge_session(
             merge_agents(
                 &source_agents,
                 &target_agents,
+                &target_session,
                 Path::new(AGENTS_DIR),
+                persisted_moved_paths,
+                persist_moves,
                 &mut moved_paths,
             )?;
         }
     }
     merge_session_record(source, target, session_id)?;
-    merge_metadata(source, target, session_id, &moved_paths)?;
+    let mut metadata_moved_paths = persisted_moved_paths.to_vec();
+    metadata_moved_paths.extend(moved_paths.iter().cloned());
+    merge_metadata(source, target, session_id, &metadata_moved_paths)?;
     merge_stale_leases(source, target, session_id)?;
     if has_live_leases(source, session_id)? || has_live_leases(target, session_id)? {
         drop(source_state_lock);
@@ -166,7 +170,10 @@ pub(super) fn merge_session(
 fn merge_agents(
     source_agents: &Path,
     target_agents: &Path,
+    target_session: &Path,
     source_rel: &Path,
+    persisted_moved_paths: &[(PathBuf, PathBuf)],
+    persist_moves: &mut dyn FnMut(&[(PathBuf, PathBuf)]) -> Result<(), SessionTmpError>,
     moved_paths: &mut Vec<(PathBuf, PathBuf)>,
 ) -> Result<(), SessionTmpError> {
     for item in fs::read_dir(source_agents)? {
@@ -182,6 +189,9 @@ fn merge_agents(
             &target_path,
             &source_relative,
             &target_relative,
+            target_session,
+            persisted_moved_paths,
+            persist_moves,
             moved_paths,
         )?;
     }
@@ -193,12 +203,39 @@ fn merge_payload_path(
     target: &Path,
     source_relative: &Path,
     target_relative: &Path,
+    target_session: &Path,
+    persisted_moved_paths: &[(PathBuf, PathBuf)],
+    persist_moves: &mut dyn FnMut(&[(PathBuf, PathBuf)]) -> Result<(), SessionTmpError>,
     moved_paths: &mut Vec<(PathBuf, PathBuf)>,
 ) -> Result<(), SessionTmpError> {
     let source_type = fs::symlink_metadata(source)?.file_type();
+    let mapped_target = mapped_payload_target(
+        target_session,
+        source_relative,
+        persisted_moved_paths,
+        moved_paths,
+    );
     if storage::file_type_is_link(source_type) {
+        let target = mapped_target.as_deref().unwrap_or(target);
+        if let Ok(target_type) = fs::symlink_metadata(target).map(|metadata| metadata.file_type())
+            && storage::file_type_is_link(target_type)
+            && fs::read_link(source)? == fs::read_link(target)?
+        {
+            record_move(
+                source_relative,
+                &destination_relative(target_session, target, target_relative),
+                persisted_moved_paths,
+                persist_moves,
+                moved_paths,
+            )?;
+            return Ok(());
+        }
         let destination = if fs::symlink_metadata(target).is_ok() {
-            collision_path(target)?
+            if mapped_target.is_some() {
+                target.to_path_buf()
+            } else {
+                collision_path(source, target)?
+            }
         } else {
             target.to_path_buf()
         };
@@ -207,44 +244,54 @@ fn merge_payload_path(
             &destination,
             source_relative,
             target_relative,
+            target_session,
+            persisted_moved_paths,
+            persist_moves,
             moved_paths,
         )?;
         return Ok(());
     }
+    let target = mapped_target.as_deref().unwrap_or(target);
     if fs::symlink_metadata(target).is_ok() {
         let target_type = fs::symlink_metadata(target)?.file_type();
         if source_type.is_dir() && target_type.is_dir() && !storage::file_type_is_link(target_type) {
-            for item in fs::read_dir(source)? {
-                let child = item?.path();
-                let Some(name) = child.file_name() else {
-                    continue;
-                };
-                merge_payload_path(
-                    &child,
-                    &target.join(name),
-                    &source_relative.join(name),
-                    &target_relative.join(name),
-                    moved_paths,
-                )?;
-            }
-            if fs::read_dir(source)?.next().transpose()?.is_none() {
-                fs::remove_dir(source)?;
-            }
+            merge_existing_directory(
+                source,
+                target,
+                source_relative,
+                target_relative,
+                target_session,
+                persisted_moved_paths,
+                persist_moves,
+                moved_paths,
+            )?;
             return Ok(());
         }
         if source_type.is_file() && target_type.is_file() && files_equal(source, target)? {
-            fs::remove_file(source)?;
-            moved_paths.push((source_relative.to_path_buf(), target_relative.to_path_buf()));
+            record_move(
+                source_relative,
+                &destination_relative(target_session, target, target_relative),
+                persisted_moved_paths,
+                persist_moves,
+                moved_paths,
+            )?;
             return Ok(());
         }
         // Never overwrite a differing payload. A unique sibling keeps both
         // paths addressable and gives metadata a stable destination mapping.
-        let target = collision_path(target)?;
+        let target = if mapped_target.is_some() {
+            target.to_path_buf()
+        } else {
+            collision_path(source, target)?
+        };
         move_payload_path_no_replace(
             source,
             &target,
             source_relative,
             target_relative,
+            target_session,
+            persisted_moved_paths,
+            persist_moves,
             moved_paths,
         )?;
         return Ok(());
@@ -254,25 +301,80 @@ fn merge_payload_path(
         target,
         source_relative,
         target_relative,
+        target_session,
+        persisted_moved_paths,
+        persist_moves,
         moved_paths,
     )
 }
 
-/// Move one payload entry without allowing a concurrent writer to be
-/// overwritten. `rename` is intentionally avoided here: on Unix it replaces
-/// a destination that appears after an existence check. Files use
-/// `create_new`, directories use `create_dir`, and symlinks use an atomic
-/// create operation; each retries with a fresh collision path on `EEXIST`.
+/// Copy one payload entry without allowing a concurrent writer to be
+/// overwritten. The source remains until the caller has durably recorded the
+/// mapping in the migration manifest. `rename` is intentionally avoided here:
+/// on Unix it replaces a destination that appears after an existence check.
+/// Files use `create_new`, directories use `create_dir`, and symlinks use an
+/// atomic create operation; each retries with a fresh collision path on
+/// `EEXIST`.
 fn move_payload_path_no_replace(
     source: &Path,
     target: &Path,
     source_relative: &Path,
     target_relative: &Path,
+    target_session: &Path,
+    persisted_moved_paths: &[(PathBuf, PathBuf)],
+    persist_moves: &mut dyn FnMut(&[(PathBuf, PathBuf)]) -> Result<(), SessionTmpError>,
     moved_paths: &mut Vec<(PathBuf, PathBuf)>,
 ) -> Result<(), SessionTmpError> {
     let source_type = fs::symlink_metadata(source)?.file_type();
     let mut destination = target.to_path_buf();
     for _ in 0..8 {
+        if let Ok(target_type) = fs::symlink_metadata(&destination).map(|metadata| metadata.file_type())
+        {
+            if storage::file_type_is_link(source_type)
+                && storage::file_type_is_link(target_type)
+                && fs::read_link(source)? == fs::read_link(&destination)?
+            {
+                record_move(
+                    source_relative,
+                    &destination_relative(target_session, &destination, target_relative),
+                    persisted_moved_paths,
+                    persist_moves,
+                    moved_paths,
+                )?;
+                return Ok(());
+            }
+            if source_type.is_dir()
+                && target_type.is_dir()
+                && !storage::file_type_is_link(target_type)
+            {
+                merge_existing_directory(
+                    source,
+                    &destination,
+                    source_relative,
+                    target_relative,
+                    target_session,
+                    persisted_moved_paths,
+                    persist_moves,
+                    moved_paths,
+                )?;
+                return Ok(());
+            }
+            if source_type.is_file()
+                && target_type.is_file()
+                && files_equal(source, &destination)?
+            {
+                record_move(
+                    source_relative,
+                    &destination_relative(target_session, &destination, target_relative),
+                    persisted_moved_paths,
+                    persist_moves,
+                    moved_paths,
+                )?;
+                return Ok(());
+            }
+            destination = collision_path(source, &destination)?;
+            continue;
+        }
         if let Some(parent) = destination.parent() {
             storage::ensure_directory_not_symlink(parent)?;
             fs::create_dir_all(parent)?;
@@ -280,15 +382,17 @@ fn move_payload_path_no_replace(
         if storage::file_type_is_link(source_type) {
             match create_payload_symlink(source, &destination) {
                 Ok(()) => {
-                    fs::remove_file(source)?;
-                    moved_paths.push((
-                        source_relative.to_path_buf(),
-                        destination_relative(&destination, target_relative),
-                    ));
+                    record_move(
+                        source_relative,
+                        &destination_relative(target_session, &destination, target_relative),
+                        persisted_moved_paths,
+                        persist_moves,
+                        moved_paths,
+                    )?;
                     return Ok(());
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    destination = collision_path(target)?;
+                    destination = collision_path(source, target)?;
                     continue;
                 }
                 Err(error) => return Err(error.into()),
@@ -297,30 +401,20 @@ fn move_payload_path_no_replace(
             match fs::create_dir(&destination) {
                 Ok(()) => {
                     storage::set_private_directory(&destination)?;
-                    for item in fs::read_dir(source)? {
-                        let child = item?.path();
-                        let Some(name) = child.file_name() else {
-                            continue;
-                        };
-                        merge_payload_path(
-                            &child,
-                            &destination.join(name),
-                            &source_relative.join(name),
-                            &target_relative.join(name),
-                            moved_paths,
-                        )?;
-                    }
-                    if fs::read_dir(source)?.next().transpose()?.is_none() {
-                        fs::remove_dir(source)?;
-                    }
-                    moved_paths.push((
-                        source_relative.to_path_buf(),
-                        destination_relative(&destination, target_relative),
-                    ));
+                    merge_existing_directory(
+                        source,
+                        &destination,
+                        source_relative,
+                        target_relative,
+                        target_session,
+                        persisted_moved_paths,
+                        persist_moves,
+                        moved_paths,
+                    )?;
                     return Ok(());
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    destination = collision_path(target)?;
+                    destination = collision_path(source, target)?;
                     continue;
                 }
                 Err(error) => return Err(error.into()),
@@ -337,15 +431,17 @@ fn move_payload_path_no_replace(
                     target_file.sync_all()?;
                     drop(target_file);
                     storage::set_private_file(&destination)?;
-                    fs::remove_file(source)?;
-                    moved_paths.push((
-                        source_relative.to_path_buf(),
-                        destination_relative(&destination, target_relative),
-                    ));
+                    record_move(
+                        source_relative,
+                        &destination_relative(target_session, &destination, target_relative),
+                        persisted_moved_paths,
+                        persist_moves,
+                        moved_paths,
+                    )?;
                     return Ok(());
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    destination = collision_path(target)?;
+                    destination = collision_path(source, target)?;
                     continue;
                 }
                 Err(error) => return Err(error.into()),
@@ -358,10 +454,98 @@ fn move_payload_path_no_replace(
     )))
 }
 
-fn destination_relative(destination: &Path, target_relative: &Path) -> PathBuf {
+fn merge_existing_directory(
+    source: &Path,
+    target: &Path,
+    source_relative: &Path,
+    target_relative: &Path,
+    target_session: &Path,
+    persisted_moved_paths: &[(PathBuf, PathBuf)],
+    persist_moves: &mut dyn FnMut(&[(PathBuf, PathBuf)]) -> Result<(), SessionTmpError>,
+    moved_paths: &mut Vec<(PathBuf, PathBuf)>,
+) -> Result<(), SessionTmpError> {
+    let target_relative = destination_relative(target_session, target, target_relative);
+    for item in fs::read_dir(source)? {
+        let child = item?.path();
+        let Some(name) = child.file_name() else {
+            continue;
+        };
+        merge_payload_path(
+            &child,
+            &target.join(name),
+            &source_relative.join(name),
+            &target_relative.join(name),
+            target_session,
+            persisted_moved_paths,
+            persist_moves,
+            moved_paths,
+        )?;
+    }
+    if fs::read_dir(source)?.next().transpose()?.is_none() {
+        record_move(
+            source_relative,
+            &target_relative,
+            persisted_moved_paths,
+            persist_moves,
+            moved_paths,
+        )?;
+    }
+    Ok(())
+}
+
+fn mapped_payload_target(
+    target_session: &Path,
+    source_relative: &Path,
+    persisted_moved_paths: &[(PathBuf, PathBuf)],
+    moved_paths: &[(PathBuf, PathBuf)],
+) -> Option<PathBuf> {
+    let mapped = super::records::map_relative_path(source_relative, persisted_moved_paths);
+    let mapped = if mapped == source_relative {
+        super::records::map_relative_path(source_relative, moved_paths)
+    } else {
+        mapped
+    };
+    (mapped != source_relative).then(|| target_session.join(mapped))
+}
+
+fn record_move(
+    source: &Path,
+    target: &Path,
+    persisted_moved_paths: &[(PathBuf, PathBuf)],
+    persist_moves: &mut dyn FnMut(&[(PathBuf, PathBuf)]) -> Result<(), SessionTmpError>,
+    moved_paths: &mut Vec<(PathBuf, PathBuf)>,
+) -> Result<(), SessionTmpError> {
+    if moved_paths
+        .iter()
+        .any(|(existing_source, existing_target)| {
+            existing_source == source && existing_target == target
+        })
+    {
+        return Ok(());
+    }
+    moved_paths.push((source.to_path_buf(), target.to_path_buf()));
+    if !persisted_moved_paths
+        .iter()
+        .any(|(existing_source, existing_target)| {
+            existing_source == source && existing_target == target
+        })
+    {
+        let mut all_paths = persisted_moved_paths.to_vec();
+        all_paths.extend(moved_paths.iter().cloned());
+        persist_moves(&all_paths)?;
+    }
+    Ok(())
+}
+
+fn destination_relative(
+    target_session: &Path,
+    destination: &Path,
+    fallback: &Path,
+) -> PathBuf {
     destination
-        .file_name()
-        .map_or_else(|| target_relative.to_path_buf(), |name| target_relative.with_file_name(name))
+        .strip_prefix(target_session)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| fallback.to_path_buf())
 }
 
 fn create_payload_symlink(source: &Path, destination: &Path) -> std::io::Result<()> {

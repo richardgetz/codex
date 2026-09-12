@@ -82,14 +82,6 @@ pub(super) fn merge_metadata(
         }
         let original_path = metadata.path.clone();
         metadata.path = map_relative_path(&original_path, moved_paths);
-        if metadata.path == original_path
-            && !source
-                .payload_session_dir(session_id)
-                .join(&original_path)
-                .exists()
-        {
-            metadata.path = recover_moved_path(target, session_id, &original_path);
-        }
         if metadata_dir_contains(&target_dir, &metadata)? {
             continue;
         }
@@ -258,72 +250,30 @@ pub(super) fn map_relative_path(path: &Path, moved_paths: &[(PathBuf, PathBuf)])
         .filter(|(source, _)| path == source || path.starts_with(source))
         .max_by_key(|(source, _)| source.components().count())
         .map(|(source, target)| {
-            target.join(path.strip_prefix(source).unwrap_or_else(|_| Path::new("")))
+            let suffix = path.strip_prefix(source).unwrap_or_else(|_| Path::new(""));
+            if suffix.as_os_str().is_empty() {
+                target.clone()
+            } else {
+                target.join(suffix)
+            }
         })
         .unwrap_or_else(|| path.to_path_buf())
 }
 
-pub(super) fn recover_moved_path(target: &ControlState, session_id: &str, path: &Path) -> PathBuf {
-    let mut components = path.components();
-    if components
-        .next()
-        .is_none_or(|component| component.as_os_str() != AGENTS_DIR)
-    {
-        return path.to_path_buf();
-    }
-    let Some(std::path::Component::Normal(thread)) = components.next() else {
-        return path.to_path_buf();
-    };
-    let components = components.collect::<Vec<_>>();
-    let Some(std::path::Component::Normal(name)) = components.last() else {
-        return path.to_path_buf();
-    };
-    if components
-        .iter()
-        .any(|component| !matches!(component, std::path::Component::Normal(_)))
-    {
-        return path.to_path_buf();
-    }
-    let parent_relative = Path::new(AGENTS_DIR)
-        .join(thread)
-        .join(components.iter().take(components.len().saturating_sub(1)).fold(
-            PathBuf::new(),
-            |mut parent, component| {
-                parent.push(component.as_os_str());
-                parent
-            },
-        ));
-    let parent_dir = target
-        .payload_session_dir(session_id)
-        .join(&parent_relative);
-    let prefix = format!("{}-migrated-", name.to_string_lossy());
-    let mut candidates = fs::read_dir(parent_dir)
-        .ok()
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let candidate = entry.path();
-            let candidate_name = candidate.file_name()?.to_str()?;
-            candidate_name
-                .starts_with(&prefix)
-                .then_some(candidate_name.to_string())
-        })
-        .collect::<Vec<_>>();
-    candidates.sort();
-    candidates
-        .first()
-        .map(|candidate| parent_relative.join(candidate))
-        .unwrap_or_else(|| path.to_path_buf())
-}
-
-pub(super) fn collision_path(path: &Path) -> Result<PathBuf, SessionTmpError> {
+pub(super) fn collision_path(source: &Path, path: &Path) -> Result<PathBuf, SessionTmpError> {
     let name = path
         .file_name()
         .ok_or_else(|| SessionTmpError::PathOutsideAgent(path.to_path_buf()))?
         .to_string_lossy();
-    for _ in 0..8 {
-        let candidate = path.with_file_name(format!("{name}-migrated-{}", uuid::Uuid::new_v4().simple()));
+    let prefix = format!("{name}-migrated-");
+    let digest = stable_collision_digest(source, path);
+    for suffix in 0..8 {
+        let suffix = if suffix == 0 {
+            digest.clone()
+        } else {
+            format!("{digest}-{suffix}")
+        };
+        let candidate = path.with_file_name(format!("{prefix}{suffix}"));
         if !candidate.exists() {
             return Ok(candidate);
         }
@@ -332,4 +282,17 @@ pub(super) fn collision_path(path: &Path) -> Result<PathBuf, SessionTmpError> {
         ErrorKind::AlreadyExists,
         "unable to allocate a collision-safe migration path",
     )))
+}
+
+fn stable_collision_digest(source: &Path, target: &Path) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in source
+        .to_string_lossy()
+        .bytes()
+        .chain(target.to_string_lossy().bytes())
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }

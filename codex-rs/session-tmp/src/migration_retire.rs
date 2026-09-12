@@ -15,14 +15,20 @@ use crate::SESSION_METADATA_FILE;
 use super::SessionTmpError;
 use super::read_manifest;
 use super::Path;
+use super::PathBuf;
 use std::fs;
+use std::fs::File;
 use std::io::ErrorKind;
+use std::io::Read;
 
 pub(super) fn retire_source_session(
     source: &ControlState,
+    target: &ControlState,
     session_id: &str,
+    moved_paths: &[(PathBuf, PathBuf)],
 ) -> Result<(), SessionTmpError> {
     let payload_session = source.payload_session_dir(session_id);
+    remove_moved_payload_paths(source, target, session_id, moved_paths)?;
     remove_known_control_files(&payload_session, session_id)?;
     // `merge_session` holds the legacy session lock while retiring the
     // source. Remove only this validated session's lock file before dropping
@@ -32,6 +38,112 @@ pub(super) fn retire_source_session(
     let state_session = source.state_session_dir(session_id);
     remove_known_control_files(&state_session, session_id)?;
     Ok(())
+}
+
+/// Remove only payload paths that were copied to a destination recorded in the
+/// durable migration manifest. Files are compared before removal so a manual
+/// edit made after the copy remains in the source tree for operator recovery.
+fn remove_moved_payload_paths(
+    source: &ControlState,
+    target: &ControlState,
+    session_id: &str,
+    moved_paths: &[(PathBuf, PathBuf)],
+) -> Result<(), SessionTmpError> {
+    let mut paths = moved_paths.to_vec();
+    paths.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
+    for (source_relative, target_relative) in paths {
+        if !super::records::valid_manifest_path(&source_relative)
+            || !super::records::valid_manifest_path(&target_relative)
+        {
+            continue;
+        }
+        let source_path = source.payload_session_dir(session_id).join(&source_relative);
+        let target_path = target.payload_session_dir(session_id).join(&target_relative);
+        let source_type = match fs::symlink_metadata(&source_path) {
+            Ok(metadata) => metadata.file_type(),
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let target_type = match fs::symlink_metadata(&target_path) {
+            Ok(metadata) => metadata.file_type(),
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let equivalent = if storage::file_type_is_link(source_type) {
+            storage::file_type_is_link(target_type)
+                && fs::read_link(&source_path)? == fs::read_link(&target_path)?
+        } else if source_type.is_file() {
+            target_type.is_file() && files_equal(&source_path, &target_path)?
+        } else {
+            source_type.is_dir() && target_type.is_dir() && !storage::file_type_is_link(target_type)
+                && fs::read_dir(&source_path)?.next().transpose()?.is_none()
+        };
+        if !equivalent {
+            continue;
+        }
+        if source_type.is_dir() {
+            match fs::remove_dir(&source_path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(_) => {}
+            }
+        } else {
+            match fs::remove_file(&source_path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    prune_empty_payload_dirs(&source.payload_session_dir(session_id).join(AGENTS_DIR))?;
+    Ok(())
+}
+
+fn prune_empty_payload_dirs(path: &Path) -> Result<(), SessionTmpError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if storage::file_type_is_link(metadata.file_type()) || !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    for item in fs::read_dir(path)? {
+        let child = item?.path();
+        let child_metadata = fs::symlink_metadata(&child)?;
+        if child_metadata.file_type().is_dir() && !storage::file_type_is_link(child_metadata.file_type()) {
+            prune_empty_payload_dirs(&child)?;
+        }
+    }
+    if fs::read_dir(path)?.next().transpose()?.is_none() {
+        let _ = fs::remove_dir(path);
+    }
+    Ok(())
+}
+
+fn files_equal(left: &Path, right: &Path) -> Result<bool, SessionTmpError> {
+    let left_metadata = fs::metadata(left)?;
+    let right_metadata = fs::metadata(right)?;
+    if left_metadata.len() != right_metadata.len() {
+        return Ok(false);
+    }
+    let mut left_file = File::open(left)?;
+    let mut right_file = File::open(right)?;
+    let mut left_buffer = [0_u8; 64 * 1024];
+    let mut right_buffer = [0_u8; 64 * 1024];
+    loop {
+        let left_read = left_file.read(&mut left_buffer)?;
+        let right_read = right_file.read(&mut right_buffer)?;
+        if left_read != right_read {
+            return Ok(false);
+        }
+        if left_read == 0 {
+            return Ok(true);
+        }
+        if left_buffer[..left_read] != right_buffer[..right_read] {
+            return Ok(false);
+        }
+    }
 }
 
 fn remove_legacy_lock_file(source: &ControlState, session_id: &str) -> Result<(), SessionTmpError> {
@@ -130,8 +242,7 @@ pub(super) fn source_root_is_retirable(source: &ControlState) -> Result<bool, Se
         Err(error) if error.kind() == ErrorKind::NotFound => true,
         Err(error) => return Err(error.into()),
     };
-    Ok(payload_retirable
-        && root_has_only_managed_entries(source.state_root(), false))
+    Ok(payload_retirable && state_root_is_retirable(source.state_root()))
 }
 
 /// Retires a recovery payload root without recursively deleting anything. The
@@ -228,7 +339,7 @@ pub(super) fn retire_source_payload(source: &ControlState) -> Result<bool, Sessi
 /// retired. Unknown files or a concurrent writer keep the state root intact.
 pub(super) fn retire_source_state(source: &ControlState) -> Result<bool, SessionTmpError> {
     let root = source.state_root();
-    if !root_has_only_managed_entries(root, false) {
+    if !state_root_is_retirable(root) {
         return Ok(false);
     }
     match source.ensure_identity() {
@@ -252,6 +363,13 @@ pub(super) fn retire_source_state(source: &ControlState) -> Result<bool, Session
         if name == state::STATE_SESSIONS_DIR || name == state::STATE_LOCKS_DIR {
             if !metadata.file_type().is_dir() {
                 return Err(SessionTmpError::UnsafeManagedPath(path));
+            }
+            if name == state::STATE_SESSIONS_DIR && state_sessions_only_lock_files(&path) {
+                // Per-session external lock names remain as stable
+                // coordination files. They are no longer tied to a live
+                // source record, and removing them could split a waiter from
+                // a new manager that opens the same state root.
+                continue;
             }
             match fs::remove_dir(&path) {
                 Ok(()) => {}
@@ -351,6 +469,98 @@ fn root_has_only_managed_entries(root: &Path, payload: bool) -> bool {
             && (name == state::STATE_SESSIONS_DIR || name == state::STATE_LOCKS_DIR)
             && !directory_empty(&path)
         {
+            return false;
+        }
+    }
+    true
+}
+
+fn state_root_is_retirable(root: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(root) else {
+        return false;
+    };
+    for item in entries {
+        let Ok(path) = item.map(|entry| entry.path()) else {
+            return false;
+        };
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            return false;
+        };
+        if storage::file_type_is_link(metadata.file_type()) {
+            return false;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        if name == state::STATE_SESSIONS_DIR {
+            if !metadata.file_type().is_dir() || !state_sessions_only_lock_files(&path) {
+                return false;
+            }
+        } else if name == state::STATE_LOCKS_DIR {
+            if !metadata.file_type().is_dir() || !directory_empty(&path) {
+                return false;
+            }
+        } else if name != state::STATE_MARKER
+            && name != state::STATE_ROOT_RECORD
+            && name != MIGRATION_LOCK_FILE
+            && !(name.starts_with(MIGRATION_MANIFEST_PREFIX)
+                && name.ends_with(MIGRATION_MANIFEST_SUFFIX)
+                && read_manifest(&path).is_some_and(|manifest| manifest.schema_version == 1))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn state_sessions_only_lock_files(path: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+    for item in entries {
+        let Ok(child) = item.map(|entry| entry.path()) else {
+            return false;
+        };
+        let Some(name) = child.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        if name != ".locks" {
+            return false;
+        }
+        let Ok(metadata) = fs::symlink_metadata(&child) else {
+            return false;
+        };
+        if storage::file_type_is_link(metadata.file_type())
+            || !metadata.file_type().is_dir()
+            || !state_lock_files_are_safe(&child)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn state_lock_files_are_safe(path: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+    for item in entries {
+        let Ok(child) = item.map(|entry| entry.path()) else {
+            return false;
+        };
+        let Ok(metadata) = fs::symlink_metadata(&child) else {
+            return false;
+        };
+        if storage::file_type_is_link(metadata.file_type()) || !metadata.file_type().is_file() {
+            return false;
+        }
+        let Some(name) = child.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        let Some(session_id) = name.strip_suffix(".lock") else {
+            return false;
+        };
+        if storage::validate_component(session_id).is_err() {
             return false;
         }
     }

@@ -20,6 +20,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
 use std::time::Duration;
+use uuid::Uuid;
 
 #[cfg(not(test))]
 const LEASE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
@@ -29,6 +30,7 @@ const LEASE_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(25);
 pub(super) struct SessionLease {
     path: PathBuf,
     legacy_path: Option<PathBuf>,
+    owner_token: String,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -85,8 +87,13 @@ impl SessionLease {
             session_id: session_id.to_string(),
             thread_id: thread_id.to_string(),
             process_id: std::process::id(),
+            owner_token: Some(Uuid::new_v4().to_string()),
             updated_at: now_seconds(),
         };
+        let owner_token = record
+            .owner_token
+            .clone()
+            .expect("newly acquired leases always have an owner token");
         let legacy_path = if legacy_transition_active
             && legacy_lock.is_some()
             && legacy_session_dir.is_dir()
@@ -142,6 +149,7 @@ impl SessionLease {
                     let state_root_for_thread = state.state_root().to_path_buf();
                     let state_session_dir_for_thread = session_dir.to_path_buf();
                     let legacy_path_for_thread = legacy_path.clone();
+                    let owner_token_for_thread = owner_token.clone();
                     let legacy_marker_for_thread = state
                         .payload_root()
                         .join(super::state::LEGACY_MARKER);
@@ -198,11 +206,20 @@ impl SessionLease {
                                 ) {
                                     break;
                                 }
+                                if !lease_is_owned(
+                                    &path_for_thread,
+                                    &owner_token_for_thread,
+                                    &session_id_for_thread,
+                                    &thread_id_for_thread,
+                                ) {
+                                    break;
+                                }
                                 let record = LeaseRecord {
                                     schema_version: 1,
                                     session_id: session_id_for_thread.clone(),
                                     thread_id: thread_id_for_thread.clone(),
                                     process_id: std::process::id(),
+                                    owner_token: Some(owner_token_for_thread.clone()),
                                     updated_at: now_seconds(),
                                 };
                                 if let Err(error) = write_json_atomically(&path_for_thread, &record)
@@ -224,6 +241,12 @@ impl SessionLease {
                                     )) = super::storage::try_lock_existing_session(
                                         &legacy_session_for_thread,
                                     )
+                                    && lease_is_owned(
+                                        legacy_path,
+                                        &owner_token_for_thread,
+                                        &session_id_for_thread,
+                                        &thread_id_for_thread,
+                                    )
                                     && let Err(error) = write_json_atomically_existing(legacy_path, &record)
                                 {
                                     tracing::debug!(
@@ -238,7 +261,7 @@ impl SessionLease {
                         Err(error) => {
                             let _ = fs::remove_file(&path);
                             if let Some(legacy_path) = legacy_path.as_ref() {
-                                remove_own_legacy_lease(legacy_path);
+                                remove_own_legacy_lease(legacy_path, &owner_token);
                             }
                             return Err(error.into());
                         }
@@ -246,6 +269,7 @@ impl SessionLease {
                     return Ok(Self {
                         path,
                         legacy_path,
+                        owner_token,
                         stop,
                         thread: Some(thread),
                     });
@@ -299,14 +323,24 @@ impl Drop for SessionLease {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
-        remove_own_state_lease(&self.path);
+        remove_own_state_lease(&self.path, &self.owner_token);
         if let Some(path) = &self.legacy_path {
-            remove_own_legacy_lease(path);
+            remove_own_legacy_lease(path, &self.owner_token);
         }
     }
 }
 
-fn remove_own_state_lease(path: &Path) {
+fn lease_is_owned(path: &Path, owner_token: &str, session_id: &str, thread_id: &str) -> bool {
+    super::storage::read_lease_record(path).is_ok_and(|record| {
+        record.schema_version == 1
+            && record.session_id == session_id
+            && record.thread_id == thread_id
+            && record.process_id == std::process::id()
+            && record.owner_token.as_deref() == Some(owner_token)
+    })
+}
+
+fn remove_own_state_lease(path: &Path, owner_token: &str) {
     let Some(leases_dir) = path.parent() else {
         return;
     };
@@ -326,17 +360,13 @@ fn remove_own_state_lease(path: &Path) {
         drop(lock);
         return;
     };
-    if super::storage::read_lease_record(path).is_ok_and(|record| {
-        record.process_id == std::process::id()
-            && record.session_id == session_id
-            && record.thread_id == thread_id
-    }) {
+    if lease_is_owned(path, owner_token, session_id, thread_id) {
         let _ = fs::remove_file(path);
     }
     drop(lock);
 }
 
-fn remove_own_legacy_lease(path: &Path) {
+fn remove_own_legacy_lease(path: &Path, owner_token: &str) {
     let Some(leases_dir) = path.parent() else {
         return;
     };
@@ -348,8 +378,10 @@ fn remove_own_legacy_lease(path: &Path) {
     else {
         return;
     };
-    if super::storage::read_lease_record(path)
-        .is_ok_and(|record| record.process_id == std::process::id())
+    let session_id = session_dir.file_name().and_then(|name| name.to_str());
+    let thread_id = path.file_stem().and_then(|name| name.to_str());
+    if let (Some(session_id), Some(thread_id)) = (session_id, thread_id)
+        && lease_is_owned(path, owner_token, session_id, thread_id)
     {
         let _ = fs::remove_file(path);
     }

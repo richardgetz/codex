@@ -107,6 +107,9 @@ fn external_heartbeat_survives_payload_deletion() {
             session_id: "session-1".to_string(),
             thread_id: "thread-1".to_string(),
             process_id: std::process::id(),
+            owner_token: crate::storage::read_lease_record(&lease_path)
+                .unwrap()
+                .owner_token,
             updated_at: 0,
         })
         .unwrap(),
@@ -228,6 +231,7 @@ fn deleting_legacy_payload_does_not_resurrect_heartbeat_control_files() {
             session_id: "session-1".to_string(),
             thread_id: "old-thread".to_string(),
             process_id: std::process::id(),
+            owner_token: None,
             updated_at,
         })
         .unwrap(),
@@ -414,6 +418,7 @@ fn malformed_default_marker_uses_hidden_namespace_and_ignores_foreign_controls()
             session_id: "foreign".to_string(),
             thread_id: "foreign-thread".to_string(),
             process_id: std::process::id(),
+            owner_token: None,
             updated_at: crate::storage::now_seconds(),
         })
         .unwrap(),
@@ -563,6 +568,7 @@ fn lease_drop_does_not_remove_a_replacement_external_lease() {
             session_id: "session-1".to_string(),
             thread_id: "thread-1".to_string(),
             process_id: std::process::id().saturating_add(1),
+            owner_token: None,
             updated_at: crate::storage::now_seconds(),
         })
         .unwrap(),
@@ -575,6 +581,49 @@ fn lease_drop_does_not_remove_a_replacement_external_lease() {
             .unwrap()
             .process_id,
         std::process::id().saturating_add(1)
+    );
+}
+
+#[test]
+fn stale_heartbeat_does_not_overwrite_a_replacement_external_lease() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = SessionTmpManager::open(
+        &config(&root),
+        root.path(),
+        "session-1",
+        "thread-1",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+    let lease_path = manager
+        .state_session_dir
+        .join(LEASES_DIR)
+        .join("thread-1.json");
+    fs::write(
+        &lease_path,
+        serde_json::to_vec(&crate::storage::LeaseRecord {
+            schema_version: 1,
+            session_id: "session-1".to_string(),
+            thread_id: "thread-1".to_string(),
+            process_id: std::process::id(),
+            owner_token: Some("replacement-owner".to_string()),
+            updated_at: crate::storage::now_seconds(),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+
+    let record = crate::storage::read_lease_record(&lease_path).unwrap();
+    assert_eq!(record.owner_token.as_deref(), Some("replacement-owner"));
+    drop(manager);
+    assert_eq!(
+        crate::storage::read_lease_record(&lease_path)
+            .unwrap()
+            .owner_token
+            .as_deref(),
+        Some("replacement-owner")
     );
 }
 
@@ -692,6 +741,150 @@ fn recovery_merge_preserves_collisions_and_mixes_session_ids() {
 }
 
 #[test]
+fn recovery_merge_preserves_foreign_migrated_prefix_directory() {
+    let home = tempfile::tempdir().unwrap();
+    let normal_root = home.path().join("session-tmp");
+    let recovery_root = home.path().join("session-tmp-recovery");
+    let normal_agent = normal_root
+        .join(SESSIONS_DIR)
+        .join("same-session")
+        .join(AGENTS_DIR)
+        .join("same-thread");
+    let recovery_session = recovery_root.join(SESSIONS_DIR).join("same-session");
+    let recovery_agent = recovery_root
+        .join(SESSIONS_DIR)
+        .join("same-session")
+        .join(AGENTS_DIR)
+        .join("same-thread");
+    let foreign_destination = normal_agent.join("nested-migrated-foreign");
+    let updated_at = crate::storage::now_seconds();
+    fs::create_dir_all(&normal_agent).unwrap();
+    fs::create_dir_all(foreign_destination.join("deep")).unwrap();
+    fs::create_dir_all(recovery_agent.join("nested").join("deep")).unwrap();
+    fs::write(normal_agent.join("nested"), b"normal file").unwrap();
+    fs::write(
+        foreign_destination.join("deep").join("artifact.txt"),
+        b"foreign",
+    )
+    .unwrap();
+    fs::write(
+        recovery_agent.join("nested").join("deep").join("artifact.txt"),
+        b"replayed",
+    )
+    .unwrap();
+    fs::create_dir_all(recovery_session.join(ENTRY_METADATA_DIR)).unwrap();
+    fs::write(
+        recovery_session
+            .join(ENTRY_METADATA_DIR)
+            .join("nested-entry.json"),
+        serde_json::to_vec(&EntryMetadata {
+            id: "nested-entry".to_string(),
+            session_id: "same-session".to_string(),
+            thread_id: "same-thread".to_string(),
+            path: PathBuf::from("agents/same-thread/nested/deep/artifact.txt"),
+            purpose: "nested migration payload".to_string(),
+            retention: Retention::Manual,
+            created_at: updated_at,
+            expires_at: None,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        normal_root.join(crate::state::LEGACY_MARKER),
+        crate::state::LEGACY_MARKER_CONTENT,
+    )
+    .unwrap();
+    fs::write(
+        recovery_root.join(crate::state::LEGACY_MARKER),
+        crate::state::LEGACY_MARKER_CONTENT,
+    )
+    .unwrap();
+    for root in [&normal_root, &recovery_root] {
+        let session_dir = root.join(SESSIONS_DIR).join("same-session");
+        fs::write(
+            session_dir.join(SESSION_METADATA_FILE),
+            serde_json::to_vec(&SessionRecord {
+                schema_version: 1,
+                session_id: "same-session".to_string(),
+                created_at: updated_at,
+                updated_at,
+                status: "active".to_string(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    let manager = SessionTmpManager::open(
+        &default_config(),
+        home.path(),
+        "current-session",
+        "current-thread",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(!recovery_root.exists());
+    assert!(normal_agent.join("nested").is_file());
+    assert_eq!(
+        fs::read(foreign_destination.join("deep").join("artifact.txt")).unwrap(),
+        b"foreign"
+    );
+    assert_eq!(
+        fs::read_dir(&normal_agent)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("nested-migrated-"))
+            })
+            .count(),
+        2
+    );
+    let migrated_destination = fs::read_dir(&normal_agent)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with("nested-migrated-") && path != &foreign_destination
+                })
+        })
+        .expect("managed collision should have its own deterministic destination");
+    assert_eq!(
+        fs::read(migrated_destination.join("deep").join("artifact.txt")).unwrap(),
+        b"replayed"
+    );
+    let metadata_dir = manager
+        .state
+        .state_session_dir("same-session")
+        .join(ENTRY_METADATA_DIR);
+    let migrated_metadata_path = fs::read_dir(&metadata_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("nested-entry"))
+        })
+        .expect("migrated metadata should remain discoverable");
+    let migrated_metadata = crate::storage::read_metadata(&migrated_metadata_path).unwrap();
+    assert_eq!(
+        fs::read(manager.state.payload_session_dir("same-session").join(migrated_metadata.path))
+            .unwrap(),
+        b"replayed"
+    );
+    drop(manager);
+}
+
+#[test]
 fn recovery_merge_defers_a_live_legacy_lease_and_retries_after_release() {
     let home = tempfile::tempdir().unwrap();
     let normal_root = home.path().join("session-tmp");
@@ -729,6 +922,7 @@ fn recovery_merge_defers_a_live_legacy_lease_and_retries_after_release() {
             session_id: "live-session".to_string(),
             thread_id: "live-thread".to_string(),
             process_id: std::process::id(),
+            owner_token: None,
             updated_at,
         })
         .unwrap(),
@@ -845,11 +1039,18 @@ fn legacy_inline_control_files_are_imported_without_moving_payloads() {
             session_id: "legacy-session".to_string(),
             thread_id: "legacy-thread".to_string(),
             process_id: std::process::id(),
+            owner_token: None,
             updated_at: 1,
         })
         .unwrap(),
     )
     .unwrap();
+    let legacy_lock_path = configured_root
+        .join(SESSIONS_DIR)
+        .join(".locks")
+        .join("legacy-session.lock");
+    fs::create_dir_all(legacy_lock_path.parent().unwrap()).unwrap();
+    fs::write(&legacy_lock_path, b"").unwrap();
     let mut config = config(&root);
     config.root = Some(configured_root.clone());
 
@@ -868,6 +1069,7 @@ fn legacy_inline_control_files_are_imported_without_moving_payloads() {
     assert!(session_dir.join(AGENTS_DIR).join("legacy-thread").exists());
     assert!(!session_dir.join(ENTRY_METADATA_DIR).exists());
     assert!(!session_dir.join(LEASES_DIR).exists());
+    assert!(legacy_lock_path.exists());
     assert!(manager.state_session_dir.join(SESSION_METADATA_FILE).exists());
 }
 

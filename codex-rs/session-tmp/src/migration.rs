@@ -310,7 +310,24 @@ pub(super) fn consolidate_recovery(
             deferred = true;
             continue;
         }
-        let merge = match merge::merge_session(&source, target, &session_id) {
+        let mut persist_moves = |session_moved_paths: &[(PathBuf, PathBuf)]| {
+            let mut all_paths = moved_paths.clone();
+            all_paths.extend(session_moved_paths.iter().cloned());
+            write_manifest(
+                &manifest_path,
+                &source,
+                target,
+                "in_progress",
+                &all_paths,
+            )
+        };
+        let merge = match merge::merge_session(
+            &source,
+            target,
+            &session_id,
+            &moved_paths,
+            &mut persist_moves,
+        ) {
             Ok(result) => result,
             Err(error) => {
                 tracing::debug!(
@@ -343,7 +360,7 @@ pub(super) fn consolidate_recovery(
                 "in_progress",
                 &moved_paths,
             )?;
-            if let Err(error) = merge.retire_source(&source, &session_id) {
+            if let Err(error) = merge.retire_source(&source, target, &session_id) {
                 tracing::debug!(
                     error = %error,
                     session_id = %session_id,
@@ -355,8 +372,9 @@ pub(super) fn consolidate_recovery(
     }
     // Unknown recovery content is deliberately left in its original tree and
     // excluded from managed cleanup. The source can be retired only after all
-    // validated records are gone and no unrecognized content remains. Keep
-    // migration locks held through the final payload removal; old binaries do
+    // validated records are gone and no unrecognized content remains. Payload
+    // copies stay in the source until their mappings are durable; keep
+    // migration locks held through the exact source cleanup. Old binaries do
     // not honor these locks, so retirement itself must be non-recursive.
     let source_retirable = retire::source_root_is_retirable(&source).unwrap_or(false);
     if !deferred && source_retirable {

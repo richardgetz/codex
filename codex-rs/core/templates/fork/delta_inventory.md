@@ -372,7 +372,10 @@ release or merge rules.
     durable artifacts, credentials, or source files there.
   - New roots enroll only when empty, while validated legacy roots import
     marker-era session records into external state and retire validated legacy
-    controls plus the old marker after inactive leases and locks drain. The historical
+    controls plus the old marker after validated leases become inactive. Legacy
+    lock pathnames may remain as tiny compatibility residues so waiting old
+    processes cannot be split onto a replacement lock; those residues do not
+    block external enrollment or marker retirement. The historical
     `<codex_home>/session-tmp-recovery` tree is automatically merged into the
     normal default payload namespace with collision-safe, resumable moves;
     live old-version sessions defer migration until a later open. Recognized
@@ -661,8 +664,9 @@ release or merge rules.
   configured namespace, and no control files are written below payload roots
   except a bounded compatibility lease during an active old-version
   transition.
-  Verify marker-era roots import exact records and retire their marker only
-  after legacy leases and locks drain; recovery-root consolidation is
+  Verify marker-era roots import exact records and retire their marker after
+  validated leases become inactive, while retained legacy lock pathnames do
+  not block enrollment; recovery-root consolidation is
   collision-safe, resumable, preserves unknown files, defers live old-version
   sessions, preserves unknown recovery paths outside managed cleanup, and
   retires obsolete recovery state automatically once the source is empty.

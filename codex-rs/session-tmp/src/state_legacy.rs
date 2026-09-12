@@ -160,9 +160,14 @@ impl ControlState {
         for session_id in &legacy_session_ids {
             retire_legacy_session_controls(&self.legacy_session_dir(session_id), session_id)?;
         }
+        // Keep every legacy lock pathname as a durable compatibility residue.
+        // Removing a name while an older process may still hold or await its
+        // descriptor would split the old lock domain. The marker itself can be
+        // retired now that all validated session controls are durable; future
+        // managers use external state and leave these tiny lock files alone.
         self.remove_legacy_marker()?;
         drop(legacy_locks);
-        remove_legacy_lock_files(&sessions_dir, &legacy_session_ids)
+        Ok(())
     }
 
     fn remove_legacy_marker(&self) -> Result<(), SessionTmpError> {
@@ -174,6 +179,9 @@ impl ControlState {
             return Err(SessionTmpError::UnsafeManagedPath(marker));
         }
         if marker.exists() {
+            if fs::read_to_string(&marker)? != LEGACY_MARKER_CONTENT {
+                return Ok(());
+            }
             fs::remove_file(marker)?;
         }
         Ok(())
@@ -241,35 +249,6 @@ fn retire_legacy_session_controls(
 
     if fs::read_dir(session_dir)?.next().transpose()?.is_none() {
         fs::remove_dir(session_dir)?;
-    }
-    Ok(())
-}
-
-fn remove_legacy_lock_files(
-    sessions_dir: &Path,
-    session_ids: &[String],
-) -> Result<(), SessionTmpError> {
-    let locks_dir = sessions_dir.join(".locks");
-    if !is_real_directory(&locks_dir) {
-        return Ok(());
-    }
-    for session_id in session_ids {
-        let path = locks_dir.join(format!("{session_id}.lock"));
-        match fs::symlink_metadata(&path) {
-            Ok(metadata) if storage::file_type_is_link(metadata.file_type()) => {
-                return Err(SessionTmpError::UnsafeManagedPath(path));
-            }
-            Ok(_) => match fs::remove_file(&path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
-            },
-            Err(error) if error.kind() == ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-    if fs::read_dir(&locks_dir)?.next().transpose()?.is_none() {
-        fs::remove_dir(locks_dir)?;
     }
     Ok(())
 }

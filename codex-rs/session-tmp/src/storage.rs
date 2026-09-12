@@ -46,6 +46,11 @@ pub(super) struct LeaseRecord {
     pub(super) session_id: String,
     pub(super) thread_id: String,
     pub(super) process_id: u32,
+    /// Unique ownership token for one lease acquisition. Older records omit
+    /// this field; those tokenless records are never overwritten by a newer
+    /// heartbeat and are only reclaimed by the normal stale-record path.
+    #[serde(default)]
+    pub(super) owner_token: Option<String>,
     pub(super) updated_at: u64,
 }
 
