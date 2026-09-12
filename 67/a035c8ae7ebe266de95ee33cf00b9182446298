@@ -1,0 +1,19 @@
+intent:
+  id: team-delegation-activity-proof-2026-09-12
+change_type: test
+scope: team delegation and TUI activity projection
+summary: Add unchanged proof tests for Team On instruction authorization and direct/nested Worker activity admission.
+decision: Capture the two reported regressions before implementation changes so each fix has a stable red-to-green behavioral proof.
+constraints:
+  - Keep the proof assertions unchanged after the implementation fix.
+  - Preserve explicit per-task delegation restrictions and selected Lead tree scope.
+  - Do not mutate the saved user session or weaken unknown-activity filtering.
+intent_priority: high
+code_locations:
+  - codex-rs/core/tests/suite/team.rs
+  - codex-rs/tui/src/app/tests.rs
+  - codex-rs/tui/src/app/team_activity_tests.rs
+requested_by: user and Lead
+recorded_by: Codex
+agent: Codex
+model: gpt-5.6
