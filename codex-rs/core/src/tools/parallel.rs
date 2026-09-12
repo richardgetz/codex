@@ -232,7 +232,11 @@ impl ToolCallRuntime {
             tokio::select! {
                 res = &mut dispatch_handle => res.map_err(Self::tool_task_join_error)?,
                 _ = cancellation_token.cancelled() => {
-                    if terminal_outcome_reached.load(Ordering::Acquire) || dispatch_handle.is_finished() {
+                    // The registry flag is the authority for a result that reached a terminal
+                    // lifecycle event. A finished dispatch without that flag may have observed
+                    // this same cancellation while waiting at an activity boundary; let the
+                    // cancellation branch own the normal aborted response in that case.
+                    if terminal_outcome_reached.load(Ordering::Acquire) {
                         dispatch_handle.await.map_err(Self::tool_task_join_error)?
                     } else {
                         let secs = started.elapsed().as_secs_f32().max(0.1);
