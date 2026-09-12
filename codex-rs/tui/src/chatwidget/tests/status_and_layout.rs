@@ -3002,6 +3002,7 @@ async fn lead_idle_and_deadline_warnings_render_snapshot() {
         lines_to_single_string(&cells.concat()),
         @r###"
 ⚠ Lead wait parked; next oversight deadline: 2030-01-01T00:00:00Z.
+
 ⚠ Lead oversight deadline reached; review 1 active Worker.
 "###
     );

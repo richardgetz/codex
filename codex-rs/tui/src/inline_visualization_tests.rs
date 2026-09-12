@@ -73,6 +73,27 @@ fn buffer_to_text(buffer: &Buffer, width: u16) -> String {
         .join("\n")
 }
 
+fn normalize_viewer_paths(output: &str) -> String {
+    let mut normalized = Vec::new();
+    let mut wrapped_path = false;
+    for line in output.lines() {
+        if let Some(start) = line.find("file://") {
+            normalized.push(format!("{}file://<viewer-path>", &line[..start]));
+            wrapped_path = !line[start..].contains(".html");
+        } else if wrapped_path {
+            if let Some(end) = line.find(".html") {
+                normalized.push(format!("<viewer-path>{}", &line[end + ".html".len()..]));
+                wrapped_path = false;
+            } else {
+                normalized.push("<viewer-path>".to_string());
+            }
+        } else {
+            normalized.push(line.to_string());
+        }
+    }
+    normalized.join("\n")
+}
+
 #[test]
 fn rewrites_complete_directive_to_trusted_static_file_placeholder() {
     let (_codex_home, context) = context_with_fragment("<div>chart</div>");
@@ -303,16 +324,7 @@ fn finalized_agent_cell_replays_visualization_link() {
         .map(|line| line_text(&line.line))
         .collect::<Vec<_>>()
         .join("\n");
-    let snapshot_text = text
-        .lines()
-        .map(|line| {
-            line.find("file://").map_or_else(
-                || line.to_string(),
-                |start| format!("{}file://<viewer-path>", &line[..start]),
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let snapshot_text = normalize_viewer_paths(&text);
 
     insta::assert_snapshot!("finalized_agent_cell_visualization_link", snapshot_text);
     let title_span = lines
@@ -378,16 +390,7 @@ fn transcript_overlay_remeasures_visualization_when_artifact_becomes_available()
         "viewer URL was clipped: {available:?}"
     );
 
-    let available = available
-        .lines()
-        .map(|line| {
-            line.find("file://").map_or_else(
-                || line.to_string(),
-                |start| format!("{}file://<viewer-path>", &line[..start]),
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let available = normalize_viewer_paths(&available);
     insta::assert_snapshot!(
         "transcript_overlay_visualization_becomes_available",
         format!("before:\n{unavailable}\n\nafter:\n{available}")
