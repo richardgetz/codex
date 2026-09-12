@@ -869,6 +869,7 @@ async fn stale_turn_errors_do_not_stop_a_replacement_goal() -> anyhow::Result<()
             )
             .await?;
         harness.notify_turn_error("turn-1", error).await;
+        harness.stop_turn("turn-1").await;
         replacement.apply_runtime_effects(&harness.goal_service).await;
 
         let goal = runtime
