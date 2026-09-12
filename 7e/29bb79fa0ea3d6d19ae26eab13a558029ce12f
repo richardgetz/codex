@@ -1,0 +1,26 @@
+intent:
+  id: intent/2026-09-12/captured-model-extension-context#7e29bb79fa0e
+  change_type: fix
+  scope: context
+  summary: Bind extension context, skill catalog budgets, and metrics to each captured sampling-step model.
+  decision: Pass captured step model metadata, usable context windows, and step telemetry through world-state and turn-context contributors; use step-bound context rebuilds for new windows and mid-turn compaction while retaining legacy TurnContext wrappers for compatibility.
+  constraints:
+    - Preserve Team-selected model and effort capture, routing, and dynamic_handoff behavior.
+    - Do not enable or alter context-management experiments or remote catalog configuration.
+    - Keep existing TurnContext helper callers compatible while ensuring live StepContext paths use captured model data.
+    - Preserve Goal wait, Continuous mode, pause, cancellation, and completion behavior.
+    - Keep app-server wire APIs unchanged.
+    - This is an upstream-compatible change; no fork delta inventory entry is required.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core/src/compact.rs::build_compaction_initial_context
+    - codex-rs/core/src/session/mod.rs::build_turn_context_contribution_items
+    - codex-rs/core/src/session/mod.rs::build_initial_context_with_world_state_from_mcp_binding_for_step
+    - codex-rs/core/src/session/world_state.rs::Session::build_world_state_for_step
+    - codex-rs/ext/extension-api/src/contributors/context.rs::TurnContextContributionInput
+    - codex-rs/ext/extension-api/src/contributors/world_state.rs::WorldStateContributionInput
+    - codex-rs/ext/skills/src/world_state_catalogs.rs::CatalogContext::new
+  requested_by: @richardgetz
+  recorded_by:
+    agent: Codex Worker
+    model: unknown
