@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-09-12/core-cancellation-ready-arbitration#654ae75d5a"
+  change_type: "fix"
+  scope: "core-tool-dispatch"
+  summary: "Make cancellation own a ready/ready pre-admission dispatch race without skipping lifecycle completion."
+  decision: "Bias the outer dispatch select toward cancellation; atomically claim only runtime-cleanup cancellations that emit the normal aborted response, while non-runtime dispatches keep the registry finish callback authoritative and await after abort."
+  constraints:
+    - "Preserve terminal results already claimed by the registry."
+    - "Preserve genuine task-join failures and existing abort notifications/timing."
+    - "Keep cancellation-derived TurnAborted errors from leaking at the activity boundary."
+    - "Do not change activity, sandbox, or handler admission policy."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/tools/parallel.rs::ToolCallRuntime::handle_tool_call_with_source"
+    - "codex-rs/core/src/session/mod.rs"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
