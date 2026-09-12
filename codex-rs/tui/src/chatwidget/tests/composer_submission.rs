@@ -33,6 +33,34 @@ fn assert_hidden_shell_payload_is_literal(op: Result<Op, TryRecvError>, payload:
     }
 }
 
+fn queue_autosend_state(chat: &ChatWidget) -> String {
+    format!(
+        "configured={} misalignment={} suppression={} recovered_queue={} \
+         rate_limit_recovery_pending={} blocks_direct_input={} pending_start={} \
+         agent_turn_running={} review_mode={} task_running={} mcp_startup={} \
+         queued={} queued_history={} rejected={} rejected_history={} pending_steers={} \
+         safety_buffering_prompt={} composer={:?}",
+        chat.is_session_configured(),
+        chat.has_misalignment_policy_violation(),
+        chat.input_queue.suppress_queue_autosend,
+        chat.input_queue.recovered_queue,
+        chat.input_queue.rate_limit_recovery_pending,
+        chat.blocks_direct_input,
+        chat.input_queue.user_turn_pending_start,
+        chat.turn_lifecycle.agent_turn_running,
+        chat.review.is_review_mode,
+        chat.bottom_pane.is_task_running(),
+        chat.mcp_startup_status.is_some(),
+        chat.input_queue.queued_user_messages.len(),
+        chat.input_queue.queued_user_message_history_records.len(),
+        chat.input_queue.rejected_steers_queue.len(),
+        chat.input_queue.rejected_steer_history_records.len(),
+        chat.input_queue.pending_steers.len(),
+        chat.safety_buffering_prompt.is_some(),
+        chat.bottom_pane.composer_text(),
+    )
+}
+
 #[tokio::test]
 async fn user_submission_does_not_commit_recap_loading_to_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -2450,7 +2478,13 @@ async fn reconnect_holds_only_recovered_input_until_manually_edited() {
         chat.restore_reconnected_input(input);
         chat.set_queue_autosend_suppressed(/*suppressed*/ false);
         if let Some(text) = recovered {
-            assert!(!chat.maybe_send_next_queued_input());
+            let state_before_recovered_send = queue_autosend_state(&chat);
+            let recovered_submitted = chat.maybe_send_next_queued_input();
+            let state_after_recovered_send = queue_autosend_state(&chat);
+            assert!(
+                !recovered_submitted,
+                "recovered input was auto-sent unexpectedly; before={state_before_recovered_send}; after={state_after_recovered_send}"
+            );
             chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
             assert_eq!(chat.bottom_pane.composer_text(), text);
             assert_no_submit_op(&mut ops);
@@ -2462,7 +2496,13 @@ async fn reconnect_holds_only_recovered_input_until_manually_edited() {
         chat.input_queue
             .queued_user_messages
             .push_back(UserMessage::from("new follow-up").into());
-        assert!(chat.maybe_send_next_queued_input());
+        let state_before_follow_up_send = queue_autosend_state(&chat);
+        let follow_up_submitted = chat.maybe_send_next_queued_input();
+        let state_after_follow_up_send = queue_autosend_state(&chat);
+        assert!(
+            follow_up_submitted,
+            "new follow-up was not auto-sent; before={state_before_follow_up_send}; after={state_after_follow_up_send}"
+        );
         assert_matches!(next_submit_op(&mut ops), Op::UserTurn { .. });
     }
 }

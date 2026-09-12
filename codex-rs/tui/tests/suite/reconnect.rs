@@ -14,12 +14,17 @@ use std::time::Instant;
 use tokio::net::UnixListener;
 use tokio_tungstenite::tungstenite::Message;
 
+const RECONNECT_MODEL: &str = "gpt-5.6-terra";
+const ACCOUNT_SWITCH_RESPONSE: &str = "{}";
+const ACCOUNT_READ_RESPONSE: &str = r#"{"account":{"type":"apiKey"},"requiresOpenaiAuth":false}"#;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Result<()> {
     let repo_root = codex_utils_cargo_bin::repo_root()?;
     // macOS's default temporary directory leaves too little room for the control socket path.
     let codex_home = tempfile::tempdir_in("/tmp")?;
     write_test_config(codex_home.path(), &repo_root)?;
+    let config_provenance = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     let socket = codex_app_server_client::app_server_control_socket_path(codex_home.path())?;
     std::fs::create_dir_all(socket.parent().unwrap())?;
     let listener = UnixListener::bind(socket.as_path())?;
@@ -77,13 +82,14 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
                 }
                 let result = match request.method.as_str() {
                     "initialize" => json!({"userAgent": "reconnect-pty"}),
+                    "account/switch" => json!({}),
                     "account/read" => {
                         json!({"account": {"type": "apiKey"}, "requiresOpenaiAuth": false})
                     }
                     "model/list" => json!({"data": [], "nextCursor": null}),
                     "configRequirements/read" => json!({"requirements": null}),
                     "thread/start" | "thread/resume" => {
-                        json!({"thread": thread, "model": "gpt-5.6-terra", "modelProvider": "openai",
+                        json!({"thread": thread, "model": RECONNECT_MODEL, "modelProvider": "openai",
                             "cwd": server_cwd, "approvalPolicy": "never", "approvalsReviewer": "user",
                             "sandbox": {"type": "readOnly"}, "reasoningEffort": null})
                     }
@@ -135,7 +141,7 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
     let mut disconnect_tx = Some(disconnect_tx);
     let mut restore_tx = Some(restore_tx);
     for expected in [
-        "gpt-5.6-terra",
+        RECONNECT_MODEL,
         "preserved-draft",
         "Reconnecting",
         "preserved-draft!",
@@ -147,11 +153,11 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
         }
         ensure!(
             terminal.screen_contains(expected),
-            "missing {expected}; screen:\n{}",
+            "missing {expected}; config fixture={config_provenance:?}; model fixture={RECONNECT_MODEL:?}; account/switch response={ACCOUNT_SWITCH_RESPONSE}; account/read response={ACCOUNT_READ_RESPONSE}; screen:\n{}",
             terminal.screen_contents()
         );
         match expected {
-            "gpt-5.6-terra" => terminal.write_input(b"preserved-draft")?,
+            RECONNECT_MODEL => terminal.write_input(b"preserved-draft")?,
             "preserved-draft" => {
                 disconnect_tx.take().unwrap().send(()).unwrap();
             }
