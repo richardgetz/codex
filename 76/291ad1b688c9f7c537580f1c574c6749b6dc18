@@ -1,0 +1,26 @@
+intent:
+  id: intent/2026-09-12/goal-explicit-user-pause#76291ad1b6
+  change_type: fix
+  scope: goal-control
+  summary: Allow update_goal to honor explicit user pause requests.
+  decision: Accept paused through update_goal only as a model response to an explicit user request, account final progress with budget-limit precedence, reset continuation-breaker state on turn abort, and keep resume and system-limit statuses host-controlled.
+  constraints:
+    - Preserve existing complete and blocked audits and lifecycle accounting.
+    - Preserve paused status across thread resume and stop automatic Goal continuation.
+    - Reject active, budget-limited, and usage-limited model status mutations.
+    - Keep app-server wire compatibility and do not infer pause intent without user input.
+  intent_priority: must
+  code_locations:
+    - codex-rs/ext/goal/src/spec.rs
+    - codex-rs/ext/goal/src/tool.rs
+    - codex-rs/ext/goal/src/extension.rs
+    - codex-rs/ext/goal/templates/goals/budget_limit.md
+    - codex-rs/ext/goal/templates/goals/continuation.md
+    - codex-rs/ext/goal/templates/goals/objective_updated.md
+    - codex-rs/ext/goal/tests/goal_extension_backend.rs
+    - codex-rs/app-server/tests/suite/v2/thread_resume.rs
+    - codex-rs/core/templates/fork/delta_inventory.md
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: unknown
