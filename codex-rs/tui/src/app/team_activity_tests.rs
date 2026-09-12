@@ -168,6 +168,50 @@ fn unknown_activity_waits_for_parent_metadata_admission() {
 }
 
 #[test]
+fn collab_admitted_parent_metadata_survives_activity_refresh() {
+    let root = ThreadId::new();
+    let worker = ThreadId::new();
+    let nested_worker = ThreadId::new();
+    let mut projection = TeamActivityProjection::default();
+
+    projection.replace_thread_metadata(Some(root), [(root, None)]);
+    // Active AgentControl spawns expose parent edges through collab items before their first
+    // activity snapshot; the next overview refresh must retain those locally admitted edges.
+    projection.observe_thread_parent(worker, Some(root));
+    projection.observe_thread_parent(nested_worker, Some(worker));
+    projection.replace_thread_metadata(Some(root), [(root, None)]);
+    projection.observe(&notification(
+        root,
+        root,
+        ThreadActivity::Idle,
+        ThreadPauseState::Running,
+        /*in_flight_operations*/ 0,
+    ));
+    projection.observe(&notification(
+        worker,
+        root,
+        ThreadActivity::Working,
+        ThreadPauseState::Running,
+        /*in_flight_operations*/ 1,
+    ));
+    projection.observe(&notification(
+        nested_worker,
+        root,
+        ThreadActivity::Waiting,
+        ThreadPauseState::Running,
+        /*in_flight_operations*/ 0,
+    ));
+
+    let status = projection
+        .status_for_root(root, None)
+        .expect("active collab workers remain visible after refresh");
+    assert_eq!(status.workers_working, 1);
+    assert_eq!(status.workers_waiting, 1);
+    assert_eq!(status.direct_workers, 1);
+    assert_eq!(status.subagents, 1);
+}
+
+#[test]
 fn projection_renders_pause_transition_and_clears_when_idle() {
     let root = ThreadId::new();
     let worker = ThreadId::new();

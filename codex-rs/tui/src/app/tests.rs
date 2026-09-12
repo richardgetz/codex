@@ -128,7 +128,10 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchivedNotification;
 use codex_app_server_protocol::ThreadClosedNotification;
+use codex_app_server_protocol::ThreadActivity;
+use codex_app_server_protocol::ThreadActivityUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadPauseState;
 use codex_app_server_protocol::ThreadRealtimeAudioChunk;
 use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
@@ -2227,12 +2230,16 @@ async fn token_usage_update_refreshes_status_line_with_runtime_context_window() 
 #[tokio::test]
 async fn collab_receiver_notification_caches_thread_without_app_server_read() {
     let mut app = make_test_app().await;
+    let sender_thread_id = ThreadId::new();
     let receiver_thread_id =
         ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
+    app.primary_thread_id = Some(sender_thread_id);
+    app.team_activity
+        .replace_thread_metadata(Some(sender_thread_id), [(sender_thread_id, None)]);
 
     app.handle_thread_event_now(ThreadBufferedEvent::Notification(Box::new(
         ServerNotification::ItemStarted(ItemStartedNotification {
-            thread_id: ThreadId::new().to_string(),
+            thread_id: sender_thread_id.to_string(),
             turn_id: "turn-1".to_string(),
             started_at_ms: 0,
             item: ThreadItem::CollabAgentToolCall {
@@ -2259,6 +2266,27 @@ async fn collab_receiver_notification_caches_thread_without_app_server_read() {
             is_closed: false,
         })
     );
+    app.team_activity.observe(&ThreadActivityUpdatedNotification {
+        thread_id: sender_thread_id.to_string(),
+        root_thread_id: sender_thread_id.to_string(),
+        activity: ThreadActivity::Idle,
+        pause_state: ThreadPauseState::Running,
+        wait_reason: None,
+        in_flight_operations: 0,
+    });
+    app.team_activity.observe(&ThreadActivityUpdatedNotification {
+        thread_id: receiver_thread_id.to_string(),
+        root_thread_id: sender_thread_id.to_string(),
+        activity: ThreadActivity::Working,
+        pause_state: ThreadPauseState::Running,
+        wait_reason: None,
+        in_flight_operations: 1,
+    });
+    let status = app
+        .team_activity
+        .status_for_root(sender_thread_id, None)
+        .expect("collab receiver activity should be visible under its sending thread");
+    assert_eq!(status.workers_working, 1);
 }
 
 #[tokio::test]

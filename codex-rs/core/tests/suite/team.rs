@@ -390,6 +390,8 @@ async fn team_toggle_pins_lead_and_restores_original_model() -> Result<()> {
     let active_fragments = team_instruction_fragments(&requests[0]);
     assert_eq!(active_fragments.len(), 1);
     assert!(active_fragments[0].contains("You are the Lead"));
+    assert!(active_fragments[0].contains("Team On is the user's opt-in authorization"));
+    assert!(active_fragments[0].contains("delegate substantive in-scope work"));
     assert!(active_fragments[0].contains("Dynamic lookup handoff is enabled"));
     assert_eq!(
         team_instruction_fragments(&requests[1]),
