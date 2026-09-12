@@ -1,7 +1,6 @@
 //! Server collaboration-mode discovery and TUI-visible selection. Missing discovery adds no presets.
 
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ClientRequest;
@@ -16,16 +15,13 @@ use crate::model_catalog::ModelCatalog;
 
 fn filtered_presets(
     model_catalog: &ModelCatalog,
-    collaboration_modes_config: CollaborationModesConfig,
+    _collaboration_modes_config: CollaborationModesConfig,
 ) -> Vec<CollaborationModeMask> {
-    let presets = if model_catalog.collaboration_modes.is_empty() {
-        builtin_collaboration_mode_presets(collaboration_modes_config)
-    } else {
-        model_catalog.collaboration_modes.clone()
-    };
-    presets
-        .into_iter()
+    model_catalog
+        .collaboration_modes
+        .iter()
         .filter(|mask| mask.mode.is_some_and(ModeKind::is_tui_visible))
+        .cloned()
         .collect()
 }
 

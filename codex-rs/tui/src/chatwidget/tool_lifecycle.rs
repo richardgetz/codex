@@ -118,9 +118,9 @@ impl ChatWidget {
         self.active_collab_wait_calls.insert(call_id.to_string());
         self.update_task_running_state();
         self.bottom_pane.ensure_status_indicator();
+        self.set_status_header(String::from("Waiting on agents"));
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ false);
-        self.set_status_header(String::from("Waiting on agents"));
     }
 
     fn end_collab_waiting(&mut self, call_id: &str) {
