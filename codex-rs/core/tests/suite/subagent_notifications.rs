@@ -2917,9 +2917,10 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
     );
 
     // `TurnComplete` is broadcast before the child completion is forwarded to its
-    // parent. The send telemetry is emitted after the queue-only operation is
-    // accepted by the parent session, so waiting for the worker's second result
-    // send preserves FIFO ordering before the root request below.
+    // parent. Send telemetry is emitted when the queue-only operation is accepted,
+    // while receive telemetry is emitted after the parent mailbox enqueues it. Wait
+    // for both distinct result submissions to reach that receive point before the
+    // root request below, so this assertion does not race mailbox materialization.
     timeout(Duration::from_secs(5), async {
         loop {
             let result_send_lines = String::from_utf8(output.lock().expect("buffer lock").clone())
@@ -2934,12 +2935,47 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
                 .map(|line| line.chars().take(512).collect::<String>())
                 .collect::<Vec<_>>();
             if result_send_lines.len() >= 2 {
-                eprintln!(
-                    "peer result send telemetry count={} lines={:?}",
-                    result_send_lines.len(),
-                    result_send_lines.iter().take(4).collect::<Vec<_>>(),
-                );
-                break;
+                let communication_ids = result_send_lines
+                    .iter()
+                    .filter_map(|line| {
+                        line.split_whitespace().find_map(|field| {
+                            field
+                                .strip_prefix("communication_id=")
+                                .map(|value| value.trim_matches('"').to_string())
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let received_lines = String::from_utf8(
+                    output.lock().expect("buffer lock").clone(),
+                )
+                .expect("logs should be UTF-8")
+                .lines()
+                .filter(|line| {
+                    line.contains("state=\"receive\"")
+                        && communication_ids
+                            .iter()
+                            .any(|id| line.contains(&format!("communication_id={id}")))
+                })
+                .map(|line| line.chars().take(512).collect::<String>())
+                .take(4)
+                .collect::<Vec<_>>();
+                let has_distinct_ids = communication_ids.len() >= 2
+                    && communication_ids[0] != communication_ids[1];
+                let all_submissions_received = has_distinct_ids
+                    && communication_ids.iter().take(2).all(|id| {
+                        received_lines
+                            .iter()
+                            .any(|line| line.contains(&format!("communication_id={id}")))
+                    });
+                if all_submissions_received {
+                    eprintln!(
+                        "peer result send telemetry count={} lines={:?} receive_lines={:?}",
+                        result_send_lines.len(),
+                        result_send_lines.iter().take(4).collect::<Vec<_>>(),
+                        received_lines,
+                    );
+                    break;
+                }
             }
             sleep(Duration::from_millis(10)).await;
         }
