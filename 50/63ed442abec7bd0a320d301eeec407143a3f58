@@ -1,0 +1,26 @@
+intent:
+  id: intent/2026-09-11/goal-background-wait
+  change_type: fix
+  scope: goal-continuation
+  summary: Park automatic Goal continuations while tracked unified-exec processes run and serialize Team Lead admission.
+  decision: Add lifecycle wait handles for live unified-exec process IDs; the Goal runtime tracks per-turn generations, deduplicates and cancels watchers, and wakes only when exact processes terminate; Team Goal admission reuses the existing Lead guard while direct Workers remain active.
+  constraints:
+    - Preserve ordinary user and actionable Worker turns, explicit Goal starts, pause, cancel, and completion wake behavior.
+    - Do not add polling, generic sleep, no-progress counters, or disable Goals or Continuous mode.
+    - Attribute waits to an active Goal turn and exact managed process IDs; invalidate stale callbacks on turn or goal mutation.
+    - Preserve external process lifecycle when a Goal is replaced or cleared; cancel only the old Goal waiter.
+    - Keep app-server wire APIs unchanged and use deterministic mock responses only.
+  intent_priority: high
+  code_locations:
+    - codex-rs/ext/goal/src/runtime.rs
+    - codex-rs/ext/goal/src/extension.rs
+    - codex-rs/ext/goal/src/api.rs
+    - codex-rs/core/src/session/turn_input.rs
+    - codex-rs/core/src/tools/lifecycle.rs
+    - codex-rs/core/src/unified_exec/process_manager.rs
+    - codex-rs/app-server/tests/suite/v2/goal_wait.rs
+    - codex-rs/core/templates/fork/delta_inventory.md
+  requested_by: user
+  recorded_by:
+    agent: Codex Worker
+    model: gpt-5
