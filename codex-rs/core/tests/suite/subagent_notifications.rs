@@ -2648,6 +2648,14 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
     const REQUESTER_CALL_ID: &str = "spawn-routing-requester";
     const FOLLOWUP_CALL_ID: &str = "request-peer-followup";
 
+    let output: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(Level::INFO)
+        .with_writer(MockWriter::new(output))
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
     let server = start_mock_server().await;
     let mut builder = test_codex()
         .with_model("gpt-5.6-sol")
@@ -2889,22 +2897,22 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
     );
 
     // `TurnComplete` is broadcast before the child completion is forwarded to its
-    // parent. Wait for the queue-only completion operation so the root request
-    // below cannot race that forwarding step.
+    // parent. The send telemetry is emitted after the queue-only operation is
+    // accepted by the parent session, so waiting for the worker's second result
+    // send preserves FIFO ordering before the root request below.
     timeout(Duration::from_secs(5), async {
         loop {
-            let delivered = manager.captured_ops().into_iter().any(|(thread_id, op)| {
-                thread_id == root_thread_id
-                    && matches!(
-                        op,
-                        Op::InterAgentCommunication { communication, .. }
-                            if !communication.trigger_turn
-                                && communication.author.as_str() == "/root/worker"
-                                && communication.recipient.is_root()
-                                && communication.content.contains("peer follow-up finished")
-                    )
-            });
-            if delivered {
+            let result_sends = String::from_utf8(output.lock().expect("buffer lock").clone())
+                .expect("logs should be UTF-8")
+                .lines()
+                .filter(|line| {
+                    line.contains("kind=\"result\"")
+                        && line.contains("state=\"send\"")
+                        && line.contains(&format!("sender_thread_id={worker_thread_id}"))
+                        && line.contains(&format!("receiver_thread_id={root_thread_id}"))
+                })
+                .count();
+            if result_sends >= 2 {
                 break;
             }
             sleep(Duration::from_millis(10)).await;
