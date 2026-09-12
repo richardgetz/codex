@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-12/tui-team-wait-mode-discovery#f5402c5074"
+  change_type: fix
+  scope: tui
+  summary: Preserve team-wait interrupt state and restored collaboration mode when server discovery is unavailable.
+  decision: Apply the status header before hiding the interrupt hint, and treat the server collaboration catalog as authoritative so an empty catalog cannot cycle restored modes through local fallback presets.
+  constraints:
+    - Preserve explicit collaboration mode selections and draft input when catalog discovery is empty.
+    - Keep the team wait row free of an interrupt hint while retaining normal interrupt behavior elsewhere.
+    - Do not change app-server or core APIs.
+  intent_priority: must
+  code_locations:
+    - "codex-rs/tui/src/chatwidget/tool_lifecycle.rs::begin_collab_waiting"
+    - "codex-rs/tui/src/collaboration_modes.rs::filtered_presets"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5"
