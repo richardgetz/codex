@@ -291,6 +291,12 @@ the effective assignment in thread responses. See the
   managed directory and durable metadata for created or registered paths. The
   configured parent is treated as managed storage, not as a general deletion
   target; cleanup is restricted to the managed layout and its ownership data.
+- If the configured root cannot be opened safely (for example, an existing
+  unmarked directory), startup and resume continue with this feature disabled
+  for the runtime and emit a warning. Codex never adopts or rewrites an
+  untrusted root; choose a new empty root or repair the
+  `.codex-managed-session-tmp` marker after verifying its contents before
+  enabling the feature again.
 - Agents receive explicit guidance that every file under their managed agent
   directory is disposable, including untracked files created by shell commands.
   Source files, deliverables, checkpoints, credentials, and other durable data

@@ -1209,17 +1209,41 @@ impl Session {
             stale_after: config.session_tmp.stale_after,
         };
         let is_root_session = session_id == SessionId::from(thread_id);
-        let session_tmp = codex_session_tmp::SessionTmpManager::open(
-            &session_tmp_config,
-            config.codex_home.as_path(),
-            &session_id.to_string(),
-            &thread_id.to_string(),
-            if is_root_session {
-                codex_session_tmp::SessionTmpOwner::RootSession
-            } else {
-                codex_session_tmp::SessionTmpOwner::Agent
-            },
-        )?;
+        let (session_tmp, session_tmp_unavailable) =
+            match codex_session_tmp::SessionTmpManager::open(
+                &session_tmp_config,
+                config.codex_home.as_path(),
+                &session_id.to_string(),
+                &thread_id.to_string(),
+                if is_root_session {
+                    codex_session_tmp::SessionTmpOwner::RootSession
+                } else {
+                    codex_session_tmp::SessionTmpOwner::Agent
+                },
+            ) {
+                Ok(session_tmp) => (session_tmp, false),
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "managed session temporary storage is unavailable; continuing without it for this runtime"
+                    );
+                    (None, true)
+                }
+            };
+        let config = if session_tmp_unavailable {
+            const SESSION_TMP_UNAVAILABLE_WARNING: &str =
+                "Session temporary storage is unavailable; continuing without it for this runtime. Use a new empty root or repair its managed marker after verifying its contents.";
+            let mut config = (*config).clone();
+            config.session_tmp.enabled = false;
+            config.session_tmp.root = None;
+            config
+                .startup_warnings
+                .push(SESSION_TMP_UNAVAILABLE_WARNING.to_owned());
+            Arc::new(config)
+        } else {
+            config
+        };
+        session_configuration.original_config_do_not_use = Arc::clone(&config);
         session_configuration.session_tmp_agent_root = session_tmp
             .as_ref()
             .map(|manager| AbsolutePathBuf::from_absolute_path(manager.agent_root()))

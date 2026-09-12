@@ -358,6 +358,11 @@ release or merge rules.
     managed-layout paths are eligible for cleanup; agents are told that all
     files under their managed directory are disposable and must not store
     durable artifacts, credentials, or source files there.
+  - If a configured root cannot be opened safely, startup and resume fail open
+    with a bounded warning and disable session temporary storage for that
+    runtime. Untrusted roots are never adopted or rewritten; operators must
+    choose a new empty root or repair a verified `.codex-managed-session-tmp`
+    marker before re-enabling the feature.
   - Slash command: `/tmp [status|list|clean|clear|reap [days]]`. The current
     root session owns cleanup; `clear` also removes manual-retention entries,
     while `reap` force-cleans only sessions older than the selected age.
@@ -625,6 +630,9 @@ release or merge rules.
   source of truth.
 - Verify initial context preserves Skills → Apps → Plugins ordering without
   changing App enablement or connector filtering.
+- Verify marker or safety failures in an enabled session temporary root fail
+  open with a bounded warning, disable the feature only for that runtime, and
+  preserve untrusted root contents without adoption or marker rewrites.
 - Verify `[team]` rejects enabled configurations without both complete profiles,
   remains disabled by default, and `/team` state survives resume/fork without
   mutating global config. Verify Lead routing, Worker routing for all delegated
