@@ -1,0 +1,20 @@
+intent:
+  id: tui-fixture-path-normalization-20260912
+  change_type: test
+  scope: codex-rs/tui
+  summary: Harden path-sensitive visualization and Kitty local-file fixture assertions.
+  decision: Normalize wrapped temporary viewer paths in snapshots, retain the reviewed lead idle/deadline warning spacing, and validate the decoded local-file path payload while preserving product behavior and protocol checks.
+  constraints:
+    - no production behavior changes
+    - preserve visual output and local-file protocol assertions
+    - accept only the reviewed warning and visualization snapshot deltas
+  intent_priority: normal
+  code_locations:
+    - codex-rs/tui/src/inline_visualization_tests.rs
+    - codex-rs/tui/src/pets/mod.rs
+    - codex-rs/tui/src/chatwidget/tests/status_and_layout.rs
+    - codex-rs/tui/src/snapshots/codex_tui__inline_visualization__tests__transcript_overlay_visualization_becomes_available.snap
+  requested_by: /root/stable_refresh
+  recorded_by: codex
+  agent: /root/stable_refresh/resolve_tui_app
+  model: gpt-5.6-sol
