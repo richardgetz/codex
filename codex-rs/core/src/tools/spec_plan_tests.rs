@@ -909,7 +909,7 @@ async fn built_in_scratchpad_and_schedule_follow_mode_config() {
         } else {
             ToolExposure::Hidden
         };
-        let registered_name = ToolName::namespaced(namespace.name.clone(), &tool_name).to_string();
+        let registered_name = ToolName::namespaced(namespace.name.clone(), tool_name).to_string();
         default_plan.assert_registered_contains(&[registered_name.as_str()]);
         default_plan.assert_resolved_contains(&[registered_name.as_str()]);
         assert_eq!(default_plan.exposure(&registered_name), expected_exposure);
@@ -958,7 +958,7 @@ async fn built_in_session_tmp_tools_are_opt_in_and_lineage_tools_are_hidden() {
             ResponsesApiNamespaceTool::Function(tool) => tool.name,
             ResponsesApiNamespaceTool::Custom(tool) => tool.name,
         };
-        let registered_name = ToolName::namespaced(namespace.name.clone(), tool_name).to_string();
+        let registered_name = ToolName::namespaced(namespace.name.clone(), &tool_name).to_string();
         enabled.assert_registered_contains(&[registered_name.as_str()]);
         enabled.assert_resolved_contains(&[registered_name.as_str()]);
         let expected_exposure = if tool_name == TOOL_CREATE {
