@@ -1,0 +1,15 @@
+intent:
+  id: tui-capture-backend-force-color-20260912
+  change_type: test
+  scope: codex-rs/tui
+  summary: Make custom-terminal capture tests deterministic under NO_COLOR.
+  decision: Force crossterm color output when constructing the test-only CaptureBackend, matching the existing VT100 test backend so cursor style and RGB assertions observe the intended terminal bytes.
+  constraints:
+    - test-only; no production cursor behavior changes
+    - preserve existing semantic cursor assertions and snapshots
+    - avoid relaxing output checks
+  intent_priority: normal
+  code_locations:
+    - codex-rs/tui/src/custom_terminal.rs::tests::CaptureBackend::new
+  requested_by: /root/stable_refresh
+  recorded_by: codex
