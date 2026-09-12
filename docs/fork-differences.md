@@ -273,6 +273,15 @@ App-server clients can switch modes through `thread/settings/update` and read
 the effective assignment in thread responses. See the
 [Lead/Worker API example](../codex-rs/app-server/README.md#example-configure-and-toggle-leadworker-routing).
 
+### Slash agent picker status markers
+
+The legacy `/agent` and `/subagents` picker keeps its spawn-order navigation and
+uses each row's cached active-turn signal for the status marker: a larger green
+`●` marks an active turn, a dim `·` marks an idle open thread, and the existing
+plain `•` marks a closed thread. This is display-only; it does not infer
+waiting or paused state or add polling, and labels, row width, and keyboard
+navigation remain unchanged.
+
 ### Session-owned temporary storage
 
 - Managed temporary storage is opt-in so existing use of the operating system's

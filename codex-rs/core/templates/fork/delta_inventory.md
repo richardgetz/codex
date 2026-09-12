@@ -50,6 +50,9 @@ release or merge rules.
 - TUI team waits publish the waiting header before updating interruption hints,
   and collaboration-mode discovery keeps an empty server catalog empty instead
   of synthesizing built-in presets; visible modes still follow server filtering.
+- Legacy `/agent` and `/subagents` picker rows use the cached active-turn
+  liveness signal: green `●` for active turns, dim `·` for idle open threads,
+  and plain `•` for closed threads, without polling or status inference.
 - Main-checkout Rust build coordination: one designated build owner runs
   serialized Cargo/`just` validation against one shared target/cache after
   source integration; worker worktrees remain source-only, and active
@@ -857,6 +860,10 @@ release or merge rules.
 - Verify the TUI sets its waiting header before interrupt-hint updates, and
   leaves an empty server collaboration-mode catalog empty while retaining only
   visible server-provided modes.
+- Verify legacy `/agent` and `/subagents` picker markers derive from cached
+  `is_running`/`is_closed`, preserve active-turn semantics and the closed/idle
+  distinction, and keep labels, row width, keyboard navigation, and the
+  no-polling/no-inference boundary unchanged.
   Verify the running two-row Team/Workers/Subagents layout, direct Worker cap
   denominator, nested parent metadata hydration, and 30-second ordinary-wait
   grace: repeated waits must not extend it, expiry must redraw without a new
