@@ -2290,6 +2290,56 @@ async fn collab_receiver_notification_caches_thread_without_app_server_read() {
 }
 
 #[tokio::test]
+async fn sub_agent_activity_admits_parent_edge_before_thread_metadata() {
+    let mut app = make_test_app().await;
+    let parent_thread_id = ThreadId::new();
+    let worker_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000125").expect("valid thread id");
+    app.primary_thread_id = Some(parent_thread_id);
+    app.team_activity
+        .replace_thread_metadata(Some(parent_thread_id), [(parent_thread_id, None)]);
+
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(Box::new(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: parent_thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            item: ThreadItem::SubAgentActivity {
+                id: "activity-1".to_string(),
+                kind: codex_app_server_protocol::SubAgentActivityKind::Started,
+                agent_thread_id: worker_thread_id.to_string(),
+                agent_path: "/root/worker".to_string(),
+            },
+        }),
+    )));
+
+    app.team_activity.observe(&ThreadActivityUpdatedNotification {
+        thread_id: parent_thread_id.to_string(),
+        root_thread_id: parent_thread_id.to_string(),
+        activity: ThreadActivity::Idle,
+        pause_state: ThreadPauseState::Running,
+        wait_reason: None,
+        in_flight_operations: 0,
+    });
+    app.team_activity.observe(&ThreadActivityUpdatedNotification {
+        thread_id: worker_thread_id.to_string(),
+        root_thread_id: parent_thread_id.to_string(),
+        activity: ThreadActivity::Working,
+        pause_state: ThreadPauseState::Running,
+        wait_reason: None,
+        in_flight_operations: 1,
+    });
+
+    assert_eq!(
+        app.team_activity
+            .status_for_root(parent_thread_id, None)
+            .expect("worker activity should be admitted from sub-agent item")
+            .workers_working,
+        1
+    );
+}
+
+#[tokio::test]
 async fn collab_receiver_notification_does_not_cache_not_found_thread() {
     let mut app = make_test_app().await;
     let receiver_thread_id =

@@ -5,6 +5,8 @@
 //! when the visible thread changes.
 
 use super::session_lifecycle::ThreadAttachPresentation;
+use super::app_server_event_targets::server_notification_thread_target;
+use super::app_server_event_targets::ServerNotificationThreadTarget;
 use super::*;
 use crate::app_event::ThreadTitleDestination;
 use crate::chatwidget::ThreadInputStateRestoreMode;
@@ -1293,6 +1295,16 @@ impl App {
         if let Some(activity) =
             sub_agent_activity_item(notification).and_then(sub_agent_activity_display)
         {
+            if activity.is_running_hint
+                && let ServerNotificationThreadTarget::Thread(parent_thread_id) =
+                server_notification_thread_target(notification)
+                && parent_thread_id != activity.thread_id
+            {
+                // V2 spawn activity is emitted on the parent thread before a ThreadStarted or
+                // overview refresh can provide persisted parent metadata.
+                self.team_activity
+                    .observe_thread_parent(activity.thread_id, Some(parent_thread_id));
+            }
             self.agent_navigation.record_sub_agent_activity(activity);
             self.sync_active_agent_label();
             return;
@@ -1300,6 +1312,13 @@ impl App {
 
         let Some(receiver_thread_ids) = collab_receiver_thread_ids(notification) else {
             return;
+        };
+        let is_item_started = matches!(notification, ServerNotification::ItemStarted(_));
+        let parent_thread_id = match server_notification_thread_target(notification) {
+            ServerNotificationThreadTarget::Thread(thread_id) => Some(thread_id),
+            ServerNotificationThreadTarget::InvalidThreadId(_)
+            | ServerNotificationThreadTarget::AppScoped
+            | ServerNotificationThreadTarget::Global => None,
         };
 
         for receiver_thread_id in receiver_thread_ids {
@@ -1314,6 +1333,14 @@ impl App {
                 );
                 continue;
             };
+
+            if is_item_started
+                && let Some(parent_thread_id) = parent_thread_id
+                && parent_thread_id != thread_id
+            {
+                self.team_activity
+                    .observe_thread_parent(thread_id, Some(parent_thread_id));
+            }
 
             if self.agent_navigation.get(&thread_id).is_some() {
                 continue;

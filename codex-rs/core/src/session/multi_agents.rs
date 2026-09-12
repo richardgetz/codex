@@ -170,11 +170,18 @@ pub(crate) fn effective_multi_agent_mode(turn_context: &TurnContext) -> Option<M
         .as_deref()
         .or_else(|| catalog_mode.and_then(|mode| mode.hint_text.as_deref()));
 
-    // A configured or catalog hint, including an empty string, defines a custom policy instead
-    // of an effort-derived built-in policy.
-    let multi_agent_mode = match mode_hint_text {
-        Some(hint_text) => MultiAgentMode::Custom(hint_text.to_string()),
-        None => match turn_context.effective_reasoning_effort() {
+    // A configured hint, including an empty string, defines a custom policy instead of an
+    // effort-derived built-in policy. Team On is itself the user's explicit delegation opt-in,
+    // so use the proactive catalog guidance (or the built-in equivalent) when no custom policy
+    // was configured; this prevents the default explicit-request guard from suppressing Team
+    // delegation while preserving explicit custom restrictions.
+    let multi_agent_mode = match (mode_hint_text, turn_context.config.team_mode) {
+        (Some(hint_text), _) => MultiAgentMode::Custom(hint_text.to_string()),
+        (None, codex_protocol::protocol::TeamMode::LeadWorker) => catalog_mode
+            .and_then(|messages| messages.proactive.clone())
+            .map(MultiAgentMode::Custom)
+            .unwrap_or(MultiAgentMode::Proactive),
+        (None, _) => match turn_context.effective_reasoning_effort() {
             Some(ReasoningEffort::Ultra) => catalog_mode
                 .and_then(|messages| messages.proactive.clone())
                 .map(MultiAgentMode::Custom)

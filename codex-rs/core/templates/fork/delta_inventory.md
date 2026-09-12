@@ -38,6 +38,11 @@ release or merge rules.
   `docs/fork-differences.md` current and identify Rick-owned metadata.
 
 - Opt-in Lead/Worker model teams:
+  - Team On is the user's explicit in-thread authorization to delegate
+    substantive in-scope implementation, testing, research, and applicable
+    skill work; Lead balance `1` favors Worker handoff with minimal optional
+    Lead oversight while task-specific user, AGENTS.md, skill, scope,
+    concurrency, depth, and approval restrictions remain authoritative.
   - `[team]` can define exactly one Lead and one Worker model/effort profile;
     profiles remain disabled for new sessions unless `team.enabled = true`.
   - `/team on`, `/team off`, and `/team status` switch and report the live
@@ -250,6 +255,10 @@ release or merge rules.
     only for the selected loaded tree, ignores `NotLoaded`, ephemeral, or
     temporary helper threads, and rejects unknown/unloaded child activity until
     a fresh `thread/started`/`turn/started` admits it.
+  - Collab spawn and V2 `SubAgentActivity` start events locally admit their
+    parent edges before persisted metadata arrives. Same-root metadata refreshes
+    retain those locally admitted edges until the overview catches up, keeping
+    unfinished direct and nested Workers visible without polling.
 
 - Recursive per-response usage accounting:
   - App-server v2 sends the legacy context-window counters through
@@ -581,6 +590,10 @@ release or merge rules.
   supported catalog pairs, Team Off remains unchanged during profile edits,
   updated profiles apply to newly spawned Workers, and in-flight Workers stay
   pinned to their captured profile.
+  Verify Team On authorizes substantive in-scope delegation by default and
+  balance `1` favors Worker handoff without weakening explicit task-specific
+  delegation restrictions or Worker completeness, required checks, approvals,
+  scope, concurrency, and depth limits.
 - Verify `[team.lead].balance` defaults to `3`, accepts only `1..5`, rejects
   Worker updates, and persists through session snapshots, resume, and fork.
   Verify `/team balance` renders all five approved labels and typed values,
@@ -749,6 +762,9 @@ release or merge rules.
   over delayed activity until the next `turn/started`, metadata-only root
   removal prunes descendants, reset/reconnect rebuilds only the selected loaded
   tree, and ephemeral/temporary helper threads do not enter the projection.
+  Verify collab spawn and V2 `SubAgentActivity` start events admit parent edges
+  before metadata refresh, and same-root refreshes retain those edges until
+  overview metadata catches up.
   Verify `codex-mcp-server`
   handles `ThreadActivityUpdated` exhaustively, forwards the notification, and
   continues waiting for real turn completion.

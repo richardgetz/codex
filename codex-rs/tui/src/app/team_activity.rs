@@ -199,12 +199,25 @@ impl TeamActivityProjection {
         selected_root: Option<ThreadId>,
         metadata: impl IntoIterator<Item = (ThreadId, Option<ThreadId>)>,
     ) {
-        if self.selected_root != selected_root {
+        let preserve_existing = selected_root.is_some() && self.selected_root == selected_root;
+        if !preserve_existing {
             self.terminal_threads.clear();
             self.closed_root = None;
         }
         self.selected_root = selected_root;
-        self.parent_thread_ids = metadata.into_iter().collect();
+        let previous_parent_thread_ids = std::mem::take(&mut self.parent_thread_ids);
+        let mut parent_thread_ids: HashMap<_, _> = metadata.into_iter().collect();
+        if preserve_existing {
+            // Collab spawn notifications can admit a parent edge before the next overview
+            // refresh sees the new thread. Keep those locally admitted edges until overview
+            // metadata catches up, while letting fresh metadata replace stale relationships.
+            for (thread_id, parent_thread_id) in previous_parent_thread_ids {
+                parent_thread_ids
+                    .entry(thread_id)
+                    .or_insert(parent_thread_id);
+            }
+        }
+        self.parent_thread_ids = parent_thread_ids;
         if let Some(root_thread_id) = selected_root {
             self.parent_thread_ids.insert(root_thread_id, None);
             let admitted_thread_ids: HashSet<_> = self.parent_thread_ids.keys().copied().collect();
