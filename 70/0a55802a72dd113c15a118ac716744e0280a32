@@ -1,0 +1,26 @@
+intent:
+  id: "intent/2026-09-12/session-tmp-recovery-force-reap"
+  change_type: fix
+  scope: session-tmp
+  summary: "Recover managed roots safely and add explicit inactive-session reaping."
+  decision: "Retry a deterministic marker-validated sibling root after recoverable startup or command-path failures, and add a named force mode that bypasses heartbeat age while retaining lock and lease protections."
+  constraints:
+    - "Never adopt, marker-repair, or delete untrusted original roots; preserve their contents."
+    - "Disable the feature only for the current runtime when both roots fail; do not write config.toml."
+    - "Force reap bypasses heartbeat age only; current and live sessions remain protected."
+    - "Keep age-plus-force syntax unambiguous and bounded."
+    - "Do not alter sandbox environment variables."
+  intent_priority: must
+  code_locations:
+    - "codex-rs/core/src/session/session.rs"
+    - "codex-rs/session-tmp"
+    - "codex-rs/core/tests/suite/session_tmp.rs"
+    - "codex-rs/tui/src/chatwidget/session_tmp_command.rs"
+    - "codex-rs/tui/src/chatwidget/slash_dispatch.rs"
+    - "codex-rs/tui/src/chatwidget/tests/slash_commands.rs"
+    - "docs/fork-differences.md"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5.6-luna"
