@@ -1,0 +1,20 @@
+intent:
+  id: intent/2026-09-12/goal-stale-terminal-error#d9bfe571cd
+  change_type: fix
+  scope: goal-continuation
+  summary: Keep stale terminal errors from stopping replacement Goals.
+  decision: Carry the errored turn's accounted Goal identity as the expected goal for TurnError and UsageLimit stops; reject the stop when replacement state has a different Goal ID, while retaining the existing permit and wait invalidation sequencing.
+  constraints:
+    - Preserve terminal error and usage-limit handling for the same Goal.
+    - Preserve external process lifecycle and replacement cancellation semantics.
+    - Keep EmptyResponse breaker and explicit pause behavior unchanged.
+    - Reject stale TurnError and UsageLimit stops without clearing the replacement Goal.
+    - Add deterministic backend coverage for both stale error kinds.
+  intent_priority: must
+  code_locations:
+    - codex-rs/ext/goal/src/runtime.rs
+    - codex-rs/ext/goal/tests/goal_extension_backend.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: unknown
