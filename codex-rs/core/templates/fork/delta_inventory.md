@@ -43,6 +43,9 @@ release or merge rules.
 - Initial developer context keeps extension Skills world-state sections ahead of
   Apps and Plugins usage guidance, while preserving the existing App enablement,
   model-capability, and connector filtering rules.
+- TUI team waits publish the waiting header before updating interruption hints,
+  and collaboration-mode discovery keeps an empty server catalog empty instead
+  of synthesizing built-in presets; visible modes still follow server filtering.
 - Main-checkout Rust build coordination: one designated build owner runs
   serialized Cargo/`just` validation against one shared target/cache after
   source integration; worker worktrees remain source-only, and active
@@ -787,6 +790,9 @@ release or merge rules.
   cancellation before activity or parallel-dispatch admission returns one
   normal aborted tool response without surfacing an internal `TurnAborted`
   fatal error.
+- Verify the TUI sets its waiting header before interrupt-hint updates, and
+  leaves an empty server collaboration-mode catalog empty while retaining only
+  visible server-provided modes.
   Verify the running two-row Team/Workers/Subagents layout, direct Worker cap
   denominator, nested parent metadata hydration, and 30-second ordinary-wait
   grace: repeated waits must not extend it, expiry must redraw without a new
