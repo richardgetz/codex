@@ -1,0 +1,19 @@
+intent:
+  id: goal-wait-remove-unexercised-app-fixture
+  change_type: test
+  scope: goal
+  summary: Remove an app-server timing fixture that cannot reach watcher completion.
+  decision: Retain the stable public user-flow wait test and deterministic runtime proof, while removing the delayed responder and app-server variant whose exec follow-up keeps the request task active until terminal error and therefore cannot exercise complete_background_wait.
+  constraints:
+    - Do not leave known failing or false-green tests in the suite.
+    - Preserve no-polling and process-completion behavior coverage through the existing goal wait test.
+    - Keep the production runtime and public API unchanged.
+  intent_priority: must
+  code_locations:
+    - codex-rs/app-server/tests/common/lib.rs
+    - codex-rs/app-server/tests/common/mock_model_server.rs
+    - codex-rs/app-server/tests/suite/v2/goal_wait.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: Codex Worker
+    model: unknown
