@@ -9,6 +9,7 @@ use super::*;
 
 fn model_with_shell_type(shell_type: ConfigShellToolType) -> ModelInfo {
     ModelInfo {
+        guardian: None,
         slug: "test-model".to_string(),
         display_name: "Test Model".to_string(),
         description: None,
@@ -45,6 +46,7 @@ fn model_with_shell_type(shell_type: ConfigShellToolType) -> ModelInfo {
         input_modalities: codex_protocol::openai_models::default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        supports_experimental_context: false,
         use_responses_lite: false,
         node_repl_auto_review_required: false,
         node_repl_disabled: false,
@@ -52,6 +54,7 @@ fn model_with_shell_type(shell_type: ConfigShellToolType) -> ModelInfo {
         model_specialty: None,
         tool_mode: None,
         multi_agent_version: None,
+        multi_agent_reasoning_effort: None,
     }
 }
 
