@@ -2644,6 +2644,7 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
 async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> Result<()> {
     const SPAWN_WORKER_PROMPT: &str = "spawn the completion-routing worker";
     const SPAWN_REQUESTER_PROMPT: &str = "spawn the completion-routing requester";
+    const PRELUDE_PROMPT: &str = "acknowledge the completion-routing mailbox";
     const READ_RESULT_PROMPT: &str = "read the completion-routing worker result";
     const WORKER_INITIAL_TASK: &str = "finish the worker initial task";
     const REQUESTER_TASK: &str = "ask the sibling worker to do more";
@@ -2953,6 +2954,34 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
     .await
     .expect("worker completion should be queued for the root");
 
+    // Queue-only child mail that arrives while the root is idle is recorded at the end of the
+    // next explicit turn, then becomes part of a subsequent model request. This preserves the
+    // final-answer boundary: the prelude consumes the queued mail without restarting its turn,
+    // while the original READ prompt below proves that the next request sees the follow-up text.
+    let prelude_result_request = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, PRELUDE_PROMPT)
+                && !body_contains(request, "peer follow-up finished")
+        },
+        sse(vec![
+            ev_response_created("resp-routing-root-prelude"),
+            ev_assistant_message("msg-routing-root-prelude", "mailbox acknowledged"),
+            ev_completed("resp-routing-root-prelude"),
+        ]),
+    )
+    .await;
+    test.submit_turn(PRELUDE_PROMPT).await?;
+    let prelude_request = prelude_result_request
+        .requests()
+        .into_iter()
+        .find(|request| {
+            request.body_json()["client_metadata"]["thread_id"] == json!(root_thread_id)
+                && request.body_contains_text(PRELUDE_PROMPT)
+        })
+        .expect("root prelude request");
+    assert!(!prelude_request.body_contains_text("peer follow-up finished"));
+
     let root_result_request = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
@@ -2968,66 +2997,15 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
     )
     .await;
     test.submit_turn(READ_RESULT_PROMPT).await?;
-    let root_requests = root_result_request.requests();
-    let candidate_summaries = root_requests
-        .iter()
-        .filter(|request| {
-            request.body_json()["client_metadata"]["thread_id"] == json!(root_thread_id)
-                && request.body_contains_text(READ_RESULT_PROMPT)
-        })
-        .take(4)
-        .map(|request| {
-            let agent_messages = request.inputs_of_type("agent_message");
-            let summaries = agent_messages
-                .iter()
-                .take(8)
-                .map(|item| {
-                    let author = item
-                        .get("author")
-                        .and_then(Value::as_str)
-                        .map(|author| author.chars().take(128).collect::<String>())
-                        .unwrap_or_else(|| "<missing>".to_string());
-                    let recipient = item
-                        .get("recipient")
-                        .and_then(Value::as_str)
-                        .map(|recipient| recipient.chars().take(128).collect::<String>())
-                        .unwrap_or_else(|| "<missing>".to_string());
-                    let content_preview = item
-                        .get("content")
-                        .and_then(Value::as_array)
-                        .and_then(|content| {
-                            content.iter().find_map(|part| {
-                                part.get("text")
-                                    .and_then(Value::as_str)
-                                    .map(|text| text.chars().take(256).collect::<String>())
-                            })
-                        })
-                        .unwrap_or_else(|| "<missing>".to_string());
-                    let has_followup_text = content_preview.contains("peer follow-up finished");
-                    format!(
-                        "author={author} recipient={recipient} followup_text={has_followup_text} content={content_preview:?}"
-                    )
-            })
-            .collect::<Vec<_>>();
-            format!(
-                "read_result={} sender_text={} final_text={} agent_messages={} summaries={summaries:?}",
-                request.body_contains_text(READ_RESULT_PROMPT),
-                request.body_contains_text("Sender: /root/worker"),
-                request.body_contains_text("peer follow-up finished"),
-                agent_messages.len(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let root_request = root_requests
+    let root_request = root_result_request
+        .requests()
         .into_iter()
         .find(|request| {
             request.body_json()["client_metadata"]["thread_id"] == json!(root_thread_id)
                 && request.body_contains_text(READ_RESULT_PROMPT)
                 && request.body_contains_text("peer follow-up finished")
         })
-        .unwrap_or_else(|| {
-            panic!("root result request; candidates={candidate_summaries:?}");
-        });
+        .expect("root result request");
     assert!(
         root_request
             .inputs_of_type("agent_message")
