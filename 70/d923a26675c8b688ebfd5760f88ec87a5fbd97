@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-12/reconnect-fixture-diagnostics#7a9e7a0245"
+  change_type: "test"
+  scope: "codex-rs/tui"
+  summary: "Expose queue and PTY reconnect fixture provenance when recovery assertions fail."
+  decision: "Keep reconnect assertions strict while recording every queue gate and supplying account/switch, account/read, and configured model evidence; answer startup account/switch requests in the fixture."
+  constraints:
+    - "Test-only changes; no production behavior changes."
+    - "Preserve original recovered-input, follow-up, and PTY screen assertions."
+    - "Do not run Cargo or broaden fixture scope."
+  intent_priority: "normal"
+  code_locations:
+    - "codex-rs/tui/src/chatwidget/tests/composer_submission.rs::reconnect_holds_only_recovered_input_until_manually_edited"
+    - "codex-rs/tui/tests/suite/reconnect.rs::automatic_reconnect_restores_draft_and_routes_new_notifications"
+  requested_by: "/root/stable_refresh"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
