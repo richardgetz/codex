@@ -2965,7 +2965,9 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
     // root request below, so this assertion does not race mailbox materialization.
     timeout(Duration::from_secs(5), async {
         loop {
-            let result_send_lines = String::from_utf8(output.lock().expect("buffer lock").clone())
+            let result_send_entries = String::from_utf8(
+                output.lock().expect("buffer lock").clone(),
+            )
                 .expect("logs should be UTF-8")
                 .lines()
                 .filter(|line| {
@@ -2974,18 +2976,25 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
                         && line.contains(&format!("sender_thread_id={worker_thread_id}"))
                         && line.contains(&format!("receiver_thread_id={root_thread_id}"))
                 })
-                .map(|line| line.chars().take(512).collect::<String>())
+                .take(4)
+                .filter_map(|line| {
+                    // Parse the identifier from the full line before retaining a bounded
+                    // preview; tracing places it after the preview's 512-byte boundary.
+                    let communication_id = line.split_whitespace().find_map(|field| {
+                        field
+                            .strip_prefix("communication_id=")
+                            .map(|value| value.trim_matches('"').to_string())
+                    })?;
+                    Some((
+                        communication_id,
+                        line.chars().take(512).collect::<String>(),
+                    ))
+                })
                 .collect::<Vec<_>>();
-            if result_send_lines.len() >= 2 {
-                let communication_ids = result_send_lines
+            if result_send_entries.len() >= 2 {
+                let communication_ids = result_send_entries
                     .iter()
-                    .filter_map(|line| {
-                        line.split_whitespace().find_map(|field| {
-                            field
-                                .strip_prefix("communication_id=")
-                                .map(|value| value.trim_matches('"').to_string())
-                        })
-                    })
+                    .map(|(communication_id, _)| communication_id)
                     .collect::<Vec<_>>();
                 let received_lines = String::from_utf8(
                     output.lock().expect("buffer lock").clone(),
@@ -3012,8 +3021,12 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
                 if all_submissions_received {
                     eprintln!(
                         "peer result send telemetry count={} lines={:?} receive_lines={:?}",
-                        result_send_lines.len(),
-                        result_send_lines.iter().take(4).collect::<Vec<_>>(),
+                        result_send_entries.len(),
+                        result_send_entries
+                            .iter()
+                            .take(4)
+                            .map(|(_, line)| line)
+                            .collect::<Vec<_>>(),
                         received_lines,
                     );
                     break;
