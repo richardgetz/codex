@@ -297,6 +297,24 @@ the effective assignment in thread responses. See the
   untrusted root; choose a new empty root or repair the
   `.codex-managed-session-tmp` marker after verifying its contents before
   enabling the feature again.
+- The safest recovery is a new absolute root, for example:
+
+  ```toml
+  [session_tmp]
+  enabled = true
+  root = "/Users/me/.codex/session-tmp-new"
+  ```
+
+  For a one-time launch, use:
+
+  ```sh
+  codex -c 'session_tmp.enabled=true' \
+    -c 'session_tmp.root="/Users/me/.codex/session-tmp-new"'
+  ```
+
+  Codex creates the managed marker only when that new root is empty; it leaves
+  the old root and its data alone. A configured recovery takes effect on the
+  next start.
 - Agents receive explicit guidance that every file under their managed agent
   directory is disposable, including untracked files created by shell commands.
   Source files, deliverables, checkpoints, credentials, and other durable data

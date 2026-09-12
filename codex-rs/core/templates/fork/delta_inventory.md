@@ -363,6 +363,11 @@ release or merge rules.
     runtime. Untrusted roots are never adopted or rewritten; operators must
     choose a new empty root or repair a verified `.codex-managed-session-tmp`
     marker before re-enabling the feature.
+  - The documented recovery uses a new absolute root, such as
+    `codex -c 'session_tmp.enabled=true' -c
+    'session_tmp.root="/Users/me/.codex/session-tmp-new"'`. The marker is
+    created only for an empty root; the old root and its data are preserved,
+    and the configured root applies on the next start.
   - Slash command: `/tmp [status|list|clean|clear|reap [days]]`. The current
     root session owns cleanup; `clear` also removes manual-retention entries,
     while `reap` force-cleans only sessions older than the selected age.
