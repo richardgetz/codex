@@ -1,0 +1,27 @@
+intent:
+  id: "intent/2026-09-12/resumed-worker-activity#f2781938d7bc"
+  change_type: "fix"
+  scope: "tui-team-activity"
+  summary: "Count active Workers that resume or reload after the initial TUI activity snapshot."
+  decision: "Refresh selected-root process-local activity at lifecycle boundaries and perform one bounded event-driven metadata read through a validated parent chain when a resumed child activity update arrives without local metadata."
+  constraints:
+    - "Keep admission limited to the selected root and loaded or valid ThreadSpawn lineage."
+    - "Reject NotLoaded, SystemError, ephemeral, temporary, unknown, closed, and non-ThreadSpawn records."
+    - "Bound hydration to one attempt per selected-tree lifecycle, an eight-edge parent chain, and a two-second total deadline."
+    - "Preserve terminal tombstones, local parent-edge grace, and event-driven operation without polling or activity protocol changes."
+    - "Keep Rust validation in the designated main checkout owner."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/app/team_activity.rs::App::observe_thread_activity"
+    - "codex-rs/tui/src/app/team_activity.rs::App::refresh_team_activity_from_server"
+    - "codex-rs/tui/src/app_server_session.rs::AppServerSession::thread_activity_read"
+    - "codex-rs/tui/src/app_server_session.rs::AppServerSession::thread_read_for_activity"
+    - "codex-rs/tui/src/app/app_server_events.rs::App::handle_server_notification_event"
+    - "codex-rs/tui/src/app/startup.rs"
+    - "codex-rs/tui/src/app/session_lifecycle.rs"
+    - "codex-rs/tui/src/app/reconnect.rs"
+    - "codex-rs/tui/src/app/team_activity_tests.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex resumed_activity Worker"
+    model: "gpt-5.6-luna"
