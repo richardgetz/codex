@@ -234,6 +234,9 @@ async fn goal_wait_completion_preserves_terminal_error_for_active_turn(
         app_server.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    // Let the post-turn idle hook run before checking that no continuation was
+    // admitted. Without this barrier the assertion could race the idle hook.
+    sleep(Duration::from_millis(/*millis*/ 500)).await;
     assert_eq!(
         3,
         server
