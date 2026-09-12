@@ -354,7 +354,9 @@ fn finalized_agent_cell_replays_visualization_link() {
 
 #[test]
 fn transcript_overlay_remeasures_visualization_when_artifact_becomes_available() {
-    let codex_home = tempfile::tempdir().expect("temp codex home");
+    // Keep the temporary viewer URL short enough that the snapshot does not depend on the
+    // runner's session-temporary directory prefix. The URL itself is still exercised below.
+    let codex_home = tempfile::tempdir_in(".").expect("temp codex home");
     let context = InlineVisualizationContext::new(codex_home.path(), ThreadId::new())
         .expect("UUIDv7 thread id should provide a timestamp");
     fs::create_dir_all(&context.thread_dir).expect("create visualization directory");
