@@ -1,0 +1,17 @@
+intent:
+  id: goal-wait-completion-proof-compatibility
+  change_type: test
+  scope: goal
+  summary: Keep the wait-completion regression executable before and after the generation split.
+  decision: Start the accounting turn at its shared baseline and let wait registration establish its scope, avoiding renamed generation setters; map the internal stop error explicitly into the test result.
+  constraints:
+    - The proof must compile against the pre-split runtime for RED and the split runtime for GREEN.
+    - Preserve exact watcher claim/completion and both terminal status assertions.
+    - Do not add compatibility aliases or production API surface.
+  intent_priority: must
+  code_locations:
+    - codex-rs/ext/goal/src/runtime_tests.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: Codex Worker
+    model: unknown
