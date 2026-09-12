@@ -492,9 +492,11 @@ docs = "read"
 
     let (read_deny_policy, _) =
         compile_permission_profile(&permissions, "read_deny", &mut startup_warnings)?;
+    // The legacy "none" entry denies both capabilities and therefore resolves to None,
+    // which is distinct from the stronger Deny marker.
     assert_eq!(
         read_deny_policy.resolve_access_for_local_path_with_cwd(cwd.path(), cwd.path()),
-        FileSystemAccessMode::Deny
+        FileSystemAccessMode::None
     );
 
     let (write_deny_policy, _) =
@@ -502,7 +504,7 @@ docs = "read"
     assert!(!write_deny_policy.has_full_disk_write_access());
     assert_eq!(
         write_deny_policy.resolve_access_for_local_path_with_cwd(cwd.path(), cwd.path()),
-        FileSystemAccessMode::Deny
+        FileSystemAccessMode::None
     );
 
     let (write_read_policy, _) =

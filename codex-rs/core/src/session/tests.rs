@@ -5925,9 +5925,11 @@ async fn session_tmp_agent_root_is_added_only_when_materialized() {
     session_configuration.session_tmp_agent_root = Some(agent_root.clone());
     let enabled = session_configuration.file_system_sandbox_policy(&[]);
 
+    // The test configuration's baseline is read-only; materializing the managed root adds
+    // the narrow write exception without changing the rest of the profile.
     assert_eq!(
         baseline.resolve_access_with_cwd(agent_root.as_path(), session_configuration.cwd()),
-        FileSystemAccessMode::None
+        FileSystemAccessMode::Read
     );
     assert_eq!(
         enabled.resolve_access_with_cwd(agent_root.as_path(), session_configuration.cwd()),

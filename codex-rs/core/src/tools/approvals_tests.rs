@@ -176,6 +176,15 @@ async fn non_utf8_cwd_preserves_approval_routing(
         }
     };
     assert_eq!(approval.await, expected);
+    if reviewer == ApprovalsReviewer::User {
+        let event = events
+            .try_recv()
+            .expect("approval completion should publish activity state");
+        assert!(matches!(
+            event.msg,
+            codex_protocol::protocol::EventMsg::ThreadActivityUpdated(_)
+        ));
+    }
     assert!(events.try_recv().is_err());
     Ok(())
 }
