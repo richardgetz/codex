@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-09-12/session-tmp-retirement"
+  change_type: "fix"
+  scope: "codex-rs/session-tmp"
+  summary: "Keep session-tmp control state external and make legacy migration crash-resumable."
+  decision: "Use externally locked migration barriers, manifest-before-retirement phases, exact-owned cleanup, and external-state liveness so disposable payload deletion cannot destroy control state."
+  constraints:
+    - "Never adopt or move unknown payload content."
+    - "Legacy compatibility writes must not recreate deleted payload parents."
+    - "Preserve custom-root and symlink safety."
+    - "Validate only in the integrated main checkout; source worker runs no Cargo."
+  intent_priority: "high"
+  code_locations:
+    - "codex-rs/session-tmp/src/migration.rs"
+    - "codex-rs/session-tmp/src/migration_merge.rs"
+    - "codex-rs/session-tmp/src/migration_retire.rs"
+    - "codex-rs/session-tmp/src/lease.rs"
+    - "codex-rs/session-tmp/src/state.rs"
+  requested_by: "user"
+  recorded_by:
+    agent: "codex-worker"
+    model: "gpt-5.6-luna"
+  supersedes: "session-tmp-state-separation"
