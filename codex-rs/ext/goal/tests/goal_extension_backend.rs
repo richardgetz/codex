@@ -875,12 +875,16 @@ async fn stale_turn_errors_do_not_stop_a_replacement_goal() -> anyhow::Result<()
                 )
                 .await?;
             if runtime_effects_before_error {
-                replacement.apply_runtime_effects(&harness.goal_service).await;
+                replacement
+                    .apply_runtime_effects(&harness.goal_service)
+                    .await;
             }
             harness.notify_turn_error("turn-1", error).await;
             harness.stop_turn("turn-1").await;
             if !runtime_effects_before_error {
-                replacement.apply_runtime_effects(&harness.goal_service).await;
+                replacement
+                    .apply_runtime_effects(&harness.goal_service)
+                    .await;
             }
 
             let goal = runtime
@@ -916,10 +920,8 @@ async fn stale_turn_stop_does_not_charge_progress_to_replacement_objective() -> 
             .record_token_usage(
                 "turn-1",
                 &token_usage(
-                    /*input_tokens*/ 20,
-                    /*cached_input_tokens*/ 0,
-                    /*output_tokens*/ 0,
-                    /*reasoning_output_tokens*/ 0,
+                    /*input_tokens*/ 20, /*cached_input_tokens*/ 0,
+                    /*output_tokens*/ 0, /*reasoning_output_tokens*/ 0,
                     /*total_tokens*/ 20,
                 ),
             )
@@ -938,15 +940,15 @@ async fn stale_turn_stop_does_not_charge_progress_to_replacement_objective() -> 
                 },
             )
             .await?;
-        replacement.apply_runtime_effects(&harness.goal_service).await;
+        replacement
+            .apply_runtime_effects(&harness.goal_service)
+            .await;
         harness
             .record_token_usage(
                 "turn-1",
                 &token_usage(
-                    /*input_tokens*/ 30,
-                    /*cached_input_tokens*/ 0,
-                    /*output_tokens*/ 0,
-                    /*reasoning_output_tokens*/ 0,
+                    /*input_tokens*/ 30, /*cached_input_tokens*/ 0,
+                    /*output_tokens*/ 0, /*reasoning_output_tokens*/ 0,
                     /*total_tokens*/ 30,
                 ),
             )
@@ -970,7 +972,10 @@ async fn stale_turn_stop_does_not_charge_progress_to_replacement_objective() -> 
 #[tokio::test]
 async fn terminal_errors_after_wait_turn_rebind_stop_the_same_goal() -> anyhow::Result<()> {
     for (error, expected_status) in [
-        (CodexErrorInfo::Other, codex_state::ThreadGoalStatus::Blocked),
+        (
+            CodexErrorInfo::Other,
+            codex_state::ThreadGoalStatus::Blocked,
+        ),
         (
             CodexErrorInfo::UsageLimitExceeded,
             codex_state::ThreadGoalStatus::UsageLimited,

@@ -572,13 +572,11 @@ impl GoalRuntimeHandle {
         }
 
         let (event_name, status, expected_goal_id) = match reason {
-            ActiveGoalStopReason::TurnError => {
-                (
-                    "turn-error",
-                    codex_state::ThreadGoalStatus::Blocked,
-                    Some(accounting_goal_id.clone()),
-                )
-            }
+            ActiveGoalStopReason::TurnError => (
+                "turn-error",
+                codex_state::ThreadGoalStatus::Blocked,
+                Some(accounting_goal_id.clone()),
+            ),
             ActiveGoalStopReason::UsageLimit => (
                 "usage-limit",
                 codex_state::ThreadGoalStatus::UsageLimited,
@@ -923,13 +921,8 @@ impl GoalRuntimeHandle {
         if self.inner.intent_generation.load(Ordering::Acquire) != expected_intent_generation {
             return Ok(None);
         }
-        self.account_active_goal_progress(
-            turn_id,
-            event_id,
-            mode,
-            budget_limited_goal_disposition,
-        )
-        .await
+        self.account_active_goal_progress(turn_id, event_id, mode, budget_limited_goal_disposition)
+            .await
     }
 
     async fn account_idle_goal_progress(

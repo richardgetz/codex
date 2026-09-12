@@ -622,7 +622,9 @@ async fn multi_agent_v2_cold_resume_refreshes_legacy_usage_hints_once(
                 wait_agent_tool
                     .pointer("/parameters/properties/timeout_ms/description")
                     .and_then(Value::as_str),
-                Some("Optional timeout in milliseconds. Defaults to 30000, min 10000, max 3600000.")
+                Some(
+                    "Optional timeout in milliseconds. Defaults to 30000, min 10000, max 3600000."
+                )
             );
         }
     }

@@ -2918,9 +2918,7 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
                         && line.contains(&format!("sender_thread_id={worker_thread_id}"))
                         && line.contains(&format!("receiver_thread_id={root_thread_id}"))
                 })
-                .filter_map(|line| {
-                    log_field(line, "communication_id").map(str::to_owned)
-                })
+                .filter_map(|line| log_field(line, "communication_id").map(str::to_owned))
                 .take(4)
                 .collect::<Vec<_>>();
             if result_send_ids.len() >= 2 {
@@ -2930,7 +2928,10 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
                 let all_submissions_received = if has_distinct_ids {
                     let mut received_first = false;
                     let mut received_second = false;
-                    for line in logs.lines().filter(|line| line.contains("state=\"receive\"")) {
+                    for line in logs
+                        .lines()
+                        .filter(|line| line.contains("state=\"receive\""))
+                    {
                         let Some(communication_id) = log_field(line, "communication_id") else {
                             continue;
                         };

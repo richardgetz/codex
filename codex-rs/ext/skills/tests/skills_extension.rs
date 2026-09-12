@@ -1323,8 +1323,7 @@ async fn plain_name_selection_prefers_executor_skill_over_host_name_collision() 
     // Turn-input contribution consumes the executor catalog captured by the preceding
     // world-state contribution, just as the production sampling-step flow does.
     let turn_store = ExtensionData::new("turn-1");
-    registry
-        .context_contributors()[0]
+    registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",

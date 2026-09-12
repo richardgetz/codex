@@ -70,10 +70,7 @@ async fn team_worker_limit_admits_shell_task_while_worker_idle(
         },
         sse(vec![
             ev_response_created("worker-limit-shell-worker"),
-            ev_assistant_message(
-                "worker-limit-shell-message",
-                "worker initial complete",
-            ),
+            ev_assistant_message("worker-limit-shell-message", "worker initial complete"),
             ev_completed("worker-limit-shell-worker"),
         ]),
     )

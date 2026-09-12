@@ -136,14 +136,11 @@ impl TeamActivityProjection {
         }
         if !is_root_activity
             && notification.activity != ThreadActivity::Idle
-            && self
-                .locally_admitted_parent_ids
-                .contains_key(&thread_id)
+            && self.locally_admitted_parent_ids.contains_key(&thread_id)
         {
             // A real Worker can remain active without ever producing ThreadStarted metadata.
             // Keep its provisional edge alive while activity snapshots continue to arrive.
-            self.locally_admitted_parent_ids
-                .insert(thread_id, now);
+            self.locally_admitted_parent_ids.insert(thread_id, now);
         }
         let previous = self.entries.get(&thread_id);
         let ordinary_waiting = is_ordinary_waiting(notification.activity, notification.wait_reason);
@@ -189,8 +186,8 @@ impl TeamActivityProjection {
                 SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id, ..
                 }) => Some(*parent_thread_id),
-            _ => None,
-        });
+                _ => None,
+            });
         self.set_thread_parent(thread_id, parent_thread_id);
         self.locally_admitted_parent_ids.remove(&thread_id);
     }
@@ -341,7 +338,7 @@ impl TeamActivityProjection {
                         .entries
                         .get(thread_id)
                         .is_none_or(|entry| entry.activity == ThreadActivity::Idle))
-                    .then_some(*thread_id)
+                .then_some(*thread_id)
             })
             .collect();
         for thread_id in stale_thread_ids {
@@ -595,10 +592,7 @@ impl super::App {
                 .frame_requester()
                 .schedule_frame_in(deadline.saturating_duration_since(now));
         }
-        if let Some(deadline) = self
-            .team_activity
-            .next_local_parent_admission_deadline(now)
-        {
+        if let Some(deadline) = self.team_activity.next_local_parent_admission_deadline(now) {
             self.chat_widget
                 .frame_requester()
                 .schedule_frame_in(deadline.saturating_duration_since(now));

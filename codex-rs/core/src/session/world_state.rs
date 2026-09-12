@@ -6,7 +6,6 @@ use super::turn_context::TurnContext;
 use crate::connectors;
 use crate::context::ApprovalPromptContext;
 use crate::context::TokenBudgetContext;
-use crate::enablement::filter_connectors_for_mode;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::AppsInstructionsState;
 use crate::context::world_state::CollaborationModeState;
@@ -26,6 +25,7 @@ use crate::context::world_state::RealtimeState;
 use crate::context::world_state::ToolsState;
 use crate::context::world_state::UsageLimitsState;
 use crate::context::world_state::WorldState;
+use crate::enablement::filter_connectors_for_mode;
 use crate::realtime_prompt::RealtimePreamblePolicy;
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_extension_api::WorldStateContributionInput;
@@ -364,23 +364,22 @@ impl Session {
                 world_state.add_extension_section(section);
             }
         }
-        let apps_available =
-            if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
-                let connectors = filter_connectors_for_mode(
-                    &turn_context.config,
-                    turn_context.mode,
-                    &connectors::accessible_connectors_from_mcp_tools(step_context.mcp.tools()),
-                );
-                let connectors = AppToolPolicyEvaluator::new(
-                    &turn_context.config.config_layer_stack,
-                )
+        let apps_available = if turn_context.config.include_apps_instructions
+            && turn_context.apps_enabled()
+        {
+            let connectors = filter_connectors_for_mode(
+                &turn_context.config,
+                turn_context.mode,
+                &connectors::accessible_connectors_from_mcp_tools(step_context.mcp.tools()),
+            );
+            let connectors = AppToolPolicyEvaluator::new(&turn_context.config.config_layer_stack)
                 .apply_app_enabled_state(connectors);
-                filter_connectors_for_mode(&turn_context.config, turn_context.mode, &connectors)
-                    .into_iter()
-                    .any(|connector| connector.is_accessible && connector.is_enabled)
-            } else {
-                false
-            };
+            filter_connectors_for_mode(&turn_context.config, turn_context.mode, &connectors)
+                .into_iter()
+                .any(|connector| connector.is_accessible && connector.is_enabled)
+        } else {
+            false
+        };
         let apps_usage_instructions_available =
             apps_available && step_model_info.include_apps_usage_instructions;
         world_state.add_section(AppsInstructionsState::new(

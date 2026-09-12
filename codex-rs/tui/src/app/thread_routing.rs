@@ -4,9 +4,9 @@
 //! channels, submits thread-scoped operations through the app server, and replays buffered events
 //! when the visible thread changes.
 
-use super::session_lifecycle::ThreadAttachPresentation;
-use super::app_server_event_targets::server_notification_thread_target;
 use super::app_server_event_targets::ServerNotificationThreadTarget;
+use super::app_server_event_targets::server_notification_thread_target;
+use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::app_event::ThreadTitleDestination;
 use crate::chatwidget::ThreadInputStateRestoreMode;
@@ -1297,7 +1297,7 @@ impl App {
         {
             if activity.is_running_hint
                 && let ServerNotificationThreadTarget::Thread(parent_thread_id) =
-                server_notification_thread_target(notification)
+                    server_notification_thread_target(notification)
                 && parent_thread_id != activity.thread_id
             {
                 // V2 spawn activity is emitted on the parent thread before a ThreadStarted or

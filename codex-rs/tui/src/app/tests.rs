@@ -126,10 +126,10 @@ use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread;
-use codex_app_server_protocol::ThreadArchivedNotification;
-use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadActivity;
 use codex_app_server_protocol::ThreadActivityUpdatedNotification;
+use codex_app_server_protocol::ThreadArchivedNotification;
+use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadPauseState;
 use codex_app_server_protocol::ThreadRealtimeAudioChunk;
@@ -2266,22 +2266,24 @@ async fn collab_receiver_notification_caches_thread_without_app_server_read() {
             is_closed: false,
         })
     );
-    app.team_activity.observe(&ThreadActivityUpdatedNotification {
-        thread_id: sender_thread_id.to_string(),
-        root_thread_id: sender_thread_id.to_string(),
-        activity: ThreadActivity::Idle,
-        pause_state: ThreadPauseState::Running,
-        wait_reason: None,
-        in_flight_operations: 0,
-    });
-    app.team_activity.observe(&ThreadActivityUpdatedNotification {
-        thread_id: receiver_thread_id.to_string(),
-        root_thread_id: sender_thread_id.to_string(),
-        activity: ThreadActivity::Working,
-        pause_state: ThreadPauseState::Running,
-        wait_reason: None,
-        in_flight_operations: 1,
-    });
+    app.team_activity
+        .observe(&ThreadActivityUpdatedNotification {
+            thread_id: sender_thread_id.to_string(),
+            root_thread_id: sender_thread_id.to_string(),
+            activity: ThreadActivity::Idle,
+            pause_state: ThreadPauseState::Running,
+            wait_reason: None,
+            in_flight_operations: 0,
+        });
+    app.team_activity
+        .observe(&ThreadActivityUpdatedNotification {
+            thread_id: receiver_thread_id.to_string(),
+            root_thread_id: sender_thread_id.to_string(),
+            activity: ThreadActivity::Working,
+            pause_state: ThreadPauseState::Running,
+            wait_reason: None,
+            in_flight_operations: 1,
+        });
     let status = app
         .team_activity
         .status_for_root(sender_thread_id, None)
@@ -2313,22 +2315,24 @@ async fn sub_agent_activity_admits_parent_edge_before_thread_metadata() {
         }),
     )));
 
-    app.team_activity.observe(&ThreadActivityUpdatedNotification {
-        thread_id: parent_thread_id.to_string(),
-        root_thread_id: parent_thread_id.to_string(),
-        activity: ThreadActivity::Idle,
-        pause_state: ThreadPauseState::Running,
-        wait_reason: None,
-        in_flight_operations: 0,
-    });
-    app.team_activity.observe(&ThreadActivityUpdatedNotification {
-        thread_id: worker_thread_id.to_string(),
-        root_thread_id: parent_thread_id.to_string(),
-        activity: ThreadActivity::Working,
-        pause_state: ThreadPauseState::Running,
-        wait_reason: None,
-        in_flight_operations: 1,
-    });
+    app.team_activity
+        .observe(&ThreadActivityUpdatedNotification {
+            thread_id: parent_thread_id.to_string(),
+            root_thread_id: parent_thread_id.to_string(),
+            activity: ThreadActivity::Idle,
+            pause_state: ThreadPauseState::Running,
+            wait_reason: None,
+            in_flight_operations: 0,
+        });
+    app.team_activity
+        .observe(&ThreadActivityUpdatedNotification {
+            thread_id: worker_thread_id.to_string(),
+            root_thread_id: parent_thread_id.to_string(),
+            activity: ThreadActivity::Working,
+            pause_state: ThreadPauseState::Running,
+            wait_reason: None,
+            in_flight_operations: 1,
+        });
 
     assert_eq!(
         app.team_activity
@@ -2368,22 +2372,24 @@ async fn collab_spawn_completion_admits_parent_edge_before_thread_metadata() {
         }),
     )));
 
-    app.team_activity.observe(&ThreadActivityUpdatedNotification {
-        thread_id: parent_thread_id.to_string(),
-        root_thread_id: parent_thread_id.to_string(),
-        activity: ThreadActivity::Idle,
-        pause_state: ThreadPauseState::Running,
-        wait_reason: None,
-        in_flight_operations: 0,
-    });
-    app.team_activity.observe(&ThreadActivityUpdatedNotification {
-        thread_id: worker_thread_id.to_string(),
-        root_thread_id: parent_thread_id.to_string(),
-        activity: ThreadActivity::Working,
-        pause_state: ThreadPauseState::Running,
-        wait_reason: None,
-        in_flight_operations: 1,
-    });
+    app.team_activity
+        .observe(&ThreadActivityUpdatedNotification {
+            thread_id: parent_thread_id.to_string(),
+            root_thread_id: parent_thread_id.to_string(),
+            activity: ThreadActivity::Idle,
+            pause_state: ThreadPauseState::Running,
+            wait_reason: None,
+            in_flight_operations: 0,
+        });
+    app.team_activity
+        .observe(&ThreadActivityUpdatedNotification {
+            thread_id: worker_thread_id.to_string(),
+            root_thread_id: parent_thread_id.to_string(),
+            activity: ThreadActivity::Working,
+            pause_state: ThreadPauseState::Running,
+            wait_reason: None,
+            in_flight_operations: 1,
+        });
 
     assert_eq!(
         app.team_activity
