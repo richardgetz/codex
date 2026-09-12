@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-12/core-peer-completion-delivery-test#1722ec25b6"
+  change_type: "test"
+  scope: "core-subagent-notifications"
+  summary: "Synchronize the peer completion integration test with the parent delivery operation."
+  decision: "Wait for the worker's second result send telemetry record; this is emitted after the queue-only operation is accepted by the parent session and preserves FIFO ordering before the root read turn."
+  constraints:
+    - "Use APIs available to the integration fixture; do not expose or depend on private captured operation logs."
+    - "Keep the existing completion activity and model-request assertions unchanged."
+    - "Bound the wait and avoid unbounded polling or model retries."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/tests/suite/subagent_notifications.rs::multi_agent_v2_peer_followup_completion_notifies_initiating_turn"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
