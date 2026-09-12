@@ -171,7 +171,7 @@ fn usage_snapshot_recovery_requires_capacity_and_resettable_limits() {
 
     assert!(usage_snapshot_recovered(
         policy,
-        std::slice::from_ref(&rate_limits(80.0, Some(95.0)))
+        std::slice::from_ref(&rate_limits(80.0, Some(85.0)))
     ));
     assert!(!usage_snapshot_recovered(
         policy,
@@ -179,7 +179,7 @@ fn usage_snapshot_recovery_requires_capacity_and_resettable_limits() {
     ));
     assert!(!usage_snapshot_recovered(policy, &[]));
 
-    let mut credit_cap = rate_limits(80.0, Some(95.0));
+    let mut credit_cap = rate_limits(80.0, Some(85.0));
     credit_cap.spend_control_reached = Some(true);
     assert!(!usage_snapshot_recovered(
         policy,
