@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-12/core-peer-completion-capture#86df3a0531"
+  change_type: "test"
+  scope: "core-subagent-notifications"
+  summary: "Keep peer completion telemetry capture deterministic in the integration fixture."
+  decision: "Run the peer completion routing test on Tokio's current-thread runtime so its scoped tracing subscriber observes Result-send telemetry from all spawned session loops without global subscriber state or production plumbing."
+  constraints:
+    - "Preserve the existing peer completion, initiating-turn activity, FIFO queue-admission, and root payload assertions."
+    - "Do not change production completion routing or expose private operation-capture APIs."
+    - "Keep the telemetry wait bounded and scoped to the worker and root thread IDs."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/tests/suite/subagent_notifications.rs::multi_agent_v2_peer_followup_completion_notifies_initiating_turn"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
