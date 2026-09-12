@@ -1,0 +1,23 @@
+intent:
+  id: team-on-delegation-activity-fix-2026-09-12
+  change_type: fix
+  scope: Team On delegation authorization and TUI activity projection
+  summary: Treat Team On as explicit delegation opt-in and admit spawned Worker parent edges before metadata refresh.
+  decision: Override the default explicit-request multi-agent mode only for Team On without a custom mode hint, strengthen Lead guidance and balance-1 handoff guidance, and classify collab start events into the selected Lead activity tree.
+  constraints:
+    - Preserve Team Off behavior and explicit task-specific user, AGENTS.md, skill, scope, concurrency, depth, and approval restrictions.
+    - Keep Worker scope, completeness, required checks, approvals, and configured efforts unchanged.
+    - Preserve unknown/unloaded activity rejection and terminal barriers.
+    - Keep the unchanged Team and TUI proof assertions as red-to-green gates.
+  intent_priority: high
+  code_locations:
+    - codex-rs/core/src/context/team_instructions.rs
+    - codex-rs/core/src/session/multi_agents.rs
+    - codex-rs/tui/src/app/team_activity.rs
+    - codex-rs/tui/src/app/thread_routing.rs
+    - codex-rs/tui/src/app/tests.rs
+    - codex-rs/core/templates/fork/delta_inventory.md
+  requested_by: user and Lead
+  recorded_by: Codex
+  agent: Codex
+  model: gpt-5.6
