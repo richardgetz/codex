@@ -1,0 +1,23 @@
+intent:
+  id: intent/2026-09-11/integral-tool-arguments
+  change_type: fix
+  scope: tool-arguments
+  summary: Accept exactly integral decimal and exponent spellings for selected integer tool arguments.
+  decision: Keep strict JSON deserialization as the default and add a bounded fallback only for top-level wait and output-limit keys in sleep, unified exec, write_stdin, and code-mode wait; preserve direct Value payloads and reject fractional, rounded, non-finite, and out-of-range values.
+  constraints:
+    - Do not coerce nested Value fields or generic tools.
+    - Require finite exactly integral values within the safe numeric range and retain the original parse error on rejection.
+    - Keep existing integer bounds and handler validation unchanged.
+    - Cover representative accepted, Value-preserving, fractional, unsafe, and overflow inputs without live model calls.
+  intent_priority: high
+  code_locations:
+    - codex-rs/core/src/tools/handlers/mod.rs
+    - codex-rs/core/src/tools/handlers/argument_parser_tests.rs
+    - codex-rs/core/src/tools/handlers/sleep.rs
+    - codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs
+    - codex-rs/core/src/tools/handlers/unified_exec/write_stdin.rs
+    - codex-rs/core/src/tools/code_mode/wait_handler.rs
+  requested_by: user
+  recorded_by:
+    agent: Codex Worker
+    model: gpt-5
