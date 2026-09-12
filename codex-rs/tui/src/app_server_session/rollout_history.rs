@@ -21,15 +21,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 
 #[cfg(test)]
-fn trace_resume_phase(
-    thread_id: ThreadId,
-    phase: &str,
-    request_id: Option<&str>,
-    exclude_turns: Option<bool>,
-) {
-    eprintln!(
-        "[cached-legacy-resume] thread={thread_id} phase={phase} request_id={request_id:?} exclude_turns={exclude_turns:?}"
-    );
+fn trace_resume_phase(thread_id: ThreadId, phase: &str) {
+    eprintln!("[cached-legacy-resume] thread={thread_id} phase={phase}");
 }
 
 impl AppServerSession {
@@ -128,7 +121,7 @@ impl AppServerSession {
         self.thread_tool_transport()
             .configure_mcp(&mut params.config);
         #[cfg(test)]
-        trace_resume_phase(thread_id, "params-built", None, None);
+        trace_resume_phase(thread_id, "params-built");
         let mut rollout_maintenance_guard = None;
         params.exclude_turns = if self.history_support == ThreadHistorySupport::Paginated {
             let known_legacy_history = self
@@ -146,19 +139,14 @@ impl AppServerSession {
                             .ok()
                             .flatten();
                         #[cfg(test)]
-                        trace_resume_phase(
-                            thread_id,
-                            "maintenance-lock-attempted",
-                            None,
-                            Some(true),
-                        );
+                        trace_resume_phase(thread_id, "maintenance-lock-attempted");
                         rollout_maintenance_guard.is_some()
                     } && {
                         #[cfg(test)]
-                        trace_resume_phase(thread_id, "thread-read-issued", None, Some(true));
+                        trace_resume_phase(thread_id, "thread-read-issued");
                         let read = self.thread_read(thread_id, /*include_turns*/ false).await;
                         #[cfg(test)]
-                        trace_resume_phase(thread_id, "thread-read-completed", None, Some(true));
+                        trace_resume_phase(thread_id, "thread-read-completed");
                         read.is_ok_and(|thread| thread.history_mode == ThreadHistoryMode::Legacy)
                     }));
             !known_legacy_history
@@ -170,28 +158,16 @@ impl AppServerSession {
         }
         let request_id = self.next_request_id();
         #[cfg(test)]
-        let request_id_display = request_id.to_string();
-        #[cfg(test)]
-        trace_resume_phase(
-            thread_id,
-            "thread-resume-issued",
-            Some(&request_id_display),
-            Some(params.exclude_turns),
-        );
+        trace_resume_phase(thread_id, "thread-resume-issued");
         let resume_response = self
             .client
             .request_typed(ClientRequest::ThreadResume {
-                request_id: request_id.clone(),
+                request_id,
                 params: params.clone(),
             })
             .await;
         #[cfg(test)]
-        trace_resume_phase(
-            thread_id,
-            "thread-resume-completed",
-            Some(&request_id_display),
-            Some(params.exclude_turns),
-        );
+        trace_resume_phase(thread_id, "thread-resume-completed");
         drop(rollout_maintenance_guard);
         let mut response: ThreadResumeResponse = match resume_response {
             Ok(response) => response,
@@ -225,12 +201,7 @@ impl AppServerSession {
         )
         .await?;
         #[cfg(test)]
-        trace_resume_phase(
-            thread_id,
-            "history-hydration-completed",
-            Some(&request_id_display),
-            Some(params.exclude_turns),
-        );
+        trace_resume_phase(thread_id, "history-hydration-completed");
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;
