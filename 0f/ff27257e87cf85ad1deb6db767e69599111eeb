@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-09-12/core-fixture-semantics#e6eb7baa20"
+  change_type: "test"
+  scope: "core-release-gate"
+  summary: "Align release-gate expectations with existing permission and activity semantics."
+  decision: "Update stale fixtures to distinguish None from Deny, retain read-only remote and baseline session temporary roots, and consume the intentional approval activity notification emitted after manual approval."
+  constraints:
+    - "Do not change permission, environment, session temporary, or approval production behavior."
+    - "Continue asserting the managed local root is writable while remote and baseline roots remain non-writable."
+    - "Accept only the expected ThreadActivityUpdated event and reject any additional event."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/config/permissions_tests.rs::legacy_project_roots_restrictions_do_not_fail_open"
+    - "codex-rs/core/src/environment_selection.rs::session_tmp_root_is_added_to_local_but_not_remote_environments"
+    - "codex-rs/core/src/session/tests.rs::session_tmp_agent_root_is_added_only_when_materialized"
+    - "codex-rs/core/src/tools/approvals_tests.rs::non_utf8_cwd_preserves_approval_routing"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
