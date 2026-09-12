@@ -24,7 +24,7 @@ use color_eyre::eyre::Result;
 fn trace_resume_phase(
     thread_id: ThreadId,
     phase: &str,
-    request_id: Option<i64>,
+    request_id: Option<&str>,
     exclude_turns: Option<bool>,
 ) {
     eprintln!(
@@ -170,16 +170,18 @@ impl AppServerSession {
         }
         let request_id = self.next_request_id();
         #[cfg(test)]
+        let request_id_display = request_id.to_string();
+        #[cfg(test)]
         trace_resume_phase(
             thread_id,
             "thread-resume-issued",
-            Some(request_id),
+            Some(&request_id_display),
             Some(params.exclude_turns),
         );
         let resume_response = self
             .client
             .request_typed(ClientRequest::ThreadResume {
-                request_id,
+                request_id: request_id.clone(),
                 params: params.clone(),
             })
             .await;
@@ -187,7 +189,7 @@ impl AppServerSession {
         trace_resume_phase(
             thread_id,
             "thread-resume-completed",
-            Some(request_id),
+            Some(&request_id_display),
             Some(params.exclude_turns),
         );
         drop(rollout_maintenance_guard);
@@ -226,7 +228,7 @@ impl AppServerSession {
         trace_resume_phase(
             thread_id,
             "history-hydration-completed",
-            Some(request_id),
+            Some(&request_id_display),
             Some(params.exclude_turns),
         );
         let fork_parent_title = self
