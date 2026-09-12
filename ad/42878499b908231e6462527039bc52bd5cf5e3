@@ -1,0 +1,22 @@
+intent:
+  id: core-context-fork-help-snapshot-refresh-20260912
+  change_type: test
+  scope: codex-rs/core
+  summary: Accept fresh ForkHelp context output in pending-input and token-budget snapshots.
+  decision: Update the four tracked snapshots from the current main-generated outputs after verifying that only the bounded ForkHelp developer fragment changed and all request/response content remained identical.
+  constraints:
+    - snapshot-only; no production behavior changes
+    - preserve source, assertion_line, expression, scenario, and all non-ForkHelp lines byte-for-byte
+    - accept only the four reviewed main-generated outputs; do not add .snap.new or context annotation artifacts
+    - retain the existing bounded append-only context and ForkHelp inventory behavior
+  intent_priority: must
+  code_locations:
+    - codex-rs/core/tests/suite/snapshots/all__suite__pending_input__pending_input_queued_mail_after_commentary.snap
+    - codex-rs/core/tests/suite/snapshots/all__suite__pending_input__pending_input_queued_mail_after_reasoning.snap
+    - codex-rs/core/tests/suite/snapshots/all__suite__pending_input__pending_input_user_input_no_preempt_after_reasoning.snap
+    - codex-rs/core/tests/suite/snapshots/all__suite__token_budget__token_budget_new_context_window_tool_full_context.snap
+  requested_by: /root/stable_refresh
+  recorded_by: codex
+  agent: /root/stable_refresh
+  model: gpt-5.6-sol
+  related_intent: intent/2026-09-12/core-context-snapshots#940fa903c1
