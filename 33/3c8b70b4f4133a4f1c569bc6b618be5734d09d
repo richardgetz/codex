@@ -1,0 +1,15 @@
+intent:
+  id: tui-cached-resume-trace-request-id-20260912
+  change_type: test
+  scope: codex-rs/tui
+  summary: Keep temporary cached-resume diagnostics compatible with JSON-RPC request IDs.
+  decision: Trace the display form of the protocol RequestId while cloning the ID for the typed request, preserving the existing resume request and test timeout behavior.
+  constraints:
+    - test-only diagnostic correction; remove the trace after one bounded run
+    - preserve all assertions and resume semantics
+    - do not log paths, credentials, request bodies, or other sensitive state
+  intent_priority: normal
+  code_locations:
+    - codex-rs/tui/src/app_server_session/rollout_history.rs
+  requested_by: /root/stable_refresh
+  recorded_by: codex
