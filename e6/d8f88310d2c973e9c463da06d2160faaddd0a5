@@ -1,0 +1,28 @@
+intent:
+  id: "intent/2026-09-12/disposable-session-tmp#e6d8f88310d2"
+  change_type: "fix"
+  scope: "session-tmp"
+  summary: "Keep temporary payload deletion independent of durable session management."
+  decision: "Store ownership, records, leases, and coordination outside payload roots; recreate enrolled payload namespaces in place and automatically import legacy inline state and consolidate validated recovery payloads. Replace sibling recovery routing while preserving its data-safety guarantees. Distinguish active turns from idle threads in the slash agent picker."
+  constraints:
+    - "Startup and resume remain nonfatal if temporary storage cannot be opened safely."
+    - "Migrate both legacy-only and recovery-release layouts with exact per-session ownership and replayable move records."
+    - "Never adopt unknown custom-root contents, infer path ownership from name prefixes, or overwrite unrelated payloads."
+    - "Preserve live legacy sessions, replacement lease ownership, and stable lock domains; retry deferred migration on a later open."
+    - "Retain small durable migration receipts and necessary legacy lock residue when safe removal cannot be established."
+    - "Deleting payloads must not recreate inline heartbeat/control state or require a new recovery directory."
+    - "Picker markers use cached active-turn liveness and do not claim to classify working, waiting, or paused inference."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/session-tmp/src/state.rs"
+    - "codex-rs/session-tmp/src/state_legacy.rs"
+    - "codex-rs/session-tmp/src/migration.rs"
+    - "codex-rs/session-tmp/src/migration_merge.rs"
+    - "codex-rs/session-tmp/src/lease.rs"
+    - "codex-rs/core/src/session/session.rs"
+    - "codex-rs/tui/src/multi_agents.rs"
+    - "docs/fork-differences.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6"
