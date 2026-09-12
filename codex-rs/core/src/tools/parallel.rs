@@ -251,7 +251,13 @@ impl ToolCallRuntime {
                         } else {
                             dispatch_handle.abort();
                             match dispatch_handle.await {
-                                Ok(result) => return result,
+                                // A dispatch that is still waiting at an activity boundary can
+                                // observe the same cancellation and return TurnAborted as a
+                                // fatal tool error. The outer cancellation branch owns this
+                                // terminal outcome, so preserve the normal aborted response
+                                // instead of surfacing that internal boundary error.
+                                Ok(Ok(result)) => return Ok(result),
+                                Ok(Err(_)) => {}
                                 Err(err) if err.is_cancelled() => {}
                                 Err(err) => return Err(Self::tool_task_join_error(err)),
                             }

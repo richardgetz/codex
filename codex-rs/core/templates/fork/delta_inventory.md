@@ -234,6 +234,9 @@ release or merge rules.
     may finish at a cooperative boundary; external subprocesses or remote jobs
     are not suspended or replayed. Waiting for approval, user input, usage, or
     another agent is quiescent and reports `paused`.
+  - Cancellation that arrives while a tool is waiting at an activity or
+    parallel-dispatch boundary returns the normal aborted tool response instead
+    of leaking the internal `TurnAborted` boundary error.
   - App-server v2 exposes `thread/activity/pause`,
     `thread/activity/continue`, `thread/activity/read`, and the ephemeral
     `thread/activity/updated` notification with structured activity, pause
@@ -781,7 +784,10 @@ release or merge rules.
   root, keeps the title aligned with that projection, animates only actual
   work (and in-flight Pausing), honors reduced-motion settings, and renders
   the static `Paused · Lead + N workers · /continue to resume` row. Verify
-  the running two-row Team/Workers/Subagents layout, direct Worker cap
+  cancellation before activity or parallel-dispatch admission returns one
+  normal aborted tool response without surfacing an internal `TurnAborted`
+  fatal error.
+  Verify the running two-row Team/Workers/Subagents layout, direct Worker cap
   denominator, nested parent metadata hydration, and 30-second ordinary-wait
   grace: repeated waits must not extend it, expiry must redraw without a new
   event or animation, and approval/user-input/usage-limit/error/completion,
