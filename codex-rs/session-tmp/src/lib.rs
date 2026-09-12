@@ -417,6 +417,20 @@ fn open_control_state(
     if !root.is_absolute() {
         return Err(SessionTmpError::RootNotAbsolute(root));
     }
+    // When a validated recovery root is present, bootstrap a fresh hidden
+    // namespace under an un-enrolled default root before the ordinary open
+    // can claim that root's top-level payload tree. A valid legacy marker on
+    // the normal root remains authoritative and keeps its existing layout.
+    if config.root.is_none()
+        && (migration::recovery_is_enrolled(default_root)
+            || migration::recovery_manifest_pending(default_root))
+        && !migration::recovery_has_live_legacy_lease(default_root).unwrap_or(true)
+        && !matches!(state::inspect_payload_root(&root), Ok(true))
+    {
+        let control = state::ControlState::open_for_validated_migration(default_root, &root)?;
+        migration::consolidate_recovery(&control, default_root)?;
+        return Ok(control);
+    }
     match state::ControlState::open(default_root, &root) {
         Ok(control) => {
             control.retire_legacy_marker_if_inactive()?;

@@ -304,6 +304,9 @@ navigation remain unchanged.
   `<codex_home>/state/session-tmp`, outside the disposable payload. Deleting a
   payload root while Codex is running therefore recreates the same configured
   path from its durable state without a recovery warning.
+  If the configured root or its external control state is unsafe or unavailable,
+  startup and resume continue for that runtime with session temporary storage
+  disabled; unknown files are never adopted.
 - New roots enroll only when empty (or when a validated legacy migration has
   supplied exact session records) and do not need a payload marker. Existing
   `.codex-managed-session-tmp` roots are imported into external state; once old
@@ -315,8 +318,9 @@ navigation remain unchanged.
   open observes that they have released their legacy lease. Recognized session
   payloads and control records move, while unknown recovery files stay at
   their original paths outside managed cleanup, so a recovery tree containing
-  such files remains until it is empty. A markerless nonempty custom root
-  remains inert and is never adopted.
+  such files remains until it is empty. A small external source identity is
+  retained as a durable migration tombstone so interrupted cleanup can resume
+  safely. A markerless nonempty custom root remains inert and is never adopted.
 - Agents receive explicit guidance that every file under their managed agent
   directory is disposable, including untracked files created by shell commands.
   Source files, deliverables, checkpoints, credentials, and other durable data

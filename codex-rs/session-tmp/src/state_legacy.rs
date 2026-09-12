@@ -268,7 +268,7 @@ fn remove_legacy_lock_files(
             Err(error) => return Err(error.into()),
         }
     }
-    if fs::read_dir(locks_dir)?.next().transpose()?.is_none() {
+    if fs::read_dir(&locks_dir)?.next().transpose()?.is_none() {
         fs::remove_dir(locks_dir)?;
     }
     Ok(())

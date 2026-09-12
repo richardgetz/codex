@@ -10,6 +10,8 @@ use super::state;
 use super::storage;
 use super::types::SessionTmpError;
 use super::state::ControlState;
+use crate::SESSIONS_DIR;
+use crate::SESSION_METADATA_FILE;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fs;
@@ -72,6 +74,53 @@ pub(super) fn recovery_is_enrolled(default_root: &Path) -> bool {
     }
 }
 
+/// Returns whether a validated recovery session still has a fresh legacy
+/// lease. An active old-version writer keeps the normal payload namespace as
+/// its compatibility destination; once released, the next open can use the
+/// hidden migration namespace or complete an existing external enrollment.
+pub(super) fn recovery_has_live_legacy_lease(
+    default_root: &Path,
+) -> Result<bool, SessionTmpError> {
+    let recovery_root = default_root.join(state::LEGACY_RECOVERY_ROOT);
+    let sessions_dir = recovery_root.join(SESSIONS_DIR);
+    storage::ensure_directory_not_symlink(&sessions_dir)?;
+    if !sessions_dir.is_dir() {
+        return Ok(false);
+    }
+    let mut entries = fs::read_dir(&sessions_dir)?;
+    for _ in 0..MAX_MIGRATION_SESSIONS {
+        let Some(entry) = entries.next() else {
+            return Ok(false);
+        };
+        let path = entry?.path();
+        let Some(session_id) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if storage::validate_component(session_id).is_err() || !state::is_real_directory(&path) {
+            continue;
+        }
+        let Ok(record) = storage::read_session_record(&path.join(SESSION_METADATA_FILE)) else {
+            continue;
+        };
+        if record.schema_version != 1 || record.session_id != session_id {
+            continue;
+        }
+        if matches!(
+            storage::try_lock_legacy_session(&recovery_root, session_id)?,
+            storage::LegacyLock::Unavailable
+        ) {
+            return Ok(true);
+        }
+        if storage::has_fresh_lease(
+            &path.join(storage::LEASES_DIR),
+            storage::LEASE_STALE_AFTER,
+        )? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Returns whether a durable target manifest still points at the historical
 /// recovery path. This lets startup resume a state-only retirement after the
 /// recovery payload directory has already disappeared.
@@ -123,9 +172,25 @@ pub(super) fn consolidate_recovery(
     let source_state_root = target.state_base().join(&source_root_id);
     let _first_lock = first_lock;
     let _second_lock = second_lock;
-    // Hold the historical barrier across source discovery and initialization.
-    let _source_state_migration_lock =
-        storage::wait_for_migration_lock(&source_state_root.join(MIGRATION_LOCK_FILE))?;
+    // Hold both historical barriers across source discovery and initialization
+    // in the same root-id order as the global barriers. This keeps old
+    // marker-managed writers in both domains from racing consolidation.
+    let (_first_state_migration_lock, _second_state_migration_lock) =
+        if target.root_id() < source_root_id.as_str() {
+            (
+                storage::wait_for_migration_lock(
+                    &target.state_root().join(MIGRATION_LOCK_FILE),
+                )?,
+                storage::wait_for_migration_lock(&source_state_root.join(MIGRATION_LOCK_FILE))?,
+            )
+        } else {
+            (
+                storage::wait_for_migration_lock(&source_state_root.join(MIGRATION_LOCK_FILE))?,
+                storage::wait_for_migration_lock(
+                    &target.state_root().join(MIGRATION_LOCK_FILE),
+                )?,
+            )
+        };
     if !recovery_root.exists()
         && !source_state_root.exists()
         && let Some((_, manifest)) = pending_manifest.as_ref()
@@ -293,7 +358,8 @@ pub(super) fn consolidate_recovery(
     // validated records are gone and no unrecognized content remains. Keep
     // migration locks held through the final payload removal; old binaries do
     // not honor these locks, so retirement itself must be non-recursive.
-    if !deferred && retire::source_root_is_retirable(&source).unwrap_or(false) {
+    let source_retirable = retire::source_root_is_retirable(&source).unwrap_or(false);
+    if !deferred && source_retirable {
         // Retire control state first while the migration locks still exclude
         // new managers.  The payload root is removed only after that state is
         // gone, so a crash cannot strand an external source tree with no

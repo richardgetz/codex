@@ -4,14 +4,14 @@ use super::liveness::{collect_session_ids, session_is_live};
 use super::state;
 use super::storage;
 use super::ControlState;
-use super::AGENTS_DIR;
-use super::ENTRY_METADATA_DIR;
-use super::LEASES_DIR;
+use crate::AGENTS_DIR;
+use crate::ENTRY_METADATA_DIR;
+use crate::LEASES_DIR;
 use super::MIGRATION_LOCK_FILE;
 use super::MIGRATION_MANIFEST_PREFIX;
 use super::MIGRATION_MANIFEST_SUFFIX;
-use super::SESSIONS_DIR;
-use super::SESSION_METADATA_FILE;
+use crate::SESSIONS_DIR;
+use crate::SESSION_METADATA_FILE;
 use super::SessionTmpError;
 use super::read_manifest;
 use super::Path;
@@ -155,7 +155,29 @@ pub(super) fn retire_source_payload(source: &ControlState) -> Result<bool, Sessi
         return Ok(false);
     }
     let marker = root.join(state::LEGACY_MARKER);
-    if !legacy_marker_is_valid(&marker)? {
+    let marker_present = match fs::symlink_metadata(&marker) {
+        Ok(metadata) if storage::file_type_is_link(metadata.file_type()) => {
+            return Err(SessionTmpError::UnsafeManagedPath(marker));
+        }
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            return Err(SessionTmpError::UnsafeManagedPath(marker));
+        }
+        Ok(_) => true,
+        Err(error) if error.kind() == ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    if !marker_present {
+        // A missing marker is safe only when the retained external identity
+        // still validates this exact source path. Unknown or malformed roots
+        // remain untouched.
+        match source.ensure_identity() {
+            Ok(()) => {}
+            Err(SessionTmpError::UnsafeManagedPath(path)) => {
+                return Err(SessionTmpError::UnsafeManagedPath(path));
+            }
+            Err(_) => return Ok(false),
+        }
+    } else if !legacy_marker_is_valid(&marker)? {
         return Ok(false);
     }
     let sessions = root.join(SESSIONS_DIR);
@@ -170,30 +192,34 @@ pub(super) fn retire_source_payload(source: &ControlState) -> Result<bool, Sessi
             }
             match fs::remove_dir(&legacy_locks) {
                 Ok(()) => {}
-                Err(error) if error.kind() == ErrorKind::NotEmpty => return Ok(false),
+                Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => return Ok(false),
                 Err(error) if error.kind() == ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
         }
         match fs::remove_dir(&sessions) {
             Ok(()) => {}
-            Err(error) if error.kind() == ErrorKind::NotEmpty => return Ok(false),
+            Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => return Ok(false),
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
     }
-    if !legacy_marker_is_valid(&marker)? {
-        return Ok(false);
-    }
-    match fs::remove_file(&marker) {
-        Ok(()) => {}
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
+    if marker_present {
+        if !legacy_marker_is_valid(&marker)? {
+            return Ok(false);
+        }
+        match fs::remove_file(&marker) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     match fs::remove_dir(root) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(true),
-        Err(error) if error.kind() == ErrorKind::NotEmpty => Ok(false),
+        Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => {
+            Ok(false)
+        }
         Err(error) => Err(error.into()),
     }
 }
@@ -210,7 +236,9 @@ pub(super) fn retire_source_state(source: &ControlState) -> Result<bool, Session
         Err(SessionTmpError::UnsafeManagedPath(path)) => {
             return Err(SessionTmpError::UnsafeManagedPath(path));
         }
-        Err(_) => return Ok(false),
+        Err(_) => {
+            return Ok(false);
+        }
     }
     for item in fs::read_dir(root)? {
         let path = item?.path();
@@ -227,7 +255,9 @@ pub(super) fn retire_source_state(source: &ControlState) -> Result<bool, Session
             }
             match fs::remove_dir(&path) {
                 Ok(()) => {}
-                Err(error) if error.kind() == ErrorKind::NotEmpty => return Ok(false),
+                Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => {
+                    return Ok(false)
+                }
                 Err(error) if error.kind() == ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
@@ -243,14 +273,14 @@ pub(super) fn retire_source_state(source: &ControlState) -> Result<bool, Session
                                 || manifest.target_root_id == source.root_id)
                     })))
         {
-            if name == state::STATE_MARKER || name == state::STATE_ROOT_RECORD {
-                match source.ensure_identity() {
-                    Ok(()) => {}
-                    Err(SessionTmpError::UnsafeManagedPath(path)) => {
-                        return Err(SessionTmpError::UnsafeManagedPath(path));
-                    }
-                    Err(_) => return Ok(false),
-                }
+            // Keep identity and coordination files as durable bookkeeping.
+            // They form a source tombstone so an interrupted payload
+            // retirement remains discoverable on the next open.
+            if name == state::STATE_MARKER
+                || name == state::STATE_ROOT_RECORD
+                || name == MIGRATION_LOCK_FILE
+            {
+                continue;
             }
             match fs::remove_file(&path) {
                 Ok(()) => {}
@@ -261,12 +291,11 @@ pub(super) fn retire_source_state(source: &ControlState) -> Result<bool, Session
             return Ok(false);
         }
     }
-    match fs::remove_dir(root) {
-        Ok(()) => Ok(true),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(true),
-        Err(error) if error.kind() == ErrorKind::NotEmpty => Ok(false),
-        Err(error) => Err(error.into()),
-    }
+    // The identity marker, root record, and legacy migration lock intentionally
+    // remain in place. They are a tiny durable source tombstone rather than
+    // disposable payload control, and allow a later open to finish a payload
+    // retirement after a process crash.
+    Ok(true)
 }
 
 fn legacy_marker_is_valid(path: &Path) -> Result<bool, SessionTmpError> {

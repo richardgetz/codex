@@ -3,12 +3,12 @@
 use super::liveness::migration_limit_error;
 use super::storage;
 use super::ControlState;
-use super::AGENTS_DIR;
-use super::ENTRY_METADATA_DIR;
-use super::LEASES_DIR;
+use crate::AGENTS_DIR;
+use crate::ENTRY_METADATA_DIR;
+use crate::LEASES_DIR;
 use super::MAX_MIGRATION_ENTRIES;
-use super::SESSION_METADATA_FILE;
-use super::EntryMetadata;
+use crate::SESSION_METADATA_FILE;
+use crate::EntryMetadata;
 use super::Path;
 use super::PathBuf;
 use super::SessionTmpError;

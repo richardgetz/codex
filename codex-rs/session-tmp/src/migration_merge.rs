@@ -2,13 +2,12 @@
 
 use super::liveness::{has_live_leases, session_is_live};
 use super::records::{
-    collision_path, map_relative_path, merge_metadata, merge_session_record, merge_stale_leases,
-    recover_moved_path, valid_metadata_path,
+    collision_path, merge_metadata, merge_session_record, merge_stale_leases,
 };
 use super::retire::retire_source_session;
 use super::storage;
 use super::ControlState;
-use super::AGENTS_DIR;
+use crate::AGENTS_DIR;
 use super::Path;
 use super::PathBuf;
 use super::SessionTmpError;

@@ -73,7 +73,7 @@ pub(super) fn reap_sessions(
         return Ok(report);
     }
     let legacy_transition_active = state.legacy_transition_active()?;
-    for item in fs::read_dir(sessions_dir)? {
+    for item in fs::read_dir(&sessions_dir)? {
         let session_dir = item?.path();
         let is_real_directory = fs::symlink_metadata(&session_dir)
             .map(|metadata| {

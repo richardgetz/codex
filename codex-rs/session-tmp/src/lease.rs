@@ -40,7 +40,17 @@ impl SessionLease {
         session_id: &str,
         thread_id: &str,
     ) -> Result<Self, SessionTmpError> {
-        let Some(_session_lock) = super::storage::try_lock_session(session_dir)? else {
+        let mut session_lock = None;
+        for _ in 0..16 {
+            match super::storage::try_lock_session(session_dir)? {
+                Some(lock) => {
+                    session_lock = Some(lock);
+                    break;
+                }
+                None => std::thread::sleep(Duration::from_millis(2)),
+            }
+        }
+        let Some(_session_lock) = session_lock else {
             return Err(SessionTmpError::SessionAlreadyOwned(thread_id.to_string()));
         };
         let legacy_session_dir = state.legacy_session_dir(session_id);

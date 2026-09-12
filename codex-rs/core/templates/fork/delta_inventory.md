@@ -378,7 +378,11 @@ release or merge rules.
     live old-version sessions defer migration until a later open. Recognized
     session payloads and controls move, while unknown recovery files stay at
     their original paths outside managed cleanup, keeping that tree until it
-    is empty. Markerless nonempty custom roots are never adopted.
+    is empty. A small external source identity is retained as a durable
+    migration tombstone so interrupted cleanup can resume safely. Markerless
+    nonempty custom roots are never adopted. If the root or external state is
+    unsafe or unavailable, startup/resume continues for that runtime with
+    session temporary storage disabled.
   - Slash command: `/tmp [status|list|clean|clear|reap [days|--force]]`. The
     current root session owns cleanup; `clear` also removes manual-retention
     entries. Age-limited `reap [days]` and explicit `reap --force` use managed
@@ -654,7 +658,9 @@ release or merge rules.
   changing App enablement or connector filtering.
 - Verify session temporary control state stays under
   `<codex_home>/state/session-tmp`, payload deletion recreates the same
-  configured namespace, and no control files are written below payload roots.
+  configured namespace, and no control files are written below payload roots
+  except a bounded compatibility lease during an active old-version
+  transition.
   Verify marker-era roots import exact records and retire their marker only
   after legacy leases and locks drain; recovery-root consolidation is
   collision-safe, resumable, preserves unknown files, defers live old-version

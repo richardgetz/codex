@@ -3,9 +3,9 @@
 use super::state;
 use super::storage;
 use super::ControlState;
-use super::LEASES_DIR;
+use crate::LEASES_DIR;
 use super::MAX_MIGRATION_SESSIONS;
-use super::SESSION_METADATA_FILE;
+use crate::SESSION_METADATA_FILE;
 use super::SessionTmpError;
 use std::collections::HashSet;
 use std::fs;

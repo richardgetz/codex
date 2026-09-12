@@ -9,6 +9,7 @@ use super::STATE_MARKER_CONTENT;
 use super::STATE_ROOT_RECORD;
 use super::STATE_DIR;
 use super::STATE_SESSION_TMP_DIR;
+use super::V2_PAYLOAD_NAMESPACE;
 use super::SessionTmpError;
 use std::fs;
 use std::fs::OpenOptions;
@@ -16,7 +17,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub(super) fn inspect_payload_root(root: &Path) -> Result<bool, SessionTmpError> {
+pub(crate) fn inspect_payload_root(root: &Path) -> Result<bool, SessionTmpError> {
     match fs::symlink_metadata(root) {
         Ok(metadata) if storage::file_type_is_link(metadata.file_type()) => {
             return Err(SessionTmpError::UnsafeManagedPath(root.to_path_buf()));
@@ -45,7 +46,7 @@ pub(super) fn inspect_payload_root(root: &Path) -> Result<bool, SessionTmpError>
     Ok(false)
 }
 
-pub(super) fn payload_is_nonempty(root: &Path) -> Result<bool, SessionTmpError> {
+pub(crate) fn payload_is_nonempty(root: &Path) -> Result<bool, SessionTmpError> {
     if !root.exists() {
         return Ok(false);
     }
@@ -187,7 +188,7 @@ pub(super) fn read_root_record(path: &Path) -> Result<RootRecord, SessionTmpErro
 /// Migration uses this to finish a source whose disposable root was removed
 /// after its manifest was persisted. Invalid or incomplete state is ignored so
 /// an arbitrary state directory cannot authorize adoption of a payload path.
-pub(super) fn payload_root_from_state_root(
+pub(crate) fn payload_root_from_state_root(
     state_root: &Path,
     expected_root_id: &str,
 ) -> Result<Option<PathBuf>, SessionTmpError> {
@@ -231,13 +232,13 @@ pub(super) fn payload_root_from_state_root(
     Ok(Some(record.payload_root))
 }
 
-pub(super) fn is_real_directory(path: &Path) -> bool {
+pub(crate) fn is_real_directory(path: &Path) -> bool {
     fs::symlink_metadata(path)
         .map(|metadata| metadata.file_type().is_dir() && !storage::file_type_is_link(metadata.file_type()))
         .unwrap_or(false)
 }
 
-pub(super) fn canonicalize_for_identity(path: &Path) -> Result<PathBuf, SessionTmpError> {
+pub(crate) fn canonicalize_for_identity(path: &Path) -> Result<PathBuf, SessionTmpError> {
     if path.exists() {
         return Ok(fs::canonicalize(path)?);
     }
@@ -259,7 +260,7 @@ pub(super) fn canonicalize_for_identity(path: &Path) -> Result<PathBuf, SessionT
     Ok(canonical)
 }
 
-pub(super) fn root_id(canonical_payload_root: &Path) -> String {
+pub(crate) fn root_id(canonical_payload_root: &Path) -> String {
     // FNV-1a is tiny, deterministic across processes/platforms, and keeps
     // the state directory name to one validated component without adding a
     // dependency solely for hashing a path identity.
@@ -278,7 +279,7 @@ pub(super) fn paths_overlap(left: &Path, right: &Path) -> bool {
 /// Returns whether an external identity already enrolls `payload_root`.
 /// Unlike [`ControlState::open`], this probe never creates directories or
 /// recreates a deleted payload root, so it is safe for migration discovery.
-pub(super) fn external_identity_present(
+pub(crate) fn external_identity_present(
     default_root: &Path,
     payload_root: &Path,
 ) -> Result<bool, SessionTmpError> {
@@ -303,7 +304,7 @@ pub(super) fn external_identity_present(
         .is_ok_and(|namespace| namespace.is_some()))
 }
 
-pub(super) fn ensure_existing_ancestors_for_runtime(
+pub(crate) fn ensure_existing_ancestors_for_runtime(
     path: &Path,
 ) -> Result<(), SessionTmpError> {
     let mut cursor = Some(path);

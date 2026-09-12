@@ -204,7 +204,7 @@ impl ControlState {
                 identity::ensure_payload_namespace(&namespace, &canonical_payload_root)?;
                 namespace
             }
-        }
+        };
 
         let state = Self {
             payload_root: payload_root.to_path_buf(),
