@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-09-12/core-skills-app-order#8e56060100"
+  change_type: "fix"
+  scope: "core-context"
+  summary: "Keep world-state Skills catalog sections ahead of Apps and Plugins guidance."
+  decision: "Remove the fork-reintroduced static Apps injection and build extension world-state sections before Apps and Plugins sections. The persisted Apps state remains the single capability-gated guidance path, preserving connector, mode, feature, and model gates while making the actual rendered Skills → Apps → Plugins order deterministic."
+  constraints:
+    - "Preserve Apps enablement, connector accessibility policy, mode filtering, and MCP discovery."
+    - "Omit Apps guidance when no eligible connector is discovered or the model opts out."
+    - "Keep Skills catalog content and extension ordering unchanged apart from its placement before Apps and Plugins."
+    - "Keep app-server wire contracts and world-state persistence IDs unchanged."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session/mod.rs::Session::build_initial_context_with_world_state_impl"
+    - "codex-rs/core/src/session/world_state.rs::Session::build_world_state_for_step"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
