@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-12/core-peer-completion-test#893a8d6f54"
+  change_type: "test"
+  scope: "core-multi-agent"
+  summary: "Synchronize peer-completion integration fixture with asynchronous parent delivery."
+  decision: "Wait for the queue-only completion operation after the child TurnComplete event before submitting the root read-result turn, so the regression observes the actual completion payload instead of racing forwarding."
+  constraints:
+    - "Keep production completion routing unchanged."
+    - "Retain existing initiating-turn activity and root payload assertions."
+    - "Bound the wait and avoid broad timing sleeps."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/tests/suite/subagent_notifications.rs::multi_agent_v2_peer_followup_completion_notifies_initiating_turn"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
