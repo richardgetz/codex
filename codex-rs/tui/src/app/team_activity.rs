@@ -41,6 +41,8 @@ pub(super) const ORDINARY_WAITING_GRACE: Duration = Duration::from_secs(30);
 const TEAM_ACTIVITY_METADATA_HYDRATION_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 /// Bound ancestor reads when a nested child is the first resumed activity observed.
 const MAX_TEAM_ACTIVITY_METADATA_HYDRATION_DEPTH: usize = 8;
+/// Keep failed metadata lookups bounded when stale activity IDs churn on a selected root.
+pub(super) const MAX_TEAM_ACTIVITY_METADATA_HYDRATION_ATTEMPTS: usize = 256;
 /// Keep an event-admitted parent edge briefly while persisted overview metadata catches up.
 ///
 /// Activity updates can trigger several metadata syncs before a newly spawned thread appears in
@@ -71,16 +73,20 @@ pub(super) struct TeamActivityProjection {
     /// corresponding thread. The value records when the edge was admitted; stale edges expire
     /// after a bounded grace window instead of being retained forever.
     locally_admitted_parent_ids: HashMap<ThreadId, Instant>,
-    /// Terminal notifications can race detached activity updates. Keep barriers only for IDs in
-    /// the currently admitted loaded tree; removed/unloaded children are rejected as unknown
-    /// until a fresh ThreadStarted event admits them again.
+    /// Terminal notifications can race detached activity updates. Keep barriers for IDs in the
+    /// currently admitted loaded tree and for unknown IDs with a bounded hydration guard;
+    /// removed/unloaded children are rejected as unknown until a fresh ThreadStarted event admits
+    /// them again.
     terminal_threads: HashSet<ThreadId>,
     /// A root close/delete/archive can race detached updates before any root metadata is loaded.
     /// This single selected-root barrier covers that uncached case without retaining old IDs.
     closed_root: Option<ThreadId>,
     selected_root: Option<ThreadId>,
-    /// Bound metadata reads for unknown activity IDs to one attempt per selected tree lifecycle.
-    metadata_hydration_attempts: HashSet<ThreadId>,
+    /// Bound metadata reads for unknown activity IDs while retaining enough order to evict stale
+    /// failed IDs when a selected tree sees more churn than the cap allows.
+    metadata_hydration_attempts: HashMap<ThreadId, u64>,
+    /// Monotonic insertion order used to evict the oldest failed lookup at capacity.
+    metadata_hydration_attempt_sequence: u64,
 }
 
 impl TeamActivityProjection {
@@ -223,7 +229,24 @@ impl TeamActivityProjection {
     }
 
     pub(super) fn begin_metadata_hydration(&mut self, thread_id: ThreadId) -> bool {
-        self.metadata_hydration_attempts.insert(thread_id)
+        if self.metadata_hydration_attempts.contains_key(&thread_id) {
+            return false;
+        }
+        if self.metadata_hydration_attempts.len() >= MAX_TEAM_ACTIVITY_METADATA_HYDRATION_ATTEMPTS
+            && let Some(oldest_thread_id) = self
+                .metadata_hydration_attempts
+                .iter()
+                .min_by_key(|(_, sequence)| *sequence)
+                .map(|(thread_id, _)| *thread_id)
+        {
+            self.metadata_hydration_attempts.remove(&oldest_thread_id);
+            self.terminal_threads.remove(&oldest_thread_id);
+        }
+        let sequence = self.metadata_hydration_attempt_sequence;
+        self.metadata_hydration_attempt_sequence = sequence.saturating_add(1);
+        self.metadata_hydration_attempts
+            .insert(thread_id, sequence)
+            .is_none()
     }
 
     /// Cache a parent edge for a thread and apply it to an activity entry already seen.
@@ -239,7 +262,6 @@ impl TeamActivityProjection {
     }
 
     fn set_thread_parent(&mut self, thread_id: ThreadId, parent_thread_id: Option<ThreadId>) {
-        self.start_thread(thread_id);
         self.parent_thread_ids.insert(thread_id, parent_thread_id);
         if let Some(entry) = self.entries.get_mut(&thread_id) {
             entry.parent_thread_id = parent_thread_id;
@@ -250,6 +272,7 @@ impl TeamActivityProjection {
     /// Clear a terminal tombstone when a genuinely new turn starts for this thread.
     pub(super) fn start_thread(&mut self, thread_id: ThreadId) {
         self.terminal_threads.remove(&thread_id);
+        self.metadata_hydration_attempts.remove(&thread_id);
         if self.closed_root == Some(thread_id) {
             self.closed_root = None;
         }
@@ -268,6 +291,7 @@ impl TeamActivityProjection {
             self.terminal_threads.clear();
             self.closed_root = None;
             self.metadata_hydration_attempts.clear();
+            self.metadata_hydration_attempt_sequence = 0;
         }
         self.selected_root = selected_root;
         let previous_parent_thread_ids = std::mem::take(&mut self.parent_thread_ids);
@@ -275,6 +299,9 @@ impl TeamActivityProjection {
             std::mem::take(&mut self.locally_admitted_parent_ids);
         let active_lineage_ids = self.active_lineage_ids(&previous_parent_thread_ids);
         let mut parent_thread_ids: HashMap<_, _> = metadata.into_iter().collect();
+        for thread_id in parent_thread_ids.keys() {
+            self.metadata_hydration_attempts.remove(thread_id);
+        }
         let mut locally_admitted_parent_ids = HashMap::new();
         if preserve_existing {
             // Collab spawn notifications can admit a parent edge before the next overview
@@ -301,11 +328,15 @@ impl TeamActivityProjection {
             self.parent_thread_ids.insert(root_thread_id, None);
             self.locally_admitted_parent_ids.remove(&root_thread_id);
             let admitted_thread_ids: HashSet<_> = self.parent_thread_ids.keys().copied().collect();
+            let hydration_attempt_ids: HashSet<_> =
+                self.metadata_hydration_attempts.keys().copied().collect();
             self.entries.retain(|thread_id, entry| {
                 entry.root_thread_id == root_thread_id && admitted_thread_ids.contains(thread_id)
             });
-            self.terminal_threads
-                .retain(|thread_id| admitted_thread_ids.contains(thread_id));
+            self.terminal_threads.retain(|thread_id| {
+                admitted_thread_ids.contains(thread_id)
+                    || hydration_attempt_ids.contains(thread_id)
+            });
         } else {
             self.entries.clear();
             self.parent_thread_ids.clear();
@@ -333,14 +364,16 @@ impl TeamActivityProjection {
         self.closed_root = None;
         self.selected_root = None;
         self.metadata_hydration_attempts.clear();
+        self.metadata_hydration_attempt_sequence = 0;
     }
 
     /// Mark terminal activity immediately while retaining root metadata for any other workers.
     pub(super) fn finish_thread(&mut self, thread_id: ThreadId) {
-        if self.parent_thread_ids.contains_key(&thread_id)
+        let admitted = self.parent_thread_ids.contains_key(&thread_id)
             || self.entries.contains_key(&thread_id)
-            || self.selected_root == Some(thread_id)
-        {
+            || self.selected_root == Some(thread_id);
+        let hydration_attempted = self.metadata_hydration_attempts.contains_key(&thread_id);
+        if admitted || hydration_attempted {
             self.terminal_threads.insert(thread_id);
         }
         if let Some(entry) = self.entries.get_mut(&thread_id) {
@@ -348,6 +381,11 @@ impl TeamActivityProjection {
             entry.wait_reason = None;
             entry.ordinary_waiting_since = None;
             entry.in_flight_operations = 0;
+        }
+        // Unknown terminal IDs retain their one-shot guard until metadata or a fresh turn arrives;
+        // this prevents a delayed update from reopening a failed lookup.
+        if admitted {
+            self.metadata_hydration_attempts.remove(&thread_id);
         }
     }
 
@@ -475,7 +513,7 @@ impl TeamActivityProjection {
         self.locally_admitted_parent_ids
             .retain(|candidate, _| !removed.contains(candidate));
         self.metadata_hydration_attempts
-            .retain(|candidate| !removed.contains(candidate));
+            .retain(|candidate, _| !removed.contains(candidate));
         if is_root {
             self.entries
                 .retain(|_, entry| entry.root_thread_id != thread_id);

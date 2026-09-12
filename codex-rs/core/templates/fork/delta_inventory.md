@@ -281,10 +281,12 @@ release or merge rules.
     edges come from existing thread metadata; no activity protocol fields or
     backend polling are added. Startup/resume, root selection, and reconnect
     take one root-scoped activity snapshot. If a selected-tree Worker reports
-    live activity before its metadata arrives, the TUI makes one bounded,
-    event-driven `thread/read` attempt (including a bounded parent chain) to
+    live activity before its metadata arrives, the TUI makes bounded,
+    event-driven `thread/read` attempts (including a bounded parent chain) to
     recover its edge; failed, `NotLoaded`, `SystemError`, ephemeral, or
-    non-ThreadSpawn records remain rejected. Terminal completion wins over
+    non-ThreadSpawn records remain rejected. Failed lookup IDs are capped. Metadata
+    clears an attempt; a terminal notification keeps its bounded guard until a
+    fresh turn or cap eviction permits another attempt. Terminal completion wins over
     delayed activity updates until the next `turn/started`; reset/reconnect
     rebuilds metadata only for the selected loaded tree, ignores `NotLoaded`,
     ephemeral, or temporary helper threads, and rejects unknown/unloaded child
@@ -822,9 +824,12 @@ release or merge rules.
   already-launched external commands are neither suspended nor replayed and
   process-local activity is reconstructed through `thread/activity/read` after
   startup/resume, root selection, and reconnect rather than cold-resume
-  persistence; verify one-shot bounded `thread/read` hydration admits a
+  persistence; verify bounded `thread/read` hydration attempts admit a
   resumed Worker activity edge only after validating its selected-root parent
-  chain and loaded ThreadSpawn status. Verify the TUI uses the
+  chain and loaded ThreadSpawn status, and failed lookup tracking stays capped,
+  clears on metadata, and retains a bounded terminal guard until fresh-turn or
+  cap-eviction admission. Verify the TUI uses the
+  Verify the TUI uses the
   event-driven `Lead: idle|working|waiting · Workers: N working[, M waiting]`
   row, counts unfinished direct and nested Workers only within the selected
   root, keeps the title aligned with that projection, animates only actual

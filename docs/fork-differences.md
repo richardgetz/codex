@@ -476,9 +476,11 @@ the next `turn/started`; reset and reconnect rebuild parent metadata only for
 the selected loaded tree and skip `NotLoaded`, ephemeral, or temporary helper
 threads. Startup/resume, root selection, and reconnect take one root-scoped
 activity snapshot. If a selected-tree Worker reports live activity before its
-metadata arrives, the TUI makes one bounded, event-driven `thread/read` attempt
+metadata arrives, the TUI makes bounded, event-driven `thread/read` attempts
 through its parent chain; failed, `NotLoaded`, `SystemError`, ephemeral, or
-non-ThreadSpawn records remain rejected. Activity from an unknown or unloaded
+non-ThreadSpawn records remain rejected. Failed lookup IDs are capped. Metadata
+clears an attempt; a terminal notification keeps its bounded guard until a
+fresh turn or cap eviction permits another attempt. Activity from an unknown or unloaded
 child is otherwise ignored until a fresh `thread/started`/`turn/started`
 admits it. The display logic adds no inference or backend polling. See the [app-server
 API](../codex-rs/app-server/README.md) for connection and thread lifecycle
