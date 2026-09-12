@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-09-12/stable-refresh-final-format"
+  change_type: "chore"
+  scope: "rust"
+  summary: "Apply repository formatting to the validated stable-refresh fixes."
+  decision: "Keep the final main-checkout formatting changes together after all focused regression tests and scoped lint fixes have passed."
+  constraints:
+    - "Formatting and import ordering only; preserve behavior and existing test assertions."
+    - "Run Cargo only in the main checkout with one owner."
+    - "Do not rerun tests after final fix or fmt, following repository instructions."
+    - "Build the final committed CLI version before publishing the PR update."
+    - "No fork behavior changes; no additional inventory entry is needed."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session/world_state.rs"
+    - "codex-rs/core/tests/suite/subagent_notifications.rs"
+    - "codex-rs/ext/goal/src/runtime.rs"
+    - "codex-rs/ext/skills/tests/skills_extension.rs"
+    - "codex-rs/tui/src/app"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Lead"
+    model: "unknown"
