@@ -1,0 +1,23 @@
+intent:
+  id: session-tmp-state-separation
+  change_type: fix
+  scope: codex-rs/session-tmp
+  summary: Keep session temporary control state outside disposable payload roots and migrate legacy roots safely.
+  decision: Use per-root external state under codex_home/state/session-tmp with validated migration and quarantine.
+  constraints:
+    - Preserve custom-root and symlink safety.
+    - Keep legacy lease and lock compatibility until inactive.
+    - Recreate deleted payloads without resurrecting payload-side heartbeat controls.
+    - Avoid Cargo validation in the source-only worker worktree.
+    - Update fork documentation and inventory.
+  intent_priority: high
+  code_locations:
+    - codex-rs/session-tmp
+    - codex-rs/core/src/session/session.rs
+    - codex-rs/core/tests/suite/session_tmp.rs
+    - docs/fork-differences.md
+    - codex-rs/core/templates/fork/delta_inventory.md
+  requested_by: user
+  recorded_by:
+    agent: codex-worker
+    model: gpt-5.6-luna
