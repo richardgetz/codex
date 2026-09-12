@@ -12,7 +12,7 @@ intent:
   intent_priority: must
   code_locations:
     - codex-rs/core/tests/suite/snapshots/all__suite__pending_input__pending_input_queued_mail_after_commentary.snap
-    - codex-rs/core/tests/suite/pending_input__pending_input_queued_mail_after_reasoning.snap
+    - codex-rs/core/tests/suite/snapshots/all__suite__pending_input__pending_input_queued_mail_after_reasoning.snap
     - codex-rs/core/tests/suite/snapshots/all__suite__pending_input__pending_input_user_input_no_preempt_after_reasoning.snap
     - codex-rs/core/tests/suite/snapshots/all__suite__token_budget__token_budget_new_context_window_tool_full_context.snap
   requested_by: /root/stable_refresh
