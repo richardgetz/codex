@@ -148,6 +148,9 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
             // a user message. Match the persisted task text for both forms.
             body_contains(request, USAGE_CHILD_TASK)
                 && request_has_model(request, WORKER_MODEL)
+                // The full-history grandchild retains the parent's task text;
+                // reserve this response for the child's initial turn.
+                && !body_contains(request, USAGE_GRANDCHILD_TASK)
                 && !request_has_function_call_output(request, USAGE_CHILD_SPAWN_CALL_ID)
         },
         sse(vec![
@@ -256,6 +259,9 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
         |request| {
             request.body_contains_text(USAGE_CHILD_TASK)
                 && response_request_has_model(request, WORKER_MODEL)
+                // Keep a full-history grandchild request from being selected
+                // as the child's initial turn in captured-request order.
+                && !request.body_contains_text(USAGE_GRANDCHILD_TASK)
                 && !response_request_has_function_call_output(request, USAGE_CHILD_SPAWN_CALL_ID)
         },
         "usage projection child",
@@ -266,6 +272,9 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
         |request| {
             request.body_contains_text(USAGE_GRANDCHILD_TASK)
                 && response_request_has_model(request, WORKER_MODEL)
+                // The child completion request retains the grandchild spawn
+                // arguments, but is not the forked grandchild turn itself.
+                && !response_request_has_function_call_output(request, USAGE_CHILD_SPAWN_CALL_ID)
         },
         "usage projection grandchild",
     )

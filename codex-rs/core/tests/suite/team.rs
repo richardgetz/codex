@@ -1312,7 +1312,16 @@ async fn team_worker_limit_rejects_second_direct_spawn_and_reuses_completed_slot
         ThreadSettingsOverrides::default(),
     )
     .await?;
-    let third_output = root_after_third_output
+    let replacement_request = wait_for_captured_request(
+        &root_after_third_output,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, THIRD_DIRECT_CALL_ID)
+        },
+        "replacement direct spawn output",
+    )
+    .await;
+    let third_output = replacement_request
         .function_call_output_text(THIRD_DIRECT_CALL_ID)
         .expect("replacement direct spawn output");
     let third_result: Value = serde_json::from_str(&third_output)?;
