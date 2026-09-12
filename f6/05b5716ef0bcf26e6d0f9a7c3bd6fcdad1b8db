@@ -1,0 +1,19 @@
+intent:
+  id: goal-wait-terminal-regression
+  change_type: test
+  scope: goal
+  summary: Add deterministic coverage for tracked-wait completion and stale same-ID turn accounting.
+  decision: Keep process completion separate from intent invalidation and ensure terminal handling survives while the turn remains active.
+  constraints:
+    - Cover both turn errors and usage-limit errors.
+    - Preserve existing process wait and polling assertions.
+    - No live billed model requests.
+  intent_priority: must
+  code_locations:
+    - codex-rs/app-server/tests/common/mock_model_server.rs
+    - codex-rs/app-server/tests/suite/v2/goal_wait.rs
+    - codex-rs/ext/goal/tests/goal_extension_backend.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: Codex Worker
+    model: unknown
