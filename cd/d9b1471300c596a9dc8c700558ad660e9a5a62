@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-12/tool-dispatch-cancel-boundary#cdd9b14713"
+  change_type: "fix"
+  scope: "core-activity"
+  summary: "Return an aborted tool result when cancellation wins before dispatch admission."
+  decision: "Treat errors returned by a dispatch task after the outer cancellation branch has claimed the outcome as internal cancellation cleanup, while preserving successful results and join failures. This closes the activity/parallel gate race where wait_for_activity_resume maps the same cancellation to a fatal FunctionCallError."
+  constraints:
+    - "Keep cancellation ownership in the outer handle_tool_call branch."
+    - "Preserve successful tool results and genuine task join failures."
+    - "Do not start a handler after activity pause or cancellation."
+    - "Retain exactly one timing event with execution_started=false for pre-admission cancellation."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/tools/parallel.rs::ToolCallRuntime::handle_tool_call_with_source"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
