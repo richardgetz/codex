@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-12/team-response-matcher-types#d716a14270"
+  change_type: "fix"
+  scope: "team-tests"
+  summary: "Use ResponsesRequest helpers in captured-request predicates."
+  decision: "Keep wiremock request matchers at mock registration and use the typed ResponsesRequest helpers only after a response is captured."
+  constraints:
+    - "Preserve completion-wake, direct-cap, slot-reuse, and recursive usage assertions."
+    - "Do not alter the original Team delegation or TUI proof tests."
+    - "Use main-only validation for Cargo tests."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/tests/suite/team.rs::team_worker_limit_rejects_second_direct_spawn_and_reuses_completed_slot"
+    - "codex-rs/core/tests/suite/team_worker_limits.rs::team_worker_limit_admits_shell_task_while_worker_idle"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex stable_refresh Worker"
+    model: "gpt-5.6"
