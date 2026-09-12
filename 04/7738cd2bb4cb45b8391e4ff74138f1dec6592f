@@ -1,0 +1,19 @@
+intent:
+  id: goal-intent-wait-generation-split
+  change_type: fix
+  scope: goal
+  summary: Separate Goal intent invalidation from tracked background-wait completion.
+  decision: Keep a monotonic intent generation for stale turn callbacks while advancing a distinct wait generation for process rebind/completion; guard turn-stop accounting with the captured intent.
+  constraints:
+    - Process completion must not suppress valid same-goal TurnError or UsageLimit handling.
+    - Objective replacement, cancellation, and same-ID objective edits must reject stale callbacks and progress writes.
+    - on_turn_start remains permit-free because automatic continuation holds the goal-state permit through lifecycle admission.
+  intent_priority: must
+  code_locations:
+    - codex-rs/ext/goal/src/accounting.rs
+    - codex-rs/ext/goal/src/extension.rs
+    - codex-rs/ext/goal/src/runtime.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: Codex Worker
+    model: unknown
