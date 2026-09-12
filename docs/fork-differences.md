@@ -310,14 +310,15 @@ navigation remain unchanged.
 - New roots enroll only when empty (or when a validated legacy migration has
   supplied exact session records) and do not need a payload marker. Existing
   `.codex-managed-session-tmp` roots are imported into external state; once old
-  leases are inactive, validated legacy control records and the marker are
-  retired while payload agents and unknown files remain in place. Legacy lock
-  pathnames may remain as tiny compatibility residues so waiting old processes
-  cannot be split onto a replacement lock; they do not keep the marker or
-  external enrollment active. The historical `<codex_home>/session-tmp-recovery` tree is merged
+  leases are inactive and any held legacy locks have drained, validated legacy
+  control records and the marker are retired while payload agents and unknown
+  files remain in place. Legacy lock pathnames may remain as tiny compatibility
+  residues so waiting old processes cannot be split onto a replacement lock;
+  they do not prevent marker retirement or later use of external state. The
+  historical `<codex_home>/session-tmp-recovery` tree is merged
   automatically into the normal default root, with collision-safe paths and
   resumable migration; live old-version sessions remain in place until a later
-  open observes that they have released their legacy lease. Legacy lock
+  open observes that they have released their legacy lease and lock. Legacy lock
   pathnames are retained when an old process could still be waiting on their
   inode; in that case the source may remain as a tiny lock-only residue while
   recognized session payload and control data have already been retired.

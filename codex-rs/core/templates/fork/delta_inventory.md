@@ -372,7 +372,8 @@ release or merge rules.
     durable artifacts, credentials, or source files there.
   - New roots enroll only when empty, while validated legacy roots import
     marker-era session records into external state and retire validated legacy
-    controls plus the old marker after validated leases become inactive. Legacy
+    controls plus the old marker after validated leases are inactive and held
+    legacy locks have drained. Legacy
     lock pathnames may remain as tiny compatibility residues so waiting old
     processes cannot be split onto a replacement lock; those residues do not
     block external enrollment or marker retirement. The historical
@@ -668,8 +669,8 @@ release or merge rules.
   except a bounded compatibility lease during an active old-version
   transition.
   Verify marker-era roots import exact records and retire their marker after
-  validated leases become inactive, while retained legacy lock pathnames do
-  not block enrollment; recovery-root consolidation is
+  validated leases are inactive and held legacy locks have drained, while
+  retained legacy lock pathnames do not block enrollment; recovery-root consolidation is
   collision-safe, resumable, preserves unknown files, defers live old-version
   sessions, preserves unknown recovery paths outside managed cleanup, and
   retires obsolete recovery state automatically once the source is empty or
