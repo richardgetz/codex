@@ -79,6 +79,9 @@ pub(crate) enum InputQueueActivity {
 pub(crate) struct PendingInputStatus {
     pub(crate) has_pending_input: bool,
     pub(crate) has_user_input: bool,
+    /// Raw response-item injections require a same-turn follow-up, but do not authorize it as an
+    /// explicit user turn for usage-floor checks.
+    pub(crate) has_pending_response_items: bool,
 }
 
 /// Turn-local pending input storage owned by the input queue flow.
@@ -672,6 +675,10 @@ impl TurnInputQueue {
                 .items
                 .iter()
                 .any(|input| matches!(input, TurnInput::UserInput { .. })),
+            has_pending_response_items: self
+                .items
+                .iter()
+                .any(|input| matches!(input, TurnInput::ResponseItem(_))),
         }
     }
 }
@@ -859,6 +866,7 @@ mod tests {
             PendingInputStatus {
                 has_pending_input: true,
                 has_user_input: true,
+                has_pending_response_items: false,
             }
         );
         assert_eq!(
@@ -869,6 +877,18 @@ mod tests {
             PendingInputStatus {
                 has_pending_input: true,
                 has_user_input: false,
+                has_pending_response_items: false,
+            }
+        );
+        assert_eq!(
+            TurnInputQueue {
+                items: vec![TurnInput::ResponseItem(ResponseItem::Other.into())],
+            }
+            .status(),
+            PendingInputStatus {
+                has_pending_input: false,
+                has_user_input: false,
+                has_pending_response_items: true,
             }
         );
     }

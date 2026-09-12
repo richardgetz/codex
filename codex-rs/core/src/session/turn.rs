@@ -561,8 +561,10 @@ pub(crate) async fn run_turn(
                 let PendingInputStatus {
                     has_pending_input,
                     has_user_input: has_pending_user_input,
+                    has_pending_response_items,
                 } = pending_input_status;
-                let needs_follow_up = model_needs_follow_up || has_pending_input;
+                let needs_follow_up =
+                    model_needs_follow_up || has_pending_input || has_pending_response_items;
                 let token_limit_reached = token_status.token_limit_reached;
                 let (usage_policy, rate_limits) = sess.usage_policy_and_rate_limits().await;
                 let automatic_continuation_is_allowed =
@@ -585,6 +587,7 @@ pub(crate) async fn run_turn(
                     model_needs_follow_up,
                     has_pending_input,
                     has_pending_user_input,
+                    has_pending_response_items,
                     needs_follow_up,
                     "post sampling token usage"
                 );

@@ -211,6 +211,9 @@ release or merge rules.
     `minimumRemainingPercent` stops automatic continuation, loopbacks, hooks,
     and queued automatic work before the configured provider-window floor is
     crossed. Explicit user turns remain allowed.
+  - Raw response-item injections received after a final answer still reopen the
+    active turn for one follow-up request, while remaining automatic input for
+    usage-floor admission and never bypassing `minimumRemainingPercent`.
   - The model receives bounded advisory status for provider usage windows,
     including remaining percentage and reset time for 5-hour, weekly, and
     other known windows.
@@ -788,7 +791,10 @@ release or merge rules.
 - Verify per-thread `usagePolicy` remains disabled by default, persists through
   resume and all fork modes, exposes bounded provider-window status to models,
   and only auto-resumes resettable provider limits while respecting the
-  configured continuation floor. Verify the TUI default and interval bounds,
+  configured continuation floor. Verify raw response-item injections reopen an
+  active turn after a final answer without being treated as explicit-user
+  authorization that bypasses the continuation floor. Verify the TUI default
+  and interval bounds,
   known-reset scheduling, hourly fallback account refresh, floor-paused work,
   `/continue` wake/report behavior, and cancellation/manual-stop preservation.
 - Verify `/pause` and `/continue` affect only the selected Lead tree, reconcile
