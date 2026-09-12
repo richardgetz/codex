@@ -285,9 +285,6 @@ async fn cached_legacy_resume_revalidates_history_across_migration_settings() ->
     for (startup_enabled, workspace_enabled) in
         [(false, false), (false, true), (true, false), (true, true)]
     {
-        eprintln!(
-            "[cached-legacy-resume] startup_enabled={startup_enabled} workspace_enabled={workspace_enabled} phase=iteration-start"
-        );
         let codex_home = tempfile::tempdir().expect("tempdir");
         let config = build_config(&codex_home).await;
         let legacy_thread_id = ThreadId::from_string(
@@ -325,9 +322,6 @@ async fn cached_legacy_resume_revalidates_history_across_migration_settings() ->
         let maintenance_guard =
             codex_rollout::try_acquire_rollout_maintenance_lock(codex_home.path())?
                 .expect("acquire rollout maintenance lock");
-        eprintln!(
-            "[cached-legacy-resume] startup_enabled={startup_enabled} workspace_enabled={workspace_enabled} phase=maintenance-lock-acquired"
-        );
         let mut app_server = crate::start_app_server_for_picker(
             &startup_config,
             &crate::AppServerTarget::Embedded,
@@ -335,9 +329,6 @@ async fn cached_legacy_resume_revalidates_history_across_migration_settings() ->
             std::sync::Arc::new(crate::EnvironmentManager::default_for_tests()),
         )
         .await?;
-        eprintln!(
-            "[cached-legacy-resume] startup_enabled={startup_enabled} workspace_enabled={workspace_enabled} phase=picker-server-started"
-        );
         app_server.remember_thread_history_mode(legacy_thread_id, ThreadHistoryMode::Legacy);
         let local_settings = crate::local_settings::LocalSettings::from(&resume_config);
         let next_request_id = app_server.next_request_id;
@@ -350,23 +341,13 @@ async fn cached_legacy_resume_revalidates_history_across_migration_settings() ->
             );
             tokio::pin!(resume);
             drop(maintenance_guard);
-            eprintln!(
-                "[cached-legacy-resume] startup_enabled={startup_enabled} workspace_enabled={workspace_enabled} phase=maintenance-lock-released request_id={next_request_id}"
-            );
             // This current-thread test polls resume before yielding to the startup worker.
             // Resume must acquire its guard before waiting for metadata revalidation.
             assert!(resume.as_mut().now_or_never().is_none());
-            eprintln!(
-                "[cached-legacy-resume] startup_enabled={startup_enabled} workspace_enabled={workspace_enabled} phase=resume-still-pending"
-            );
             assert!(
                 codex_rollout::try_acquire_rollout_maintenance_lock(codex_home.path())?.is_none()
             );
-            let legacy = resume.await?;
-            eprintln!(
-                "[cached-legacy-resume] startup_enabled={startup_enabled} workspace_enabled={workspace_enabled} phase=resume-returned"
-            );
-            legacy
+            resume.await?
         };
         assert_eq!(app_server.next_request_id, next_request_id + 2);
         assert!(!legacy.turns.is_empty());
