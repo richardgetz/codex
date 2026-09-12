@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-12/core-peer-worker-completion-diagnostic#8821e3812f"
+  change_type: "test"
+  scope: "core-subagent-notifications"
+  summary: "Trace peer worker completion and follow-up request admission."
+  decision: "Capture bounded worker TurnComplete metadata and existing follow-up mock request IDs so the peer regression distinguishes model-step admission from parent-forwarding loss while preserving the original root payload matcher and assertions."
+  constraints:
+    - "Keep production routing unchanged."
+    - "Keep diagnostics bounded to 256-character fields and two request IDs."
+    - "Do not relax or replace the original payload/activity assertions."
+    - "Do not expose production or private test APIs."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/tests/suite/subagent_notifications.rs::multi_agent_v2_peer_followup_completion_notifies_initiating_turn"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
