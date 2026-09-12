@@ -133,6 +133,17 @@ impl TeamActivityProjection {
             );
             return;
         }
+        if !is_root_activity
+            && notification.activity != ThreadActivity::Idle
+            && self
+                .locally_admitted_parent_ids
+                .contains_key(&thread_id)
+        {
+            // A real Worker can remain active without ever producing ThreadStarted metadata.
+            // Keep its provisional edge alive while activity snapshots continue to arrive.
+            self.locally_admitted_parent_ids
+                .insert(thread_id, now);
+        }
         let previous = self.entries.get(&thread_id);
         let ordinary_waiting = is_ordinary_waiting(notification.activity, notification.wait_reason);
         let ordinary_waiting_since = if ordinary_waiting
@@ -319,7 +330,11 @@ impl TeamActivityProjection {
             .locally_admitted_parent_ids
             .iter()
             .filter_map(|(thread_id, admitted_at)| {
-                (now.saturating_duration_since(*admitted_at) >= LOCAL_PARENT_ADMISSION_GRACE)
+                (now.saturating_duration_since(*admitted_at) >= LOCAL_PARENT_ADMISSION_GRACE
+                    && self
+                        .entries
+                        .get(thread_id)
+                        .is_none_or(|entry| entry.activity == ThreadActivity::Idle))
                     .then_some(*thread_id)
             })
             .collect();
