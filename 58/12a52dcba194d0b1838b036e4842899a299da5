@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-12/core-peer-payload-diagnostic#841e9d2ba0"
+  change_type: "test"
+  scope: "core-subagent-notifications"
+  summary: "Capture bounded queue telemetry and agent-message fields for the peer completion matcher failure."
+  decision: "Extend the existing diagnostic fixture to print capped worker-to-root result-send lines and capped root agent-message summaries while preserving the original matcher, turn waits, queue barrier, and assertions."
+  constraints:
+    - "Use only existing tracing and wiremock request data; do not expose production or private test APIs."
+    - "Scope output to the target worker/root IDs and cap each excerpt."
+    - "Do not relax or alter completion-routing expectations."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/tests/suite/subagent_notifications.rs::multi_agent_v2_peer_followup_completion_notifies_initiating_turn"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
