@@ -2748,10 +2748,23 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
     test.submit_turn(SPAWN_WORKER_PROMPT).await?;
     let worker_thread_id = created_threads.recv().await?;
     let worker_thread = test.thread_manager.get_thread(worker_thread_id).await?;
-    wait_for_event(worker_thread.as_ref(), |event| {
+    let worker_initial_completion = wait_for_event(worker_thread.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    if let EventMsg::TurnComplete(completion) = &worker_initial_completion {
+        let last_agent_message = completion
+            .last_agent_message
+            .as_deref()
+            .map(|message| message.chars().take(256).collect::<String>());
+        let error = completion.error.as_ref().map(|error| {
+            format!("{error:?}").chars().take(256).collect::<String>()
+        });
+        eprintln!(
+            "peer worker completion stage=initial turn_id={} last_agent_message={last_agent_message:?} error={error:?}",
+            completion.turn_id,
+        );
+    }
 
     let requester_spawn_args = serde_json::to_string(&json!({
         "message": REQUESTER_TASK,
@@ -2860,13 +2873,42 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
         .function_call_output_text(FOLLOWUP_CALL_ID)
         .expect("requester follow-up tool output");
     assert_eq!(followup_output, "");
-    wait_for_event(worker_thread.as_ref(), |event| {
+    let worker_followup_completion = wait_for_event(worker_thread.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    if let EventMsg::TurnComplete(completion) = &worker_followup_completion {
+        let last_agent_message = completion
+            .last_agent_message
+            .as_deref()
+            .map(|message| message.chars().take(256).collect::<String>());
+        let error = completion.error.as_ref().map(|error| {
+            format!("{error:?}").chars().take(256).collect::<String>()
+        });
+        eprintln!(
+            "peer worker completion stage=followup turn_id={} last_agent_message={last_agent_message:?} error={error:?}",
+            completion.turn_id,
+        );
+    }
 
-    let worker_followup_turn_id = worker_followup_request
-        .requests()
+    let worker_followup_requests = worker_followup_request.requests();
+    let worker_followup_turn_ids = worker_followup_requests
+        .iter()
+        .filter_map(|request| {
+            request
+                .body_json()
+                .get("client_metadata")
+                .and_then(|metadata| metadata.get("turn_id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .take(2)
+        .collect::<Vec<_>>();
+    eprintln!(
+        "peer worker followup request count={} turn_ids={worker_followup_turn_ids:?}",
+        worker_followup_requests.len(),
+    );
+    let worker_followup_turn_id = worker_followup_requests
         .into_iter()
         .find_map(|request| {
             let body = request.body_json();
