@@ -1,0 +1,15 @@
+intent:
+  id: tui-inline-visualization-short-temp-root-20260912
+  change_type: test
+  scope: codex-rs/tui
+  summary: Make the inline visualization overlay fixture independent of session temporary path length.
+  decision: Create this test's temporary codex home under the repository working directory so the rendered viewer URL does not wrap differently across runners; retain URL presence and viewer remeasurement assertions.
+  constraints:
+    - test-only; no production behavior changes
+    - preserve existing path normalization and reviewed snapshot semantics
+    - do not weaken rendered-content assertions
+  intent_priority: normal
+  code_locations:
+    - codex-rs/tui/src/inline_visualization_tests.rs
+  requested_by: /root/stable_refresh
+  recorded_by: codex
