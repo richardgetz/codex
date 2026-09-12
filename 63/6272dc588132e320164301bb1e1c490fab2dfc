@@ -1,0 +1,16 @@
+intent:
+  id: team-edge-expiry-redraw-2026-09-12
+  change_type: fix
+  scope: TUI provisional Team parent-edge lifecycle
+  summary: Schedule a redraw at provisional parent-edge expiry so stale collab activity cannot remain visible without another server event.
+  decision: Reuse the existing frame scheduler to re-evaluate Team activity at the 30-second local admission grace deadline; cleanup remains event-driven and adds no polling.
+  constraints:
+    - Preserve delayed first activity and nested edge admission during the grace window.
+    - Keep Team counts limited to selected roots and prune omitted/unloaded edges after expiry.
+  intent_priority: high
+  code_locations:
+    - codex-rs/tui/src/app/team_activity.rs
+  requested_by: user
+  recorded_by: codex
+  agent: /root/stable_refresh
+  model: gpt-5.6-sol
