@@ -526,7 +526,10 @@ impl GoalRuntimeHandle {
         // Hold this through accounting and the status update so external goal
         // mutations and idle continuation cannot interleave between them.
         let _goal_state_permit = self.goal_state_permit().await?;
-        self.invalidate_background_wait_locked().await;
+        let is_empty_response = matches!(&reason, ActiveGoalStopReason::EmptyResponse);
+        if !is_empty_response {
+            self.invalidate_background_wait_locked().await;
+        }
         let Some(accounting_goal_id) = self
             .inner
             .accounting_state
@@ -602,6 +605,9 @@ impl GoalRuntimeHandle {
         if !can_stop {
             self.inner.accounting_state.clear_active_goal();
             return Ok(());
+        }
+        if is_empty_response {
+            self.invalidate_background_wait_locked().await;
         }
         let previous_status = Some(active_goal.status);
         let Some(goal) = self
