@@ -1,0 +1,16 @@
+intent:
+  id: goal-wait-terminal-assertion-barrier
+  change_type: test
+  scope: goal
+  summary: Barrier the delayed wait regression before checking for an unwanted continuation.
+  decision: Give the post-turn idle lifecycle hook a bounded scheduling window so the no-extra-request assertion cannot race the hook.
+  constraints:
+    - Keep the test deterministic without live model calls.
+    - Preserve the existing 500ms bounded wait.
+  intent_priority: should
+  code_locations:
+    - codex-rs/app-server/tests/suite/v2/goal_wait.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: Codex Worker
+    model: unknown
