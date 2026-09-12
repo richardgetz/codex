@@ -317,7 +317,11 @@ navigation remain unchanged.
   external enrollment active. The historical `<codex_home>/session-tmp-recovery` tree is merged
   automatically into the normal default root, with collision-safe paths and
   resumable migration; live old-version sessions remain in place until a later
-  open observes that they have released their legacy lease. Recognized session
+  open observes that they have released their legacy lease. Legacy lock
+  pathnames are retained when an old process could still be waiting on their
+  inode; in that case the source may remain as a tiny lock-only residue while
+  recognized session payload and control data have already been retired.
+  Recognized session
   payloads and control records move, while unknown recovery files stay at
   their original paths outside managed cleanup, so a recovery tree containing
   such files remains until it is empty. A small external source identity is

@@ -546,6 +546,40 @@ fn recovery_manifest_completes_after_both_source_roots_were_retired() {
 }
 
 #[test]
+fn unsafe_recovery_manifest_is_not_completed_without_source_roots() {
+    let home = tempfile::tempdir().unwrap();
+    let normal_root = home.path().join("session-tmp");
+    let recovery_root = home.path().join("session-tmp-recovery");
+    let target = crate::state::ControlState::open(home.path(), &normal_root).unwrap();
+    let source_root_id = crate::state::root_id(
+        &crate::state::canonicalize_for_identity(&recovery_root).unwrap(),
+    );
+    let manifest_path = target
+        .state_root()
+        .join(format!(".migration-{source_root_id}.json"));
+    fs::write(
+        &manifest_path,
+        serde_json::json!({
+            "schema_version": 1,
+            "source_root_id": source_root_id,
+            "target_root_id": target.root_id(),
+            "phase": "in_progress",
+            "updated_at": crate::storage::now_seconds(),
+            "source_payload_root": recovery_root,
+            "moved_paths": [{"source": "../escape", "target": "agents/thread/file"}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    crate::migration::consolidate_recovery(&target, home.path()).unwrap();
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    assert_eq!(manifest["phase"], "in_progress");
+}
+
+#[test]
 fn lease_drop_does_not_remove_a_replacement_external_lease() {
     let root = tempfile::tempdir().unwrap();
     let manager = SessionTmpManager::open(
@@ -737,6 +771,92 @@ fn recovery_merge_preserves_collisions_and_mixes_session_ids() {
         .unwrap(),
         b"only"
     );
+    drop(manager);
+}
+
+#[test]
+fn recovery_merge_scopes_mappings_to_each_session() {
+    let home = tempfile::tempdir().unwrap();
+    let normal_root = home.path().join("session-tmp");
+    let recovery_root = home.path().join("session-tmp-recovery");
+    let normal_conflict = normal_root
+        .join(SESSIONS_DIR)
+        .join("session-one")
+        .join(AGENTS_DIR)
+        .join("shared-thread");
+    let recovery_one = recovery_root
+        .join(SESSIONS_DIR)
+        .join("session-one")
+        .join(AGENTS_DIR)
+        .join("shared-thread");
+    let recovery_two = recovery_root
+        .join(SESSIONS_DIR)
+        .join("session-two")
+        .join(AGENTS_DIR)
+        .join("shared-thread");
+    fs::create_dir_all(&normal_conflict).unwrap();
+    fs::create_dir_all(&recovery_one).unwrap();
+    fs::create_dir_all(&recovery_two).unwrap();
+    for root in [&normal_root, &recovery_root] {
+        fs::write(
+            root.join(crate::state::LEGACY_MARKER),
+            crate::state::LEGACY_MARKER_CONTENT,
+        )
+        .unwrap();
+    }
+    let updated_at = crate::storage::now_seconds();
+    for (root, session_id) in [
+        (&normal_root, "session-one"),
+        (&recovery_root, "session-one"),
+        (&recovery_root, "session-two"),
+    ] {
+        let session_dir = root.join(SESSIONS_DIR).join(session_id);
+        fs::write(
+            session_dir.join(SESSION_METADATA_FILE),
+            serde_json::to_vec(&SessionRecord {
+                schema_version: 1,
+                session_id: session_id.to_string(),
+                created_at: updated_at,
+                updated_at,
+                status: "active".to_string(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    fs::write(normal_conflict.join("artifact.txt"), b"target-one").unwrap();
+    fs::write(recovery_one.join("artifact.txt"), b"source-one").unwrap();
+    fs::write(recovery_two.join("artifact.txt"), b"source-two").unwrap();
+
+    let manager = SessionTmpManager::open(
+        &default_config(),
+        home.path(),
+        "current-session",
+        "current-thread",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(!recovery_root.exists());
+    let session_two_agent = normal_root
+        .join(SESSIONS_DIR)
+        .join("session-two")
+        .join(AGENTS_DIR)
+        .join("shared-thread");
+    assert_eq!(
+        fs::read(session_two_agent.join("artifact.txt")).unwrap(),
+        b"source-two"
+    );
+    assert!(!fs::read_dir(session_two_agent)
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("artifact.txt-migrated-"))
+        }));
     drop(manager);
 }
 

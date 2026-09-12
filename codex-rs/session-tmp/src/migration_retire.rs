@@ -30,11 +30,11 @@ pub(super) fn retire_source_session(
     let payload_session = source.payload_session_dir(session_id);
     remove_moved_payload_paths(source, target, session_id, moved_paths)?;
     remove_known_control_files(&payload_session, session_id)?;
-    // `merge_session` holds the legacy session lock while retiring the
-    // source. Remove only this validated session's lock file before dropping
-    // that lock so an otherwise empty `.locks` directory cannot keep a
-    // successfully migrated recovery root alive forever.
-    remove_legacy_lock_file(source, session_id)?;
+    // Keep the legacy lock pathname even while this validated session is
+    // retired. An older process may already hold or await the same inode;
+    // unlinking it would split that lock domain when a later manager creates a
+    // replacement path. A lock-only recovery root is a bounded compatibility
+    // residue and remains outside normal payload cleanup.
     let state_session = source.state_session_dir(session_id);
     remove_known_control_files(&state_session, session_id)?;
     Ok(())
@@ -143,29 +143,6 @@ fn files_equal(left: &Path, right: &Path) -> Result<bool, SessionTmpError> {
         if left_buffer[..left_read] != right_buffer[..right_read] {
             return Ok(false);
         }
-    }
-}
-
-fn remove_legacy_lock_file(source: &ControlState, session_id: &str) -> Result<(), SessionTmpError> {
-    if !source.legacy_transition_active()? {
-        return Ok(());
-    }
-    let locks_dir = source.payload_sessions_dir().join(".locks");
-    let path = locks_dir.join(format!("{session_id}.lock"));
-    match fs::symlink_metadata(&path) {
-        Ok(metadata) if storage::file_type_is_link(metadata.file_type()) => {
-            Err(SessionTmpError::UnsafeManagedPath(path))
-        }
-        Ok(metadata) if !metadata.file_type().is_file() => {
-            Err(SessionTmpError::UnsafeManagedPath(path))
-        }
-        Ok(_) => match fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.into()),
-        },
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
     }
 }
 

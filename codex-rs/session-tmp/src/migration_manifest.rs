@@ -48,6 +48,10 @@ pub(super) fn recovery_manifest_pending(default_root: &Path) -> bool {
             || manifest.moved_paths.iter().any(|movement| {
                 !super::records::valid_manifest_path(&movement.source)
                     || !super::records::valid_manifest_path(&movement.target)
+                    || movement
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|session_id| storage::validate_component(session_id).is_err())
             })
         {
             return false;

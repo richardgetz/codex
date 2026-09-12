@@ -49,8 +49,13 @@ struct MigrationManifest {
     moved_paths: Vec<ManifestMove>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct ManifestMove {
+    /// Relative paths are scoped to one source session. Older manifests did
+    /// not carry this field; those entries remain for auditability but are not
+    /// applied to a different session during replay.
+    #[serde(default)]
+    session_id: Option<String>,
     source: PathBuf,
     target: PathBuf,
 }
@@ -257,6 +262,10 @@ pub(super) fn consolidate_recovery(
             if manifest.moved_paths.iter().any(|movement| {
                 !records::valid_manifest_path(&movement.source)
                     || !records::valid_manifest_path(&movement.target)
+                    || movement
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|session_id| storage::validate_component(session_id).is_err())
             }) {
                 tracing::debug!(
                     path = %manifest_path.display(),
@@ -264,11 +273,7 @@ pub(super) fn consolidate_recovery(
                 );
                 return Ok(());
             }
-            manifest
-                .moved_paths
-                .into_iter()
-                .map(|path| (path.source, path.target))
-                .collect::<Vec<_>>()
+            manifest.moved_paths
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(error.into()),
@@ -312,7 +317,19 @@ pub(super) fn consolidate_recovery(
         }
         let mut persist_moves = |session_moved_paths: &[(PathBuf, PathBuf)]| {
             let mut all_paths = moved_paths.clone();
-            all_paths.extend(session_moved_paths.iter().cloned());
+            for (source_path, target_path) in session_moved_paths {
+                if !all_paths.iter().any(|movement| {
+                    movement.session_id.as_deref() == Some(session_id.as_str())
+                        && movement.source == *source_path
+                        && movement.target == *target_path
+                }) {
+                    all_paths.push(ManifestMove {
+                        session_id: Some(session_id.clone()),
+                        source: source_path.clone(),
+                        target: target_path.clone(),
+                    });
+                }
+            }
             write_manifest(
                 &manifest_path,
                 &source,
@@ -325,7 +342,11 @@ pub(super) fn consolidate_recovery(
             &source,
             target,
             &session_id,
-            &moved_paths,
+            &moved_paths
+                .iter()
+                .filter(|movement| movement.session_id.as_deref() == Some(session_id.as_str()))
+                .map(|movement| (movement.source.clone(), movement.target.clone()))
+                .collect::<Vec<_>>(),
             &mut persist_moves,
         ) {
             Ok(result) => result,
@@ -341,7 +362,19 @@ pub(super) fn consolidate_recovery(
         };
         if !merge.merged {
             if !merge.moved_paths.is_empty() {
-                moved_paths.extend(merge.moved_paths);
+                for (source_path, target_path) in merge.moved_paths {
+                    if !moved_paths.iter().any(|movement| {
+                        movement.session_id.as_deref() == Some(session_id.as_str())
+                            && movement.source == source_path
+                            && movement.target == target_path
+                    }) {
+                        moved_paths.push(ManifestMove {
+                            session_id: Some(session_id.clone()),
+                            source: source_path,
+                            target: target_path,
+                        });
+                    }
+                }
                 write_manifest(
                     &manifest_path,
                     &source,
@@ -352,7 +385,19 @@ pub(super) fn consolidate_recovery(
             }
             deferred = true;
         } else {
-            moved_paths.extend(merge.moved_paths.iter().cloned());
+            for (source_path, target_path) in &merge.moved_paths {
+                if !moved_paths.iter().any(|movement| {
+                    movement.session_id.as_deref() == Some(session_id.as_str())
+                        && movement.source == *source_path
+                        && movement.target == *target_path
+                }) {
+                    moved_paths.push(ManifestMove {
+                        session_id: Some(session_id.clone()),
+                        source: source_path.clone(),
+                        target: target_path.clone(),
+                    });
+                }
+            }
             write_manifest(
                 &manifest_path,
                 &source,
@@ -456,7 +501,7 @@ fn write_manifest(
     source: &ControlState,
     target: &ControlState,
     phase: &str,
-    moved_paths: &[(PathBuf, PathBuf)],
+    moved_paths: &[ManifestMove],
 ) -> Result<(), SessionTmpError> {
     storage::write_json_atomically(
         path,
@@ -467,13 +512,7 @@ fn write_manifest(
             phase: phase.to_string(),
             updated_at: storage::now_seconds(),
             source_payload_root: Some(source.payload_root().to_path_buf()),
-            moved_paths: moved_paths
-                .iter()
-                .map(|(source, target)| ManifestMove {
-                    source: source.clone(),
-                    target: target.clone(),
-                })
-                .collect(),
+            moved_paths: moved_paths.to_vec(),
         },
     )
 }
@@ -511,6 +550,14 @@ fn pending_recovery_manifest(
             || manifest.target_root_id != target.root_id
             || manifest.phase == "complete"
             || storage::validate_component(&manifest.source_root_id).is_err()
+            || manifest.moved_paths.iter().any(|movement| {
+                !records::valid_manifest_path(&movement.source)
+                    || !records::valid_manifest_path(&movement.target)
+                    || movement
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|session_id| storage::validate_component(session_id).is_err())
+            })
         {
             continue;
         }

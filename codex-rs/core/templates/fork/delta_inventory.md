@@ -378,8 +378,11 @@ release or merge rules.
     block external enrollment or marker retirement. The historical
     `<codex_home>/session-tmp-recovery` tree is automatically merged into the
     normal default payload namespace with collision-safe, resumable moves;
-    live old-version sessions defer migration until a later open. Recognized
-    session payloads and controls move, while unknown recovery files stay at
+    live old-version sessions defer migration until a later open. Legacy lock
+    pathnames remain when an old waiter could still hold their inode, so a
+    source can persist as a tiny lock-only residue after recognized payload
+    and controls retire. Recognized session payloads and controls move, while
+    unknown recovery files stay at
     their original paths outside managed cleanup, keeping that tree until it
     is empty. A small external source identity is retained as a durable
     migration tombstone so interrupted cleanup can resume safely. Markerless
@@ -669,7 +672,8 @@ release or merge rules.
   not block enrollment; recovery-root consolidation is
   collision-safe, resumable, preserves unknown files, defers live old-version
   sessions, preserves unknown recovery paths outside managed cleanup, and
-  retires obsolete recovery state automatically once the source is empty.
+  retires obsolete recovery state automatically once the source is empty or
+  reduced to retained legacy lock residue.
   Markerless
   nonempty custom roots must remain inert. Verify `/tmp reap --force` bypasses
   only the age cutoff, reports removed session/path counts, protects current
