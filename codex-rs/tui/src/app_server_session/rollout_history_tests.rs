@@ -313,6 +313,14 @@ async fn cached_legacy_resume_revalidates_history_across_migration_settings() ->
                 .features
                 .enable(Feature::BackgroundPaginatedRolloutMigration)?;
         }
+        // State DB initialization performs rollout metadata backfill under a shared maintenance
+        // lock. Initialize it before taking the exclusive guard that keeps the legacy rollout
+        // intact until the picker has selected it.
+        let state_db = crate::init_state_db_for_app_server_target(
+            &startup_config,
+            &crate::AppServerTarget::Embedded,
+        )
+        .await?;
         // Keep the real startup worker from migrating the legacy fixture before selection.
         let maintenance_guard =
             codex_rollout::try_acquire_rollout_maintenance_lock(codex_home.path())?
@@ -320,7 +328,13 @@ async fn cached_legacy_resume_revalidates_history_across_migration_settings() ->
         eprintln!(
             "[cached-legacy-resume] startup_enabled={startup_enabled} workspace_enabled={workspace_enabled} phase=maintenance-lock-acquired"
         );
-        let mut app_server = crate::start_embedded_app_server_for_picker(&startup_config).await?;
+        let mut app_server = crate::start_app_server_for_picker(
+            &startup_config,
+            &crate::AppServerTarget::Embedded,
+            state_db,
+            std::sync::Arc::new(crate::EnvironmentManager::default_for_tests()),
+        )
+        .await?;
         eprintln!(
             "[cached-legacy-resume] startup_enabled={startup_enabled} workspace_enabled={workspace_enabled} phase=picker-server-started"
         );
