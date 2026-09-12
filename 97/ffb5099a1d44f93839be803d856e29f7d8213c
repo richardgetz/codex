@@ -1,0 +1,17 @@
+intent:
+  id: goal-wait-test-lifecycle-registration
+  change_type: test
+  scope: goal
+  summary: Exercise tracked wait registration through public extension lifecycle hooks.
+  decision: Replace integration-test calls to crate-private runtime methods with ToolStart and ToolWait notifications, preserving host behavior and avoiding test-only API exposure.
+  constraints:
+    - Keep the existing rebind and terminal assertions unchanged.
+    - Use a minimal empty conversation snapshot fixture.
+    - No production visibility changes.
+  intent_priority: must
+  code_locations:
+    - codex-rs/ext/goal/tests/goal_extension_backend.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: Codex Worker
+    model: unknown
