@@ -167,6 +167,9 @@ async fn team_usage_projection_reconstructs_recursive_worker_sources(
         |request: &wiremock::Request| {
             body_contains(request, USAGE_GRANDCHILD_TASK)
                 && request_has_model(request, WORKER_MODEL)
+                // Forked child context intentionally drops call-id outputs; this
+                // keeps the grandchild request disjoint from child completion.
+                && !request_has_function_call_output(request, USAGE_CHILD_SPAWN_CALL_ID)
         },
         sse(vec![
             ev_response_created(USAGE_GRANDCHILD_RESPONSE),
