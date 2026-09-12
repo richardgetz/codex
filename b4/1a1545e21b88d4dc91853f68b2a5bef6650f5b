@@ -1,0 +1,19 @@
+intent:
+  id: pr134-goal-wait-safety
+change_type: fix
+scope: goal-runtime
+summary: Defer automatic Goal continuation for tracked processes and isolate stale callbacks from replacement objectives.
+decision: Track process completion separately from Goal intent generation; retain upstream empty-turn circuit breaker and explicit pause semantics.
+constraints:
+  - Preserve manual input and external subprocess lifecycle.
+  - Same-goal errors and usage limits remain effective after wait completion.
+  - Replaced objectives do not receive stale terminal state or turn-stop usage.
+  - Raw yielded code-mode cells have no tracked process completion handle.
+intent_priority: must
+code_locations:
+  - codex-rs/ext/goal/src/runtime.rs
+  - codex-rs/ext/goal/src/extension.rs
+requested_by: Rick
+recorded_by: Codex
+agent: Codex
+model: GPT-6
