@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-12/tui-wait-mode-inventory#736e4f950"
+  change_type: "docs"
+  scope: "fork-inventory"
+  summary: "Record the integrated TUI wait-header and server mode discovery behavior."
+  decision: "Track the TUI fixes that publish the waiting header before hint updates and retain an empty server-provided collaboration-mode catalog without synthesizing built-ins."
+  constraints:
+    - "Keep the inventory synchronized with fork behavior changes."
+    - "Preserve server visibility filtering and existing Team wait semantics."
+    - "Do not change product code in this inventory-only commit."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+    - "codex-rs/tui/src/chatwidget/tool_lifecycle.rs"
+    - "codex-rs/tui/src/collaboration_modes.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
