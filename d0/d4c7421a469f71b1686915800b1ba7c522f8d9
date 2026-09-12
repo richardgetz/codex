@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-12/core-peer-mailbox-materialization#9bc7fa3ae4"
+  change_type: "test"
+  scope: "core-subagent-notifications"
+  summary: "Synchronize peer completion diagnostics with root mailbox materialization."
+  decision: "Require the first two distinct worker-to-root result submissions to emit matching receive telemetry before the root read turn, while preserving the original payload matcher and completion assertions."
+  constraints:
+    - "Use existing bounded tracing telemetry and keep output scoped to the worker and root thread IDs."
+    - "Do not alter production routing, queue semantics, or the expected peer follow-up payload."
+    - "Keep the wait bounded and avoid model retries or broad timing sleeps."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/tests/suite/subagent_notifications.rs::multi_agent_v2_peer_followup_completion_notifies_initiating_turn"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
