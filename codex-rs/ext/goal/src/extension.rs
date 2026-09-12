@@ -397,7 +397,6 @@ where
                 return;
             };
 
-            runtime.invalidate_background_wait().await;
             runtime.accounting_state().reset_empty_responses();
             let reason = match input.error {
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
