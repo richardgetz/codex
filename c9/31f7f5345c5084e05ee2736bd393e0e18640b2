@@ -1,0 +1,18 @@
+intent:
+  id: tui-cached-resume-preinit-state-db-20260912
+  change_type: test
+  scope: codex-rs/tui
+  summary: Avoid cached-resume fixture deadlock during picker startup.
+  decision: Initialize the state database before taking the exclusive rollout maintenance guard, then pass the initialized handle into picker startup so metadata backfill can acquire its shared lock while the guard still protects the legacy rollout from migration.
+  constraints:
+    - test fixture only; no production lock behavior changes
+    - preserve all original migration combinations, lock contention, resume assertions, and timeout
+    - retain startup migration blocking after the picker server begins
+    - do not log paths, credentials, request bodies, or other sensitive state
+  intent_priority: normal
+  code_locations:
+    - codex-rs/tui/src/app_server_session/rollout_history_tests.rs::cached_legacy_resume_revalidates_history_across_migration_settings
+  requested_by: /root/stable_refresh
+  recorded_by: codex
+  agent: /root/stable_refresh
+  model: gpt-5.6-sol
