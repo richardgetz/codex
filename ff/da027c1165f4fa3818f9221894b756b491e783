@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-12/core-peer-telemetry-id-parse#ffda027c11"
+  change_type: "test"
+  scope: "core-subagent-notifications"
+  summary: "Parse peer completion IDs before bounding telemetry previews."
+  decision: "Extract communication_id from each full matching tracing line before retaining its capped diagnostic preview, so the mailbox receive barrier observes valid IDs without expanding diagnostic output."
+  constraints:
+    - "Keep production routing and test behavior unchanged."
+    - "Retain at most four matching entries and 512 characters per preview."
+    - "Preserve the original receive barrier and root completion payload assertions."
+    - "Do not expose private APIs or run model retries."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/tests/suite/subagent_notifications.rs::multi_agent_v2_peer_followup_completion_notifies_initiating_turn"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
