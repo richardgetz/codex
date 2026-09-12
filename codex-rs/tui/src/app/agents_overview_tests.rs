@@ -895,7 +895,7 @@ async fn agents_overview_reasoning_uses_existing_events_and_expires_with_attachm
 #[tokio::test]
 async fn worktrees_overview_grouping_requires_feature() {
     let mut app = make_test_app().await;
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(".").unwrap();
     let primary = root.path().join("primary");
     let linked = root.path().join("linked");
     let linked_subdir = linked.join("subdir/child");
@@ -939,7 +939,12 @@ async fn worktrees_overview_grouping_requires_feature() {
         let view = app.agents_overview_view(threads.clone(), /*selected_thread_id*/ None);
         app.chat_widget.show_bottom_pane_view(Box::new(view));
         let popup = render_bottom_popup(&app.chat_widget, width);
-        assert_eq!(popup.contains(&grouped_heading), enabled, "{popup}");
+        let grouping_popup = render_bottom_popup(&app.chat_widget, /*width*/ 400);
+        assert_eq!(
+            grouping_popup.contains(&grouped_heading),
+            enabled,
+            "{grouping_popup}"
+        );
         if enabled {
             let grouping = popup
                 .lines()

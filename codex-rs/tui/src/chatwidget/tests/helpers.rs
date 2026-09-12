@@ -141,13 +141,12 @@ pub(super) fn test_session_telemetry(config: &Config, model: &str) -> SessionTel
     )
 }
 
-pub(super) fn test_model_catalog(_config: &Config) -> Arc<ModelCatalog> {
+pub(super) fn test_model_catalog(config: &Config) -> Arc<ModelCatalog> {
     Arc::new(
         ModelCatalog::new(crate::test_support::TEST_MODEL_PRESETS.clone())
             .with_collaboration_modes(
             codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets(
-                codex_models_manager::collaboration_mode_presets::CollaborationModesConfig::default(
-                ),
+                config.collaboration_modes_config(),
             ),
         ),
     )

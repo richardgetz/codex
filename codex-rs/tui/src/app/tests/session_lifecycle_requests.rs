@@ -3621,7 +3621,7 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
 
 #[test]
 fn fresh_session_applies_requested_name() -> Result<()> {
-    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+    const TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
     std::thread::Builder::new()
         .name("tui-named-fresh-session".to_string())

@@ -1,13 +1,12 @@
 ---
 source: tui/src/status/tests.rs
-assertion_line: 1925
 expression: "format!(\"complete:\\n{complete}\\n\\nlive:\\n{live}\\n\\nunavailable:\\n{unavailable}\\n\\nknown_empty:\\n{known_empty}\")"
 ---
 complete:
 /status
 
 ╭──────────────────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Codex (v0.153.4)                                              │
+│  >_ OpenAI Codex (v0.154.0)                                              │
 │                                                                          │
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date            │
 │ information on rate limits and credits                                   │
@@ -30,7 +29,7 @@ live:
 /status
 
 ╭──────────────────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Codex (v0.153.4)                                              │
+│  >_ OpenAI Codex (v0.154.0)                                              │
 │                                                                          │
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date            │
 │ information on rate limits and credits                                   │
@@ -54,7 +53,7 @@ unavailable:
 /status
 
 ╭──────────────────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Codex (v0.153.4)                                              │
+│  >_ OpenAI Codex (v0.154.0)                                              │
 │                                                                          │
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date            │
 │ information on rate limits and credits                                   │
@@ -74,7 +73,7 @@ known_empty:
 /status
 
 ╭──────────────────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Codex (v0.153.4)                                              │
+│  >_ OpenAI Codex (v0.154.0)                                              │
 │                                                                          │
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date            │
 │ information on rate limits and credits                                   │

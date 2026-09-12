@@ -307,6 +307,9 @@ async fn run_in_background_detaches_without_interrupting_main_or_side_threads() 
 async fn exit_interrupts_before_requesting_shutdown() -> Result<()> {
     let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     prepare_running_local_daemon(&mut app)?;
+    app.config
+        .features
+        .set_enabled(Feature::Goals, /*enabled*/ true)?;
     app.chat_widget
         .set_feature_enabled(Feature::Goals, /*enabled*/ true);
     let (mut app_server, mut tui) =
