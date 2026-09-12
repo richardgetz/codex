@@ -1,0 +1,17 @@
+intent:
+  id: team-on-proof-wording-2026-09-12
+  change_type: fix
+  scope: Team On delegation authorization guidance
+  summary: Preserve the explicit substantive-work authorization wording required by the Team integration proof.
+  decision: State that Team On authorizes delegation of substantive in-scope work, then enumerate implementation, testing, research, and applicable skill work without changing Team Off or restriction precedence.
+  constraints:
+    - Keep unchanged Team proof assertions valid.
+    - Preserve explicit per-task user, AGENTS.md, and skill restrictions plus scope, concurrency, depth, and approval limits.
+    - Keep the prompt contract bounded and consistent with effective Team On mode selection.
+  intent_priority: high
+  code_locations:
+    - codex-rs/core/src/context/team_instructions.rs
+  requested_by: user
+  recorded_by: codex
+  agent: /root/stable_refresh
+  model: gpt-5.6-sol
