@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-09-12/core-context-snapshots#940fa903c1"
+  change_type: "test"
+  scope: "core-context"
+  summary: "Refresh context annotations and ForkHelp snapshots after the stable refresh."
+  decision: "Align the inline content-kind expectation and four tracked snapshots with the current bounded context assembly and ForkHelp quick command index."
+  constraints:
+    - "Preserve append-only context assembly, section ordering, and the existing context-size bound."
+    - "Keep snapshot changes limited to expected annotation metadata and the current ForkHelp fragment."
+    - "Do not commit generated .context_annotations.rs.pending-snap or .snap.new artifacts."
+    - "No production behavior changes."
+  intent_priority: must
+  code_locations:
+    - "codex-rs/core/tests/suite/context_annotations.rs"
+    - "codex-rs/core/tests/suite/snapshots/all__suite__pending_input__pending_input_queued_mail_after_commentary.snap"
+    - "codex-rs/core/tests/suite/snapshots/all__suite__pending_input__pending_input_queued_mail_after_reasoning.snap"
+    - "codex-rs/core/tests/suite/snapshots/all__suite__pending_input__pending_input_user_input_no_preempt_after_reasoning.snap"
+    - "codex-rs/core/tests/suite/snapshots/all__suite__token_budget__token_budget_new_context_window_tool_full_context.snap"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
