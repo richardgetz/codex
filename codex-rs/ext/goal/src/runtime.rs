@@ -48,6 +48,7 @@ pub(crate) enum ActiveGoalStopReason {
     TurnError,
     UsageLimit,
     ExecutionUnavailable { expected_goal_id: String },
+    EmptyResponse,
 }
 
 struct GoalRuntimeInner {
@@ -403,6 +404,7 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
 
+        self.inner.accounting_state.reset_empty_responses();
         if let Some(turn_id) = self.inner.accounting_state.current_turn_id() {
             self.account_active_goal_progress(
                 turn_id.as_str(),
@@ -432,6 +434,7 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
 
+        self.inner.accounting_state.reset_empty_responses();
         let replaced_existing_goal = previous_goal
             .as_ref()
             .is_some_and(|previous_goal| previous_goal.goal_id != goal.goal_id);
@@ -546,6 +549,21 @@ impl GoalRuntimeHandle {
                 codex_state::ThreadGoalStatus::UsageLimited,
                 None,
             ),
+            ActiveGoalStopReason::EmptyResponse => {
+                let Some(expected_goal_id) =
+                    self.inner.accounting_state.empty_response_goal(turn_id)
+                else {
+                    return Ok(());
+                };
+                if accounting_goal_id != expected_goal_id {
+                    return Ok(());
+                }
+                (
+                    "empty-response",
+                    codex_state::ThreadGoalStatus::Blocked,
+                    Some(expected_goal_id),
+                )
+            }
             ActiveGoalStopReason::ExecutionUnavailable { expected_goal_id } => (
                 "execution-unavailable",
                 codex_state::ThreadGoalStatus::Blocked,
@@ -721,7 +739,12 @@ impl GoalRuntimeHandle {
             )
             .await;
         let started = match submission {
-            Ok(StartIfIdleSubmission::Started { .. }) => true,
+            Ok(StartIfIdleSubmission::Started { turn_id }) => {
+                // Turn-stop evaluation takes the same permit, so even a fast response
+                // cannot finish before this host-admitted continuation is identified.
+                self.inner.accounting_state.mark_goal_continuation(turn_id);
+                true
+            }
             Ok(StartIfIdleSubmission::NotSubmitted { reason }) => {
                 tracing::debug!(
                     ?reason,

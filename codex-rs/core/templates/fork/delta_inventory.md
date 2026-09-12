@@ -121,6 +121,11 @@ release or merge rules.
   - Selected integer-valued wait arguments accept exactly integral decimal or
     exponent spellings using their raw numeric lexemes; nested `Value` fields,
     fractional values, unsafe integers, and handler bounds remain unchanged.
+  - Backports upstream Goal empty-continuation protection from PR #44320:
+    automatically admitted Goal turns with no non-commentary activity block
+    after three consecutive empty responses, while tool, reasoning, user,
+    objective, and error activity resets the streak. Tracked external waits
+    remain event-driven and do not admit a continuation until their wake.
   - A Team Worker entering `wait_agent` with no active child dependency or
     queued activity queues one bounded handoff to its immediate parent. The
     handoff requests review or follow-up without marking the Worker complete;
@@ -616,6 +621,10 @@ release or merge rules.
   exponent spellings from preserved raw lexemes, while nested `Value` fields,
   fractional/unsafe/overflow values, and existing handler bounds remain
   unchanged.
+- Verify the upstream Goal empty-response breaker (PR #44320) counts only
+  host-admitted automatic Goal turns, blocks after three consecutive empty
+  final responses, resets on non-commentary activity/user input/objective or
+  error changes, and preserves tracked external wait parking and wake behavior.
 - Verify a dependency-free Team Worker `wait_agent` queues one bounded handoff
   to its immediate parent without marking completion, suppresses repeated
   waits in one turn, rearms after meaningful parent input or new work, queues
