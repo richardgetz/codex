@@ -1,26 +1,28 @@
 intent:
-  id: "intent/2026-09-12/session-tmp-recovery-force-reap-followup"
-  change_type: fix
-  scope: session-tmp
-  summary: "Align command-path recovery and force-reap safety reporting."
-  decision: "Retry the deterministic recovery root after later managed-layout failures, reject non-directory or non-regular lease state before force removal, and report only removed sessions in the user-facing reap result."
+  id: "intent/2026-09-12/startup-recovery-resumed-agents#f53e398ae2"
+  change_type: "fix"
+  scope: "session-tmp-and-team-activity"
+  summary: "Keep Codex usable after temporary-storage cleanup and accurately count resumed agents."
+  decision: "Recover optional session temporary storage through a reusable marker-validated root, disable only that runtime feature if recovery fails, add explicit force reaping for eligible inactive sessions, and hydrate resumed agent activity from bounded lifecycle and notification-driven reads."
   constraints:
-    - "Never adopt, marker-repair, or delete untrusted original roots; preserve their contents."
-    - "Keep ordinary age-based reap fail-closed on unsafe state."
-    - "Force reap bypasses heartbeat age only; current, live, and unsafe sessions remain protected."
-    - "Keep age-plus-force syntax unambiguous and bounded."
-    - "Do not alter sandbox environment variables."
-  intent_priority: must
+    - "Never adopt or marker-repair an untrusted nonempty root or delete its remaining contents during recovery."
+    - "Runtime tools, guidance, environment, permissions, and temporary-storage commands must use the selected recovery root consistently."
+    - "Force reap bypasses the age threshold only; protect the current session, live leases or locks, and unsafe entries. Ordinary age-based reap retains fail-closed unsafe-state handling."
+    - "Report removed sessions without misleading path counters."
+    - "Keep resumed-agent admission limited to the selected loaded tree; preserve terminal barriers, direct versus nested counts, and waiting grace."
+    - "Bound metadata lookup time, ancestry depth, and bookkeeping; do not add model inference or polling."
+    - "Validate integrated sources serially in the main checkout with focused checks; preserve config.toml and existing session data."
+  intent_priority: "must"
   code_locations:
     - "codex-rs/core/src/session/session.rs"
     - "codex-rs/session-tmp/src/lib.rs"
     - "codex-rs/session-tmp/src/storage.rs"
-    - "codex-rs/session-tmp/src/lib_tests.rs"
     - "codex-rs/tui/src/chatwidget/session_tmp_command.rs"
-    - "codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__session_tmp_reap_force_slash_command.snap"
+    - "codex-rs/tui/src/app/team_activity.rs"
+    - "codex-rs/tui/src/app_server_session.rs"
     - "docs/fork-differences.md"
     - "codex-rs/core/templates/fork/delta_inventory.md"
   requested_by: "@richardgetz"
   recorded_by:
-    agent: "Codex Worker"
-    model: "gpt-5.6-luna"
+    agent: "Codex Lead"
+    model: "gpt-6-astra"
