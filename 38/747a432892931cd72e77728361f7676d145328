@@ -1,0 +1,21 @@
+intent:
+  id: intent/2026-09-11/raw-integral-tool-arguments#38747a4328
+  change_type: fix
+  scope: tool-arguments
+  summary: Preserve raw numeric lexemes while accepting safe integral wait arguments.
+  decision: Parse selected top-level integer wait keys through serde_json RawValue so decimal and exponent spellings are checked textually before normalization, preserving nested Value payloads and rejecting rounded or unsafe numbers.
+  constraints:
+    - Keep fallback limited to selected sleep, unified-exec, write_stdin, and code-mode wait keys.
+    - Reject fractional, unsafe, overflow, non-finite, and handler-out-of-range values without coercion.
+    - Preserve direct Value fields and existing strict deserialization and handler bounds.
+    - Do not change sandbox environment behavior or wire APIs.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core/Cargo.toml
+    - codex-rs/core/src/tools/handlers/mod.rs
+    - codex-rs/core/src/tools/handlers/argument_parser_tests.rs
+    - codex-rs/core/templates/fork/delta_inventory.md
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
