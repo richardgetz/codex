@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-12/core-peer-completion-boundary#c58cd8a38f"
+  change_type: "test"
+  scope: "core-subagent-notifications"
+  summary: "Exercise queued peer completion after its final-answer boundary."
+  decision: "Use a neutral explicit prelude to record queue-only mail, then keep the original strict READ payload assertion on the following user turn."
+  constraints:
+    - "Preserve strict READ matcher and author/recipient/follow-up payload assertions."
+    - "Do not alter production queue or mailbox semantics."
+    - "Use existing TestCodex submit_turn completion semantics; add no redundant TurnComplete waits."
+    - "Do not add a fork inventory entry; fixture only."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/tests/suite/subagent_notifications.rs::multi_agent_v2_peer_followup_completion_notifies_initiating_turn"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "unknown"
