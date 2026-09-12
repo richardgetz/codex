@@ -1,0 +1,25 @@
+intent:
+  id: "intent/2026-09-12/resumed-worker-activity-bounded#4f20f1dbfcee"
+  change_type: "fix"
+  scope: "tui-team-activity"
+  summary: "Bound failed resumed-worker metadata hydration and prove late activity admission."
+  decision: "Track event-driven metadata hydration attempts with a capped oldest-entry eviction policy, clear entries when metadata or a fresh turn arrives, retain a bounded terminal guard for unknown failed IDs, and exercise the late ThreadActivityUpdated thread/read path with a remote mock."
+  constraints:
+    - "Keep admission limited to the selected root and loaded or valid ThreadSpawn lineage."
+    - "Reject NotLoaded, SystemError, ephemeral, temporary, unknown, closed, and non-ThreadSpawn records."
+    - "Bound tracking to 256 IDs, ancestor hydration to eight edges, and the total metadata-read deadline to two seconds."
+    - "Preserve terminal tombstones, local parent-edge grace, and event-driven operation without polling or activity protocol changes."
+    - "Keep Rust validation in the designated frozen main checkout owner."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/app/team_activity.rs::TeamActivityProjection::begin_metadata_hydration"
+    - "codex-rs/tui/src/app/team_activity.rs::TeamActivityProjection::replace_thread_metadata"
+    - "codex-rs/tui/src/app/team_activity.rs::TeamActivityProjection::finish_thread"
+    - "codex-rs/tui/src/app/team_activity_tests.rs"
+    - "codex-rs/tui/src/app/tests/team_activity_hydration_tests.rs"
+    - "docs/fork-differences.md"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex resumed_activity Worker"
+    model: "gpt-5.6-luna"
