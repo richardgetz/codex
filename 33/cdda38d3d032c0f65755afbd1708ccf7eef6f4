@@ -1,0 +1,15 @@
+intent:
+  id: tui-cached-resume-trace-minimal-20260912
+  change_type: test
+  scope: codex-rs/tui
+  summary: Reduce temporary cached-resume diagnostics to static phase labels.
+  decision: Remove protocol request-ID and parameter plumbing from the temporary trace, retaining feature-combination logs in the fixture and static lock/read/resume/hydration phase labels.
+  constraints:
+    - test-only diagnostics; remove after the bounded run
+    - preserve all assertions, request ownership, fallback behavior, and timeout semantics
+    - do not log paths, credentials, request bodies, or sensitive state
+  intent_priority: normal
+  code_locations:
+    - codex-rs/tui/src/app_server_session/rollout_history.rs
+  requested_by: /root/stable_refresh
+  recorded_by: codex
