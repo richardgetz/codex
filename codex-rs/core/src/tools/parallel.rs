@@ -230,21 +230,25 @@ impl ToolCallRuntime {
         async move {
             let _tool_call_timing_guard = tool_call_timing_guard;
             tokio::select! {
-                res = &mut dispatch_handle => res.map_err(Self::tool_task_join_error)?,
+                biased;
                 _ = cancellation_token.cancelled() => {
-                    // The registry flag is the authority for a result that reached a terminal
-                    // lifecycle event. A finished dispatch without that flag may have observed
-                    // this same cancellation while waiting at an activity boundary; let the
-                    // cancellation branch own the normal aborted response in that case.
-                    if terminal_outcome_reached.load(Ordering::Acquire) {
+                    // Cancellation owns a ready/ready race at the pre-admission boundary. For
+                    // runtimes that wait for cancellation cleanup, atomically claim the terminal
+                    // outcome before emitting the normal aborted response. Other runtimes keep
+                    // the registry's finish callback authoritative: a dispatch can complete
+                    // between this branch and its callback, and aborting/awaiting it lets that
+                    // callback claim the result without leaving stale lifecycle state.
+                    let terminal_outcome_claimed = if wait_for_runtime_cancellation {
+                        terminal_outcome_reached.swap(true, Ordering::AcqRel)
+                    } else {
+                        terminal_outcome_reached.load(Ordering::Acquire)
+                    };
+                    if terminal_outcome_claimed {
                         dispatch_handle.await.map_err(Self::tool_task_join_error)?
                     } else {
                         let secs = started.elapsed().as_secs_f32().max(0.1);
                         abort_dispatch_span.record("aborted", true);
                         if wait_for_runtime_cancellation {
-                            if terminal_outcome_reached.swap(true, Ordering::AcqRel) {
-                                return dispatch_handle.await.map_err(Self::tool_task_join_error)?;
-                            }
                             // The abort owns the terminal outcome; await only so
                             // the runtime can finish process teardown.
                             match dispatch_handle.await {
@@ -278,6 +282,7 @@ impl ToolCallRuntime {
                         Ok(response)
                     }
                 },
+                res = &mut dispatch_handle => res.map_err(Self::tool_task_join_error)?,
             }
         }
         .in_current_span()

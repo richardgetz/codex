@@ -42,7 +42,6 @@ use crate::context::SituationalRequirementsInstructions;
 use crate::context::world_state::EnvironmentsState;
 use crate::context::world_state::WorldState;
 use crate::current_time::TimeProvider;
-use crate::enablement::filter_connectors_for_mode;
 use crate::enablement::filter_lazy_mcp_servers_for_mode;
 use crate::enablement::mcp_server_allowed_in_mode;
 use crate::environment_selection::TurnEnvironmentSnapshot;

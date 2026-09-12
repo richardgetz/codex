@@ -43,6 +43,10 @@ release or merge rules.
 - Initial developer context keeps extension Skills world-state sections ahead of
   Apps and Plugins usage guidance, while preserving the existing App enablement,
   model-capability, and connector filtering rules.
+- Cancellation at a tool activity or parallel-dispatch boundary returns the
+  normal aborted response; when cancellation and a pre-admission dispatch are
+  both ready, cancellation claims the terminal outcome first while already
+  claimed completions and genuine task-join failures remain observable.
 - TUI team waits publish the waiting header before updating interruption hints,
   and collaboration-mode discovery keeps an empty server catalog empty instead
   of synthesizing built-in presets; visible modes still follow server filtering.
@@ -801,7 +805,9 @@ release or merge rules.
   the static `Paused · Lead + N workers · /continue to resume` row. Verify
   cancellation before activity or parallel-dispatch admission returns one
   normal aborted tool response without surfacing an internal `TurnAborted`
-  fatal error.
+  fatal error, including the ready/ready arbitration boundary; verify a
+  terminal completion claimed before cancellation is preserved and genuine
+  dispatch join failures still surface.
 - Verify the TUI sets its waiting header before interrupt-hint updates, and
   leaves an empty server collaboration-mode catalog empty while retaining only
   visible server-provided modes.
