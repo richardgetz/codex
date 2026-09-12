@@ -243,6 +243,67 @@ fn locally_admitted_parent_metadata_expires_after_missing_refresh() {
 }
 
 #[test]
+fn active_provisional_lineage_survives_expiry_without_thread_started() {
+    let root = ThreadId::new();
+    let worker = ThreadId::new();
+    let nested_worker = ThreadId::new();
+    let mut projection = TeamActivityProjection::default();
+
+    projection.replace_thread_metadata(Some(root), [(root, None)]);
+    projection.observe_thread_parent(worker, Some(root));
+    projection.observe_thread_parent(nested_worker, Some(worker));
+    projection.observe(&notification(
+        root,
+        root,
+        ThreadActivity::Idle,
+        ThreadPauseState::Running,
+        /*in_flight_operations*/ 0,
+    ));
+    projection.observe(&notification(
+        worker,
+        root,
+        ThreadActivity::Working,
+        ThreadPauseState::Running,
+        /*in_flight_operations*/ 1,
+    ));
+    projection.observe(&notification(
+        nested_worker,
+        root,
+        ThreadActivity::Working,
+        ThreadPauseState::Running,
+        /*in_flight_operations*/ 1,
+    ));
+
+    // A long-running child can have no ThreadStarted metadata and no further snapshot before
+    // this deadline. Its active entry and nested lineage must survive the metadata refresh.
+    let stale_at = Instant::now() - LOCAL_PARENT_ADMISSION_GRACE - Duration::from_secs(1);
+    projection
+        .locally_admitted_parent_ids
+        .insert(worker, stale_at);
+    projection
+        .locally_admitted_parent_ids
+        .insert(nested_worker, stale_at);
+    projection.replace_thread_metadata(Some(root), [(root, None)]);
+    let status = projection
+        .status_for_root(root, None)
+        .expect("active provisional workers remain visible");
+    assert_eq!(status.workers_working, 2);
+    assert_eq!(status.direct_workers, 1);
+    assert_eq!(status.subagents, 1);
+
+    // An idle parent must not expire away an active nested Worker. Terminal state on the parent
+    // is retained until the descendant also becomes idle or receives persisted metadata.
+    projection.finish_thread(worker);
+    projection.replace_thread_metadata(Some(root), [(root, None)]);
+    let status = projection
+        .status_for_root(root, None)
+        .expect("active nested worker remains visible");
+    assert_eq!(status.workers_working, 1);
+    assert_eq!(status.direct_workers, 0);
+    assert_eq!(status.subagents, 1);
+}
+
+#[test]
 fn projection_renders_pause_transition_and_clears_when_idle() {
     let root = ThreadId::new();
     let worker = ThreadId::new();

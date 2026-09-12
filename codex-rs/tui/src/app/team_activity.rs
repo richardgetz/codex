@@ -34,7 +34,8 @@ pub(super) const ORDINARY_WAITING_GRACE: Duration = Duration::from_secs(30);
 ///
 /// Activity updates can trigger several metadata syncs before a newly spawned thread appears in
 /// the overview, so this is time-based rather than refresh-count based. Once the window expires,
-/// an omitted edge is treated as stale and late activity is rejected.
+/// an omitted edge with no active entry or descendant is treated as stale and late activity is
+/// rejected. Active lineages remain visible until an idle or terminal update arrives.
 pub(super) const LOCAL_PARENT_ADMISSION_GRACE: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
@@ -239,16 +240,19 @@ impl TeamActivityProjection {
         let previous_parent_thread_ids = std::mem::take(&mut self.parent_thread_ids);
         let previous_locally_admitted_parent_ids =
             std::mem::take(&mut self.locally_admitted_parent_ids);
+        let active_lineage_ids = self.active_lineage_ids(&previous_parent_thread_ids);
         let mut parent_thread_ids: HashMap<_, _> = metadata.into_iter().collect();
         let mut locally_admitted_parent_ids = HashMap::new();
         if preserve_existing {
             // Collab spawn notifications can admit a parent edge before the next overview
             // refresh sees the new thread. Keep each locally admitted edge for a bounded grace
             // window while letting fresh metadata replace stale relationships. Once the window
-            // expires, an omitted edge is treated as authoritative and dropped.
+            // expires, an omitted edge is treated as authoritative and dropped only when its
+            // activity entry and all descendant entries are idle or absent.
             for (thread_id, admitted_at) in previous_locally_admitted_parent_ids {
                 if parent_thread_ids.contains_key(&thread_id)
-                    || now.saturating_duration_since(admitted_at) >= LOCAL_PARENT_ADMISSION_GRACE
+                    || (now.saturating_duration_since(admitted_at) >= LOCAL_PARENT_ADMISSION_GRACE
+                        && !active_lineage_ids.contains(&thread_id))
                 {
                     continue;
                 }
@@ -326,11 +330,13 @@ impl TeamActivityProjection {
     }
 
     fn expire_local_parent_edges(&mut self, now: Instant) {
+        let active_lineage_ids = self.active_lineage_ids(&self.parent_thread_ids);
         let stale_thread_ids: Vec<_> = self
             .locally_admitted_parent_ids
             .iter()
             .filter_map(|(thread_id, admitted_at)| {
                 (now.saturating_duration_since(*admitted_at) >= LOCAL_PARENT_ADMISSION_GRACE
+                    && !active_lineage_ids.contains(thread_id)
                     && self
                         .entries
                         .get(thread_id)
@@ -341,6 +347,34 @@ impl TeamActivityProjection {
         for thread_id in stale_thread_ids {
             self.remove_thread(thread_id);
         }
+    }
+
+    fn active_lineage_ids(
+        &self,
+        parent_thread_ids: &HashMap<ThreadId, Option<ThreadId>>,
+    ) -> HashSet<ThreadId> {
+        let mut active_lineage_ids: HashSet<_> = self
+            .entries
+            .iter()
+            .filter_map(|(thread_id, entry)| {
+                (entry.activity != ThreadActivity::Idle).then_some(*thread_id)
+            })
+            .collect();
+        loop {
+            let mut added_parent = false;
+            for (thread_id, parent_thread_id) in parent_thread_ids {
+                if active_lineage_ids.contains(thread_id)
+                    && let Some(parent_thread_id) = parent_thread_id
+                    && active_lineage_ids.insert(*parent_thread_id)
+                {
+                    added_parent = true;
+                }
+            }
+            if !added_parent {
+                break;
+            }
+        }
+        active_lineage_ids
     }
 
     /// Return the next UI redraw deadline for an unexpired grace period.
