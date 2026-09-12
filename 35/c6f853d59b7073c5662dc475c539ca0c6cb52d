@@ -1,0 +1,17 @@
+intent:
+  id: intent/2026-09-12/goal-wait-rebind-test#35c6f853d
+  change_type: test
+  scope: goal-continuation
+  summary: Cover valid terminal handling after tracked wait rebinding.
+  decision: Register a managed wait for an unchanged active Goal, advance to a new turn, and assert both ordinary turn errors and usage-limit errors still stop that same Goal. This guards against generation bookkeeping suppressing legitimate enforcement while stale replacement callbacks are rejected.
+  constraints:
+    - Keep the test deterministic without a live process or billed model.
+    - Exercise both terminal error classes.
+    - Preserve existing stale replacement coverage for same-ID objective edits.
+  intent_priority: must
+  code_locations:
+    - codex-rs/ext/goal/tests/goal_extension_backend.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: unknown
