@@ -47,6 +47,7 @@ use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TruncationPolicy;
+use codex_tools::ToolWaitHandle;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -886,6 +887,57 @@ async fn stale_turn_errors_do_not_stop_a_replacement_goal() -> anyhow::Result<()
             assert_eq!("replacement goal", goal.objective);
             assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
         }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn terminal_errors_after_wait_turn_rebind_stop_the_same_goal() -> anyhow::Result<()> {
+    for error in [CodexErrorInfo::Other, CodexErrorInfo::UsageLimitExceeded] {
+        let runtime = test_runtime().await?;
+        let thread_id = test_thread_id()?;
+        seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+        let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+        harness.start_turn("turn-1", &TokenUsage::default()).await;
+
+        let tools = harness.tools();
+        tool_by_name(&tools, "create_goal")
+            .handle(tool_call(
+                "create_goal",
+                "call-create-goal",
+                json!({ "objective": "unchanged goal" }),
+            ))
+            .await?;
+
+        // Register a tracked process, then rebind the wait scope to the next
+        // turn. The unchanged Goal must still honor its terminal result.
+        let runtime_handle = harness.runtime_handle();
+        let turn_store = ExtensionData::new("turn-1");
+        runtime_handle
+            .capture_tool_wait_scope(&turn_store, "call-wait")
+            .await;
+        runtime_handle
+            .register_background_wait(
+                "turn-1",
+                &turn_store,
+                "call-wait",
+                &ToolWaitHandle::new("42"),
+            )
+            .await;
+        harness.stop_turn("turn-1").await;
+        harness.start_turn("turn-2", &TokenUsage::default()).await;
+        harness.notify_turn_error("turn-2", error).await;
+
+        let goal = runtime
+            .thread_goals()
+            .get_thread_goal(thread_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
+        let expected_status = match &error {
+            CodexErrorInfo::Other => codex_state::ThreadGoalStatus::Blocked,
+            CodexErrorInfo::UsageLimitExceeded => codex_state::ThreadGoalStatus::UsageLimited,
+        };
+        assert_eq!(expected_status, goal.status);
     }
     Ok(())
 }
