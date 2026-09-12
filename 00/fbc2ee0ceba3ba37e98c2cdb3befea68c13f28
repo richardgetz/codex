@@ -1,0 +1,19 @@
+intent:
+  id: intent/2026-09-12/goal-turn-error-wait-race#00fbc2ee0c
+  change_type: fix
+  scope: goal-continuation
+  summary: Remove the split wait invalidation before terminal Goal turn errors.
+  decision: Let stop_active_goal_for_turn invalidate tracked waits while holding the goal-state permit, so a stale turn error cannot interleave with a replacement Goal mutation and stop the replacement.
+  constraints:
+    - Preserve immediate invalidation for terminal errors, usage limits, and execution-unavailable paths.
+    - Preserve EmptyResponse wait parking and the three-empty breaker.
+    - Preserve external process lifecycle, cancellation, dedupe, and app-server wire behavior.
+    - Do not add polling or alter user-visible Goal policy.
+  intent_priority: must
+  code_locations:
+    - codex-rs/ext/goal/src/extension.rs
+    - codex-rs/ext/goal/src/runtime.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: unknown
