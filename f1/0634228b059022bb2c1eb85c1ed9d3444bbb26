@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-12/kitty-payload-tmux#2ccb5e8694"
+  change_type: "test"
+  scope: "codex-rs/tui"
+  summary: "Parse Kitty local-file fixture payloads safely when terminal wrappers duplicate escape terminators."
+  decision: "Extract the payload through the first ESC byte after the exact file-reference marker, preserving canonical-path and inline-protocol assertions across plain and tmux-wrapped output."
+  constraints:
+    - "Test-only change; do not alter Kitty rendering behavior."
+    - "Retain exact file-reference marker, no-inline-payload, and decoded canonical-path assertions."
+    - "Do not depend on ambient TMUX state or weaken protocol coverage."
+  intent_priority: "normal"
+  code_locations:
+    - "codex-rs/tui/src/pets/mod.rs::kitty_local_file_pet_image_uses_file_reference_without_inline_payload"
+  requested_by: "/root/stable_refresh"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
