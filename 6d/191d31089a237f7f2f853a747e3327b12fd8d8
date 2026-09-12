@@ -1,0 +1,15 @@
+intent:
+  id: tui-cached-resume-trace-copy-fields-20260912
+  change_type: test
+  scope: codex-rs/tui
+  summary: Keep temporary cached-resume phase diagnostics compatible with fallback request ownership.
+  decision: Capture the exclude-turns flag before the fallback request consumes params, so post-request phase logging does not change resume ownership or control flow.
+  constraints:
+    - test-only diagnostic correction; remove trace after one bounded run
+    - preserve all assertions, fallback behavior, and timeout semantics
+    - do not log paths, credentials, request bodies, or sensitive state
+  intent_priority: normal
+  code_locations:
+    - codex-rs/tui/src/app_server_session/rollout_history.rs
+  requested_by: /root/stable_refresh
+  recorded_by: codex
