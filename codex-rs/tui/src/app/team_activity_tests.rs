@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::ThreadActivityState;
 use codex_app_server_protocol::ThreadActivityUpdatedNotification;
 use codex_app_server_protocol::ThreadActivityWaitReason;
 use pretty_assertions::assert_eq;
@@ -165,6 +166,48 @@ fn unknown_activity_waits_for_parent_metadata_admission() {
     assert_eq!(after_metadata.workers_waiting, 1);
     assert_eq!(after_metadata.direct_workers, 1);
     assert_eq!(after_metadata.subagents, 1);
+}
+
+#[test]
+fn activity_snapshot_counts_workers_without_live_update_edges() {
+    let root = ThreadId::new();
+    let worker = ThreadId::new();
+    let nested_worker = ThreadId::new();
+    let mut projection = TeamActivityProjection::default();
+    projection.replace_thread_metadata(
+        Some(root),
+        [
+            (root, None),
+            (worker, Some(root)),
+            (nested_worker, Some(worker)),
+        ],
+    );
+
+    let state = |thread_id: ThreadId, activity: ThreadActivity| ThreadActivityState {
+        thread_id: thread_id.to_string(),
+        root_thread_id: root.to_string(),
+        activity,
+        pause_state: ThreadPauseState::Running,
+        wait_reason: None,
+        in_flight_operations: 1,
+    };
+    projection.observe_state(state(root, ThreadActivity::Idle));
+    projection.observe_state(state(worker, ThreadActivity::Working));
+    projection.observe_state(state(nested_worker, ThreadActivity::Working));
+
+    assert_eq!(
+        projection.status_for_root(root, None),
+        Some(TeamActivityStatus {
+            lead: TeamRoleActivity::Idle,
+            workers_working: 2,
+            workers_waiting: 0,
+            direct_workers: 1,
+            subagents: 1,
+            worker_max_concurrent: None,
+            pause_state: UiPauseState::Running,
+            in_flight_operations: 3,
+        })
+    );
 }
 
 #[test]

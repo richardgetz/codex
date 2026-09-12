@@ -75,6 +75,8 @@ use codex_app_server_protocol::ThreadActivityContinueParams;
 use codex_app_server_protocol::ThreadActivityContinueResponse;
 use codex_app_server_protocol::ThreadActivityPauseParams;
 use codex_app_server_protocol::ThreadActivityPauseResponse;
+use codex_app_server_protocol::ThreadActivityReadParams;
+use codex_app_server_protocol::ThreadActivityReadResponse;
 use codex_app_server_protocol::ThreadAgentsPruneParams;
 use codex_app_server_protocol::ThreadAgentsPruneResponse;
 use codex_app_server_protocol::ThreadApproveGuardianDeniedActionParams;
@@ -1376,6 +1378,43 @@ impl AppServerSession {
             .await
             .wrap_err("thread/activity/continue failed in TUI")?;
         Ok(())
+    }
+
+    pub(crate) async fn thread_activity_read(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadActivityReadResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed::<ThreadActivityReadResponse>(ClientRequest::ThreadActivityRead {
+                request_id,
+                params: ThreadActivityReadParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/activity/read failed in TUI")
+    }
+
+    /// Read only the persisted metadata needed to classify an activity update whose thread was
+    /// loaded after the TUI resumed. This uses the shared request handle so the event loop can
+    /// perform the bounded lookup without mutating its request-id counter.
+    pub(crate) async fn thread_read_for_activity(&self, thread_id: ThreadId) -> Result<Thread> {
+        let request_id = RequestId::String(format!(
+            "team-activity-{thread_id}-{}",
+            Uuid::new_v4()
+        ));
+        self.request_handle()
+            .request_typed::<ThreadReadResponse>(ClientRequest::ThreadRead {
+                request_id,
+                params: ThreadReadParams {
+                    thread_id: thread_id.to_string(),
+                    include_turns: false,
+                },
+            })
+            .await
+            .map(|response| response.thread)
+            .wrap_err("thread/read failed while classifying team activity")
     }
 
     pub(crate) async fn thread_inject_items(

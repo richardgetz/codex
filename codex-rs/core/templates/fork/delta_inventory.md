@@ -279,11 +279,16 @@ release or merge rules.
     expiry without a new event or animation. Approval, user-input, usage-limit,
     error/completion, close, and pause transitions remain immediate. Parent
     edges come from existing thread metadata; no activity protocol fields or
-    backend polling are added. Terminal completion wins over delayed activity
-    updates until the next `turn/started`; reset/reconnect rebuilds metadata
-    only for the selected loaded tree, ignores `NotLoaded`, ephemeral, or
-    temporary helper threads, and rejects unknown/unloaded child activity until
-    a fresh `thread/started`/`turn/started` admits it.
+    backend polling are added. Startup/resume, root selection, and reconnect
+    take one root-scoped activity snapshot. If a selected-tree Worker reports
+    live activity before its metadata arrives, the TUI makes one bounded,
+    event-driven `thread/read` attempt (including a bounded parent chain) to
+    recover its edge; failed, `NotLoaded`, `SystemError`, ephemeral, or
+    non-ThreadSpawn records remain rejected. Terminal completion wins over
+    delayed activity updates until the next `turn/started`; reset/reconnect
+    rebuilds metadata only for the selected loaded tree, ignores `NotLoaded`,
+    ephemeral, or temporary helper threads, and rejects unknown/unloaded child
+    activity until a fresh `thread/started`/`turn/started` admits it.
   - Collab spawn and V2 `SubAgentActivity` start/completion events locally admit
     their parent edges before persisted metadata arrives. Same-root metadata
     refreshes retain a provisional edge for a bounded grace window, then keep it
@@ -816,7 +821,10 @@ release or merge rules.
   running/pausing/paused separately from idle/working/waiting activity. Confirm
   already-launched external commands are neither suspended nor replayed and
   process-local activity is reconstructed through `thread/activity/read` after
-  reconnect rather than cold-resume persistence. Verify the TUI uses the
+  startup/resume, root selection, and reconnect rather than cold-resume
+  persistence; verify one-shot bounded `thread/read` hydration admits a
+  resumed Worker activity edge only after validating its selected-root parent
+  chain and loaded ThreadSpawn status. Verify the TUI uses the
   event-driven `Lead: idle|working|waiting · Workers: N working[, M waiting]`
   row, counts unfinished direct and nested Workers only within the selected
   root, keeps the title aligned with that projection, animates only actual
