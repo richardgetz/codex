@@ -1,5 +1,5 @@
-use super::*;
 use super::disconnect::serve_reconnect_requests;
+use super::*;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::ThreadParamsMode;
 use codex_app_server_protocol::SessionSource;
@@ -18,24 +18,24 @@ async fn late_resumed_worker_activity_hydrates_parent_metadata() -> Result<()> {
     app.primary_thread_id = Some(root_thread_id);
     app.team_activity
         .replace_thread_metadata(Some(root_thread_id), [(root_thread_id, None)]);
-    app.team_activity.observe(&ThreadActivityUpdatedNotification {
-        thread_id: root_thread_id.to_string(),
-        root_thread_id: root_thread_id.to_string(),
-        activity: ThreadActivity::Idle,
-        pause_state: ThreadPauseState::Running,
-        wait_reason: None,
-        in_flight_operations: 0,
-    });
+    app.team_activity
+        .observe(&ThreadActivityUpdatedNotification {
+            thread_id: root_thread_id.to_string(),
+            root_thread_id: root_thread_id.to_string(),
+            activity: ThreadActivity::Idle,
+            pause_state: ThreadPauseState::Running,
+            wait_reason: None,
+            in_flight_operations: 0,
+        });
 
-    let worker_source = serde_json::to_value(SessionSource::SubAgent(
-        SubAgentSource::ThreadSpawn {
+    let worker_source =
+        serde_json::to_value(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: root_thread_id,
             depth: 1,
             agent_path: None,
             agent_nickname: None,
             agent_role: None,
-        },
-    ))?;
+        }))?;
     let cwd = app.config.cwd.clone();
     let worker = json!({
         "id": worker_thread_id,

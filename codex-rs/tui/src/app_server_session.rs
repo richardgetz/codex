@@ -1400,10 +1400,7 @@ impl AppServerSession {
     /// loaded after the TUI resumed. This uses the shared request handle so the event loop can
     /// perform the bounded lookup without mutating its request-id counter.
     pub(crate) async fn thread_read_for_activity(&self, thread_id: ThreadId) -> Result<Thread> {
-        let request_id = RequestId::String(format!(
-            "team-activity-{thread_id}-{}",
-            Uuid::new_v4()
-        ));
+        let request_id = RequestId::String(format!("team-activity-{thread_id}-{}", Uuid::new_v4()));
         self.request_handle()
             .request_typed::<ThreadReadResponse>(ClientRequest::ThreadRead {
                 request_id,

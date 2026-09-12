@@ -1880,7 +1880,11 @@ async fn session_tmp_reap_force_slash_command_removes_recent_inactive_session() 
     let inactive_session_root = inactive_manager.session_root().to_path_buf();
     drop(inactive_manager);
 
-    chat.dispatch_command_with_args(SlashCommand::SessionTmp, "reap --force".to_string(), Vec::new());
+    chat.dispatch_command_with_args(
+        SlashCommand::SessionTmp,
+        "reap --force".to_string(),
+        Vec::new(),
+    );
 
     assert!(!inactive_session_root.exists());
     chat.dispatch_command_with_args(

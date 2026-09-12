@@ -36,21 +36,16 @@ fn user_open_recovers_to_a_validated_sibling_root() {
     fs::write(invalid_root.join("preserved.txt"), b"keep").unwrap();
     let config = config(&root);
 
-    let manager = SessionTmpManager::open_for_user(
-        &config,
-        root.path(),
-        "session-1",
-        "thread-1",
-    )
-    .unwrap()
-    .unwrap();
+    let manager = SessionTmpManager::open_for_user(&config, root.path(), "session-1", "thread-1")
+        .unwrap()
+        .unwrap();
 
-    assert_eq!(
-        manager.root(),
-        root.path().join(RECOVERY_ROOT).as_path()
-    );
+    assert_eq!(manager.root(), root.path().join(RECOVERY_ROOT).as_path());
     assert!(manager.root().join(MANAGED_ROOT_MARKER).exists());
-    assert_eq!(fs::read(invalid_root.join("preserved.txt")).unwrap(), b"keep");
+    assert_eq!(
+        fs::read(invalid_root.join("preserved.txt")).unwrap(),
+        b"keep"
+    );
     assert!(!invalid_root.join(MANAGED_ROOT_MARKER).exists());
 }
 
@@ -74,19 +69,11 @@ fn user_open_recovers_when_original_session_layout_is_unsafe() {
     fs::remove_dir_all(&agents_dir).unwrap();
     fs::write(&agents_dir, b"preserve unsafe state").unwrap();
 
-    let manager = SessionTmpManager::open_for_user(
-        &config,
-        root.path(),
-        "session-1",
-        "thread-1",
-    )
-    .unwrap()
-    .unwrap();
+    let manager = SessionTmpManager::open_for_user(&config, root.path(), "session-1", "thread-1")
+        .unwrap()
+        .unwrap();
 
-    assert_eq!(
-        manager.root(),
-        root.path().join(RECOVERY_ROOT).as_path()
-    );
+    assert_eq!(manager.root(), root.path().join(RECOVERY_ROOT).as_path());
     assert!(manager.root().join(MANAGED_ROOT_MARKER).exists());
     assert!(agents_dir.is_file());
 }
@@ -1005,9 +992,7 @@ fn force_reap_removes_inactive_sessions_but_preserves_live_leases() {
     .unwrap()
     .unwrap();
 
-    let report = current_manager
-        .reap_with_mode(ReapMode::Force)
-        .unwrap();
+    let report = current_manager.reap_with_mode(ReapMode::Force).unwrap();
 
     assert_eq!(report.removed_paths, 1);
     assert_eq!(report.removed_sessions, 1);
@@ -1044,7 +1029,11 @@ fn force_reap_preserves_unsafe_session_state_and_continues() {
         manager.session_root().to_path_buf()
     };
     fs::remove_dir_all(unsafe_session_root.join(LEASES_DIR)).unwrap();
-    fs::write(unsafe_session_root.join(LEASES_DIR), b"preserve unsafe state").unwrap();
+    fs::write(
+        unsafe_session_root.join(LEASES_DIR),
+        b"preserve unsafe state",
+    )
+    .unwrap();
     let unsafe_lease_entry_root = {
         let manager = SessionTmpManager::open(
             &config,
@@ -1076,9 +1065,7 @@ fn force_reap_preserves_unsafe_session_state_and_continues() {
         manager.session_root().to_path_buf()
     };
 
-    let report = current_manager
-        .reap_with_mode(ReapMode::Force)
-        .unwrap();
+    let report = current_manager.reap_with_mode(ReapMode::Force).unwrap();
 
     assert_eq!(report.removed_paths, 1);
     assert_eq!(report.removed_sessions, 1);

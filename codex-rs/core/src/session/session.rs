@@ -1232,7 +1232,10 @@ impl Session {
                             | codex_session_tmp::SessionTmpError::RootNotAbsolute(_)
                             | codex_session_tmp::SessionTmpError::RootNotManaged(_)
                             | codex_session_tmp::SessionTmpError::UnsafeManagedPath(_)
-                    ) => return Err(error.into()),
+                    ) =>
+                {
+                    return Err(error.into());
+                }
                 Err(original_error) => {
                     let recovery_root = config.codex_home.join(SESSION_TMP_RECOVERY_ROOT);
                     let recovery_config = codex_session_tmp::SessionTmpConfig {

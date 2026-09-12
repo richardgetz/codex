@@ -3,9 +3,9 @@ use super::CleanupReport;
 use super::EntryMetadata;
 use super::MANAGED_ROOT_MARKER;
 use super::MANAGED_ROOT_MARKER_CONTENT;
+use super::ReapMode;
 use super::SESSION_METADATA_FILE;
 use super::SESSIONS_DIR;
-use super::ReapMode;
 use super::SessionTmpError;
 use serde::Deserialize;
 use serde::Serialize;
@@ -130,10 +130,15 @@ pub(super) fn reap_sessions(
             continue;
         };
         let heartbeat_is_old_enough = match mode {
-            ReapMode::OlderThan(max_age) => now.saturating_sub(record.updated_at) >= max_age.as_secs(),
+            ReapMode::OlderThan(max_age) => {
+                now.saturating_sub(record.updated_at) >= max_age.as_secs()
+            }
             ReapMode::Force => true,
         };
-        if record.schema_version != 1 || record.session_id != directory_session_id || !heartbeat_is_old_enough {
+        if record.schema_version != 1
+            || record.session_id != directory_session_id
+            || !heartbeat_is_old_enough
+        {
             continue;
         }
         let Some(_session_lock) = (match try_lock_session(&session_dir) {
@@ -166,7 +171,9 @@ pub(super) fn reap_sessions(
             Err(error) => return Err(error),
         };
         let heartbeat_is_old_enough = match mode {
-            ReapMode::OlderThan(max_age) => now.saturating_sub(record.updated_at) >= max_age.as_secs(),
+            ReapMode::OlderThan(max_age) => {
+                now.saturating_sub(record.updated_at) >= max_age.as_secs()
+            }
             ReapMode::Force => true,
         };
         if record.schema_version != 1

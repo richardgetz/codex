@@ -1,12 +1,14 @@
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::protocol::EventMsg;
 use codex_session_tmp::SessionTmpConfig;
 use codex_session_tmp::SessionTmpOwner;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_function_call_with_namespace;
-use core_test_support::responses::ev_response_created;
 #[cfg(unix)]
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
+use core_test_support::responses::ev_response_created;
 #[cfg(unix)]
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -14,15 +16,12 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use codex_protocol::permissions::FileSystemPath;
-use codex_protocol::protocol::EventMsg;
 use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::time::Duration;
 
-const SESSION_TMP_UNAVAILABLE_WARNING: &str =
-    "Session temporary storage is unavailable; continuing without it for this runtime. The configured and recovery roots could not be opened safely; use a new empty root or repair a managed marker after verifying its contents.";
+const SESSION_TMP_UNAVAILABLE_WARNING: &str = "Session temporary storage is unavailable; continuing without it for this runtime. The configured and recovery roots could not be opened safely; use a new empty root or repair a managed marker after verifying its contents.";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_tmp_tool_records_current_session_and_thread_lineage() -> anyhow::Result<()> {
@@ -196,8 +195,7 @@ async fn session_tmp_guidance_is_only_injected_when_enabled() -> anyhow::Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unavailable_session_tmp_fails_open_and_disables_runtime_consumers() -> anyhow::Result<()>
-{
+async fn unavailable_session_tmp_fails_open_and_disables_runtime_consumers() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -266,7 +264,7 @@ async fn unavailable_session_tmp_fails_open_and_disables_runtime_consumers() -> 
             };
             path.to_abs_path()
                 .is_ok_and(|path| path.as_path().starts_with(&root))
-    });
+        });
     assert!(!invalid_root_in_sandbox);
 
     #[cfg(unix)]
@@ -322,7 +320,9 @@ async fn unavailable_session_tmp_fails_open_on_resume_and_preserves_data() -> an
         ]),
     )
     .await;
-    initial.submit_text_turn("create a resumable session").await?;
+    initial
+        .submit_text_turn("create a resumable session")
+        .await?;
     assert!(initial.session_configured.rollout_path.is_some());
     let mut resume_builder = test_codex()
         .with_pre_build_hook(|home| {
@@ -366,10 +366,12 @@ async fn unavailable_session_tmp_fails_open_on_resume_and_preserves_data() -> an
 
     let request = completion.single_request();
     assert!(request.tool_by_name("session_tmp", "create").is_none());
-    assert!(!request
-        .message_input_texts("developer")
-        .join("\n")
-        .contains("<session_tmp_instructions>"));
+    assert!(
+        !request
+            .message_input_texts("developer")
+            .join("\n")
+            .contains("<session_tmp_instructions>")
+    );
 
     let root = resumed.codex_home_path().join("session-tmp-custom");
     assert_eq!(fs::read(root.join("preserved.txt"))?, b"keep this file");
@@ -457,10 +459,12 @@ async fn unavailable_session_tmp_recovers_into_validated_runtime_root() -> anyho
         fs::read(test.codex_home_path().join("session-tmp/preserved.txt"))?,
         b"leave original data"
     );
-    assert!(!test
-        .codex_home_path()
-        .join("session-tmp/.codex-managed-session-tmp")
-        .exists());
+    assert!(
+        !test
+            .codex_home_path()
+            .join("session-tmp/.codex-managed-session-tmp")
+            .exists()
+    );
 
     Ok(())
 }

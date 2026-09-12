@@ -334,8 +334,7 @@ impl TeamActivityProjection {
                 entry.root_thread_id == root_thread_id && admitted_thread_ids.contains(thread_id)
             });
             self.terminal_threads.retain(|thread_id| {
-                admitted_thread_ids.contains(thread_id)
-                    || hydration_attempt_ids.contains(thread_id)
+                admitted_thread_ids.contains(thread_id) || hydration_attempt_ids.contains(thread_id)
             });
         } else {
             self.entries.clear();

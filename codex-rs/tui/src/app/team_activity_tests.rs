@@ -232,28 +232,33 @@ fn metadata_hydration_attempts_are_bounded_and_reopened_by_metadata() {
         projection.metadata_hydration_attempts.len(),
         MAX_TEAM_ACTIVITY_METADATA_HYDRATION_ATTEMPTS
     );
-    assert!(!projection
-        .metadata_hydration_attempts
-        .contains_key(&attempted[0]));
-
-    projection.replace_thread_metadata(
-        Some(root),
-        [(root, None), (attempted[1], Some(root))],
+    assert!(
+        !projection
+            .metadata_hydration_attempts
+            .contains_key(&attempted[0])
     );
-    assert!(!projection
-        .metadata_hydration_attempts
-        .contains_key(&attempted[1]));
+
+    projection.replace_thread_metadata(Some(root), [(root, None), (attempted[1], Some(root))]);
+    assert!(
+        !projection
+            .metadata_hydration_attempts
+            .contains_key(&attempted[1])
+    );
     assert!(projection.begin_metadata_hydration(attempted[1]));
 
     projection.finish_thread(attempted[2]);
-    assert!(projection
-        .metadata_hydration_attempts
-        .contains_key(&attempted[2]));
+    assert!(
+        projection
+            .metadata_hydration_attempts
+            .contains_key(&attempted[2])
+    );
     assert!(projection.terminal_threads.contains(&attempted[2]));
     projection.start_thread(attempted[2]);
-    assert!(!projection
-        .metadata_hydration_attempts
-        .contains_key(&attempted[2]));
+    assert!(
+        !projection
+            .metadata_hydration_attempts
+            .contains_key(&attempted[2])
+    );
 }
 
 #[test]
