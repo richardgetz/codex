@@ -1,0 +1,19 @@
+intent:
+  id: team-on-activity-admission-hardening-2026-09-12
+  change_type: fix
+  scope: Team On delegation and TUI worker activity projection
+  summary: Preserve proof-compatible Team On authorization and bound provisional collab parent edges while admitting completed spawn receivers.
+  decision: Treat Team On as the explicit in-thread delegation opt-in when no custom multi-agent mode policy is configured; admit collab start/completion parent edges briefly until metadata arrives, then expire stale edges.
+  constraints:
+    - Preserve Team Off behavior, custom mode restrictions, explicit per-task no-delegation instructions, scope/concurrency/depth/approval limits, and unchanged RED proof assertions.
+    - Do not add polling or retain omitted/unloaded activity edges indefinitely.
+  intent_priority: high
+  code_locations:
+    - codex-rs/core/src/context/team_instructions.rs
+    - codex-rs/tui/src/app/team_activity.rs
+    - codex-rs/tui/src/app/thread_routing.rs
+    - codex-rs/core/templates/fork/delta_inventory.md
+  requested_by: user
+  recorded_by: codex
+  agent: /root/stable_refresh
+  model: gpt-5.6-sol
