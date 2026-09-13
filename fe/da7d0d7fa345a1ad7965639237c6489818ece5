@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-13/eta-tui-snapshot-refresh#feda7d0d7f"
+  change_type: "test"
+  scope: "tui"
+  summary: "Refresh ETA view snapshots for timing columns and updated header."
+  decision: "Accept the four focused ETA snapshots produced by the intentional timing-column UI change."
+  constraints:
+    - "Keep snapshot scope limited to ETA view tests."
+    - "Preserve stale and cancelled history cues."
+  intent_priority: "normal"
+  code_locations:
+    - "codex-rs/tui/src/app/snapshots/"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
