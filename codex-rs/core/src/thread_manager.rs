@@ -931,8 +931,8 @@ impl ThreadManager {
     /// The returned guard remains fail-closed when dropped. Call
     /// [`ThreadManagerRecoveryGuard::complete`] only after a successful recovery journal has been
     /// persisted.
-    pub fn begin_recovery_pending(&self) -> ThreadManagerRecoveryGuard {
-        self.state.begin_recovery_pending()
+    pub fn begin_recovery_pending(&self) -> CodexResult<ThreadManagerRecoveryGuard> {
+        Ok(self.state.begin_recovery_pending())
     }
 
     pub fn subscribe_thread_created(&self) -> broadcast::Receiver<ThreadId> {
