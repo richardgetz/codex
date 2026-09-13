@@ -1,6 +1,7 @@
 use super::*;
 use crate::DirectionalThreadSpawnEdgeStatus;
 use crate::SqliteConfig;
+use crate::TaskEstimateRange;
 use crate::runtime::test_support::unique_temp_dir;
 use chrono::Duration;
 use codex_utils_absolute_path::test_support::PathExt;

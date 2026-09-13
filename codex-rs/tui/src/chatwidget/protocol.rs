@@ -364,7 +364,8 @@ impl ChatWidget {
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_)
             | ServerNotification::ProjectChanged(_)
-            | ServerNotification::ThreadProjectUpdated(_) => {}
+            | ServerNotification::ThreadProjectUpdated(_)
+            | ServerNotification::ThreadEtaUpdated(_) => {}
             ServerNotification::ContextCompacted(_) => {}
         }
         self.thread_usage.replaying_turn_completion = was_replaying_turn_completion;

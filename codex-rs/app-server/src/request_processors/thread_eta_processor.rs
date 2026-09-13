@@ -18,7 +18,6 @@ use codex_app_server_protocol::ThreadEtaUpdateResponse;
 use codex_app_server_protocol::ThreadEtaUpdatedNotification;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadEtaOverallUpdatedEvent;
-use codex_protocol::protocol::ThreadEtaRevisionUpdatedEvent;
 use codex_protocol::protocol::ThreadEtaTaskUpdatedEvent;
 use codex_protocol::protocol::ThreadEtaUpdatedEvent;
 use codex_rollout::StateDbHandle;
@@ -111,7 +110,7 @@ impl ThreadEtaRequestProcessor {
         let response = api_update_response(&result);
         if !response.changed_tasks.is_empty() {
             self.outgoing
-                .send_global_server_notification(ServerNotification::ThreadEtaUpdated(
+                .send_server_notification(ServerNotification::ThreadEtaUpdated(
                     ThreadEtaUpdatedNotification {
                         root_thread_id: response.root_thread_id.clone(),
                         generated_at: response.generated_at,

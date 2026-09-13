@@ -236,7 +236,7 @@ LIMIT 1
         .fetch_optional(self.pool.as_ref())
         .await?
         .unwrap_or_else(|| thread_id.to_string());
-        ThreadId::from_string(&root)
+        Ok(ThreadId::from_string(&root)?)
     }
 
     /// Find a direct spawned child of `parent_thread_id` by canonical agent path.

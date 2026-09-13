@@ -1919,6 +1919,10 @@ impl ChatWidget {
         self.bottom_pane.has_active_view()
     }
 
+    pub(crate) fn active_tab_id_for_active_view(&self, view_id: &'static str) -> Option<&str> {
+        self.bottom_pane.active_tab_id_for_active_view(view_id)
+    }
+
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.bottom_pane.show_esc_backtrack_hint();
     }

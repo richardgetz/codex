@@ -10,7 +10,7 @@ use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::ViewCompletion;
 use crate::bottom_pane::popup_consts::MAX_POPUP_ROWS;
-use crate::bottom_pane::scroll_state::ScrollState;
+use crate::bottom_pane::ScrollState;
 use crate::keymap::KeymapContext;
 use crate::keymap::KeymapContextSet;
 use crate::keymap::ListAction;
@@ -26,6 +26,7 @@ pub(super) const ETA_VIEW_ID: &str = "thread-eta";
 pub(super) const ETA_ACTIVE_TAB_ID: &str = "active";
 pub(super) const ETA_HISTORY_TAB_ID: &str = "history";
 
+#[path = "eta_view_render.rs"]
 mod eta_view_render;
 
 /// Private task status used by the renderer. Values are copied from the app-server enum without

@@ -27,6 +27,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
+#[path = "task_estimate_math.rs"]
 mod task_estimate_math;
 use self::task_estimate_math::compute_overall;
 

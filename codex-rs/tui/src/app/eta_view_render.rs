@@ -245,10 +245,7 @@ impl Renderable for EtaView {
         Clear.render(area, buf);
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
-        let content_area = crate::bottom_pane::selection_popup_common::render_menu_surface(
-            content_area,
-            buf,
-        );
+        let content_area = crate::bottom_pane::render_menu_surface(content_area, buf);
         let inset = |rect: Rect| rect.inner(Margin::new(/*horizontal*/ 1, /*vertical*/ 0));
         let [header_area, summary_area, tabs_area, divider_area, body_area] =
             Layout::vertical([
