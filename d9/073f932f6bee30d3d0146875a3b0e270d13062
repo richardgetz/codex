@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-13/eta-state-module-wiring#d9073f932"
+  change_type: "fix"
+  scope: "state-eta"
+  summary: "Wire the extracted ETA storage module into the task estimate runtime."
+  decision: "Import the sibling storage module and remove the now-unused aggregate import so the helper extraction compiles."
+  constraints:
+    - "Keep the extraction behavior unchanged."
+    - "Limit the fix to module wiring and imports."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/state/src/runtime/task_estimates.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
