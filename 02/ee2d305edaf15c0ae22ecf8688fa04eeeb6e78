@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-09-13/session-eta#02ee2d305e"
+  change_type: "fix"
+  scope: "eta"
+  summary: "Harden ETA range safety, bounded aggregation, lifecycle cleanup, and model output limits."
+  decision: "Keep ETA reads coherent and bounded, reject unsafe model batches, preserve worker terminal history while blocking unfinished tasks, and validate canonical roots."
+  constraints:
+    - "No model-visible inference from idle, turn completion, or elapsed estimates."
+    - "History remains durable and paginated; active task limits do not count terminal rows."
+    - "Worker worktrees remain source-only; root owns integrated Rust validation."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/state/src/runtime/task_estimates.rs::TaskEstimateStore"
+    - "codex-rs/state/src/runtime/task_estimate_math.rs::compute_overall"
+    - "codex-rs/state/src/runtime/threads.rs::delete_threads_strict"
+    - "codex-rs/core/src/tools/handlers/eta.rs::EtaHandler"
+    - "codex-rs/app-server/src/request_processors/thread_eta_processor.rs::ThreadEtaRequestProcessor"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
