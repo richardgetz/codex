@@ -79,7 +79,8 @@ impl HandoffCoordinator {
                         HandoffNodeState::Restored | HandoffNodeState::Paused
                     )
             });
-            if node.turn_id.is_none() && !has_recoverable_descendant {
+            let needs_pause_restore = node.parent_thread_id.is_none() && node.was_paused;
+            if node.turn_id.is_none() && !has_recoverable_descendant && !needs_pause_restore {
                 journal.update_node(
                     &node.thread_id,
                     if node.was_paused {
@@ -111,6 +112,30 @@ impl HandoffCoordinator {
                 continue;
             }
             if node.turn_id.is_none() {
+                if needs_pause_restore {
+                    let thread_id = ThreadId::from_string(&node.thread_id).map_err(|error| {
+                        invalid_params(format!(
+                            "handoff node has an invalid thread id {}: {error}",
+                            node.thread_id
+                        ))
+                    })?;
+                    let thread = self
+                        .thread_manager
+                        .get_thread(thread_id)
+                        .await
+                        .map_err(core_error)?;
+                    if let Err(_error) = thread.submit(Op::PauseActivity).await {
+                        journal.update_node(
+                            &node.thread_id,
+                            HandoffNodeState::NeedsAttention,
+                            vec![HandoffBlocker::Persistence],
+                            None,
+                        );
+                        journal.set_state(HandoffJournalState::NeedsAttention);
+                        let _ = journal.persist(&self.codex_home).await;
+                        continue;
+                    }
+                }
                 journal.update_node(
                     &node.thread_id,
                     if node.was_paused {
