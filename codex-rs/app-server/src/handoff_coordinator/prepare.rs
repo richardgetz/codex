@@ -10,6 +10,9 @@ use codex_core::{
 use codex_protocol::ThreadId;
 use std::collections::HashSet;
 use std::sync::Arc;
+use tokio::time::{Duration, timeout};
+
+const HANDOFF_BARRIER_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl HandoffCoordinator {
     pub(crate) async fn prepare(
@@ -24,7 +27,15 @@ impl HandoffCoordinator {
             .transpose()?;
 
         let manager_guard = self.thread_manager.begin_handoff().map_err(core_error)?;
-        manager_guard.wait_for_admissions().await;
+        if timeout(HANDOFF_BARRIER_TIMEOUT, manager_guard.wait_for_admissions())
+            .await
+            .is_err()
+        {
+            manager_guard.abort();
+            return Err(internal_error(
+                "timed out waiting for thread-manager handoff admissions",
+            ));
+        }
 
         let (roots, loaded_thread_ids) = match self.loaded_roots(requested_root).await {
             Ok(value) => value,
@@ -43,6 +54,22 @@ impl HandoffCoordinator {
                     manager_guard.abort();
                     return Err(core_error(error));
                 }
+            }
+        }
+        for root_index in 0..roots.len() {
+            let timed_out = timeout(
+                HANDOFF_BARRIER_TIMEOUT,
+                tree_guards[root_index].wait_for_admissions(),
+            )
+            .await
+            .is_err();
+            if timed_out {
+                let root_id = roots[root_index].id();
+                drop(tree_guards);
+                manager_guard.abort();
+                return Err(internal_error(format!(
+                    "timed out waiting for handoff admissions for root {root_id}",
+                )));
             }
         }
 
@@ -268,6 +295,76 @@ impl HandoffCoordinator {
                 return Err(internal_error(format!(
                     "could not persist handoff node {thread_id}: {error}"
                 )));
+            }
+        }
+
+        for root_index in 0..roots.len() {
+            let timed_out = timeout(
+                HANDOFF_BARRIER_TIMEOUT,
+                tree_guards[root_index].wait_for_handoff_watchers(),
+            )
+            .await
+            .is_err();
+            if timed_out {
+                let pending_root_ids = roots
+                    .iter()
+                    .skip(root_index)
+                    .map(|root| root.id().to_string())
+                    .collect::<HashSet<_>>();
+                let affected = journal
+                    .nodes
+                    .iter()
+                    .filter(|node| pending_root_ids.contains(&node.root_thread_id))
+                    .map(|node| node.thread_id.clone())
+                    .collect::<Vec<_>>();
+                for thread_id in affected {
+                    journal.update_node(
+                        &thread_id,
+                        HandoffNodeState::NeedsAttention,
+                        vec![HandoffBlocker::SuspensionTimeout],
+                        None,
+                    );
+                }
+                journal.set_state(HandoffJournalState::NeedsAttention);
+                if let Err(error) = self.persist_journal(&journal).await {
+                    drop(tree_guards);
+                    manager_guard.abort();
+                    return Err(error);
+                }
+                let response = self.receipt_response(&journal);
+                drop(tree_guards);
+                manager_guard.abort();
+                return Ok(response);
+            }
+
+            let mut late_blockers = roots[root_index].handoff_preflight().await.blockers;
+            late_blockers.retain(|blocker| !matches!(blocker, HandoffBlocker::LiveDescendants));
+            if !late_blockers.is_empty() {
+                let root_id = roots[root_index].id().to_string();
+                let affected = journal
+                    .nodes
+                    .iter()
+                    .filter(|node| node.root_thread_id == root_id)
+                    .map(|node| node.thread_id.clone())
+                    .collect::<Vec<_>>();
+                for thread_id in affected {
+                    journal.update_node(
+                        &thread_id,
+                        HandoffNodeState::NeedsAttention,
+                        late_blockers.clone(),
+                        None,
+                    );
+                }
+                journal.set_state(HandoffJournalState::NeedsAttention);
+                if let Err(error) = self.persist_journal(&journal).await {
+                    drop(tree_guards);
+                    manager_guard.abort();
+                    return Err(error);
+                }
+                let response = self.receipt_response(&journal);
+                drop(tree_guards);
+                manager_guard.abort();
+                return Ok(response);
             }
         }
 
