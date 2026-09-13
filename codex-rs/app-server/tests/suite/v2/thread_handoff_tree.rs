@@ -2,8 +2,6 @@ use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use codex_app_server_protocol::ItemCompletedNotification;
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::SubAgentActivityKind;
 use codex_app_server_protocol::ThreadActivityPauseResponse;
 use codex_app_server_protocol::ThreadActivityReadResponse;
@@ -13,6 +11,8 @@ use codex_app_server_protocol::ThreadHandoffRecoverResponse;
 use codex_app_server_protocol::ThreadHandoffState;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadPauseState;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -21,7 +21,6 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::UserInput;
 use codex_features::Feature;
-use codex_protocol::models::{ContentItem, ResponseItem};
 use core_test_support::responses;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
@@ -199,7 +198,6 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
             .all(|entry| entry.pause_state == ThreadPauseState::Paused)
     );
 
-    old_server.clear_message_buffer();
     let prepare_request = old_server
         .send_raw_request("thread/handoff/prepare", None)
         .await?;
@@ -231,36 +229,39 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
         Some(child_turn.id.as_str())
     );
 
-    let mut synthetic_parent_completion = false;
-    while !old_server.pending_notification_methods().is_empty() {
-        let JSONRPCMessage::Notification(notification) = old_server.read_next_message().await?
-        else {
-            continue;
-        };
-        if notification.method != "rawResponseItem/completed" {
-            continue;
-        }
-        let Some(params) = notification.params else {
-            continue;
-        };
-        let raw: RawResponseItemCompletedNotification = serde_json::from_value(params)?;
-        if raw.thread_id != parent.id {
-            continue;
-        }
-        if let ResponseItem::Message { role, content, .. } = raw.item
-            && role == "user"
-            && content.iter().any(|item| match item {
-                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                    text.contains("<subagent_notification>")
-                }
-                ContentItem::InputImage { .. }
-                | ContentItem::InputAudio { .. }
-                | ContentItem::EncryptedContent { .. } => false,
-            })
-        {
-            synthetic_parent_completion = true;
-        }
-    }
+    // `prepare` waits for the V1 completion watcher. Read persisted history through the public
+    // API after that barrier so an asynchronously delivered synthetic parent marker cannot escape
+    // a notification-buffer-only assertion.
+    let parent_read_request = old_server
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: parent.id.clone(),
+            include_turns: true,
+        })
+        .await?;
+    let ThreadReadResponse {
+        thread: parent_read,
+    } = timeout(
+        REQUEST_TIMEOUT,
+        old_server.read_response(parent_read_request),
+    )
+    .await??;
+    assert!(
+        parent_read
+            .turns
+            .iter()
+            .any(|turn| turn.id == parent_turn.id)
+    );
+    let synthetic_parent_completion = parent_read.turns.iter().any(|turn| {
+        turn.items.iter().any(|item| match item {
+            ThreadItem::UserMessage { content, .. } => content.iter().any(|input| {
+                matches!(
+                    input,
+                    UserInput::Text { text, .. } if text.contains("<subagent_notification>")
+                )
+            }),
+            _ => false,
+        })
+    });
     assert!(!synthetic_parent_completion);
 
     drop(release_child_turn);
