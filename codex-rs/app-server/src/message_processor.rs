@@ -484,6 +484,7 @@ impl MessageProcessor {
             outgoing.clone(),
             state_db.clone(),
             Arc::clone(&thread_manager),
+            Arc::clone(&thread_store),
         );
         let thread_goal_processor = ThreadGoalRequestProcessor::new(
             Arc::clone(&thread_manager),

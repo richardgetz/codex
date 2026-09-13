@@ -29,6 +29,8 @@ use codex_state::TaskEstimateOverall;
 use codex_state::TaskEstimateRange;
 use codex_state::TaskEstimateStatus;
 use codex_state::TaskEstimateUpdateResult;
+use codex_thread_store::ReadThreadParams;
+use codex_thread_store::ThreadStore;
 use chrono::DateTime;
 use chrono::Utc;
 use std::sync::Arc;
@@ -42,6 +44,7 @@ pub(crate) struct ThreadEtaRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     state_db: Option<StateDbHandle>,
     thread_manager: Arc<ThreadManager>,
+    thread_store: Arc<dyn ThreadStore>,
 }
 
 impl ThreadEtaRequestProcessor {
@@ -49,11 +52,13 @@ impl ThreadEtaRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         state_db: Option<StateDbHandle>,
         thread_manager: Arc<ThreadManager>,
+        thread_store: Arc<dyn ThreadStore>,
     ) -> Self {
         Self {
             outgoing,
             state_db,
             thread_manager,
+            thread_store,
         }
     }
 
@@ -155,7 +160,22 @@ impl ThreadEtaRequestProcessor {
             .await
             .map_err(|err| internal_error(format!("failed to validate ETA root: {err}")))?
         {
-            return Ok(!metadata.rollout_path.as_os_str().is_empty());
+            if !metadata.rollout_path.as_os_str().is_empty() {
+                return Ok(true);
+            }
+
+            // A thread can be durably staged in SQLite before its rollout is materialized. The
+            // thread store is the canonical persistence boundary for this case; probing it keeps
+            // valid cold-resume roots readable while still rejecting arbitrary state rows.
+            return Ok(self
+                .thread_store
+                .read_thread(ReadThreadParams {
+                    thread_id: root_thread_id,
+                    include_archived: false,
+                    include_history: false,
+                })
+                .await
+                .is_ok());
         }
         let Ok(thread) = self.thread_manager.get_thread(root_thread_id).await else {
             return Ok(false);
