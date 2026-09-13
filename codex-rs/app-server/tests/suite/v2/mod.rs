@@ -107,6 +107,8 @@ mod thread_environments;
 mod thread_fork;
 mod thread_goal_empty_responses;
 mod thread_handoff;
+#[path = "thread_handoff_tree.rs"]
+mod thread_handoff_tree;
 mod thread_inject_items;
 mod thread_list;
 mod thread_loaded_list;
