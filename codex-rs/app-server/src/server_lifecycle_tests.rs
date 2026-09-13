@@ -38,6 +38,11 @@ fn turn_count_updates_are_only_notified_while_draining() {
             .update_running_assistant_turns(/*running_assistant_turns*/ 1)
             .is_none()
     );
+    assert!(
+        lifecycle
+            .update_running_assistant_turns(/*running_assistant_turns*/ 0)
+            .is_none()
+    );
     lifecycle.begin_drain().expect("drain should transition");
     let update = lifecycle
         .update_running_assistant_turns(/*running_assistant_turns*/ 1)
