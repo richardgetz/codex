@@ -136,7 +136,7 @@ impl ThreadWatchManager {
             .await
             .runtime_by_thread_id
             .values()
-            .filter(|runtime| runtime.running)
+            .filter(|runtime| runtime.running || runtime.pending_turn_admissions > 0)
             .count()
     }
 
@@ -153,17 +153,105 @@ impl ThreadWatchManager {
         .await;
     }
 
+    /// Record a started turn with its id so a terminal event cannot clear a newer admission.
+    pub(crate) async fn note_turn_started_with_id(&self, thread_id: &str, turn_id: &str) {
+        let turn_id = turn_id.to_string();
+        self.update_runtime_for_thread(thread_id, move |runtime| {
+            if runtime
+                .terminal_turn_ids_before_admission
+                .iter()
+                .any(|completed_turn_id| completed_turn_id == &turn_id)
+            {
+                // Keep the tombstone after either event. The admission response may arrive
+                // before or after the start event, and both orderings must stay terminal.
+                return;
+            }
+            if runtime.running
+                && runtime
+                    .active_turn_id
+                    .as_deref()
+                    .is_some_and(|active_turn_id| active_turn_id != turn_id)
+            {
+                return;
+            }
+            runtime.is_loaded = true;
+            runtime.running = true;
+            runtime.active_turn_id = Some(turn_id);
+            runtime.has_system_error = false;
+        })
+        .await;
+    }
+
+    /// Reserve a running-turn count before Core starts its asynchronous task.
+    /// The reservation closes the drain race before the `TurnStarted` event.
+    pub(crate) async fn begin_turn_admission(&self, thread_id: &str) {
+        self.update_runtime_for_thread(thread_id, |runtime| {
+            runtime.pending_turn_admissions = runtime.pending_turn_admissions.saturating_add(1);
+            runtime.has_system_error = false;
+        })
+        .await;
+    }
+
+    /// Commit a previously reserved turn after Core accepted the submission.
+    /// If a terminal event raced ahead, do not mark the completed turn as running.
+    pub(crate) async fn accept_turn_admission(&self, thread_id: &str, turn_id: &str) {
+        let turn_id = turn_id.to_string();
+        self.update_runtime_for_thread(thread_id, move |runtime| {
+            if runtime.pending_turn_admissions == 0 {
+                return;
+            }
+            runtime.pending_turn_admissions -= 1;
+            if runtime
+                .terminal_turn_ids_before_admission
+                .iter()
+                .any(|completed_turn_id| completed_turn_id == &turn_id)
+            {
+                return;
+            }
+            runtime.running = true;
+            runtime.active_turn_id = Some(turn_id);
+            runtime.has_system_error = false;
+        })
+        .await;
+    }
+
+    /// Release a reservation when Core rejected the submission. Terminal tombstones remain
+    /// bounded so a delayed event from a rejected admission cannot resurrect work.
+    pub(crate) async fn cancel_turn_admission(&self, thread_id: &str) {
+        self.update_runtime_for_thread(thread_id, |runtime| {
+            if runtime.pending_turn_admissions == 0 {
+                return;
+            }
+            runtime.pending_turn_admissions -= 1;
+        })
+        .await;
+    }
+
     pub(crate) async fn note_turn_completed(&self, thread_id: &str, _failed: bool) {
         self.clear_active_state(thread_id).await;
+    }
+
+    /// Clear only the turn that emitted this terminal event, preserving newer admissions.
+    /// Keep a bounded tombstone so a delayed start event cannot resurrect the turn.
+    pub(crate) async fn note_turn_completed_for_turn(&self, thread_id: &str, turn_id: &str) {
+        self.clear_turn_for_id(thread_id, turn_id).await;
     }
 
     pub(crate) async fn note_turn_interrupted(&self, thread_id: &str) {
         self.clear_active_state(thread_id).await;
     }
 
+    /// Clear only the interrupted turn, preserving newer admissions.
+    pub(crate) async fn note_turn_interrupted_for_turn(&self, thread_id: &str, turn_id: &str) {
+        self.clear_turn_for_id(thread_id, turn_id).await;
+    }
+
     pub(crate) async fn note_thread_shutdown(&self, thread_id: &str) {
         self.update_runtime_for_thread(thread_id, |runtime| {
             runtime.running = false;
+            runtime.active_turn_id = None;
+            runtime.pending_turn_admissions = 0;
+            runtime.terminal_turn_ids_before_admission.clear();
             runtime.pending_permission_requests = 0;
             runtime.pending_user_input_requests = 0;
             runtime.is_loaded = false;
@@ -174,6 +262,9 @@ impl ThreadWatchManager {
     pub(crate) async fn note_system_error(&self, thread_id: &str) {
         self.update_runtime_for_thread(thread_id, |runtime| {
             runtime.running = false;
+            runtime.active_turn_id = None;
+            runtime.pending_turn_admissions = 0;
+            runtime.terminal_turn_ids_before_admission.clear();
             runtime.pending_permission_requests = 0;
             runtime.pending_user_input_requests = 0;
             runtime.has_system_error = true;
@@ -181,11 +272,52 @@ impl ThreadWatchManager {
         .await;
     }
 
+    /// Record an error for one turn without clearing a newer admitted turn.
+    pub(crate) async fn note_system_error_for_turn(&self, thread_id: &str, turn_id: &str) {
+        let turn_id = turn_id.to_string();
+        self.update_runtime_for_thread(thread_id, move |runtime| {
+            let is_current_turn = runtime.active_turn_id.as_deref() == Some(turn_id.as_str())
+                || (runtime.active_turn_id.is_none() && runtime.pending_turn_admissions == 0);
+            if is_current_turn {
+                runtime.running = false;
+                runtime.active_turn_id = None;
+                runtime.pending_permission_requests = 0;
+                runtime.pending_user_input_requests = 0;
+                runtime.has_system_error = true;
+                remember_terminal_turn(runtime, turn_id);
+            } else if runtime.pending_turn_admissions > 0 {
+                remember_terminal_turn(runtime, turn_id);
+            }
+        })
+        .await;
+    }
+
     async fn clear_active_state(&self, thread_id: &str) {
         self.update_runtime_for_thread(thread_id, move |runtime| {
             runtime.running = false;
+            runtime.active_turn_id = None;
+            runtime.pending_turn_admissions = 0;
+            runtime.terminal_turn_ids_before_admission.clear();
             runtime.pending_permission_requests = 0;
             runtime.pending_user_input_requests = 0;
+        })
+        .await;
+    }
+
+    async fn clear_turn_for_id(&self, thread_id: &str, turn_id: &str) {
+        let turn_id = turn_id.to_string();
+        self.update_runtime_for_thread(thread_id, move |runtime| {
+            if runtime.active_turn_id.as_deref() == Some(turn_id.as_str())
+                || (runtime.active_turn_id.is_none() && runtime.pending_turn_admissions == 0)
+            {
+                runtime.running = false;
+                runtime.active_turn_id = None;
+                remember_terminal_turn(runtime, turn_id);
+                return;
+            }
+            if runtime.pending_turn_admissions > 0 {
+                remember_terminal_turn(runtime, turn_id);
+            }
         })
         .await;
     }
@@ -230,7 +362,7 @@ impl ThreadWatchManager {
             let running_turn_count = state
                 .runtime_by_thread_id
                 .values()
-                .filter(|runtime| runtime.running)
+                .filter(|runtime| runtime.running || runtime.pending_turn_admissions > 0)
                 .count();
             self.running_turn_count_tx.send_if_modified(|current| {
                 if *current == running_turn_count {
@@ -430,9 +562,29 @@ impl ThreadWatchState {
 struct RuntimeFacts {
     is_loaded: bool,
     running: bool,
+    active_turn_id: Option<String>,
+    pending_turn_admissions: u32,
+    // Terminal events can arrive before the corresponding admission response/start event.
+    terminal_turn_ids_before_admission: Vec<String>,
     pending_permission_requests: u32,
     pending_user_input_requests: u32,
     has_system_error: bool,
+}
+
+const MAX_TERMINAL_TURN_IDS: usize = 64;
+
+fn remember_terminal_turn(runtime: &mut RuntimeFacts, turn_id: String) {
+    if runtime
+        .terminal_turn_ids_before_admission
+        .iter()
+        .any(|completed_turn_id| completed_turn_id == &turn_id)
+    {
+        return;
+    }
+    if runtime.terminal_turn_ids_before_admission.len() >= MAX_TERMINAL_TURN_IDS {
+        runtime.terminal_turn_ids_before_admission.remove(0);
+    }
+    runtime.terminal_turn_ids_before_admission.push(turn_id);
 }
 
 fn loaded_thread_status(runtime: &RuntimeFacts) -> ThreadStatus {
@@ -448,7 +600,7 @@ fn loaded_thread_status(runtime: &RuntimeFacts) -> ThreadStatus {
         active_flags.push(ThreadActiveFlag::WaitingOnUserInput);
     }
 
-    if runtime.running || !active_flags.is_empty() {
+    if runtime.running || runtime.pending_turn_admissions > 0 || !active_flags.is_empty() {
         return ThreadStatus::Active { active_flags };
     }
 
@@ -682,7 +834,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn has_running_turns_tracks_runtime_running_flag_only() {
+    async fn has_running_turns_tracks_runtime_and_pending_admissions() {
         let manager = ThreadWatchManager::new();
         manager.upsert_thread(INTERACTIVE_THREAD_ID).await;
 
@@ -693,13 +845,108 @@ mod tests {
             .await;
         assert_eq!(manager.running_turn_count().await, 0);
 
-        manager.note_turn_started(INTERACTIVE_THREAD_ID).await;
+        manager.begin_turn_admission(INTERACTIVE_THREAD_ID).await;
+        manager
+            .accept_turn_admission(INTERACTIVE_THREAD_ID, "turn-1")
+            .await;
+        assert_eq!(manager.running_turn_count().await, 1);
+
+        // The event watcher may observe TurnStarted after admission; it must
+        // not double-count the already-running turn.
+        manager
+            .note_turn_started_with_id(INTERACTIVE_THREAD_ID, "turn-1")
+            .await;
+        assert_eq!(manager.running_turn_count().await, 1);
+
+        // A terminal event for A may race ahead of the admission response for B.
+        // Clearing A must preserve B's reservation so drain cannot finish early.
+        manager.begin_turn_admission(INTERACTIVE_THREAD_ID).await;
+        manager
+            .note_turn_completed_for_turn(INTERACTIVE_THREAD_ID, "turn-1")
+            .await;
+        assert_eq!(manager.running_turn_count().await, 1);
+        manager
+            .accept_turn_admission(INTERACTIVE_THREAD_ID, "turn-2")
+            .await;
+        assert_eq!(manager.running_turn_count().await, 1);
+        manager
+            .note_turn_completed_for_turn(INTERACTIVE_THREAD_ID, "turn-2")
+            .await;
+        assert_eq!(manager.running_turn_count().await, 0);
+
+        // A terminal event may arrive before its admission response; consume only that
+        // reservation and leave the thread idle after acceptance.
+        manager.begin_turn_admission(INTERACTIVE_THREAD_ID).await;
+        manager
+            .note_turn_completed_for_turn(INTERACTIVE_THREAD_ID, "turn-3")
+            .await;
+        assert_eq!(manager.running_turn_count().await, 1);
+        manager
+            .accept_turn_admission(INTERACTIVE_THREAD_ID, "turn-3")
+            .await;
+        assert_eq!(manager.running_turn_count().await, 0);
+        manager
+            .note_turn_started_with_id(INTERACTIVE_THREAD_ID, "turn-3")
+            .await;
+        assert_eq!(manager.running_turn_count().await, 0);
+
+        // The start event may also race ahead of the admission response; the tombstone
+        // must survive both events so acceptance cannot resurrect a completed turn.
+        manager.begin_turn_admission(INTERACTIVE_THREAD_ID).await;
+        manager
+            .note_turn_completed_for_turn(INTERACTIVE_THREAD_ID, "turn-4")
+            .await;
+        manager
+            .note_turn_started_with_id(INTERACTIVE_THREAD_ID, "turn-4")
+            .await;
+        manager
+            .accept_turn_admission(INTERACTIVE_THREAD_ID, "turn-4")
+            .await;
+        assert_eq!(manager.running_turn_count().await, 0);
+
+        // Keep the same protection when a reserved submission is rejected after a
+        // terminal event; an unexpected late start must remain non-running.
+        manager.begin_turn_admission(INTERACTIVE_THREAD_ID).await;
+        manager
+            .note_turn_completed_for_turn(INTERACTIVE_THREAD_ID, "turn-5")
+            .await;
+        manager.cancel_turn_admission(INTERACTIVE_THREAD_ID).await;
+        manager
+            .note_turn_started_with_id(INTERACTIVE_THREAD_ID, "turn-5")
+            .await;
+        assert_eq!(manager.running_turn_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn turn_error_does_not_clear_a_newer_admission() {
+        let manager = ThreadWatchManager::new();
+        manager.upsert_thread(INTERACTIVE_THREAD_ID).await;
+
+        manager.begin_turn_admission(INTERACTIVE_THREAD_ID).await;
+        manager
+            .accept_turn_admission(INTERACTIVE_THREAD_ID, "turn-1")
+            .await;
+        manager.begin_turn_admission(INTERACTIVE_THREAD_ID).await;
+
+        manager
+            .note_system_error_for_turn(INTERACTIVE_THREAD_ID, "turn-1")
+            .await;
         assert_eq!(manager.running_turn_count().await, 1);
 
         manager
-            .note_turn_completed(INTERACTIVE_THREAD_ID, false)
+            .accept_turn_admission(INTERACTIVE_THREAD_ID, "turn-2")
+            .await;
+        assert_eq!(manager.running_turn_count().await, 1);
+        manager
+            .note_turn_completed_for_turn(INTERACTIVE_THREAD_ID, "turn-2")
             .await;
         assert_eq!(manager.running_turn_count().await, 0);
+        assert_eq!(
+            manager
+                .loaded_status_for_thread(INTERACTIVE_THREAD_ID)
+                .await,
+            ThreadStatus::Idle,
+        );
     }
 
     #[tokio::test]
