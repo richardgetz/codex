@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-13/eta-rpc-error-fixture#5f864cf71"
+  change_type: "test"
+  scope: "app-server-eta"
+  summary: "Assert unknown-thread ETA requests through the JSON-RPC error path."
+  decision: "Use raw request IDs and error readers for negative RPC cases because typed request helpers only deserialize successful responses."
+  constraints:
+    - "Keep production ETA behavior unchanged."
+    - "Preserve exact unknown-root error coverage."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server/tests/suite/v2/thread_eta.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
