@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-09-13/session-tmp-explicit-default-followup#9457bb3188"
+  change_type: "fix"
+  scope: "codex-rs/session-tmp"
+  summary: "Make custom-state recovery discoverable and first enrollment race-free."
+  decision: "Follow the durable per-root locator during read-only recovery discovery, hold the global per-root migration barrier before state and namespace enrollment, and retire only the exact recorded hidden namespace after it is empty."
+  constraints:
+    - "Do not create or adopt state while performing recovery discovery."
+    - "Preserve unknown payload content and untrusted control files."
+    - "Serialize concurrent initial opens without changing the lock domain."
+    - "Keep migration cleanup exact-owned and collision-safe."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/session-tmp/src/state_locator.rs"
+    - "codex-rs/session-tmp/src/state_identity.rs"
+    - "codex-rs/session-tmp/src/state.rs"
+    - "codex-rs/session-tmp/src/migration.rs"
+    - "codex-rs/session-tmp/src/migration_retire.rs"
+    - "codex-rs/session-tmp/src/lib_tests.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6-luna"
