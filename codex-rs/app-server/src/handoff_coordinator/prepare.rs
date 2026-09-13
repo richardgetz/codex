@@ -504,13 +504,13 @@ impl HandoffCoordinator {
                 .await
                 .map_err(core_error)?;
             let source = thread.session_source();
-            let rollout_path = self.materialize_rollout_path(&thread).await?;
             let chain_root = self.loaded_chain_root(*thread_id).await;
             if let (Some(requested_root), Some(chain_root)) = (requested_root, chain_root)
                 && requested_root != chain_root
             {
                 continue;
             }
+            let rollout_path = self.materialize_rollout_path(&thread).await?;
             let preflight = thread.handoff_preflight().await;
             let mut blockers = preflight.blockers;
             blockers.retain(|blocker| !matches!(blocker, HandoffBlocker::LiveDescendants));
