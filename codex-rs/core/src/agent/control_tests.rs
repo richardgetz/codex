@@ -1188,7 +1188,7 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 #[tokio::test]
 async fn send_inter_agent_communication_requeues_when_handoff_is_sealed() {
     let harness = AgentControlHarness::new().await;
-    let (thread_id, _thread) = harness.start_thread().await;
+    let (thread_id, thread) = harness.start_thread().await;
     let communication = InterAgentCommunication::new(
         AgentPath::root(),
         AgentPath::try_from("/root/worker").expect("agent path"),
@@ -1198,7 +1198,13 @@ async fn send_inter_agent_communication_requeues_when_handoff_is_sealed() {
     );
     // Seal the same root control used to submit the completion. The thread's control is a
     // per-tree handle, while the harness control is the sender for this direct-delivery test.
-    let _handoff = harness.control.begin_handoff().expect("seal handoff");
+    let _sender_handoff = harness
+        .control
+        .begin_handoff()
+        .expect("seal sender handoff");
+    // Keep the target tree sealed as well so its inbound poller cannot consume the persisted
+    // fallback before this test claims the durable envelope.
+    let _target_handoff = thread.begin_handoff().expect("seal target handoff");
 
     let error = harness
         .control
