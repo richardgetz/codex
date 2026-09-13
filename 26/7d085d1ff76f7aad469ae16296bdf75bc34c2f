@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-13/session-tmp-recovery-lock-residue#267d085d1"
+  change_type: "fix"
+  scope: "codex-rs/session-tmp"
+  summary: "Retire validated recovery controls while preserving legacy lock pathnames."
+  decision: "Treat regular validated sessions/.locks/<session>.lock files as bounded compatibility residues: remove migrated session records and marker, preserve lock inodes and unknown content, and allow migration completion without recursive cleanup."
+  constraints:
+    - "Never unlink a legacy lock pathname that an old process may hold or await."
+    - "Only valid component-named regular lock files are accepted as managed residues."
+    - "Unknown recovery files and payload content remain untouched."
+    - "Keep migration rerunnable and avoid duplicate records."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/session-tmp/src/migration_retire.rs"
+    - "codex-rs/session-tmp/src/lib_tests.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6-luna"
