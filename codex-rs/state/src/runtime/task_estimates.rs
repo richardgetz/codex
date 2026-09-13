@@ -7,9 +7,7 @@ use crate::TaskEstimateOverall;
 use crate::TaskEstimateSnapshot;
 use crate::TaskEstimateStatus;
 use crate::TaskEstimateUpdateResult;
-use crate::model::TaskEstimateRow;
 use crate::model::datetime_to_epoch_seconds;
-use crate::model::task_estimate_from_row;
 use crate::model::validate_dependencies;
 use crate::model::validate_dependency_graph;
 use crate::model::validate_task_reason;
@@ -18,11 +16,9 @@ use crate::model::validate_task_id;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::ThreadId;
-use sqlx::Row;
 use sqlx::Sqlite;
 use sqlx::SqlitePool;
 use sqlx::Transaction;
-use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -31,8 +27,8 @@ use uuid::Uuid;
 mod task_estimate_math;
 use self::task_estimate_math::compute_overall;
 
-const MAX_TASKS_PER_ROOT: usize = 256;
-const MAX_REVISIONS_PER_TASK: usize = 32;
+pub(super) const MAX_TASKS_PER_ROOT: usize = 256;
+pub(super) const MAX_REVISIONS_PER_TASK: usize = 32;
 const DEFAULT_HISTORY_LIMIT: usize = 50;
 const MAX_HISTORY_LIMIT: usize = 100;
 
@@ -149,11 +145,13 @@ ORDER BY created_at, task_id
         .await?;
         let mut active = Vec::with_capacity(active_rows.len());
         for row in active_rows {
-            active.push(task_from_row_with_revisions(&mut tx, row).await?);
+            active.push(
+                task_estimate_storage::task_from_row_with_revisions(&mut tx, row).await?,
+            );
         }
 
         let (cursor_terminal_at, cursor_task_id) = cursor
-            .map(parse_history_cursor)
+            .map(task_estimate_storage::parse_history_cursor)
             .transpose()?
             .unwrap_or((i64::MIN, String::new()));
         let history_rows = sqlx::query(
@@ -179,10 +177,14 @@ LIMIT ?
         .await?;
         let mut history = Vec::with_capacity(history_rows.len().min(limit));
         for row in history_rows {
-            history.push(task_from_row_with_revisions(&mut tx, row).await?);
+            history.push(
+                task_estimate_storage::task_from_row_with_revisions(&mut tx, row).await?,
+            );
         }
         let next_cursor = if history.len() > limit {
-            history.pop().map(|task| history_cursor(&task))
+            history
+                .pop()
+                .map(|task| task_estimate_storage::history_cursor(&task))
         } else {
             None
         };
@@ -190,7 +192,9 @@ LIMIT ?
         // Keep aggregate dependency resolution independent from the paginated History output.
         // Read every unfinished task plus only the terminal rows explicitly referenced by their
         // parent/dependency graph; lifetime History is intentionally not scanned here.
-        let all_tasks = load_relevant_task_map(&mut tx, root_thread_id, &BTreeSet::new()).await?;
+        let all_tasks =
+            task_estimate_storage::load_relevant_task_map(&mut tx, root_thread_id, &BTreeSet::new())
+                .await?;
 
         tx.commit().await?;
 
@@ -259,7 +263,8 @@ LIMIT ?
         .execute(&mut *tx)
         .await?;
         if actor_thread_id != root_thread_id
-            && !actor_is_descendant(&mut tx, root_thread_id, actor_thread_id).await?
+            && !task_estimate_storage::actor_is_descendant(&mut tx, root_thread_id, actor_thread_id)
+                .await?
         {
             return Err(anyhow::anyhow!(
                 "task estimate actor is not part of the requested root session"
@@ -290,11 +295,15 @@ LIMIT ?
             if let Some(task_id) = changed {
                 changed_ids.insert(task_id);
             }
-            let task_map = load_relevant_task_map(&mut tx, root_thread_id, &changed_ids).await?;
+            let task_map =
+                task_estimate_storage::load_relevant_task_map(&mut tx, root_thread_id, &changed_ids)
+                    .await?;
             validate_dependency_graph(&task_map)?;
-            validate_parent_graph(&task_map)?;
+            task_estimate_storage::validate_parent_graph(&task_map)?;
         }
-        let all_tasks = load_relevant_task_map(&mut tx, root_thread_id, &changed_ids).await?;
+        let all_tasks =
+            task_estimate_storage::load_relevant_task_map(&mut tx, root_thread_id, &changed_ids)
+                .await?;
         if changed_ids.is_empty() {
             let overall = compute_overall(&all_tasks.values().cloned().collect::<Vec<_>>(), now);
             tx.commit().await?;
@@ -316,7 +325,8 @@ LIMIT ?
             let Some(task) = all_tasks.get(&task_id).cloned() else {
                 continue;
             };
-            let revisions = load_revisions(&mut tx, root_thread_id, &task_id).await?;
+            let revisions =
+                task_estimate_storage::load_revisions(&mut tx, root_thread_id, &task_id).await?;
             changed_tasks.push(TaskEstimate {
                 revisions,
                 ..task
@@ -377,7 +387,7 @@ LIMIT ?
                     .clone()
                     .unwrap_or_default();
                 validate_dependencies(&task_id, parent_task_id, &depends_on_task_ids)?;
-                ensure_related_tasks_exist(
+                task_estimate_storage::ensure_related_tasks_exist(
                     tx,
                     root_thread_id,
                     parent_task_id,
@@ -411,7 +421,7 @@ INSERT INTO eta_tasks (
                 .execute(&mut **tx)
                 .await?;
                 if mutation.estimate.is_some() {
-                    insert_revision(
+                    task_estimate_storage::insert_revision(
                         tx,
                         root_thread_id,
                         &task_id,
@@ -430,7 +440,9 @@ INSERT INTO eta_tasks (
                     .as_deref()
                     .ok_or_else(|| anyhow::anyhow!("task updates require task_id"))?;
                 validate_task_id(task_id)?;
-                let Some(existing) = load_task(tx, root_thread_id, task_id).await? else {
+                let Some(existing) =
+                    task_estimate_storage::load_task(tx, root_thread_id, task_id).await?
+                else {
                     return Err(anyhow::anyhow!("task not found: {task_id}"));
                 };
                 ensure_actor_can_mutate(&existing, root_thread_id, actor_thread_id)?;
@@ -461,7 +473,7 @@ INSERT INTO eta_tasks (
                     .unwrap_or(&existing.depends_on_task_ids);
                 if mutation.parent_task_id.is_some() || mutation.depends_on_task_ids.is_some() {
                     validate_dependencies(task_id, parent_task_id, depends_on_task_ids)?;
-                    ensure_related_tasks_exist(
+                    task_estimate_storage::ensure_related_tasks_exist(
                         tx,
                         root_thread_id,
                         parent_task_id,
@@ -560,7 +572,7 @@ WHERE task_id = ? AND root_thread_id = ?
                 .execute(&mut **tx)
                 .await?;
                 if mutation.estimate.is_some() {
-                    insert_revision(
+                    task_estimate_storage::insert_revision(
                         tx,
                         root_thread_id,
                         task_id,
@@ -571,21 +583,12 @@ WHERE task_id = ? AND root_thread_id = ?
                     )
                         .await?;
                 }
-                trim_revisions(tx, root_thread_id, task_id).await?;
+                task_estimate_storage::trim_revisions(tx, root_thread_id, task_id).await?;
                 Ok(Some(task_id.to_string()))
             }
         }
     }
 
-}
-
-async fn task_from_row_with_revisions(
-    tx: &mut Transaction<'_, Sqlite>,
-    row: sqlx::sqlite::SqliteRow,
-) -> anyhow::Result<TaskEstimate> {
-    let task = task_estimate_from_row(TaskEstimateRow::try_from_row(&row)?)?;
-    let revisions = load_revisions(tx, task.root_thread_id, &task.task_id).await?;
-    Ok(TaskEstimate { revisions, ..task })
 }
 
 impl StateRuntime {
@@ -614,56 +617,6 @@ impl StateRuntime {
     }
 }
 
-async fn actor_is_descendant(
-    tx: &mut Transaction<'_, Sqlite>,
-    root_thread_id: ThreadId,
-    actor_thread_id: ThreadId,
-) -> anyhow::Result<bool> {
-    Ok(sqlx::query_scalar::<_, i64>(
-    r#"
-SELECT EXISTS(
-    WITH RECURSIVE subtree(thread_id) AS (
-        SELECT child_thread_id FROM thread_spawn_edges WHERE parent_thread_id = ?
-        UNION
-        SELECT edge.child_thread_id
-        FROM thread_spawn_edges edge JOIN subtree ON edge.parent_thread_id = subtree.thread_id
-    )
-    SELECT 1 FROM subtree WHERE thread_id = ?
-)
-        "#,
-    )
-    .bind(root_thread_id.to_string())
-    .bind(actor_thread_id.to_string())
-    .fetch_one(&mut **tx)
-    .await?
-        != 0)
-}
-
-async fn ensure_related_tasks_exist(
-    tx: &mut Transaction<'_, Sqlite>,
-    root_thread_id: ThreadId,
-    parent_task_id: Option<&str>,
-    depends_on_task_ids: &[String],
-) -> anyhow::Result<()> {
-    let mut related = depends_on_task_ids.iter().map(String::as_str).collect::<Vec<_>>();
-    if let Some(parent_task_id) = parent_task_id {
-        related.push(parent_task_id);
-    }
-    for task_id in related {
-        let exists = sqlx::query_scalar::<_, i64>(
-            "SELECT EXISTS(SELECT 1 FROM eta_tasks WHERE root_thread_id = ? AND task_id = ?)",
-        )
-        .bind(root_thread_id.to_string())
-        .bind(task_id)
-        .fetch_one(&mut **tx)
-        .await?;
-        if exists == 0 {
-            return Err(anyhow::anyhow!("task relationship references unknown task `{task_id}`"));
-        }
-    }
-    Ok(())
-}
-
 fn ensure_actor_can_mutate(
     task: &TaskEstimate,
     root_thread_id: ThreadId,
@@ -681,223 +634,6 @@ fn matches_terminal_action(status: TaskEstimateStatus, action: TaskEstimateActio
         (TaskEstimateStatus::Completed, TaskEstimateAction::Complete)
             | (TaskEstimateStatus::Cancelled, TaskEstimateAction::Cancel)
     )
-}
-
-async fn insert_revision(
-    tx: &mut Transaction<'_, Sqlite>,
-    root_thread_id: ThreadId,
-    task_id: &str,
-    estimate: crate::TaskEstimateRange,
-    reason: Option<&str>,
-    now: DateTime<Utc>,
-    actor_thread_id: ThreadId,
-) -> anyhow::Result<()> {
-    let next_revision = sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(MAX(revision), 0) + 1 FROM eta_task_revisions WHERE root_thread_id = ? AND task_id = ?",
-    )
-    .bind(root_thread_id.to_string())
-    .bind(task_id)
-    .fetch_one(&mut **tx)
-    .await?;
-    sqlx::query(
-        "INSERT INTO eta_task_revisions (root_thread_id, task_id, revision, lower_seconds, upper_seconds, reason, updated_at, actor_thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(root_thread_id.to_string())
-    .bind(task_id)
-    .bind(next_revision)
-    .bind(estimate.lower_seconds)
-    .bind(estimate.upper_seconds)
-    .bind(reason)
-    .bind(datetime_to_epoch_seconds(now))
-    .bind(actor_thread_id.to_string())
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-async fn trim_revisions(
-    tx: &mut Transaction<'_, Sqlite>,
-    root_thread_id: ThreadId,
-    task_id: &str,
-) -> anyhow::Result<()> {
-    sqlx::query(
-        r#"
-DELETE FROM eta_task_revisions
-WHERE root_thread_id = ? AND task_id = ?
-  AND revision NOT IN (
-      SELECT revision FROM eta_task_revisions
-      WHERE root_thread_id = ? AND task_id = ?
-      ORDER BY revision DESC LIMIT ?
-  )
-        "#,
-    )
-    .bind(root_thread_id.to_string())
-    .bind(task_id)
-    .bind(root_thread_id.to_string())
-    .bind(task_id)
-    .bind(i64::try_from(MAX_REVISIONS_PER_TASK).unwrap_or(i64::MAX))
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-async fn load_task(
-    tx: &mut Transaction<'_, Sqlite>,
-    root_thread_id: ThreadId,
-    task_id: &str,
-) -> anyhow::Result<Option<TaskEstimate>> {
-    let row = sqlx::query(
-        r#"
-SELECT task_id, root_thread_id, owner_thread_id, parent_task_id, depends_on_task_ids, title,
-       status, current_lower_seconds, current_upper_seconds, original_lower_seconds,
-       original_upper_seconds, created_at, started_at, terminal_at, actual_elapsed_seconds,
-       updated_at, updated_sequence
-FROM eta_tasks WHERE root_thread_id = ? AND task_id = ?
-        "#,
-    )
-    .bind(root_thread_id.to_string())
-    .bind(task_id)
-    .fetch_optional(&mut **tx)
-    .await?;
-    row.map(|row| task_estimate_from_row(TaskEstimateRow::try_from_row(&row)?))
-        .transpose()
-}
-
-async fn load_relevant_task_map(
-    tx: &mut Transaction<'_, Sqlite>,
-    root_thread_id: ThreadId,
-    seed_task_ids: &BTreeSet<String>,
-) -> anyhow::Result<BTreeMap<String, TaskEstimate>> {
-    let rows = sqlx::query(
-        r#"
-SELECT task_id, root_thread_id, owner_thread_id, parent_task_id, depends_on_task_ids, title,
-       status, current_lower_seconds, current_upper_seconds, original_lower_seconds,
-       original_upper_seconds, created_at, started_at, terminal_at, actual_elapsed_seconds,
-       updated_at, updated_sequence
-FROM eta_tasks
-WHERE root_thread_id = ? AND status IN ('pending', 'active', 'blocked')
-        "#,
-    )
-    .bind(root_thread_id.to_string())
-    .fetch_all(&mut **tx)
-    .await?;
-    let mut tasks = rows
-        .into_iter()
-        .map(|row| {
-            let task = task_estimate_from_row(TaskEstimateRow::try_from_row(&row)?)?;
-            Ok((task.task_id.clone(), task))
-        })
-        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-    let mut pending = tasks
-        .values()
-        .flat_map(|task| {
-            task.parent_task_id
-                .iter()
-                .cloned()
-                .chain(task.depends_on_task_ids.iter().cloned())
-        })
-        .chain(seed_task_ids.iter().cloned())
-        .collect::<BTreeSet<_>>();
-    const MAX_RELEVANT_TASKS: usize = MAX_TASKS_PER_ROOT * 64;
-    while let Some(task_id) = pending.pop_first() {
-        if tasks.contains_key(&task_id) {
-            continue;
-        }
-        let Some(task) = load_task(tx, root_thread_id, &task_id).await? else {
-            return Err(anyhow::anyhow!("task relationship references unknown task `{task_id}`"));
-        };
-        pending.extend(
-            task.parent_task_id
-                .iter()
-                .cloned()
-                .chain(task.depends_on_task_ids.iter().cloned()),
-        );
-        tasks.insert(task_id, task);
-        if tasks.len() > MAX_RELEVANT_TASKS {
-            return Err(anyhow::anyhow!(
-                "ETA dependency graph exceeds the bounded aggregate read"
-            ));
-        }
-    }
-    if tasks.is_empty() {
-        // A root with only terminal History still has a completed aggregate. Read one terminal
-        // row as a sentinel instead of scanning the unbounded lifetime History.
-        let row = sqlx::query(
-            r#"
-SELECT task_id, root_thread_id, owner_thread_id, parent_task_id, depends_on_task_ids, title,
-       status, current_lower_seconds, current_upper_seconds, original_lower_seconds,
-       original_upper_seconds, created_at, started_at, terminal_at, actual_elapsed_seconds,
-       updated_at, updated_sequence
-FROM eta_tasks
-WHERE root_thread_id = ? AND status IN ('completed', 'cancelled')
-ORDER BY terminal_at DESC, task_id DESC
-LIMIT 1
-            "#,
-        )
-        .bind(root_thread_id.to_string())
-        .fetch_optional(&mut **tx)
-        .await?;
-        if let Some(row) = row {
-            let task = task_estimate_from_row(TaskEstimateRow::try_from_row(&row)?)?;
-            tasks.insert(task.task_id.clone(), task);
-        }
-    }
-    Ok(tasks)
-}
-
-async fn load_revisions(
-    tx: &mut Transaction<'_, Sqlite>,
-    root_thread_id: ThreadId,
-    task_id: &str,
-) -> anyhow::Result<Vec<crate::TaskEstimateRevision>> {
-    sqlx::query(
-        "SELECT lower_seconds, upper_seconds, reason, updated_at, actor_thread_id FROM eta_task_revisions WHERE root_thread_id = ? AND task_id = ? ORDER BY revision",
-    )
-    .bind(root_thread_id.to_string())
-    .bind(task_id)
-    .fetch_all(&mut **tx)
-    .await?
-    .iter()
-    .map(crate::model::task_estimate_revision_from_row)
-    .collect()
-}
-
-fn parse_history_cursor(cursor: &str) -> anyhow::Result<(i64, String)> {
-    let (timestamp, task_id) = cursor
-        .split_once(':')
-        .ok_or_else(|| anyhow::anyhow!("invalid ETA history cursor"))?;
-    let timestamp = timestamp
-        .parse::<i64>()
-        .map_err(|_| anyhow::anyhow!("invalid ETA history cursor timestamp"))?;
-    validate_task_id(task_id)?;
-    Ok((timestamp, task_id.to_string()))
-}
-
-fn history_cursor(task: &TaskEstimate) -> String {
-    format!(
-        "{}:{}",
-        task.terminal_at
-            .map(datetime_to_epoch_seconds)
-            .unwrap_or_default(),
-        task.task_id
-    )
-}
-
-fn validate_parent_graph(tasks: &BTreeMap<String, TaskEstimate>) -> anyhow::Result<()> {
-    for task in tasks.values() {
-        let mut current = task.parent_task_id.as_deref();
-        let mut seen = BTreeSet::new();
-        while let Some(parent_id) = current {
-            if !seen.insert(parent_id) {
-                return Err(anyhow::anyhow!("task parent graph contains a cycle"));
-            }
-            let parent = tasks
-                .get(parent_id)
-                .ok_or_else(|| anyhow::anyhow!("task parent references unknown task `{parent_id}`"))?;
-            current = parent.parent_task_id.as_deref();
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
