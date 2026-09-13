@@ -835,11 +835,7 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides(
                 .disable(Feature::MultiAgentV2)
                 .expect("MultiAgentV2 feature");
             configure_team(config, TeamMode::LeadWorker);
-            let profiles = config
-                .team
-                .profiles
-                .as_mut()
-                .expect("team profiles");
+            let profiles = config.team.profiles.as_mut().expect("team profiles");
             profiles.lead_dynamic_handoff = true;
             profiles.lead_balance = 5;
             config.team.worker_max_concurrent = Some(1);
@@ -943,25 +939,37 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides(
     assert_request_assignment(&child_request, WORKER_MODEL, "low");
     assert_request_assignment(&grandchild_request, WORKER_MODEL, "low");
     let root_fragments = team_instruction_fragments(&root_request);
-    assert!(root_fragments
-        .iter()
-        .any(|fragment| fragment.contains("quick preflight judgment")));
-    assert!(root_fragments
-        .iter()
-        .any(|fragment| fragment.contains("browser/UI/CLI")));
-    assert!(root_fragments
-        .iter()
-        .any(|fragment| fragment.contains("Maximum confidence")));
+    assert!(
+        root_fragments
+            .iter()
+            .any(|fragment| fragment.contains("quick preflight judgment"))
+    );
+    assert!(
+        root_fragments
+            .iter()
+            .any(|fragment| fragment.contains("browser/UI/CLI"))
+    );
+    assert!(
+        root_fragments
+            .iter()
+            .any(|fragment| fragment.contains("Maximum confidence"))
+    );
     let child_fragments = team_instruction_fragments(&child_request);
-    assert!(child_fragments
-        .iter()
-        .any(|fragment| fragment.contains("filter irrelevant material")));
-    assert!(child_fragments
-        .iter()
-        .any(|fragment| fragment.contains("complete the scoped work")));
-    assert!(child_fragments
-        .iter()
-        .any(|fragment| fragment.contains("another CLI wrapper")));
+    assert!(
+        child_fragments
+            .iter()
+            .any(|fragment| fragment.contains("filter irrelevant material"))
+    );
+    assert!(
+        child_fragments
+            .iter()
+            .any(|fragment| fragment.contains("complete the scoped work"))
+    );
+    assert!(
+        child_fragments
+            .iter()
+            .any(|fragment| fragment.contains("another CLI wrapper"))
+    );
     child_completion_request.function_call_output(CHILD_SPAWN_CALL_ID);
 
     let child_thread_id = child_request.body_json()["client_metadata"]["thread_id"]
@@ -1482,15 +1490,21 @@ async fn team_snapshot_survives_cold_resume_and_profile_change() -> Result<()> {
     let resumed_request = resumed_response.single_request();
     assert_request_assignment(&initial_request, LEAD_MODEL, "max");
     let initial_fragments = team_instruction_fragments(&initial_request);
-    assert!(initial_fragments
-        .iter()
-        .any(|fragment| fragment.contains("delegate substantive in-scope work")));
-    assert!(!initial_fragments
-        .iter()
-        .any(|fragment| fragment.contains("Dynamic handoff")));
-    assert!(!initial_fragments
-        .iter()
-        .any(|fragment| fragment.contains("browser/UI/CLI")));
+    assert!(
+        initial_fragments
+            .iter()
+            .any(|fragment| fragment.contains("delegate substantive in-scope work"))
+    );
+    assert!(
+        !initial_fragments
+            .iter()
+            .any(|fragment| fragment.contains("Dynamic handoff"))
+    );
+    assert!(
+        !initial_fragments
+            .iter()
+            .any(|fragment| fragment.contains("browser/UI/CLI"))
+    );
     assert!(
         !initial_fragments
             .iter()

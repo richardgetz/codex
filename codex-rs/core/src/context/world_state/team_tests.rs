@@ -46,10 +46,16 @@ fn dynamic_handoff_updates_lead_and_worker_guidance() {
         .expect("dynamic handoff should update Lead instructions");
     assert!(fragment.body().contains("quick preflight judgment"));
     assert!(fragment.body().contains("browser/UI/CLI"));
-    assert!(fragment.body().contains("routine execution or verification loops"));
-    assert!(fragment
-        .body()
-        .contains("neither reverses dynamic execution routing"));
+    assert!(
+        fragment
+            .body()
+            .contains("routine execution or verification loops")
+    );
+    assert!(
+        fragment
+            .body()
+            .contains("neither reverses dynamic execution routing")
+    );
 
     let enabled_worker = TeamPolicyState::new(TeamRole::Worker, None).with_dynamic_handoff(true);
     let fragment = enabled_worker
@@ -101,9 +107,11 @@ fn dynamic_handoff_execution_routing_survives_lead_balance_changes() {
         .render_diff(PreviousSectionState::Absent)
         .expect("low-balance dynamic handoff should render");
     assert!(low_fragment.body().contains("Maximum savings"));
-    assert!(low_fragment
-        .body()
-        .contains("neither reverses dynamic execution routing"));
+    assert!(
+        low_fragment
+            .body()
+            .contains("neither reverses dynamic execution routing")
+    );
 
     let high = TeamPolicyState::new(TeamRole::Lead, None)
         .with_dynamic_handoff(true)
@@ -112,7 +120,9 @@ fn dynamic_handoff_execution_routing_survives_lead_balance_changes() {
         .render_diff(PreviousSectionState::Absent)
         .expect("high-balance dynamic handoff should render");
     assert!(high_fragment.body().contains("Maximum confidence"));
-    assert!(high_fragment
-        .body()
-        .contains("neither reverses dynamic execution routing"));
+    assert!(
+        high_fragment
+            .body()
+            .contains("neither reverses dynamic execution routing")
+    );
 }
