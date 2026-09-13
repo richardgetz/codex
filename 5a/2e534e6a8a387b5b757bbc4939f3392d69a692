@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-09-13/session-eta-tests#5a2e534e6a8a"
+  change_type: "test"
+  scope: "eta"
+  summary: "Cover model and app-server ETA lifecycle wiring and document the bounded contract."
+  decision: "Exercise explicit create, start, and complete operations through the model SSE harness and public app-server JSON-RPC, including persistence, notification, terminal history, and no-turn read behavior; document estimate, history, aggregation, and migration limits."
+  constraints:
+    - "Tests must remain deterministic and source-only in this worker; the designated build owner runs Rust validation after integration."
+    - "Coverage must assert explicit terminal semantics and original-versus-harness actual timing without inferring completion from idle, elapsed time, or UI reads."
+    - "Documentation must state stale, unknown, first-estimate baseline, dependency, pagination, and migration compile-data boundaries."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/tests/suite/eta.rs"
+    - "codex-rs/app-server/tests/suite/v2/thread_eta.rs"
+    - "codex-rs/app-server/README.md"
+    - "docs/fork-differences.md"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
