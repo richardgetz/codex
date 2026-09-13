@@ -164,6 +164,61 @@ async fn stale_unrelated_work_keeps_update_aggregate_unknown() {
 }
 
 #[tokio::test]
+async fn repeated_start_does_not_rewrite_original_baseline() {
+    let (runtime, root) = runtime().await;
+    let now = at(1_700_000_000);
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[create("task", "Task", None)],
+            now,
+        )
+        .await
+        .expect("create task");
+    let first_start = TaskEstimateMutation {
+        action: TaskEstimateAction::Start,
+        task_id: Some("task".to_string()),
+        title: None,
+        parent_task_id: None,
+        depends_on_task_ids: None,
+        estimate: Some(TaskEstimateRange {
+            lower_seconds: Some(10),
+            upper_seconds: Some(20),
+        }),
+        reason: Some("initial estimate".to_string()),
+    };
+    runtime
+        .apply_task_estimate_mutations(root, root, &[first_start], now)
+        .await
+        .expect("start task");
+    let repeated_start = TaskEstimateMutation {
+        action: TaskEstimateAction::Start,
+        task_id: Some("task".to_string()),
+        title: None,
+        parent_task_id: None,
+        depends_on_task_ids: None,
+        estimate: Some(TaskEstimateRange {
+            lower_seconds: Some(30),
+            upper_seconds: Some(40),
+        }),
+        reason: Some("late estimate".to_string()),
+    };
+    let update = runtime
+        .apply_task_estimate_mutations(root, root, &[repeated_start], now + Duration::seconds(1))
+        .await
+        .expect("repeat start task");
+    assert_eq!(
+        update.changed_tasks[0].original_range(),
+        TaskEstimateRange {
+            lower_seconds: Some(10),
+            upper_seconds: Some(20),
+        }
+    );
+    runtime.close().await;
+}
+
+#[tokio::test]
 async fn grouping_parent_is_not_double_counted_and_requires_explicit_completion() {
     let (runtime, root) = runtime().await;
     let now = at(1_700_000_000);
@@ -266,6 +321,53 @@ async fn grouping_dependencies_are_serialized_before_parallel_children() {
         .read_task_estimate_snapshot(root, now, None, None)
         .await
         .expect("group dependency snapshot");
+    assert_eq!(
+        (
+            snapshot.overall.remaining_lower_seconds,
+            snapshot.overall.remaining_upper_seconds,
+            snapshot.overall.unknown_reason,
+        ),
+        (Some(12), Some(12), None),
+    );
+    runtime.close().await;
+}
+
+#[tokio::test]
+async fn grouping_dependency_paths_do_not_double_count_shared_transitive_work() {
+    let (runtime, root) = runtime().await;
+    let now = at(1_700_000_000);
+    let mut first = create("first", "First", Some((5, 5)));
+    first.depends_on_task_ids = Some(vec!["shared".to_string()]);
+    let mut second = create("second", "Second", Some((7, 7)));
+    second.depends_on_task_ids = Some(vec!["shared".to_string()]);
+    let mut group = create("group", "Group", Some((100, 100)));
+    group.depends_on_task_ids = Some(vec!["first".to_string(), "second".to_string()]);
+    let mut child = create("child", "Child", Some((3, 3)));
+    child.parent_task_id = Some("group".to_string());
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[
+                create("shared", "Shared", Some((2, 2))),
+                first,
+                second,
+                group,
+                child,
+                transition(TaskEstimateAction::Start, "shared"),
+                transition(TaskEstimateAction::Start, "first"),
+                transition(TaskEstimateAction::Start, "second"),
+                transition(TaskEstimateAction::Start, "group"),
+                transition(TaskEstimateAction::Start, "child"),
+            ],
+            now,
+        )
+        .await
+        .expect("create and start shared grouping dependencies");
+    let snapshot = runtime
+        .read_task_estimate_snapshot(root, now, None, None)
+        .await
+        .expect("shared grouping dependency snapshot");
     assert_eq!(
         (
             snapshot.overall.remaining_lower_seconds,

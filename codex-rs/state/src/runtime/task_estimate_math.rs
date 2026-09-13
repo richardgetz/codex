@@ -95,6 +95,8 @@ pub(super) fn compute_overall(tasks: &[TaskEstimate], now: DateTime<Utc>) -> Tas
             Ok(dependencies) => dependencies,
             Err(reason) => return TaskEstimateOverall::unknown(reason),
         };
+        let mut inherited_lower = 0_i64;
+        let mut inherited_upper = 0_i64;
         for dependency_id in inherited_dependencies {
             if existing_dependencies.contains(&dependency_id) {
                 continue;
@@ -109,9 +111,11 @@ pub(super) fn compute_overall(tasks: &[TaskEstimate], now: DateTime<Utc>) -> Tas
                 Ok(path) => path,
                 Err(reason) => return TaskEstimateOverall::unknown(reason),
             };
-            path_lower = path_lower.saturating_add(dependency_lower);
-            path_upper = path_upper.saturating_add(dependency_upper);
+            inherited_lower = inherited_lower.max(dependency_lower);
+            inherited_upper = inherited_upper.max(dependency_upper);
         }
+        path_lower = path_lower.saturating_add(inherited_lower);
+        path_upper = path_upper.saturating_add(inherited_upper);
         lower = lower.max(path_lower);
         upper = upper.max(path_upper);
     }

@@ -193,6 +193,44 @@ WHERE root_thread_id = ? AND status IN ('pending', 'active', 'blocked')
         })
         .chain(seed_task_ids.iter().cloned())
         .collect::<BTreeSet<_>>();
+    // Retain one terminal child for every unfinished group that has no active child. The
+    // aggregate uses this bounded marker to keep an explicitly active grouping task in the
+    // unknown/awaiting-completion state without scanning its entire terminal history.
+    let terminal_group_ids = tasks
+        .values()
+        .filter(|task| !task.status.is_terminal())
+        .filter(|task| {
+            !tasks.iter().any(|(_, child)| {
+                child.parent_task_id.as_deref() == Some(task.task_id.as_str())
+                    && !child.status.is_terminal()
+            })
+        })
+        .map(|task| task.task_id.clone())
+        .collect::<Vec<_>>();
+    for parent_task_id in terminal_group_ids {
+        let terminal_child_id = sqlx::query_scalar::<_, String>(
+            "SELECT task_id FROM eta_tasks WHERE root_thread_id = ? AND parent_task_id = ? AND status IN ('completed', 'cancelled') ORDER BY terminal_at DESC, task_id DESC LIMIT 1",
+        )
+        .bind(root_thread_id.to_string())
+        .bind(&parent_task_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        let Some(terminal_child_id) = terminal_child_id else {
+            continue;
+        };
+        let Some(task) = load_task(tx, root_thread_id, &terminal_child_id).await? else {
+            return Err(anyhow::anyhow!(
+                "task relationship references unknown task `{terminal_child_id}`"
+            ));
+        };
+        pending.extend(
+            task.parent_task_id
+                .iter()
+                .cloned()
+                .chain(task.depends_on_task_ids.iter().cloned()),
+        );
+        tasks.insert(task.task_id.clone(), task);
+    }
     const MAX_RELEVANT_TASKS: usize = MAX_TASKS_PER_ROOT * 64;
     while let Some(task_id) = pending.pop_first() {
         if tasks.contains_key(&task_id) {

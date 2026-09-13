@@ -67,13 +67,7 @@ impl ThreadEtaRequestProcessor {
             .root_thread_id(thread_id)
             .await
             .map_err(|err| internal_error(format!("failed to resolve ETA root: {err}")))?;
-        let root_exists = state_db
-            .get_thread(root_thread_id)
-            .await
-            .map_err(|err| internal_error(format!("failed to validate ETA root: {err}")))?
-            .is_some()
-            || self.thread_manager.get_thread(root_thread_id).await.is_ok();
-        if !root_exists {
+        if !self.root_exists(state_db, root_thread_id).await? {
             return Err(invalid_request("ETA root thread was not found"));
         }
         let snapshot = state_db
@@ -114,13 +108,7 @@ impl ThreadEtaRequestProcessor {
                 "ETA updates must target the root session thread",
             ));
         }
-        let root_exists = state_db
-            .get_thread(root_thread_id)
-            .await
-            .map_err(|err| internal_error(format!("failed to validate ETA root: {err}")))?
-            .is_some()
-            || self.thread_manager.get_thread(root_thread_id).await.is_ok();
-        if !root_exists {
+        if !self.root_exists(state_db, root_thread_id).await? {
             return Err(invalid_request("ETA root thread was not found"));
         }
         let mutations = params
@@ -155,6 +143,25 @@ impl ThreadEtaRequestProcessor {
         self.state_db
             .as_ref()
             .ok_or_else(|| internal_error("sqlite state db unavailable for ETA"))
+    }
+
+    async fn root_exists(
+        &self,
+        state_db: &StateDbHandle,
+        root_thread_id: ThreadId,
+    ) -> Result<bool, codex_app_server_protocol::JSONRPCErrorError> {
+        if let Some(metadata) = state_db
+            .get_thread(root_thread_id)
+            .await
+            .map_err(|err| internal_error(format!("failed to validate ETA root: {err}")))?
+        {
+            return Ok(!metadata.rollout_path.as_os_str().is_empty());
+        }
+        let Ok(thread) = self.thread_manager.get_thread(root_thread_id).await else {
+            return Ok(false);
+        };
+        let config = thread.config_snapshot().await;
+        Ok(!config.ephemeral && thread.rollout_path().is_some())
     }
 }
 

@@ -501,9 +501,9 @@ INSERT INTO eta_tasks (
                     TaskEstimateAction::Cancel => TaskEstimateStatus::Cancelled,
                     TaskEstimateAction::Create => unreachable!(),
                 };
-                let started_at = if matches!(action, TaskEstimateAction::Start)
-                    && existing.started_at.is_none()
-                {
+                let starts_now =
+                    matches!(action, TaskEstimateAction::Start) && existing.started_at.is_none();
+                let started_at = if starts_now {
                     Some(now)
                 } else {
                     existing.started_at
@@ -514,8 +514,7 @@ INSERT INTO eta_tasks (
                             existing.original_lower_seconds,
                             existing.original_upper_seconds,
                         )
-                    } else if started_at.is_some_and(|_| current_range.is_known())
-                        && matches!(action, TaskEstimateAction::Start)
+                    } else if starts_now && current_range.is_known()
                     {
                         (current_range.lower_seconds, current_range.upper_seconds)
                     } else {
