@@ -29,6 +29,10 @@ release or merge rules.
   disabling the standalone updater for that selection; custom bootstrap stays on
   the local Unix socket unless existing remote-control behavior is explicitly
   requested.
+- App-server daemon apply/recover checkpoints every loaded root before
+  replacing the selected local launcher, requires a fully suspended receipt,
+  restores exact turn ids, and persists unresolved failures for explicit
+  recovery without enabling remote control.
 - macOS Seatbelt GPU/Metal base-policy allowances preserve focused IOKit,
   service, and sysctl access for sandboxed MPS/MLX/PyTorch workloads with
   deny-wildcard regression coverage.
@@ -672,6 +676,10 @@ release or merge rules.
   actual path/version, keeps custom bootstrap local unless `--remote-control` is
   explicit, and does not start the standalone updater for configured npm
   launchers.
+- Verify app-server daemon apply prepares all loaded roots, replaces the
+  process only after a suspended all-node receipt, records start/recovery
+  failures durably, restores exact turn ids, and requires explicit recover
+  before retrying an unresolved attempt without enabling remote control.
 - Verify the macOS Seatbelt GPU/Metal base-policy allowances and focused
   regression tests survive upstream policy changes without wildcard access.
 - Verify `enable_mcp_approvals` remains a Rick-owned toggle and fork-only

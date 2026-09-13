@@ -798,6 +798,15 @@ enum AppServerDaemonSubcommand {
     /// Restart the local app server daemon.
     Restart,
 
+    /// Apply an installed Codex update after checkpointing every loaded app-server tree.
+    Apply,
+
+    /// Recover a previously checkpointed app-server tree after an interrupted apply.
+    Recover,
+
+    /// Print the latest app-server apply attempt without changing daemon state.
+    ApplyStatus,
+
     /// Enable remote control for future starts and a currently running managed daemon.
     EnableRemoteControl,
 
@@ -1425,6 +1434,17 @@ async fn cli_main(
                     }
                     AppServerDaemonSubcommand::Restart => {
                         print_app_server_daemon_output(AppServerLifecycleCommand::Restart).await?;
+                    }
+                    AppServerDaemonSubcommand::Apply => {
+                        print_app_server_apply_output(codex_app_server_daemon::apply().await?).await?;
+                    }
+                    AppServerDaemonSubcommand::Recover => {
+                        print_app_server_apply_output(codex_app_server_daemon::recover().await?).await?;
+                    }
+                    AppServerDaemonSubcommand::ApplyStatus => {
+                        print_app_server_apply_output(
+                            codex_app_server_daemon::apply_status().await?,
+                        ).await?;
                     }
                     AppServerDaemonSubcommand::EnableRemoteControl => {
                         print_app_server_remote_control_output(AppServerRemoteControlMode::Enabled)
@@ -2756,6 +2776,9 @@ fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'sta
             AppServerDaemonSubcommand::Bootstrap(_) => "app-server daemon bootstrap",
             AppServerDaemonSubcommand::Start => "app-server daemon start",
             AppServerDaemonSubcommand::Restart => "app-server daemon restart",
+            AppServerDaemonSubcommand::Apply => "app-server daemon apply",
+            AppServerDaemonSubcommand::Recover => "app-server daemon recover",
+            AppServerDaemonSubcommand::ApplyStatus => "app-server daemon apply-status",
             AppServerDaemonSubcommand::EnableRemoteControl => {
                 "app-server daemon enable-remote-control"
             }
@@ -2777,6 +2800,13 @@ fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'sta
 
 async fn print_app_server_daemon_output(command: AppServerLifecycleCommand) -> anyhow::Result<()> {
     let output = codex_app_server_daemon::run(command).await?;
+    println!("{}", serde_json::to_string(&output)?);
+    Ok(())
+}
+
+async fn print_app_server_apply_output(
+    output: codex_app_server_daemon::ApplyOutput,
+) -> anyhow::Result<()> {
     println!("{}", serde_json::to_string(&output)?);
     Ok(())
 }
@@ -5087,6 +5117,27 @@ mod tests {
             app_server_from_args(["codex", "app-server", "daemon", "restart"].as_ref()).subcommand,
             Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
                 subcommand: AppServerDaemonSubcommand::Restart
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(["codex", "app-server", "daemon", "apply"].as_ref()).subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Apply
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(["codex", "app-server", "daemon", "recover"].as_ref()).subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Recover
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(
+                ["codex", "app-server", "daemon", "apply-status"].as_ref()
+            )
+            .subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::ApplyStatus
             }))
         ));
         assert!(matches!(

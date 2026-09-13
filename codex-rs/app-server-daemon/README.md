@@ -32,6 +32,9 @@ initialize the connection, the TUI starts an embedded server instead. Explicit
 ```sh
 codex app-server daemon start
 codex app-server daemon restart
+codex app-server daemon apply
+codex app-server daemon recover
+codex app-server daemon apply-status
 codex app-server daemon enable-remote-control
 codex app-server daemon disable-remote-control
 codex app-server daemon stop
@@ -143,6 +146,28 @@ For a configured launcher, run the launcher's normal update command and then
 restart the daemon. The persisted launcher path is reused and re-evaluated, so
 symlinks and shims can point to the newly installed version.
 
+### Safe installed-version apply
+
+apply is the daemon-wide update button for a locally installed launcher. It asks
+the app-server coordinator to checkpoint every loaded root and child tree. The
+daemon stops only after the coordinator returns a suspended receipt in which
+every node is either suspended with its exact turn id or notActive with no turn
+id. A durable apply-receipt.json is written before the old process is stopped;
+the selected launcher is then started, and recover restores the recorded trees
+by exact turn id. The command reports applied only after the coordinator reports
+completed. During an active checkpoint or recovery, the JSON status is
+inProgress; blocked checkpoints and start/recovery failures report
+needsAttention and stay in the receipt for reconciliation with:
+
+~~~sh
+codex app-server daemon recover
+codex app-server daemon apply-status
+~~~
+
+apply always prepares all loaded roots because replacing the daemon would
+interrupt every tree. apply-status is read-only. These commands use the local
+Unix control socket and do not enable remote control or enroll a cloud service.
+
 ## Lifecycle semantics
 
 `start` is idempotent and returns after app-server is ready to answer the normal
@@ -161,9 +186,10 @@ daemon normally.
 `stop` sends a graceful termination request first, then sends a second
 termination signal after the grace window if the process is still alive.
 
-All mutating lifecycle commands are serialized per `CODEX_HOME`, so a concurrent
-`start`, `restart`, `enable-remote-control`, `disable-remote-control`, `stop`,
-or `bootstrap` does not race another in-flight lifecycle operation.
+All mutating lifecycle commands are serialized per CODEX_HOME, so a concurrent
+start, restart, apply, recover, enable-remote-control, disable-remote-control,
+stop, or bootstrap does not race another in-flight lifecycle operation. An
+unresolved apply receipt blocks a new apply until recover reconciles it.
 
 ## State
 
@@ -174,3 +200,5 @@ The daemon stores its local state under `CODEX_HOME/app-server-daemon/`:
 - `app-server.pid` for the app-server process record
 - `app-server-updater.pid` for the pid-backed standalone updater loop
 - `daemon.lock` for daemon-wide lifecycle serialization
+- apply-receipt.json for the latest checkpoint, selected launcher, and any
+  recovery failure that needs attention

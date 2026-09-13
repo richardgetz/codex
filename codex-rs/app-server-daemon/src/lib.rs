@@ -1,5 +1,7 @@
 //! Managed app-server lifecycle, serialized across CLI invocations and the updater.
 
+mod apply;
+mod apply_receipt;
 mod backend;
 #[cfg(windows)]
 use backend::windows::try_lock_file;
@@ -27,6 +29,7 @@ use managed_install::managed_codex_bin;
 use managed_install::managed_codex_version;
 use serde::Serialize;
 use settings::DaemonSettings;
+pub use apply_receipt::{ApplyOutput, ApplyStatus};
 use tokio::time::sleep;
 
 const START_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -36,6 +39,7 @@ const PID_FILE_NAME: &str = "app-server.pid";
 const UPDATE_PID_FILE_NAME: &str = "app-server-updater.pid";
 const OPERATION_LOCK_FILE_NAME: &str = "daemon.lock";
 const SETTINGS_FILE_NAME: &str = "settings.json";
+const APPLY_RECEIPT_FILE_NAME: &str = "apply-receipt.json";
 const STATE_DIR_NAME: &str = "app-server-daemon";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,6 +210,25 @@ pub async fn run(command: LifecycleCommand) -> Result<LifecycleOutput> {
     Daemon::from_environment()?.run(command).await
 }
 
+pub async fn apply() -> Result<ApplyOutput> {
+    ensure_supported_platform()?;
+    #[cfg(windows)]
+    backend::windows::ensure_not_elevated()?;
+    Daemon::from_environment()?.apply().await
+}
+
+pub async fn recover() -> Result<ApplyOutput> {
+    ensure_supported_platform()?;
+    #[cfg(windows)]
+    backend::windows::ensure_not_elevated()?;
+    Daemon::from_environment()?.recover().await
+}
+
+pub async fn apply_status() -> Result<ApplyOutput> {
+    ensure_supported_platform()?;
+    Daemon::from_environment()?.apply_status().await
+}
+
 pub async fn bootstrap(options: BootstrapOptions) -> Result<BootstrapOutput> {
     ensure_supported_platform()?;
     #[cfg(windows)]
@@ -277,6 +300,7 @@ struct Daemon {
     update_pid_file: PathBuf,
     operation_lock_file: PathBuf,
     settings_file: PathBuf,
+    apply_receipt_file: PathBuf,
     managed_codex_bin: PathBuf,
 }
 
@@ -293,6 +317,7 @@ impl Daemon {
             update_pid_file: state_dir.join(UPDATE_PID_FILE_NAME),
             operation_lock_file: state_dir.join(OPERATION_LOCK_FILE_NAME),
             settings_file: state_dir.join(SETTINGS_FILE_NAME),
+            apply_receipt_file: state_dir.join(APPLY_RECEIPT_FILE_NAME),
             managed_codex_bin: managed_codex_bin(codex_home.as_path()),
         })
     }
@@ -1152,6 +1177,7 @@ mod tests {
             update_pid_file: "updater".into(),
             operation_lock_file: "lock".into(),
             settings_file: "settings".into(),
+            apply_receipt_file: "apply-receipt".into(),
             managed_codex_bin: "/codex/standalone".into(),
         };
         let launcher = configured_launcher_path();
@@ -1173,6 +1199,7 @@ mod tests {
             update_pid_file: "updater".into(),
             operation_lock_file: "lock".into(),
             settings_file: "settings".into(),
+            apply_receipt_file: "apply-receipt".into(),
             managed_codex_bin: "/codex/standalone".into(),
         };
         let settings = DaemonSettings {
@@ -1197,6 +1224,7 @@ mod tests {
             update_pid_file: temp_dir.path().join("app-server-updater.pid"),
             operation_lock_file: temp_dir.path().join("daemon.lock"),
             settings_file: temp_dir.path().join("settings.json"),
+            apply_receipt_file: temp_dir.path().join("apply-receipt.json"),
             managed_codex_bin: temp_dir.path().join("standalone-codex"),
         };
         DaemonSettings {
@@ -1234,6 +1262,7 @@ mod tests {
             update_pid_file: state.join("updater.pid"),
             operation_lock_file: state.join("daemon.lock"),
             settings_file: state.join("settings.json"),
+            apply_receipt_file: state.join("apply-receipt.json"),
             managed_codex_bin: state.join("missing-codex"),
         };
         assert_eq!(
@@ -1255,6 +1284,7 @@ mod tests {
             update_pid_file: temp_dir.path().join("app-server-updater.pid"),
             operation_lock_file: temp_dir.path().join("daemon.lock"),
             settings_file: temp_dir.path().join("settings.json"),
+            apply_receipt_file: temp_dir.path().join("apply-receipt.json"),
             managed_codex_bin: temp_dir.path().join("missing-codex"),
         };
         let stderr_log = daemon.pid_file.with_extension("stderr.log");
