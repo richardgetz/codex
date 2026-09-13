@@ -1189,6 +1189,23 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 async fn send_inter_agent_communication_requeues_when_handoff_is_sealed() {
     let harness = AgentControlHarness::new().await;
     let (thread_id, thread) = harness.start_thread().await;
+    thread.ensure_rollout_materialized().await;
+    thread
+        .flush_rollout()
+        .await
+        .expect("target thread rollout should flush");
+    let state_db = harness
+        .state_db
+        .as_ref()
+        .expect("test harness should have a state database");
+    assert!(
+        state_db
+            .get_thread(thread_id)
+            .await
+            .expect("read target thread metadata")
+            .is_some(),
+        "target thread metadata must exist before durable handoff"
+    );
     let communication = InterAgentCommunication::new(
         AgentPath::root(),
         AgentPath::try_from("/root/worker").expect("agent path"),
@@ -1221,10 +1238,6 @@ async fn send_inter_agent_communication_requeues_when_handoff_is_sealed() {
         CodexErrorDetails::InvalidRequest(_)
     ));
 
-    let state_db = harness
-        .state_db
-        .as_ref()
-        .expect("test harness should have a state database");
     let messages = state_db
         .claim_pending_thread_inbound_messages(thread_id, /*limit*/ 1)
         .await
