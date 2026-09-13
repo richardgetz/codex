@@ -9,6 +9,7 @@ mod recovery;
 mod startup;
 
 use crate::error_code::{internal_error, invalid_params};
+use crate::request_processors::ThreadRequestProcessor;
 use codex_app_server_protocol::{
     JSONRPCErrorError, ThreadHandoffNode, ThreadHandoffNodeState, ThreadHandoffPrepareResponse,
     ThreadHandoffReceipt, ThreadHandoffState, ThreadHandoffStatusParams,
@@ -36,6 +37,7 @@ pub(crate) struct HandoffCoordinator {
     config: Arc<Config>,
     codex_home: PathBuf,
     runtime_version: String,
+    thread_processor: ThreadRequestProcessor,
     operation: Mutex<()>,
     active: Mutex<HashMap<String, ActiveHandoff>>,
     startup_recovery_state: Mutex<startup::StartupRecoveryState>,
@@ -47,12 +49,14 @@ impl HandoffCoordinator {
         config: Arc<Config>,
         codex_home: PathBuf,
         runtime_version: String,
+        thread_processor: ThreadRequestProcessor,
     ) -> Self {
         Self {
             thread_manager,
             config,
             codex_home,
             runtime_version,
+            thread_processor,
             operation: Mutex::new(()),
             active: Mutex::new(HashMap::new()),
             startup_recovery_state: Mutex::new(startup::StartupRecoveryState::Unknown),

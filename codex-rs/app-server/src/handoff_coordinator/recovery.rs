@@ -1,5 +1,6 @@
-use super::{HandoffCoordinator, core_error, ordered_indices, receipt_from_journal};
+use super::{HandoffCoordinator, core_error, ordered_indices, parse_thread_id, receipt_from_journal};
 use crate::error_code::invalid_params;
+use crate::outgoing_message::ConnectionId;
 use codex_app_server_protocol::{
     JSONRPCErrorError, ThreadHandoffRecoverParams, ThreadHandoffRecoverResponse,
 };
@@ -10,7 +11,7 @@ use codex_core::{
 use codex_protocol::ThreadId;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::MultiAgentVersion;
-use codex_protocol::protocol::Op;
+use codex_protocol::protocol::{Op, ThreadPauseState};
 use codex_rollout::InitialHistory;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,6 +28,7 @@ impl HandoffCoordinator {
     pub(crate) async fn recover(
         &self,
         params: ThreadHandoffRecoverParams,
+        connection_id: ConnectionId,
     ) -> Result<ThreadHandoffRecoverResponse, JSONRPCErrorError> {
         let _operation = self.operation.lock().await;
         let journal = self.load_journal(&params.handoff_id).await?;
@@ -97,6 +99,21 @@ impl HandoffCoordinator {
         // available for every child before any exact turn is admitted.
         let (loaded_nodes, all_loaded) = self.load_all_recovery_nodes(&mut journal).await?;
         if !all_loaded {
+            journal.set_state(HandoffJournalState::NeedsAttention);
+            self.persist_journal(&journal).await?;
+            self.refresh_startup_recovery_state().await;
+            return Ok(ThreadHandoffRecoverResponse {
+                receipt: receipt_from_journal(&journal),
+            });
+        }
+
+        // Start the normal app-server listener for every restored node before any exact turn is
+        // admitted. This preserves completion/activity events through the same channel used by a
+        // regular thread/resume, even though recovery has no client connection to subscribe.
+        if !self
+            .attach_recovery_listeners(&mut journal, &loaded_nodes, connection_id)
+            .await?
+        {
             journal.set_state(HandoffJournalState::NeedsAttention);
             self.persist_journal(&journal).await?;
             self.refresh_startup_recovery_state().await;
@@ -179,6 +196,34 @@ impl HandoffCoordinator {
         Ok((loaded_nodes, all_loaded))
     }
 
+    async fn attach_recovery_listeners(
+        &self,
+        journal: &mut HandoffJournal,
+        loaded_nodes: &[LoadedRecoveryNode],
+        connection_id: ConnectionId,
+    ) -> Result<bool, JSONRPCErrorError> {
+        let mut all_listeners_attached = true;
+        for loaded in loaded_nodes {
+            let node = journal.nodes[loaded.index].clone();
+            let thread_id = parse_thread_id(&node.thread_id)?;
+            if let Err(error) = self
+                .thread_processor
+                .attach_recovery_listener(thread_id, connection_id.clone())
+                .await
+            {
+                all_listeners_attached = false;
+                journal.update_node(
+                    &node.thread_id,
+                    HandoffNodeState::NeedsAttention,
+                    vec![HandoffBlocker::Persistence],
+                    None,
+                );
+                tracing::warn!(thread_id = %node.thread_id, error = %error.message, "failed to attach recovery listener");
+            }
+        }
+        Ok(all_listeners_attached)
+    }
+
     async fn restore_pause_state(
         &self,
         journal: &mut HandoffJournal,
@@ -187,15 +232,36 @@ impl HandoffCoordinator {
         let mut all_pauses_restored = true;
         for loaded in loaded_nodes {
             let node = journal.nodes[loaded.index].clone();
-            if node.was_paused && loaded.thread.submit(Op::PauseActivity).await.is_err() {
-                all_pauses_restored = false;
-                journal.update_node(
-                    &node.thread_id,
-                    HandoffNodeState::NeedsAttention,
-                    vec![HandoffBlocker::Persistence],
-                    None,
-                );
-                continue;
+            if node.was_paused {
+                let pause_submitted = loaded.thread.submit(Op::PauseActivity).await.is_ok();
+                let thread_id = loaded.thread.id();
+                let pause_applied = pause_submitted
+                    && timeout(RECOVERY_ADMISSION_TIMEOUT, async {
+                        loop {
+                            let is_paused = loaded.thread.activity_snapshot().await.into_iter().any(
+                                |activity| {
+                                    activity.thread_id == thread_id
+                                        && activity.pause_state == ThreadPauseState::Paused
+                                },
+                            );
+                            if is_paused {
+                                break true;
+                            }
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                    })
+                    .await
+                    .is_ok();
+                if !pause_applied {
+                    all_pauses_restored = false;
+                    journal.update_node(
+                        &node.thread_id,
+                        HandoffNodeState::NeedsAttention,
+                        vec![HandoffBlocker::Persistence],
+                        None,
+                    );
+                    continue;
+                }
             }
             if node.turn_id.is_none() {
                 let state = if node.was_paused {

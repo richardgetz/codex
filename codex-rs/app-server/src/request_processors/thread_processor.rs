@@ -1361,6 +1361,30 @@ impl ThreadRequestProcessor {
         .await
     }
 
+    /// Attach the app-server event listener for a thread restored by handoff recovery.
+    ///
+    /// Recovery has no client connection to subscribe, but it must start the same listener task
+    /// used by ordinary resume before admitting an exact saved turn so completion and activity
+    /// events are buffered through the normal app-server channel.
+    pub(crate) async fn attach_recovery_listener(
+        &self,
+        conversation_id: ThreadId,
+        connection_id: ConnectionId,
+    ) -> Result<(), JSONRPCErrorError> {
+        self.thread_watch_manager
+            .upsert_thread_silently(&conversation_id.to_string())
+            .await;
+        match self
+            .ensure_conversation_listener(conversation_id, connection_id, /*raw_events_enabled*/ false)
+            .await?
+        {
+            EnsureConversationListenerResult::Attached => Ok(()),
+            EnsureConversationListenerResult::ConnectionClosed => Err(invalid_request(
+                format!("connection closed before recovered thread {conversation_id} could be attached"),
+            )),
+        }
+    }
+
     async fn ensure_listener_task_running(
         &self,
         conversation_id: ThreadId,

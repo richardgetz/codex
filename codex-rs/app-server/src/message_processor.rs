@@ -375,12 +375,6 @@ impl MessageProcessor {
             }
         });
         let models_manager = thread_manager.get_models_manager();
-        let handoff_coordinator = HandoffCoordinator::new(
-            Arc::clone(&thread_manager),
-            Arc::clone(&config),
-            config_manager.codex_home().to_path_buf(),
-            env!("CARGO_PKG_VERSION").to_string(),
-        );
         let models_refresh_worker =
             crate::models_refresh_worker::spawn(&models_manager, config.http_client_factory());
         let turn_cost_worker =
@@ -536,6 +530,13 @@ impl MessageProcessor {
             thread_list_state_permit,
             Arc::clone(&skills_watcher),
             turn_cost_worker.as_ref().map(TurnCostWorker::handle),
+        );
+        let handoff_coordinator = HandoffCoordinator::new(
+            Arc::clone(&thread_manager),
+            Arc::clone(&config),
+            config_manager.codex_home().to_path_buf(),
+            env!("CARGO_PKG_VERSION").to_string(),
+            thread_processor.clone(),
         );
         if let Some(startup_config) = plugin_startup_tasks {
             // Keep plugin startup warmups aligned at app-server startup.
@@ -1240,7 +1241,7 @@ impl MessageProcessor {
                 .map(|response| Some(response.into())),
             ClientRequest::ThreadHandoffRecover { params, .. } => self
                 .handoff_coordinator
-                .recover(params)
+                .recover(params, request_id.connection_id)
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::ThreadFork { params, .. } => {
