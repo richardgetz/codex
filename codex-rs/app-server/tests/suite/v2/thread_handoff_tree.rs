@@ -11,8 +11,6 @@ use codex_app_server_protocol::ThreadHandoffRecoverResponse;
 use codex_app_server_protocol::ThreadHandoffState;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadPauseState;
-use codex_app_server_protocol::ThreadReadParams;
-use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -20,7 +18,10 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::UserInput;
+use codex_core::RolloutRecorder;
 use codex_features::Feature;
+use codex_protocol::models::{ContentItem, ResponseItem};
+use codex_rollout::RolloutItem;
 use core_test_support::responses;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
@@ -229,38 +230,34 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
         Some(child_turn.id.as_str())
     );
 
-    // `prepare` waits for the V1 completion watcher. Read persisted history through the public
-    // API after that barrier so an asynchronously delivered synthetic parent marker cannot escape
-    // a notification-buffer-only assertion.
-    let parent_read_request = old_server
-        .send_thread_read_request(ThreadReadParams {
-            thread_id: parent.id.clone(),
-            include_turns: true,
-        })
-        .await?;
-    let ThreadReadResponse {
-        thread: parent_read,
-    } = timeout(
-        REQUEST_TIMEOUT,
-        old_server.read_response(parent_read_request),
-    )
-    .await??;
+    // `prepare` waits for the V1 completion watcher. Inspect the durable raw rollout after that
+    // barrier so an asynchronously delivered synthetic parent marker cannot escape a projected
+    // history or notification-buffer assertion.
+    let parent_rollout_path = parent.path.as_ref().expect("parent rollout path");
+    let (rollout_items, _, parse_errors) =
+        RolloutRecorder::load_rollout_items(parent_rollout_path).await?;
+    assert_eq!(parse_errors, 0, "parent rollout should parse cleanly");
     assert!(
-        parent_read
-            .turns
+        rollout_items
             .iter()
-            .any(|turn| turn.id == parent_turn.id)
+            .any(|item| matches!(item, RolloutItem::ResponseItem(_)))
     );
-    let synthetic_parent_completion = parent_read.turns.iter().any(|turn| {
-        turn.items.iter().any(|item| match item {
-            ThreadItem::UserMessage { content, .. } => content.iter().any(|input| {
-                matches!(
-                    input,
-                    UserInput::Text { text, .. } if text.contains("<subagent_notification>")
-                )
-            }),
-            _ => false,
-        })
+    let synthetic_parent_completion = rollout_items.iter().any(|item| {
+        let RolloutItem::ResponseItem(envelope) = item else {
+            return false;
+        };
+        let ResponseItem::Message { role, content, .. } = &envelope.item else {
+            return false;
+        };
+        role == "user"
+            && content.iter().any(|item| match item {
+                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                    text.contains("<subagent_notification>")
+                }
+                ContentItem::InputImage { .. }
+                | ContentItem::InputAudio { .. }
+                | ContentItem::EncryptedContent { .. } => false,
+            })
     });
     assert!(!synthetic_parent_completion);
 
