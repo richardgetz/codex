@@ -14,9 +14,12 @@ use codex_app_server_protocol::ThreadPauseState;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnInterruptParams;
+use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
+use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_core::RolloutRecorder;
 use codex_features::Feature;
@@ -46,7 +49,8 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
         "message": CHILD_PROMPT,
         "model": "gpt-5.4",
     }))?;
-    let (release_child_turn, child_turn_gate) = oneshot::channel();
+    let (release_pending_turn_a, pending_turn_a_gate) = oneshot::channel();
+    let (release_pending_turn_b, pending_turn_b_gate) = oneshot::channel();
     let (responses_server, _completions) = start_streaming_sse_server(vec![
         vec![StreamingSseChunk {
             gate: None,
@@ -64,24 +68,29 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
         vec![
             StreamingSseChunk {
                 gate: None,
-                body: responses::sse(vec![responses::ev_response_created("child-response")]),
+                body: responses::sse(vec![responses::ev_response_created("pending-response-a")]),
             },
             StreamingSseChunk {
-                gate: Some(child_turn_gate),
+                gate: Some(pending_turn_a_gate),
                 body: responses::sse(vec![
-                    responses::ev_assistant_message("child-message", "child is unfinished"),
-                    responses::ev_completed("child-response"),
+                    responses::ev_assistant_message("pending-message-a", "turn remains gated"),
+                    responses::ev_completed("pending-response-a"),
                 ]),
             },
         ],
-        vec![StreamingSseChunk {
-            gate: None,
-            body: responses::sse(vec![
-                responses::ev_response_created("parent-follow-up-response"),
-                responses::ev_assistant_message("parent-follow-up-message", "parent idle"),
-                responses::ev_completed("parent-follow-up-response"),
-            ]),
-        }],
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: responses::sse(vec![responses::ev_response_created("pending-response-b")]),
+            },
+            StreamingSseChunk {
+                gate: Some(pending_turn_b_gate),
+                body: responses::sse(vec![
+                    responses::ev_assistant_message("pending-message-b", "turn remains gated"),
+                    responses::ev_completed("pending-response-b"),
+                ]),
+            },
+        ],
         vec![StreamingSseChunk {
             gate: None,
             body: responses::sse(vec![
@@ -150,7 +159,10 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
         }
     })
     .await??;
-    timeout(REQUEST_TIMEOUT, responses_server.wait_for_request_count(2)).await?;
+    // The parent continuation and child model request race after spawn. Keep both queued streams
+    // gated so either assignment remains unfinished; interrupt the parent explicitly below to
+    // make its terminal state deterministic while preserving the child turn for handoff.
+    timeout(REQUEST_TIMEOUT, responses_server.wait_for_request_count(3)).await?;
 
     let child_turn = timeout(REQUEST_TIMEOUT, async {
         loop {
@@ -164,16 +176,25 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
     .await??;
     assert_ne!(parent_turn.id, child_turn.id);
 
-    timeout(REQUEST_TIMEOUT, async {
+    let interrupt_request = old_server
+        .send_turn_interrupt_request(TurnInterruptParams {
+            thread_id: parent.id.clone(),
+            turn_id: parent_turn.id.clone(),
+        })
+        .await?;
+    let _: TurnInterruptResponse =
+        timeout(REQUEST_TIMEOUT, old_server.read_response(interrupt_request)).await??;
+    let interrupted_parent = timeout(REQUEST_TIMEOUT, async {
         loop {
             let completed: TurnCompletedNotification =
                 old_server.read_notification("turn/completed").await?;
             if completed.thread_id == parent.id && completed.turn.id == parent_turn.id {
-                return Ok::<(), anyhow::Error>(());
+                return Ok::<TurnCompletedNotification, anyhow::Error>(completed);
             }
         }
     })
     .await??;
+    assert_eq!(interrupted_parent.turn.status, TurnStatus::Interrupted);
 
     let pause_request = old_server
         .send_raw_request(
@@ -261,7 +282,7 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
     });
     assert!(!synthetic_parent_completion);
 
-    drop(release_child_turn);
+    drop((release_pending_turn_a, release_pending_turn_b));
     timeout(REQUEST_TIMEOUT, old_server.shutdown_gracefully()).await??;
 
     let mut replacement = TestAppServer::builder()
