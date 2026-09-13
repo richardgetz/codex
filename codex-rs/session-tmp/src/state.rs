@@ -42,7 +42,7 @@ pub(super) use identity::is_real_directory;
 pub(super) use identity::payload_is_nonempty;
 pub(super) use identity::payload_root_from_state_root;
 pub(super) use identity::root_id;
-pub(super) use locator::resolve_state_base;
+pub(crate) use locator::resolve_state_base;
 
 #[derive(Clone, Debug)]
 pub(super) struct ControlState {
@@ -168,18 +168,17 @@ impl ControlState {
         storage::ensure_directory_not_symlink(&state_base)?;
         storage::set_private_directory(&state_base)?;
 
-        let state_root = state_base.join(&root_id);
-        storage::ensure_directory_not_symlink(&state_root)?;
         let _migration_lock = if wait_for_migration {
-            storage::ensure_directory_not_symlink(&state_base.join(".migration-locks"))?;
-            storage::wait_for_migration_lock(
-                &state_base
-                    .join(".migration-locks")
-                    .join(format!("{root_id}.lock")),
-            )?
+            // Create and hold the per-root barrier before inspecting or
+            // creating the state identity and payload namespace. This closes
+            // the first-open race where two managers could each reserve a
+            // different hidden namespace before either wrote root.json.
+            Some(super::migration::lock_migration_path(&state_base, &root_id)?)
         } else {
             None
         };
+        let state_root = state_base.join(&root_id);
+        storage::ensure_directory_not_symlink(&state_root)?;
         // Acquire the persistent external barrier before the historical
         // state-root lock. Migration uses this order as well, preventing a
         // recovery manager that still has an inline lock from deadlocking

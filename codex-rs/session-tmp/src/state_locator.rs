@@ -30,7 +30,7 @@ struct StateLocator {
 /// the Codex-home default state tree remembers an explicitly configured state
 /// base after the configuration changes, so existing leases keep one lock
 /// domain instead of silently forking into a new state tree.
-pub(super) fn resolve_state_base(
+pub(crate) fn resolve_state_base(
     default_root: &Path,
     configured_state_base: Option<&Path>,
     root_id: &str,
@@ -97,6 +97,48 @@ fn validate_state_base(
         return Err(SessionTmpError::UnsafeManagedPath(state_base.to_path_buf()));
     }
     Ok(canonical_state_base)
+}
+
+/// Finds an already-enrolled state base without creating or modifying any
+/// directories. The locator is kept in the default Codex-home state tree so
+/// recovery discovery can follow an explicit state-root override even when
+/// the payload root is currently markerless.
+pub(crate) fn existing_state_base_for_identity(
+    default_root: &Path,
+    root_id: &str,
+    canonical_payload_root: &Path,
+) -> Result<PathBuf, SessionTmpError> {
+    let default_state_base = default_root.join(STATE_DIR).join(STATE_SESSION_TMP_DIR);
+    validate_state_base(&default_state_base, canonical_payload_root)?;
+    super::identity::ensure_existing_ancestors_for_runtime(&default_state_base)?;
+
+    let locator_path = default_state_base
+        .join(STATE_LOCATORS_DIR)
+        .join(format!("{root_id}.json"));
+    if let Some(locator_parent) = locator_path.parent() {
+        super::identity::ensure_existing_ancestors_for_runtime(locator_parent)?;
+    }
+    match fs::symlink_metadata(&locator_path) {
+        Ok(metadata) if storage::file_type_is_link(metadata.file_type()) => {
+            Err(SessionTmpError::UnsafeManagedPath(locator_path))
+        }
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            Err(SessionTmpError::UnsafeManagedPath(locator_path))
+        }
+        Ok(_) => {
+            let locator = read_state_locator(&locator_path)?;
+            if locator.root_id != root_id
+                || locator.canonical_payload_root != canonical_payload_root
+            {
+                return Err(SessionTmpError::RootNotManaged(locator_path));
+            }
+            validate_state_base(&locator.state_base, canonical_payload_root)
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            Ok(identity::canonicalize_for_identity(&default_state_base)?)
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn read_state_locator(path: &Path) -> Result<StateLocator, SessionTmpError> {

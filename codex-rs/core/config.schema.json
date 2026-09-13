@@ -4243,6 +4243,12 @@
           ],
           "description": "Absolute parent directory for managed storage. Defaults to `<codex_home>/session-tmp`."
         },
+        "stale_after_days": {
+          "description": "Age of inactive sessions eligible for forced stale cleanup. Set to 0 to disable automatic stale-session cleanup.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "state_root": {
           "allOf": [
             {
@@ -4250,12 +4256,6 @@
             }
           ],
           "description": "Durable control-state parent directory. Defaults to `<codex_home>/state/session-tmp` and is never placed below `root`."
-        },
-        "stale_after_days": {
-          "description": "Age of inactive sessions eligible for forced stale cleanup. Set to 0 to disable automatic stale-session cleanup.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
         }
       },
       "type": "object"

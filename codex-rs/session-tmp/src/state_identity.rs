@@ -318,8 +318,13 @@ pub(crate) fn external_identity_present(
         return Ok(false);
     }
     let canonical_payload_root = canonicalize_for_identity(payload_root)?;
-    let state_base = default_root.join(STATE_DIR).join(STATE_SESSION_TMP_DIR);
-    let state_root = state_base.join(root_id(&canonical_payload_root));
+    let root_id = root_id(&canonical_payload_root);
+    let state_base = super::locator::existing_state_base_for_identity(
+        default_root,
+        &root_id,
+        &canonical_payload_root,
+    )?;
+    let state_root = state_base.join(&root_id);
     match fs::symlink_metadata(&state_root) {
         Ok(metadata) if storage::file_type_is_link(metadata.file_type()) => {
             return Err(SessionTmpError::UnsafeManagedPath(state_root));
@@ -333,7 +338,7 @@ pub(crate) fn external_identity_present(
     }
     Ok(inspect_state_root(
         &state_root,
-        &root_id(&canonical_payload_root),
+        &root_id,
         &canonical_payload_root,
     )
     .is_ok_and(|namespace| namespace.is_some()))

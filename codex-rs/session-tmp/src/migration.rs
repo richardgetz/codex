@@ -440,7 +440,10 @@ pub(super) fn lock_for_open(state: &ControlState) -> Result<File, SessionTmpErro
     lock_migration(state)
 }
 
-fn lock_migration_path(state_base: &Path, root_id: &str) -> Result<File, SessionTmpError> {
+pub(crate) fn lock_migration_path(
+    state_base: &Path,
+    root_id: &str,
+) -> Result<File, SessionTmpError> {
     let path = state_base
         .join(".migration-locks")
         .join(format!("{root_id}.lock"));
