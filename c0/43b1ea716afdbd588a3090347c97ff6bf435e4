@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-13/eta-root-materialization#c043b1ea7"
+  change_type: "fix"
+  scope: "app-server-eta"
+  summary: "Materialize persistent ETA roots before writing task ledger updates."
+  decision: "Run the loaded non-ephemeral thread through its existing Standard persistence and flush barriers before applying an ETA mutation, while allowing already-cold persisted roots to use existing validation."
+  constraints:
+    - "Do not start a model turn or infer task completion."
+    - "Reject ephemeral roots and preserve strict unknown-root/requested-root checks."
+    - "Keep the change scoped to the ETA processor and reuse CodexThread persistence helpers."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server/src/request_processors/thread_eta_processor.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "Codex"
+    model: "gpt-5.6"
