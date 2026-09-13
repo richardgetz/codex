@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-09-13/eta-integrated-wiring#b4a5ea6443"
+  change_type: "fix"
+  scope: "codex-rs/eta"
+  summary: "Complete integrated ETA module wiring and preserve focused UI snapshots."
+  decision: "Use explicit module paths and narrow crate re-exports for the ETA renderer and list state, route global ETA notifications through the global sender, and handle the new notification exhaustively."
+  constraints:
+    - "Keep the fix limited to compile/integration wiring and ETA snapshots."
+    - "Preserve ETA behavior and avoid unrelated cleanup."
+  intent_priority: "normal"
+  code_locations:
+    - "codex-rs/state/src/runtime/task_estimates.rs"
+    - "codex-rs/state/src/runtime/task_estimates_tests.rs"
+    - "codex-rs/state/src/runtime/threads.rs"
+    - "codex-rs/app-server/src/request_processors/thread_eta_processor.rs"
+    - "codex-rs/tui/src/app/eta_view.rs"
+    - "codex-rs/tui/src/app/eta_view_render.rs"
+    - "codex-rs/tui/src/bottom_pane/mod.rs"
+    - "codex-rs/tui/src/chatwidget.rs"
+    - "codex-rs/tui/src/chatwidget/protocol.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6-luna"
