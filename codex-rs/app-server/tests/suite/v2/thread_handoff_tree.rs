@@ -160,9 +160,9 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
     })
     .await??;
     // The parent continuation and child model request race after spawn. Keep both queued streams
-    // gated so either assignment remains unfinished; interrupt the parent explicitly below to
-    // make its terminal state deterministic while preserving the child turn for handoff.
-    timeout(REQUEST_TIMEOUT, responses_server.wait_for_request_count(3)).await?;
+    // gated so either assignment remains unfinished; the child start is the only post-spawn
+    // request guaranteed before the parent is interrupted, so do not wait for a third POST.
+    timeout(REQUEST_TIMEOUT, responses_server.wait_for_request_count(2)).await?;
 
     let child_turn = timeout(REQUEST_TIMEOUT, async {
         loop {
