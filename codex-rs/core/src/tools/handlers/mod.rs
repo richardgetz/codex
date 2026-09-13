@@ -1,5 +1,6 @@
 pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
+pub(crate) mod eta;
 pub(crate) mod builtin_schedule;
 pub(crate) mod builtin_scratchpad;
 pub(crate) mod builtin_scratchpad_spec;
@@ -71,6 +72,7 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use current_time::CurrentTimeHandler;
 pub use dynamic::DynamicToolHandler;
+pub use eta::EtaHandler;
 pub use get_context_remaining::GetContextRemainingHandler;
 pub use list_available_plugins_to_install::ListAvailablePluginsToInstallHandler;
 pub use mcp::McpHandler;

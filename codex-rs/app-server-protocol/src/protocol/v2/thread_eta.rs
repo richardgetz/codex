@@ -65,6 +65,7 @@ pub struct ThreadEtaTask {
     pub depends_on_task_ids: Vec<String>,
     pub title: String,
     pub status: ThreadEtaStatus,
+    /// Remaining duration range for active work; terminal rows retain their last range.
     pub current_lower_seconds: Option<i64>,
     pub current_upper_seconds: Option<i64>,
     pub original_lower_seconds: Option<i64>,
@@ -105,7 +106,7 @@ pub struct ThreadEtaSnapshot {
 }
 
 /// Parameters for the paginated, read-only ETA projection.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct ThreadEtaReadParams {
@@ -149,7 +150,7 @@ pub struct ThreadEtaUpdateOperation {
 }
 
 /// Parameters for mutating tasks owned by the selected root session.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct ThreadEtaUpdateParams {

@@ -20,6 +20,12 @@ release or merge rules.
 
 ## Unreleased
 
+- Session-scoped `/eta` task estimates persist root/worker ownership, explicit
+  lifecycle completion/cancellation, bounded estimate revisions, dependency-aware
+  aggregate finish ranges, and paginated history through app-server v2 and the
+  model-facing `update_eta` tool. Existing thread activity remains observational;
+  no idle, elapsed ETA, or UI read infers completion.
+
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
   tags, stable-triggered releases, Apple Silicon lane, and migration-number
@@ -699,6 +705,9 @@ release or merge rules.
 - Verify the fork distribution/release contract (`@rickgetz/codex`,
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
   Apple Silicon releases) and migration-number policy remain intact.
+- Verify session-scoped ETA tasks retain composite root/task identity keys,
+  explicit terminal history, bounded revisions, dependency-aware unknown
+  aggregates, and app-server v2/update_eta wiring across upstream refreshes.
 - Verify daemon apply/recover remain restricted to explicitly configured launchers;
   standalone updater lifecycle and automatic updates remain unchanged.
 - Verify app-server daemon `bootstrap --codex-bin` accepts only an absolute

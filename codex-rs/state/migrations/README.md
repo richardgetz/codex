@@ -87,3 +87,6 @@ so they are appended as:
 0057_upstream_threads_originator.sql
 0058_upstream_threads_daybreak_enabled.sql
 ```
+
+Session-scoped ETA task estimates and bounded revision history are appended as
+`0059_rick_task_estimates.sql`.

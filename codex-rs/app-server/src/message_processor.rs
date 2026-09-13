@@ -45,6 +45,7 @@ use crate::request_processors::ProjectRequestProcessor;
 use crate::request_processors::RemoteControlRequestProcessor;
 use crate::request_processors::SearchRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
+use crate::request_processors::ThreadEtaRequestProcessor;
 use crate::request_processors::ThreadQueueRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
 use crate::request_processors::TurnRequestProcessor;
@@ -161,6 +162,7 @@ pub(crate) struct MessageProcessor {
     project_processor: ProjectRequestProcessor,
     remote_control_processor: RemoteControlRequestProcessor,
     search_processor: SearchRequestProcessor,
+    thread_eta_processor: ThreadEtaRequestProcessor,
     thread_goal_processor: ThreadGoalRequestProcessor,
     thread_queue_processor: ThreadQueueRequestProcessor,
     thread_processor: ThreadRequestProcessor,
@@ -478,6 +480,7 @@ impl MessageProcessor {
         );
         let remote_control_processor = RemoteControlRequestProcessor::new(remote_control_handle);
         let search_processor = SearchRequestProcessor::new(outgoing.clone());
+        let thread_eta_processor = ThreadEtaRequestProcessor::new(outgoing.clone(), state_db.clone());
         let thread_goal_processor = ThreadGoalRequestProcessor::new(
             Arc::clone(&thread_manager),
             outgoing.clone(),
@@ -606,6 +609,7 @@ impl MessageProcessor {
             project_processor,
             remote_control_processor,
             search_processor,
+            thread_eta_processor,
             thread_goal_processor,
             thread_queue_processor,
             thread_processor,
@@ -1292,6 +1296,12 @@ impl MessageProcessor {
                 self.thread_goal_processor
                     .thread_goal_clear(request_id.clone(), params)
                     .await
+            }
+            ClientRequest::ThreadEtaRead { params, .. } => {
+                self.thread_eta_processor.read(params).await
+            }
+            ClientRequest::ThreadEtaUpdate { params, .. } => {
+                self.thread_eta_processor.update(params).await
             }
             ClientRequest::ThreadQueueAdd { params, .. } => self
                 .thread_queue_processor

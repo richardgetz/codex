@@ -4,6 +4,7 @@ use crate::notification_media::without_notification_media;
 use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::request_processors::apply_live_thread_settings;
+use crate::request_processors::api_notification_from_event;
 use crate::request_processors::populate_thread_turns_from_history;
 use crate::request_processors::thread_from_stored_thread;
 use crate::request_processors::thread_settings_from_config_snapshot;
@@ -1374,6 +1375,13 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_global_server_notification(ServerNotification::ThreadGoalUpdated(
                     notification,
+                ))
+                .await;
+        }
+        EventMsg::ThreadEtaUpdated(eta_event) => {
+            outgoing
+                .send_global_server_notification(ServerNotification::ThreadEtaUpdated(
+                    api_notification_from_event(eta_event),
                 ))
                 .await;
         }

@@ -211,6 +211,34 @@ ON CONFLICT(child_thread_id) DO UPDATE SET
             .await
     }
 
+    /// Resolve the persisted root ancestor for a thread. A thread without a spawn edge is its
+    /// own root. The relation is intentionally independent of edge status so resumed history keeps
+    /// the same root after a worker edge is closed.
+    pub async fn root_thread_id(&self, thread_id: ThreadId) -> anyhow::Result<ThreadId> {
+        let root = sqlx::query_scalar::<_, String>(
+            r#"
+WITH RECURSIVE ancestors(thread_id) AS (
+    SELECT ?1
+    UNION
+    SELECT edge.parent_thread_id
+    FROM thread_spawn_edges edge
+    JOIN ancestors ON edge.child_thread_id = ancestors.thread_id
+)
+SELECT ancestors.thread_id
+FROM ancestors
+WHERE NOT EXISTS (
+    SELECT 1 FROM thread_spawn_edges edge WHERE edge.child_thread_id = ancestors.thread_id
+)
+LIMIT 1
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .fetch_optional(self.pool.as_ref())
+        .await?
+        .unwrap_or_else(|| thread_id.to_string());
+        ThreadId::from_string(&root)
+    }
+
     /// Find a direct spawned child of `parent_thread_id` by canonical agent path.
     pub async fn find_thread_spawn_child_by_path(
         &self,

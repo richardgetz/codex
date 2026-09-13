@@ -57,6 +57,7 @@ mod thread_control;
 mod thread_inbound_messages;
 mod thread_section_order;
 mod thread_sections;
+mod task_estimates;
 mod threads;
 
 pub use external_agent_config_imports::ExternalAgentConfigImportDetailsRecord;
@@ -67,6 +68,7 @@ pub use goals::GoalAccountingMode;
 pub use goals::GoalAccountingOutcome;
 pub use goals::GoalStore;
 pub use goals::GoalUpdate;
+pub use task_estimates::TaskEstimateStore;
 pub use memories::MemoryStore;
 pub use queued_items::SqliteQueueStore;
 pub use recovery::RuntimeDbBackup;
@@ -97,6 +99,7 @@ pub struct StateRuntime {
     thread_goals: GoalStore,
     memories: MemoryStore,
     thread_queue: SqliteQueueStore,
+    task_estimates: TaskEstimateStore,
     thread_updated_at_millis: Arc<AtomicI64>,
     thread_recency_at_millis: Arc<AtomicI64>,
 }
@@ -281,6 +284,7 @@ impl StateRuntime {
             thread_goals: GoalStore::new(Arc::clone(&goals_pool)),
             memories: MemoryStore::new(Arc::clone(&memories_pool), Arc::clone(&pool)),
             thread_queue: SqliteQueueStore::new(queue_pool),
+            task_estimates: TaskEstimateStore::new(Arc::clone(&pool)),
             pool,
             logs_pool,
             sqlite,
@@ -319,6 +323,11 @@ impl StateRuntime {
     /// Return the durable, SQLite-backed user-message queue.
     pub fn thread_queue(&self) -> &SqliteQueueStore {
         &self.thread_queue
+    }
+
+    /// Return the durable, root-session scoped task estimate store.
+    pub fn task_estimates(&self) -> &TaskEstimateStore {
+        &self.task_estimates
     }
 
     /// Close all SQLite pools and wait for outstanding pool workers to exit.

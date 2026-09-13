@@ -13,6 +13,7 @@ use crate::tools::handlers::CodeModeExecuteHandler;
 use crate::tools::handlers::CodeModeWaitHandler;
 use crate::tools::handlers::CurrentTimeHandler;
 use crate::tools::handlers::DynamicToolHandler;
+use crate::tools::handlers::EtaHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ExecCommandHandlerOptions;
 use crate::tools::handlers::GetContextRemainingHandler;
@@ -1251,6 +1252,10 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
 
     if turn_context.config.update_plan_enabled {
         registry.add(PlanHandler);
+    }
+
+    if !crate::guardian::is_basic_session_source(&turn_context.session_source) {
+        registry.add(EtaHandler);
     }
 
     if turn_context.tools_config.builtin_scratchpad_enabled {
