@@ -5,6 +5,7 @@ use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ThreadActivityPauseResponse;
 use codex_app_server_protocol::ThreadActivityReadResponse;
+use codex_app_server_protocol::ThreadActivityUpdatedNotification;
 use codex_app_server_protocol::ThreadHandoffNodeState;
 use codex_app_server_protocol::ThreadHandoffPrepareResponse;
 use codex_app_server_protocol::ThreadHandoffRecoverResponse;
@@ -29,6 +30,7 @@ use core_test_support::responses;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use serde_json::json;
+use std::collections::HashSet;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::oneshot;
@@ -203,6 +205,7 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
         .await?;
     let _: ThreadActivityPauseResponse =
         timeout(REQUEST_TIMEOUT, old_server.read_response(pause_request)).await??;
+    wait_for_paused_activity(&mut old_server, &[&parent.id, &child_id]).await?;
     let activity_request = old_server
         .send_raw_request(
             "thread/activity/read",
@@ -324,6 +327,7 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
         ThreadHandoffNodeState::Paused | ThreadHandoffNodeState::Restored
     ));
 
+    wait_for_paused_activity(&mut replacement, &[&parent.id, &child_id]).await?;
     let recovered_activity_request = replacement
         .send_raw_request(
             "thread/activity/read",
@@ -345,5 +349,24 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
 
     replacement.shutdown_gracefully().await?;
     responses_server.shutdown().await;
+    Ok(())
+}
+
+async fn wait_for_paused_activity(app: &mut TestAppServer, thread_ids: &[&str]) -> Result<()> {
+    let expected = thread_ids.iter().copied().collect::<HashSet<_>>();
+    let mut paused = HashSet::new();
+    timeout(REQUEST_TIMEOUT, async {
+        while paused.len() < expected.len() {
+            let update: ThreadActivityUpdatedNotification =
+                app.read_notification("thread/activity/updated").await?;
+            if update.pause_state == ThreadPauseState::Paused
+                && expected.contains(update.thread_id.as_str())
+            {
+                paused.insert(update.thread_id);
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await??;
     Ok(())
 }
