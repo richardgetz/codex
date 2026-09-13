@@ -71,6 +71,9 @@ impl HandoffCoordinator {
             .thread_manager
             .begin_recovery_pending()
             .map_err(core_error)?;
+        // Drain any poller claim that crossed the gate before creating replacement sessions; all
+        // subsequent pollers observe the pending bit and remain idle until recovery completes.
+        recovery_pending.wait_for_admissions().await;
         journal.set_state(HandoffJournalState::Restoring);
         self.persist_journal(&journal).await?;
 
