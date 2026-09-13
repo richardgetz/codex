@@ -1971,6 +1971,7 @@ foo = "xyzzy"
 [session_tmp]
 enabled = true
 root = "~/.codex/session-tmp"
+state_root = "~/.codex/state/session-tmp"
 "#,
         )?;
 
@@ -1984,6 +1985,15 @@ root = "~/.codex/session-tmp"
         let expected =
             AbsolutePathBuf::resolve_path_against_base("~/.codex/session-tmp", tmp.path());
         assert_eq!(root, expected.as_path().to_string_lossy());
+        let state_root = normalized
+            .get("session_tmp")
+            .and_then(TomlValue::as_table)
+            .and_then(|session_tmp| session_tmp.get("state_root"))
+            .and_then(TomlValue::as_str)
+            .expect("session temporary state root should be present");
+        let expected_state_root =
+            AbsolutePathBuf::resolve_path_against_base("~/.codex/state/session-tmp", tmp.path());
+        assert_eq!(state_root, expected_state_root.as_path().to_string_lossy());
         Ok(())
     }
 

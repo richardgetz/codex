@@ -51,6 +51,8 @@ mod queued_items;
 mod recovery;
 mod remote_control;
 mod rollout_migration;
+mod task_estimate_storage;
+mod task_estimates;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod thread_control;
@@ -77,6 +79,7 @@ pub use recovery::runtime_db_path_for_corruption_error;
 pub use recovery::sqlite_error_detail_is_corruption;
 pub use recovery::sqlite_error_detail_is_lock;
 pub use remote_control::RemoteControlEnrollmentRecord;
+pub use task_estimates::TaskEstimateStore;
 pub use threads::ThreadFilterOptions;
 
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:
@@ -97,6 +100,7 @@ pub struct StateRuntime {
     thread_goals: GoalStore,
     memories: MemoryStore,
     thread_queue: SqliteQueueStore,
+    task_estimates: TaskEstimateStore,
     thread_updated_at_millis: Arc<AtomicI64>,
     thread_recency_at_millis: Arc<AtomicI64>,
 }
@@ -281,6 +285,7 @@ impl StateRuntime {
             thread_goals: GoalStore::new(Arc::clone(&goals_pool)),
             memories: MemoryStore::new(Arc::clone(&memories_pool), Arc::clone(&pool)),
             thread_queue: SqliteQueueStore::new(queue_pool),
+            task_estimates: TaskEstimateStore::new(Arc::clone(&pool)),
             pool,
             logs_pool,
             sqlite,
@@ -319,6 +324,11 @@ impl StateRuntime {
     /// Return the durable, SQLite-backed user-message queue.
     pub fn thread_queue(&self) -> &SqliteQueueStore {
         &self.thread_queue
+    }
+
+    /// Return the durable, root-session scoped task estimate store.
+    pub fn task_estimates(&self) -> &TaskEstimateStore {
+        &self.task_estimates
     }
 
     /// Close all SQLite pools and wait for outstanding pool workers to exit.

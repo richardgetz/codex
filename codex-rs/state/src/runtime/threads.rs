@@ -211,6 +211,34 @@ ON CONFLICT(child_thread_id) DO UPDATE SET
             .await
     }
 
+    /// Resolve the persisted root ancestor for a thread. A thread without a spawn edge is its
+    /// own root. The relation is intentionally independent of edge status so resumed history keeps
+    /// the same root after a worker edge is closed.
+    pub async fn root_thread_id(&self, thread_id: ThreadId) -> anyhow::Result<ThreadId> {
+        let root = sqlx::query_scalar::<_, String>(
+            r#"
+WITH RECURSIVE ancestors(thread_id) AS (
+    SELECT ?1
+    UNION
+    SELECT edge.parent_thread_id
+    FROM thread_spawn_edges edge
+    JOIN ancestors ON edge.child_thread_id = ancestors.thread_id
+)
+SELECT ancestors.thread_id
+FROM ancestors
+WHERE NOT EXISTS (
+    SELECT 1 FROM thread_spawn_edges edge WHERE edge.child_thread_id = ancestors.thread_id
+)
+LIMIT 1
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .fetch_optional(self.pool.as_ref())
+        .await?
+        .unwrap_or_else(|| thread_id.to_string());
+        Ok(ThreadId::from_string(&root)?)
+    }
+
     /// Find a direct spawned child of `parent_thread_id` by canonical agent path.
     pub async fn find_thread_spawn_child_by_path(
         &self,
@@ -1214,6 +1242,9 @@ ON CONFLICT(id) DO UPDATE SET
         }
 
         let mut tx = self.pool.begin().await?;
+        self.task_estimates
+            .handle_deleted_threads(&mut tx, thread_ids)
+            .await?;
         for thread_id_string in &thread_id_strings {
             sqlx::query("DELETE FROM thread_dynamic_tools WHERE thread_id = ?")
                 .bind(thread_id_string)
@@ -1624,6 +1655,10 @@ mod tests {
     use super::*;
     use crate::Anchor;
     use crate::DirectionalThreadSpawnEdgeStatus;
+    use crate::TaskEstimateAction;
+    use crate::TaskEstimateMutation;
+    use crate::TaskEstimateRange;
+    use crate::TaskEstimateStatus;
     use crate::runtime::test_support::test_thread_metadata;
     use crate::runtime::test_support::unique_temp_dir;
     use anyhow::Result;
@@ -2021,6 +2056,102 @@ mod tests {
 
         assert_eq!(runtime.delete_thread(missing_thread_id).await?, 0);
         assert_thread_cleanup_state(&runtime, missing_thread_id).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_worker_blocks_unfinished_eta_tasks_and_keeps_history() -> Result<()> {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await?;
+        let root = ThreadId::from_string("00000000-0000-0000-0000-000000000407")?;
+        let worker = ThreadId::from_string("00000000-0000-0000-0000-000000000408")?;
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                root,
+                codex_home.join("root.jsonl"),
+            ))
+            .await?;
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                worker,
+                codex_home.join("worker.jsonl"),
+            ))
+            .await?;
+        runtime
+            .upsert_thread_spawn_edge(root, worker, DirectionalThreadSpawnEdgeStatus::Open)
+            .await?;
+        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp");
+        let create = |task_id: &str| TaskEstimateMutation {
+            action: TaskEstimateAction::Create,
+            task_id: Some(task_id.to_string()),
+            title: Some(task_id.to_string()),
+            parent_task_id: None,
+            depends_on_task_ids: None,
+            estimate: Some(TaskEstimateRange {
+                lower_seconds: Some(10),
+                upper_seconds: Some(20),
+            }),
+            reason: None,
+        };
+        let transition = |action, task_id: &str| TaskEstimateMutation {
+            action,
+            task_id: Some(task_id.to_string()),
+            title: None,
+            parent_task_id: None,
+            depends_on_task_ids: None,
+            estimate: None,
+            reason: None,
+        };
+        runtime
+            .apply_task_estimate_mutations(root, worker, &[create("done"), create("active")], now)
+            .await?;
+        runtime
+            .apply_task_estimate_mutations(
+                root,
+                worker,
+                &[
+                    transition(TaskEstimateAction::Start, "done"),
+                    transition(TaskEstimateAction::Start, "active"),
+                ],
+                now,
+            )
+            .await?;
+        runtime
+            .apply_task_estimate_mutations(
+                root,
+                worker,
+                &[transition(TaskEstimateAction::Complete, "done")],
+                now,
+            )
+            .await?;
+
+        assert_eq!(runtime.delete_thread(worker).await?, 1);
+        let snapshot = runtime
+            .read_task_estimate_snapshot(root, now, None, None)
+            .await?;
+        assert_eq!(snapshot.active.len(), 1);
+        assert_eq!(snapshot.active[0].status, TaskEstimateStatus::Blocked);
+        assert_eq!(snapshot.history.len(), 1);
+        assert_eq!(snapshot.history[0].status, TaskEstimateStatus::Completed);
+
+        assert_eq!(runtime.delete_thread(root).await?, 1);
+        let root_task_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM eta_tasks WHERE root_thread_id = ?")
+                .bind(root.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await?;
+        let root_ledger_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM eta_roots WHERE root_thread_id = ?")
+                .bind(root.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await?;
+        assert_eq!((root_task_count, root_ledger_count), (0, 0));
         Ok(())
     }
 

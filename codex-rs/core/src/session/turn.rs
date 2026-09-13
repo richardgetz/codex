@@ -2620,6 +2620,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<
         | EventMsg::EnvironmentConnected(_)
         | EventMsg::EnvironmentDisconnected(_)
         | EventMsg::ThreadGoalUpdated(_)
+        | EventMsg::ThreadEtaUpdated(_)
         | EventMsg::ThreadNameUpdated(_)
         | EventMsg::ScratchpadUpdate(_)
         | EventMsg::ThreadQueueChanged(_)

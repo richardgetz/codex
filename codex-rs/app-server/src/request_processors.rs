@@ -626,6 +626,8 @@ pub(crate) use process_exec_processor::ProcessExecRequestProcessor;
 pub(crate) use projects::ProjectRequestProcessor;
 pub(crate) use remote_control_processor::RemoteControlRequestProcessor;
 pub(crate) use search::SearchRequestProcessor;
+pub(crate) use thread_eta_processor::ThreadEtaRequestProcessor;
+pub(crate) use thread_eta_processor::api_notification_from_event;
 pub(crate) use thread_goal_processor::ThreadGoalRequestProcessor;
 pub(crate) use thread_processor::ThreadRequestProcessor;
 pub(crate) use thread_queue_processor::ThreadQueueRequestProcessor;
@@ -730,6 +732,7 @@ fn resolve_runtime_workspace_roots(workspace_roots: Vec<AbsolutePathBuf>) -> Vec
 mod config_errors;
 mod request_errors;
 mod thread_delete;
+mod thread_eta_processor;
 mod thread_goal_processor;
 mod thread_lifecycle;
 mod thread_resume_redaction;

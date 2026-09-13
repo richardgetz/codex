@@ -1731,6 +1731,9 @@ pub enum EventMsg {
     /// Updated long-running goal metadata for the thread.
     ThreadGoalUpdated(ThreadGoalUpdatedEvent),
 
+    /// A durable ETA task update was committed for the root session.
+    ThreadEtaUpdated(ThreadEtaUpdatedEvent),
+
     /// A durable thread-scoped user-message queue changed.
     ThreadQueueChanged(ThreadQueueChangedEvent),
 
@@ -4516,6 +4519,65 @@ pub struct ThreadGoalUpdatedEvent {
     #[ts(optional)]
     pub turn_id: Option<String>,
     pub goal: ThreadGoal,
+}
+
+/// One task included in a durable ETA update event. Timestamps are Unix seconds so the event
+/// can cross the protocol boundary without carrying a chrono representation.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "protocol/")]
+pub struct ThreadEtaTaskUpdatedEvent {
+    pub task_id: String,
+    pub root_thread_id: ThreadId,
+    pub owner_thread_id: ThreadId,
+    pub parent_task_id: Option<String>,
+    pub depends_on_task_ids: Vec<String>,
+    pub title: String,
+    pub status: String,
+    pub current_lower_seconds: Option<i64>,
+    pub current_upper_seconds: Option<i64>,
+    pub original_lower_seconds: Option<i64>,
+    pub original_upper_seconds: Option<i64>,
+    pub created_at: i64,
+    pub started_at: Option<i64>,
+    pub terminal_at: Option<i64>,
+    pub actual_elapsed_seconds: Option<i64>,
+    pub updated_at: i64,
+    pub revisions: Vec<ThreadEtaRevisionUpdatedEvent>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "protocol/")]
+pub struct ThreadEtaRevisionUpdatedEvent {
+    pub lower_seconds: Option<i64>,
+    pub upper_seconds: Option<i64>,
+    pub reason: Option<String>,
+    pub updated_at: i64,
+    pub actor_thread_id: ThreadId,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "protocol/")]
+pub struct ThreadEtaOverallUpdatedEvent {
+    pub finish_at: Option<i64>,
+    pub remaining_lower_seconds: Option<i64>,
+    pub remaining_upper_seconds: Option<i64>,
+    pub unknown_reason: Option<String>,
+}
+
+/// Event emitted after one atomic ETA mutation batch. The event carries only changed tasks and
+/// the aggregate, keeping client notifications bounded and avoiding read-time inference.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "protocol/")]
+pub struct ThreadEtaUpdatedEvent {
+    pub root_thread_id: ThreadId,
+    pub generated_at: i64,
+    pub sequence: i64,
+    pub changed_tasks: Vec<ThreadEtaTaskUpdatedEvent>,
+    pub overall: ThreadEtaOverallUpdatedEvent,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]

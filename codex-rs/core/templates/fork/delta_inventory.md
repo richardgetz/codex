@@ -20,6 +20,16 @@ release or merge rules.
 
 ## Unreleased
 
+- Session-scoped `/eta` task estimates persist root/worker ownership, explicit
+  lifecycle completion/cancellation, bounded estimate revisions, dependency-aware
+  aggregate finish ranges, and paginated history through app-server v2 and the
+  model-facing `update_eta` tool. The model tool caps each call at eight
+  operations and returns all changed summaries; History does not consume the
+  unfinished-task cap. Root deletion removes the ledger, while worker deletion
+  preserves terminal History and blocks unfinished owned tasks. Existing thread
+  activity remains observational; no idle, elapsed ETA, or UI read infers
+  completion.
+
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
   tags, stable-triggered releases, Apple Silicon lane, and migration-number
@@ -409,14 +419,18 @@ release or merge rules.
 - Managed session temporary storage:
   - Config: `[session_tmp]`; `enabled` defaults to `false`, `root` defaults to
     `<codex_home>/session-tmp`, and `stale_after_days` defaults to `7`.
+    `state_root` optionally selects the durable control-state parent and
+    defaults to `<codex_home>/state/session-tmp`.
   - When enabled, each root session and spawned agent receives an isolated
     managed directory with durable path lineage and ownership metadata. The
-    control state is stored under `<codex_home>/state/session-tmp`; disposable
-    payload roots can be deleted and recreated in place without losing leases
+    control state defaults to `<codex_home>/state/session-tmp` and may use the
+    configured `state_root`; disposable payload roots can be deleted and
+    recreated in place without losing leases
     or ownership. Agents are told that all
     files under their managed directory are disposable and must not store
     durable artifacts, credentials, or source files there.
-  - New roots enroll only when empty, while validated legacy roots import
+  - New roots enroll with an exact-owned namespace even when their configured
+    payload directory is nonempty; validated legacy roots import
     marker-era session records into external state and retire validated legacy
     controls plus the old marker after validated leases are inactive and held
     legacy locks have drained. Legacy
@@ -433,7 +447,9 @@ release or merge rules.
     their original paths outside managed cleanup, keeping that tree until it
     is empty. A small external source identity is retained as a durable
     migration tombstone so interrupted cleanup can resume safely. Markerless
-    nonempty custom roots are never adopted. If the root or external state is
+    nonempty custom roots receive a fresh hidden namespace while preserving
+    unknown files. Existing enrolled roots keep their recorded state location
+    when `state_root` changes. If the root or external state is
     unsafe or unavailable, startup/resume continues for that runtime with
     session temporary storage disabled.
   - Slash command: `/tmp [status|list|clean|clear|reap [days|--force]]`. The
@@ -693,6 +709,11 @@ release or merge rules.
 - Verify the fork distribution/release contract (`@rickgetz/codex`,
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
   Apple Silicon releases) and migration-number policy remain intact.
+- Verify session-scoped ETA tasks retain composite root/task identity keys,
+  explicit terminal history, bounded revisions, dependency-aware unknown
+  aggregates, app-server v2/update_eta wiring, the model batch/output bounds,
+  deletion cleanup semantics, and the no-inference boundary across upstream
+  refreshes.
 - Verify daemon apply/recover remain restricted to explicitly configured launchers;
   standalone updater lifecycle and automatic updates remain unchanged.
 - Verify app-server daemon `bootstrap --codex-bin` accepts only an absolute
@@ -720,9 +741,10 @@ release or merge rules.
   source of truth.
 - Verify initial context preserves Skills → Apps → Plugins ordering without
   changing App enablement or connector filtering.
-- Verify session temporary control state stays under
-  `<codex_home>/state/session-tmp`, payload deletion recreates the same
-  configured namespace, and no control files are written below payload roots
+- Verify session temporary control state stays under the default
+  `<codex_home>/state/session-tmp` or the validated `state_root` override,
+  payload deletion recreates the same configured namespace, and no control
+  files are written below payload roots
   except a bounded compatibility lease during an active old-version
   transition.
   Verify marker-era roots import exact records and retire their marker after
@@ -733,7 +755,11 @@ release or merge rules.
   retires obsolete recovery state automatically once the source is empty or
   reduced to retained legacy lock residue.
   Markerless
-  nonempty custom roots must remain inert. Verify `/tmp reap --force` bypasses
+  nonempty custom roots use a fresh hidden namespace while preserving unknown
+  files. Verify explicit default and custom roots use resolved path identity,
+  optional `state_root` locators keep an enrolled root on one durable state
+  domain when the override changes, and overlap/symlink checks remain strict.
+  Verify `/tmp reap --force` bypasses
   only the age cutoff, reports removed session/path counts, protects current
   and fresh-lease sessions, preserves unsafe state, and rejects an ambiguous
   age-plus-force form.

@@ -20,6 +20,7 @@ pub(super) const STATE_MARKER_CONTENT: &str =
 pub(super) const STATE_ROOT_RECORD: &str = "root.json";
 pub(super) const STATE_SESSIONS_DIR: &str = "sessions";
 pub(super) const STATE_LOCKS_DIR: &str = ".locks";
+pub(super) const STATE_LOCATORS_DIR: &str = ".locators";
 pub(super) const LEGACY_MARKER: &str = ".codex-managed-session-tmp";
 pub(super) const LEGACY_MARKER_CONTENT: &str =
     "codex managed session temporary storage\nschema_version=1\n";
@@ -30,6 +31,8 @@ pub(super) const V2_PAYLOAD_NAMESPACE: &str = ".codex-session-tmp-v2";
 mod identity;
 #[path = "state_legacy.rs"]
 mod legacy;
+#[path = "state_locator.rs"]
+mod locator;
 
 pub(super) use identity::canonicalize_for_identity;
 pub(super) use identity::ensure_existing_ancestors_for_runtime;
@@ -39,9 +42,11 @@ pub(super) use identity::is_real_directory;
 pub(super) use identity::payload_is_nonempty;
 pub(super) use identity::payload_root_from_state_root;
 pub(super) use identity::root_id;
+pub(crate) use locator::resolve_state_base;
 
 #[derive(Clone, Debug)]
 pub(super) struct ControlState {
+    pub(super) default_root: PathBuf,
     pub(super) payload_root: PathBuf,
     pub(super) canonical_payload_root: PathBuf,
     pub(super) payload_namespace: PathBuf,
@@ -62,27 +67,43 @@ struct RootRecord {
 
 impl ControlState {
     pub(super) fn open(default_root: &Path, payload_root: &Path) -> Result<Self, SessionTmpError> {
+        Self::open_with_state_root(default_root, payload_root, None)
+    }
+
+    pub(super) fn open_with_state_root(
+        default_root: &Path,
+        payload_root: &Path,
+        state_base_override: Option<&Path>,
+    ) -> Result<Self, SessionTmpError> {
         Self::open_with_options(
             default_root,
             payload_root,
-            /*allow_nonempty_without_legacy_marker*/ false,
+            state_base_override,
+            /*allow_nonempty_without_legacy_marker*/ true,
             /*import_legacy*/ true,
             /*recreate_existing_payload*/ true,
             /*wait_for_migration*/ true,
         )
     }
 
-    /// Enrolls a markerless nonempty default payload root after a separately
-    /// validated legacy root has supplied the exact managed session records.
-    /// The caller must keep all unknown payloads outside the state registry;
-    /// this option is never exposed through model-facing APIs or custom roots.
+    /// Enrolls a markerless nonempty payload root in a hidden managed namespace
+    /// while preserving all pre-existing files outside the state registry.
     pub(super) fn open_for_validated_migration(
         default_root: &Path,
         payload_root: &Path,
     ) -> Result<Self, SessionTmpError> {
+        Self::open_for_validated_migration_with_state_root(default_root, payload_root, None)
+    }
+
+    pub(super) fn open_for_validated_migration_with_state_root(
+        default_root: &Path,
+        payload_root: &Path,
+        state_base_override: Option<&Path>,
+    ) -> Result<Self, SessionTmpError> {
         Self::open_with_options(
             default_root,
             payload_root,
+            state_base_override,
             /*allow_nonempty_without_legacy_marker*/ true,
             /*import_legacy*/ true,
             /*recreate_existing_payload*/ true,
@@ -99,6 +120,7 @@ impl ControlState {
         Self::open_with_options(
             default_root,
             payload_root,
+            None,
             /*allow_nonempty_without_legacy_marker*/ false,
             /*import_legacy*/ false,
             /*recreate_existing_payload*/ false,
@@ -109,6 +131,7 @@ impl ControlState {
     fn open_with_options(
         default_root: &Path,
         payload_root: &Path,
+        state_base_override: Option<&Path>,
         allow_nonempty_without_legacy_marker: bool,
         import_legacy: bool,
         recreate_existing_payload: bool,
@@ -127,30 +150,38 @@ impl ControlState {
         storage::ensure_directory_not_symlink(default_root)?;
 
         let canonical_payload_root = identity::canonicalize_for_identity(payload_root)?;
-        let state_base = default_root.join(STATE_DIR).join(STATE_SESSION_TMP_DIR);
+        let root_id = identity::root_id(&canonical_payload_root);
+        let state_base = locator::resolve_state_base(
+            default_root,
+            state_base_override,
+            &root_id,
+            &canonical_payload_root,
+        )?;
         identity::ensure_existing_ancestors_for_runtime(&state_base)?;
         let canonical_state_base = identity::canonicalize_for_identity(&state_base)?;
         if identity::paths_overlap(&canonical_payload_root, &canonical_state_base) {
             return Err(SessionTmpError::UnsafeManagedPath(state_base));
         }
+        let state_base = canonical_state_base;
         storage::ensure_directory_not_symlink(&state_base)?;
         fs::create_dir_all(&state_base)?;
         storage::ensure_directory_not_symlink(&state_base)?;
         storage::set_private_directory(&state_base)?;
 
-        let root_id = identity::root_id(&canonical_payload_root);
-        let state_root = state_base.join(&root_id);
-        storage::ensure_directory_not_symlink(&state_root)?;
         let _migration_lock = if wait_for_migration {
-            storage::ensure_directory_not_symlink(&state_base.join(".migration-locks"))?;
-            storage::wait_for_migration_lock(
-                &state_base
-                    .join(".migration-locks")
-                    .join(format!("{root_id}.lock")),
-            )?
+            // Create and hold the per-root barrier before inspecting or
+            // creating the state identity and payload namespace. This closes
+            // the first-open race where two managers could each reserve a
+            // different hidden namespace before either wrote root.json.
+            Some(super::migration::lock_migration_path(
+                &state_base,
+                &root_id,
+            )?)
         } else {
             None
         };
+        let state_root = state_base.join(&root_id);
+        storage::ensure_directory_not_symlink(&state_root)?;
         // Acquire the persistent external barrier before the historical
         // state-root lock. Migration uses this order as well, preventing a
         // recovery manager that still has an inline lock from deadlocking
@@ -172,6 +203,15 @@ impl ControlState {
         };
         let existing_state =
             identity::inspect_state_root(&state_root, &root_id, &canonical_payload_root)?;
+        if !legacy_managed && existing_state.is_none() && !allow_nonempty_without_legacy_marker {
+            return Err(SessionTmpError::RootNotManaged(payload_root.to_path_buf()));
+        }
+        // Reserve the state location before creating this root's state tree.
+        // The locator is the durable enrollment decision; doing this only
+        // after validating a marker, an existing identity, or the explicit
+        // hidden-namespace enrollment path prevents migration discovery from
+        // recording arbitrary untrusted payload roots.
+        locator::write_state_locator(default_root, &root_id, &canonical_payload_root, &state_base)?;
         let payload_namespace = match existing_state {
             Some(namespace) => {
                 // A valid external identity enrolls the payload path even when its
@@ -183,31 +223,26 @@ impl ControlState {
                 namespace
             }
             None => {
-                if !legacy_managed
-                    && identity::payload_is_nonempty(payload_root)?
-                    && !allow_nonempty_without_legacy_marker
-                {
-                    return Err(SessionTmpError::RootNotManaged(payload_root.to_path_buf()));
-                }
+                identity::ensure_payload_root(payload_root)?;
+                let payload_namespace = if allow_nonempty_without_legacy_marker && !legacy_managed {
+                    identity::create_fresh_payload_namespace(payload_root)?
+                } else {
+                    payload_root.to_path_buf()
+                };
                 identity::initialize_state_root(
                     &state_root,
                     &root_id,
                     payload_root,
                     &canonical_payload_root,
-                    allow_nonempty_without_legacy_marker && !legacy_managed,
+                    &payload_namespace,
                 )?;
-                identity::ensure_payload_root(payload_root)?;
-                let namespace = if allow_nonempty_without_legacy_marker && !legacy_managed {
-                    payload_root.join(V2_PAYLOAD_NAMESPACE)
-                } else {
-                    payload_root.to_path_buf()
-                };
-                identity::ensure_payload_namespace(&namespace, &canonical_payload_root)?;
-                namespace
+                identity::ensure_payload_namespace(&payload_namespace, &canonical_payload_root)?;
+                payload_namespace
             }
         };
 
         let state = Self {
+            default_root: default_root.to_path_buf(),
             payload_root: payload_root.to_path_buf(),
             canonical_payload_root,
             payload_namespace,
@@ -253,11 +288,7 @@ impl ControlState {
     }
 
     pub(super) fn default_root(&self) -> PathBuf {
-        self.state_base
-            .parent()
-            .and_then(|state_dir| state_dir.parent())
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| self.state_base.clone())
+        self.default_root.clone()
     }
 
     pub(super) fn root_id(&self) -> &str {

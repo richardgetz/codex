@@ -94,6 +94,38 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   - `codex --disable enable_mcp_approvals`
 - `codex features list` marks Rick-owned features with `(rick)`.
 
+### Session ETA task estimates
+
+The fork includes a root-session task tree for bounded ETA estimates. In the
+TUI, `/eta` shows active tasks and a paginated History view. The model keeps
+the tree current with the `update_eta` tool when work is created or started,
+when its scope or estimate changes, when a blocker appears, and when the task
+is explicitly completed or cancelled. The app-server v2 surfaces are
+`thread/eta/read`, `thread/eta/update`, and the event-driven
+`thread/eta/updated` notification.
+
+Each estimate is an optional lower/upper duration range in seconds. The store
+retains the original range captured at start and a bounded revision list.
+History records harness timestamps, actual elapsed seconds, and early, within,
+or late classification against that original range. A first estimate published
+after work has already started has no prediction baseline and is classified as
+unknown. Cancelled tasks remain visible as cancelled history and have unknown
+accuracy; blocked tasks remain active until an explicit terminal update.
+
+The model-facing tool accepts at most eight operations per call so its response
+remains bounded and returns every changed task summary. The public app-server
+update may batch more operations. The unfinished-task cap applies only to
+active/pending/blocked rows; completed and cancelled History does not consume
+that cap. Deleting a root removes its ETA ledger, while deleting a worker keeps
+its terminal History and marks its unfinished owned tasks blocked.
+
+The aggregate finish range follows task dependencies and parallel leaves. A
+missing, unestimated, stale, blocked, or cyclic dependency makes the affected
+aggregate unknown, and grouping parents are not double-counted with their
+executable children. Opening `/eta`, reading the API, idle activity, elapsed
+time, and turn completion do not infer progress or completion. Timestamps are
+server harness values and cannot be supplied or backdated by the model.
+
 ### Lead/Worker teams
 
 Team mode assigns one model and reasoning effort to the Lead and another to
@@ -304,6 +336,8 @@ navigation remain unchanged.
   enabled = true
   # Optional; defaults to <codex_home>/session-tmp.
   root = "/Users/me/.codex/session-tmp"
+  # Optional; defaults to <codex_home>/state/session-tmp.
+  state_root = "/Users/me/.codex/session-tmp-state"
   # Optional; defaults to 7. Set to 0 to disable stale-session cleanup.
   stale_after_days = 7
   ```
@@ -313,14 +347,18 @@ navigation remain unchanged.
   configured parent is treated as payload storage, not as a general deletion
   target; cleanup is restricted to state-validated session and agent paths.
   Ownership, metadata, leases, and locks live in the per-root state directory
-  `<codex_home>/state/session-tmp`, outside the disposable payload. Deleting a
-  payload root while Codex is running therefore recreates the same configured
-  path from its durable state without a recovery warning.
+  `<codex_home>/state/session-tmp`, outside the disposable payload, unless an
+  explicit `state_root` is configured. A per-root locator remembers the first
+  validated state location, so changing that setting does not relocate an
+  enrolled root or split its lease domain. Deleting a payload root while Codex
+  is running therefore recreates the same configured path from its durable state
+  without a recovery warning.
   If the configured root or its external control state is unsafe or unavailable,
   startup and resume continue for that runtime with session temporary storage
   disabled; unknown files are never adopted.
-- New roots enroll only when empty (or when a validated legacy migration has
-  supplied exact session records) and do not need a payload marker. Existing
+- New roots enroll an exact-owned hidden namespace even when the configured
+  payload directory is nonempty; unknown files remain outside managed cleanup
+  and do not need a payload marker. Existing
   `.codex-managed-session-tmp` roots are imported into external state; once old
   leases are inactive and any held legacy locks have drained, validated legacy
   control records and the marker are retired while payload agents and unknown
@@ -339,7 +377,8 @@ navigation remain unchanged.
   their original paths outside managed cleanup, so a recovery tree containing
   such files remains until it is empty. A small external source identity is
   retained as a durable migration tombstone so interrupted cleanup can resume
-  safely. A markerless nonempty custom root remains inert and is never adopted.
+  safely. A markerless nonempty custom root receives a fresh hidden namespace
+  while its existing files remain untouched.
 - Agents receive explicit guidance that every file under their managed agent
   directory is disposable, including untracked files created by shell commands.
   Source files, deliverables, checkpoints, credentials, and other durable data

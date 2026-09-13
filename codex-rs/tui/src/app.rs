@@ -232,6 +232,8 @@ mod backend_banner_fallback;
 mod background_requests;
 mod config_persistence;
 mod connector_mentions;
+mod eta;
+mod eta_view;
 mod event_dispatch;
 mod exit_summary;
 mod experimental_features;
@@ -671,6 +673,7 @@ pub(crate) struct App {
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
     agents_overview: agents_overview::AgentsOverviewState,
+    eta: eta::EtaState,
     team_activity: team_activity::TeamActivityProjection,
     side_threads: HashMap<ThreadId, SideThreadState>,
     abandoned_side_threads: HashSet<ThreadId>,

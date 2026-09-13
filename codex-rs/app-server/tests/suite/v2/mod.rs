@@ -104,6 +104,7 @@ mod thread_archive;
 mod thread_control;
 mod thread_delete;
 mod thread_environments;
+mod thread_eta;
 mod thread_fork;
 mod thread_goal_empty_responses;
 mod thread_handoff;

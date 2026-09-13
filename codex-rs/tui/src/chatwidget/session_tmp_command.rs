@@ -17,6 +17,11 @@ pub(crate) fn config(config: &Config) -> SessionTmpConfig {
             .root
             .as_ref()
             .map(AbsolutePathBuf::to_path_buf),
+        state_root: config
+            .session_tmp
+            .state_root
+            .as_ref()
+            .map(AbsolutePathBuf::to_path_buf),
         stale_after: config.session_tmp.stale_after,
     }
 }

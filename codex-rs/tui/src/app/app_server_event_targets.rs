@@ -216,6 +216,7 @@ pub(super) fn server_notification_thread_target(
         | ServerNotification::ProcessOutputDelta(_)
         | ServerNotification::ProcessExited(_)
         | ServerNotification::McpServerEventStream(_)
+        | ServerNotification::ThreadEtaUpdated(_)
         | ServerNotification::FsChanged(_)
         | ServerNotification::WindowsWorldWritableWarning(_)
         | ServerNotification::WindowsSandboxSetupCompleted(_)
@@ -241,6 +242,8 @@ mod tests {
     use codex_app_server_protocol::McpServerStartupState;
     use codex_app_server_protocol::McpServerStatusUpdatedNotification;
     use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::ThreadEtaOverall;
+    use codex_app_server_protocol::ThreadEtaUpdatedNotification;
     use codex_app_server_protocol::ThreadSettings;
     use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
     use codex_app_server_protocol::WarningNotification;
@@ -367,5 +370,25 @@ mod tests {
         let target = server_notification_thread_target(&notification);
 
         assert_eq!(target, ServerNotificationThreadTarget::Thread(thread_id));
+    }
+
+    #[test]
+    fn eta_updates_remain_global_for_root_scoped_projection() {
+        let notification = ServerNotification::ThreadEtaUpdated(ThreadEtaUpdatedNotification {
+            root_thread_id: ThreadId::new().to_string(),
+            generated_at: 1_700_000_000,
+            sequence: 1,
+            changed_tasks: Vec::new(),
+            overall: ThreadEtaOverall {
+                finish_at: None,
+                remaining_lower_seconds: None,
+                remaining_upper_seconds: None,
+                unknown_reason: Some("no estimate".to_string()),
+            },
+        });
+
+        let target = server_notification_thread_target(&notification);
+
+        assert_eq!(target, ServerNotificationThreadTarget::Global);
     }
 }

@@ -206,6 +206,12 @@ async fn unavailable_session_tmp_fails_open_and_disables_runtime_consumers() -> 
             let recovery_root = home.join("session-tmp-recovery");
             fs::create_dir_all(recovery_root.join("sessions")).unwrap();
             fs::write(recovery_root.join("preserved.txt"), b"keep recovery data").unwrap();
+            // Keep this fixture focused on the fail-open path. A markerless
+            // nonempty root is now intentionally enrolled in a fresh hidden
+            // namespace, so make the external state base unsafe to exercise
+            // the runtime-only disable and preservation behavior.
+            fs::create_dir_all(home.join("state")).unwrap();
+            fs::write(home.join("state/session-tmp"), b"blocked").unwrap();
         })
         .with_config(|config| {
             config.session_tmp.enabled = true;
@@ -331,6 +337,8 @@ async fn unavailable_session_tmp_fails_open_on_resume_and_preserves_data() -> an
             let recovery_root = home.join("session-tmp-recovery");
             fs::create_dir_all(recovery_root.join("sessions")).unwrap();
             fs::write(recovery_root.join("preserved.txt"), b"keep recovery data").unwrap();
+            fs::create_dir_all(home.join("state")).unwrap();
+            fs::write(home.join("state/session-tmp"), b"blocked").unwrap();
         })
         .with_config(|config| {
             config.session_tmp.enabled = true;

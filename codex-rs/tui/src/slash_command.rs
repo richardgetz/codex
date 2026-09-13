@@ -43,6 +43,7 @@ pub enum SlashCommand {
     Plan,
     Team,
     Goal,
+    Eta,
     Agent,
     #[strum(serialize = "agents-prune")]
     AgentsPrune,
@@ -169,6 +170,7 @@ impl SlashCommand {
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Team => "show or toggle Lead/Worker team mode for this session",
             SlashCommand::Goal => "set or view the goal for a long-running task",
+            SlashCommand::Eta => "show stored task estimates for this session",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::AgentsPrune => "close idle agents in this session",
             SlashCommand::Agents => "view and switch between all active agent sessions",
@@ -338,6 +340,7 @@ impl SlashCommand {
             | SlashCommand::Stop
             | SlashCommand::App
             | SlashCommand::Goal
+            | SlashCommand::Eta
             | SlashCommand::Team
             | SlashCommand::Mcp
             | SlashCommand::OrchestratorMemoryForget
@@ -426,6 +429,7 @@ mod tests {
     #[test]
     fn certain_commands_are_available_during_task() {
         assert!(SlashCommand::Goal.available_during_task());
+        assert!(SlashCommand::Eta.available_during_task());
         assert!(SlashCommand::Ide.available_during_task());
         assert!(SlashCommand::Title.available_during_task());
         assert!(SlashCommand::Statusline.available_during_task());

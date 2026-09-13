@@ -761,6 +761,9 @@ pub struct SessionTmpToml {
     /// Absolute parent directory for managed storage. Defaults to
     /// `<codex_home>/session-tmp`.
     pub root: Option<AbsolutePathBuf>,
+    /// Durable control-state parent directory. Defaults to
+    /// `<codex_home>/state/session-tmp` and is never placed below `root`.
+    pub state_root: Option<AbsolutePathBuf>,
     /// Age of inactive sessions eligible for forced stale cleanup. Set to 0 to
     /// disable automatic stale-session cleanup.
     #[schemars(range(min = 0))]
@@ -772,6 +775,7 @@ pub struct SessionTmpToml {
 pub struct SessionTmpConfig {
     pub enabled: bool,
     pub root: Option<AbsolutePathBuf>,
+    pub state_root: Option<AbsolutePathBuf>,
     pub stale_after: std::time::Duration,
 }
 
@@ -780,6 +784,7 @@ impl Default for SessionTmpConfig {
         Self {
             enabled: false,
             root: None,
+            state_root: None,
             stale_after: std::time::Duration::from_secs(
                 DEFAULT_SESSION_TMP_STALE_AFTER_DAYS * 24 * 60 * 60,
             ),
@@ -799,6 +804,7 @@ impl From<Option<SessionTmpToml>> for SessionTmpConfig {
         Self {
             enabled: toml.enabled.unwrap_or(false),
             root: toml.root,
+            state_root: toml.state_root,
             stale_after: std::time::Duration::from_secs(
                 stale_after_days.saturating_mul(24 * 60 * 60),
             ),

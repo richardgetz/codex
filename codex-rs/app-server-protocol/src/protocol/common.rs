@@ -662,6 +662,18 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadGoalClearResponse,
     },
+    #[experimental("thread/eta/read")]
+    ThreadEtaRead => "thread/eta/read" {
+        params: v2::ThreadEtaReadParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadEtaReadResponse,
+    },
+    #[experimental("thread/eta/update")]
+    ThreadEtaUpdate => "thread/eta/update" {
+        params: v2::ThreadEtaUpdateParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadEtaUpdateResponse,
+    },
     #[experimental("thread/queue/add")]
     ThreadQueueAdd => "thread/queue/add" {
         params: v2::ThreadQueueAddParams,
@@ -1997,6 +2009,8 @@ server_notification_definitions! {
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadGoalUpdated => "thread/goal/updated" (v2::ThreadGoalUpdatedNotification),
     ThreadGoalCleared => "thread/goal/cleared" (v2::ThreadGoalClearedNotification),
+    #[experimental("thread/eta/updated")]
+    ThreadEtaUpdated => "thread/eta/updated" (v2::ThreadEtaUpdatedNotification),
     #[experimental("thread/queue/changed")]
     ThreadQueueChanged => "thread/queue/changed" (v2::ThreadQueueChangedNotification),
     #[experimental("project/changed")]

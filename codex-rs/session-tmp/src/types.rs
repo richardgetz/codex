@@ -17,6 +17,9 @@ pub struct SessionTmpConfig {
     /// An optional absolute parent directory. The default is supplied by the
     /// caller, normally `<codex_home>/session-tmp`.
     pub root: Option<PathBuf>,
+    /// An optional absolute parent for durable control state. The default is
+    /// derived from the caller's Codex home and remains outside `root`.
+    pub state_root: Option<PathBuf>,
     /// Age after which another session may be force-cleaned as abandoned.
     pub stale_after: Duration,
 }
@@ -26,6 +29,7 @@ impl Default for SessionTmpConfig {
         Self {
             enabled: false,
             root: None,
+            state_root: None,
             stale_after: Duration::from_secs(DEFAULT_STALE_AFTER_SECONDS),
         }
     }

@@ -410,28 +410,38 @@ fn open_control_state(
     if !root.is_absolute() {
         return Err(SessionTmpError::RootNotAbsolute(root));
     }
+    let uses_default_root = state::canonicalize_for_identity(&root)?
+        == state::canonicalize_for_identity(&default_root.join("session-tmp"))?;
     // When a validated recovery root is present, bootstrap a fresh hidden
     // namespace under an un-enrolled default root before the ordinary open
     // can claim that root's top-level payload tree. A valid legacy marker on
     // the normal root remains authoritative and keeps its existing layout.
-    if config.root.is_none()
+    if uses_default_root
         && (migration::recovery_is_enrolled(default_root)
             || migration::recovery_manifest_pending(default_root))
         && !migration::recovery_has_live_legacy_lease(default_root).unwrap_or(true)
         && !matches!(state::inspect_payload_root(&root), Ok(true))
     {
-        let control = state::ControlState::open_for_validated_migration(default_root, &root)?;
+        let control = state::ControlState::open_for_validated_migration_with_state_root(
+            default_root,
+            &root,
+            config.state_root.as_deref(),
+        )?;
         migration::consolidate_recovery(&control, default_root)?;
         return Ok(control);
     }
-    match state::ControlState::open(default_root, &root) {
+    match state::ControlState::open_with_state_root(
+        default_root,
+        &root,
+        config.state_root.as_deref(),
+    ) {
         Ok(control) => {
             control.retire_legacy_marker_if_inactive()?;
             migration::consolidate_recovery(&control, default_root)?;
             Ok(control)
         }
         Err(error)
-            if config.root.is_none()
+            if uses_default_root
                 && matches!(error, SessionTmpError::RootNotManaged(_))
                 && (migration::recovery_is_enrolled(default_root)
                     || migration::recovery_manifest_pending(default_root)) =>
@@ -439,7 +449,11 @@ fn open_control_state(
             // The old recovery root is independently marker-validated. Enroll
             // a fresh managed namespace below the nonempty default root so
             // unknown files there remain outside all cleanup traversal.
-            let control = state::ControlState::open_for_validated_migration(default_root, &root)?;
+            let control = state::ControlState::open_for_validated_migration_with_state_root(
+                default_root,
+                &root,
+                config.state_root.as_deref(),
+            )?;
             migration::consolidate_recovery(&control, default_root)?;
             Ok(control)
         }

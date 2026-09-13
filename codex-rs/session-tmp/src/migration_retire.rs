@@ -21,6 +21,7 @@ use std::fs;
 use std::fs::File;
 use std::io::ErrorKind;
 use std::io::Read;
+use std::path::Component;
 
 pub(super) fn retire_source_session(
     source: &ControlState,
@@ -223,7 +224,11 @@ pub(super) fn source_root_is_retirable(source: &ControlState) -> Result<bool, Se
                 source.payload_root().to_path_buf(),
             ));
         }
-        Ok(_) => root_has_only_managed_entries(source.payload_root(), true),
+        Ok(_) => root_has_only_managed_entries(
+            source.payload_root(),
+            true,
+            Some(source.payload_namespace()),
+        ),
         Err(error) if error.kind() == ErrorKind::NotFound => true,
         Err(error) => return Err(error.into()),
     };
@@ -247,7 +252,7 @@ pub(super) fn retire_source_payload(source: &ControlState) -> Result<bool, Sessi
         Err(error) => return Err(error.into()),
         Ok(_) => {}
     }
-    if !root_has_only_managed_entries(root, true) {
+    if !root_has_only_managed_entries(root, true, Some(source.payload_namespace())) {
         return Ok(false);
     }
     let marker = root.join(state::LEGACY_MARKER);
@@ -288,6 +293,14 @@ pub(super) fn retire_source_payload(source: &ControlState) -> Result<bool, Sessi
             }
             match fs::remove_dir(&legacy_locks) {
                 Ok(()) => {}
+                // Keep validated lock pathnames in place. An older process
+                // may already hold or await the same inode; unlinking it
+                // would split the lock domain when a later manager creates a
+                // replacement pathname. Marker retirement is still safe once
+                // the lock directory contains only these bounded residues.
+                Err(error)
+                    if error.kind() == ErrorKind::DirectoryNotEmpty
+                        && state_lock_files_are_safe(&legacy_locks) => {}
                 Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => return Ok(false),
                 Err(error) if error.kind() == ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
@@ -295,10 +308,18 @@ pub(super) fn retire_source_payload(source: &ControlState) -> Result<bool, Sessi
         }
         match fs::remove_dir(&sessions) {
             Ok(()) => {}
+            Err(error)
+                if error.kind() == ErrorKind::DirectoryNotEmpty
+                    && payload_sessions_empty_or_locks_only(&sessions) => {}
             Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => return Ok(false),
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
+    }
+    if source.payload_namespace() != root
+        && !remove_empty_payload_namespace(root, source.payload_namespace())?
+    {
+        return Ok(false);
     }
     if marker_present {
         if !legacy_marker_is_valid(&marker)? {
@@ -311,6 +332,45 @@ pub(super) fn retire_source_payload(source: &ControlState) -> Result<bool, Sessi
         }
     }
     match fs::remove_dir(root) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(true),
+        Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn remove_empty_payload_namespace(root: &Path, namespace: &Path) -> Result<bool, SessionTmpError> {
+    let relative = namespace
+        .strip_prefix(root)
+        .map_err(|_| SessionTmpError::RootNotManaged(namespace.to_path_buf()))?;
+    let mut components = relative.components();
+    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+        return Ok(false);
+    }
+    let metadata = match fs::symlink_metadata(namespace) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(true),
+        Err(error) => return Err(error.into()),
+    };
+    if storage::file_type_is_link(metadata.file_type()) || !metadata.file_type().is_dir() {
+        return Err(SessionTmpError::UnsafeManagedPath(namespace.to_path_buf()));
+    }
+    let sessions = namespace.join(SESSIONS_DIR);
+    match fs::symlink_metadata(&sessions) {
+        Ok(metadata) if storage::file_type_is_link(metadata.file_type()) => {
+            return Err(SessionTmpError::UnsafeManagedPath(sessions));
+        }
+        Ok(metadata) if !metadata.file_type().is_dir() => return Ok(false),
+        Ok(_) => match fs::remove_dir(&sessions) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => return Ok(false),
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        },
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    match fs::remove_dir(namespace) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(true),
         Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => Ok(false),
@@ -411,9 +471,25 @@ fn legacy_marker_is_valid(path: &Path) -> Result<bool, SessionTmpError> {
         .is_some_and(|content| content == state::LEGACY_MARKER_CONTENT))
 }
 
-fn root_has_only_managed_entries(root: &Path, payload: bool) -> bool {
+fn root_has_only_managed_entries(
+    root: &Path,
+    payload: bool,
+    managed_payload_namespace: Option<&Path>,
+) -> bool {
     let Ok(entries) = fs::read_dir(root) else {
         return false;
+    };
+    let managed_namespace_name = if payload {
+        managed_payload_namespace.and_then(|namespace| {
+            let relative = namespace.strip_prefix(root).ok()?;
+            let mut components = relative.components();
+            match (components.next(), components.next()) {
+                (Some(Component::Normal(name)), None) => name.to_str().map(str::to_owned),
+                _ => None,
+            }
+        })
+    } else {
+        None
     };
     for item in entries {
         let Ok(path) = item.map(|entry| entry.path()) else {
@@ -428,8 +504,11 @@ fn root_has_only_managed_entries(root: &Path, payload: bool) -> bool {
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             return false;
         };
+        let is_managed_namespace = managed_namespace_name
+            .as_deref()
+            .is_some_and(|managed| managed == name);
         let allowed = if payload {
-            name == state::LEGACY_MARKER || name == SESSIONS_DIR
+            name == state::LEGACY_MARKER || name == SESSIONS_DIR || is_managed_namespace
         } else {
             name == state::STATE_MARKER
                 || name == state::STATE_ROOT_RECORD
@@ -446,9 +525,39 @@ fn root_has_only_managed_entries(root: &Path, payload: bool) -> bool {
         if payload && name == SESSIONS_DIR && !payload_sessions_empty_or_locks_only(&path) {
             return false;
         }
+        if payload && is_managed_namespace && !payload_namespace_empty_or_managed(&path) {
+            return false;
+        }
         if !payload
             && (name == state::STATE_SESSIONS_DIR || name == state::STATE_LOCKS_DIR)
             && !directory_empty(&path)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn payload_namespace_empty_or_managed(path: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+    for item in entries {
+        let Ok(child) = item.map(|entry| entry.path()) else {
+            return false;
+        };
+        let Ok(metadata) = fs::symlink_metadata(&child) else {
+            return false;
+        };
+        if storage::file_type_is_link(metadata.file_type()) {
+            return false;
+        }
+        let Some(name) = child.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        if name != SESSIONS_DIR
+            || !metadata.file_type().is_dir()
+            || !payload_sessions_empty_or_locks_only(&child)
         {
             return false;
         }
@@ -574,7 +683,8 @@ fn payload_sessions_empty_or_locks_only(path: &Path) -> bool {
         let Some(name) = child.file_name().and_then(|name| name.to_str()) else {
             return false;
         };
-        if name != ".locks" || !metadata.file_type().is_dir() || !directory_empty(&child) {
+        if name != ".locks" || !metadata.file_type().is_dir() || !state_lock_files_are_safe(&child)
+        {
             return false;
         }
     }

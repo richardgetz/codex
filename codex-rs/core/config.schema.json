@@ -4248,6 +4248,14 @@
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "state_root": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Durable control-state parent directory. Defaults to `<codex_home>/state/session-tmp` and is never placed below `root`."
         }
       },
       "type": "object"

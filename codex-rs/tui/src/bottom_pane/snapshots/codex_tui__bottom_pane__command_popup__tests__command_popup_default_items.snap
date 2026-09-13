@@ -25,6 +25,7 @@ expression: commands
 /compact - summarize conversation to prevent hitting the context limit
 /recap - summarize the current conversation now
 /team - show or toggle Lead/Worker team mode for this session
+/eta - show stored task estimates for this session
 /agent - switch the active agent thread
 /agents-prune - close idle agents in this session
 /agents - view and switch between all active agent sessions
