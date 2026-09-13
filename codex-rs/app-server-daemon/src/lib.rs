@@ -514,9 +514,7 @@ impl Daemon {
                     sleep(START_POLL_INTERVAL).await;
                 }
                 Err(err) => {
-                    let context = self
-                        .app_server_not_ready_context(managed_codex_bin)
-                        .await;
+                    let context = self.app_server_not_ready_context(managed_codex_bin).await;
                     return Err(err).context(context);
                 }
             }
@@ -638,8 +636,14 @@ impl Daemon {
         let app_server_version = if let Some(backend) = backend {
             backend.stop().await?;
             let managed_codex_bin = self.configured_managed_codex_bin(&settings);
-            let _ = self.start_managed_backend_with_bin(&settings, managed_codex_bin).await?;
-            Some(self.wait_until_ready(managed_codex_bin).await?.app_server_version)
+            let _ = self
+                .start_managed_backend_with_bin(&settings, managed_codex_bin)
+                .await?;
+            Some(
+                self.wait_until_ready(managed_codex_bin)
+                    .await?
+                    .app_server_version,
+            )
         } else {
             None
         };
@@ -669,9 +673,7 @@ impl Daemon {
         // standalone binary after this transition. `stop` confirms the pid record is gone
         // (or returns an error) before settings or the app-server process changes.
         let updater = backend::pid_update_loop_backend(self.backend_paths(&previous_settings));
-        if settings.managed_codex_path.is_some()
-            && updater.is_starting_or_running().await?
-        {
+        if settings.managed_codex_path.is_some() && updater.is_starting_or_running().await? {
             updater.stop().await?;
         }
 
@@ -688,7 +690,8 @@ impl Daemon {
             backend.stop().await?;
         }
 
-        let backend = backend::pid_backend(self.backend_paths_with_bin(&settings, managed_codex_bin));
+        let backend =
+            backend::pid_backend(self.backend_paths_with_bin(&settings, managed_codex_bin));
         backend.start().await?;
         let updater = backend::pid_update_loop_backend(self.backend_paths(&settings));
         if updater.is_starting_or_running().await? {
@@ -990,10 +993,10 @@ mod tests {
     use super::RestartIfRunningOutcome;
     use super::RestartMode;
     use super::UpdaterRefreshMode;
-    use crate::settings::DaemonSettings;
     use super::restart_decision;
     use super::should_reexec_updater;
     use crate::client::ProbeInfo;
+    use crate::settings::DaemonSettings;
 
     #[test]
     fn remote_control_status_uses_camel_case_json() {

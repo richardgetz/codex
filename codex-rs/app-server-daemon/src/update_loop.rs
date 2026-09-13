@@ -53,9 +53,7 @@ pub(crate) async fn run(http_client_factory: HttpClientFactory) -> Result<()> {
     let mut terminate =
         signal(SignalKind::terminate()).context("failed to install updater shutdown handler")?;
     #[cfg(windows)]
-    let updater = crate::backend::pid_update_loop_backend(
-        daemon.backend_paths(&settings),
-    );
+    let updater = crate::backend::pid_update_loop_backend(daemon.backend_paths(&settings));
     #[cfg(windows)]
     updater.wait_for_ownership().await?;
     #[cfg(windows)]

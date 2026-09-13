@@ -5147,9 +5147,7 @@ mod tests {
         };
         assert_eq!(
             bootstrap.managed_codex_path,
-            Some(
-                AbsolutePathBuf::from_absolute_path(launcher).expect("absolute launcher path")
-            )
+            Some(AbsolutePathBuf::from_absolute_path(launcher).expect("absolute launcher path"))
         );
     }
 

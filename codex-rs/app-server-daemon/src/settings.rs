@@ -124,7 +124,10 @@ mod tests {
 
         expected.save(&path).await.expect("save settings");
 
-        assert_eq!(DaemonSettings::load(&path).await.expect("load settings"), expected);
+        assert_eq!(
+            DaemonSettings::load(&path).await.expect("load settings"),
+            expected
+        );
     }
 
     #[test]
