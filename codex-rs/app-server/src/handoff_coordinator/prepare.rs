@@ -9,6 +9,7 @@ use codex_core::{
 };
 use codex_protocol::ThreadId;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::{Duration, timeout};
 
@@ -451,6 +452,7 @@ impl HandoffCoordinator {
                     .await
                     .map_err(core_error)?;
                 let source = thread.session_source();
+                let rollout_path = self.materialize_rollout_path(&thread).await?;
                 let preflight = thread.handoff_preflight().await;
                 let mut blockers = preflight.blockers;
                 // A parent-linked node with no persisted version cannot be routed safely during
@@ -478,9 +480,7 @@ impl HandoffCoordinator {
                     parent_thread_id: source.parent_thread_id().map(|id| id.to_string()),
                     agent_path: source.get_agent_path().map(|path| path.to_string()),
                     turn_id: preflight.turn_id,
-                    rollout_path: thread
-                        .rollout_path()
-                        .map(|path| path.to_string_lossy().into_owned()),
+                    rollout_path: Some(rollout_path.to_string_lossy().into_owned()),
                     was_running: preflight.was_running,
                     was_paused: preflight.was_paused,
                     state: HandoffNodeState::Planned,
@@ -504,6 +504,7 @@ impl HandoffCoordinator {
                 .await
                 .map_err(core_error)?;
             let source = thread.session_source();
+            let rollout_path = self.materialize_rollout_path(&thread).await?;
             let chain_root = self.loaded_chain_root(*thread_id).await;
             if let (Some(requested_root), Some(chain_root)) = (requested_root, chain_root)
                 && requested_root != chain_root
@@ -531,9 +532,7 @@ impl HandoffCoordinator {
                 parent_thread_id: source.parent_thread_id().map(|id| id.to_string()),
                 agent_path: source.get_agent_path().map(|path| path.to_string()),
                 turn_id: preflight.turn_id,
-                rollout_path: thread
-                    .rollout_path()
-                    .map(|path| path.to_string_lossy().into_owned()),
+                rollout_path: Some(rollout_path.to_string_lossy().into_owned()),
                 was_running: preflight.was_running,
                 was_paused: preflight.was_paused,
                 state: HandoffNodeState::Planned,
@@ -542,6 +541,43 @@ impl HandoffCoordinator {
         }
         nodes.sort_by(|left, right| left.thread_id.cmp(&right.thread_id));
         Ok(nodes)
+    }
+
+    async fn materialize_rollout_path(
+        &self,
+        thread: &CodexThread,
+    ) -> Result<PathBuf, JSONRPCErrorError> {
+        thread.ensure_rollout_materialized().await;
+        thread.flush_rollout().await.map_err(|error| {
+            internal_error(format!(
+                "could not flush rollout for {}: {error}",
+                thread.id()
+            ))
+        })?;
+        let stored = thread.read_thread(/*include_archived*/ true, /*include_history*/ false).await.map_err(|error| {
+            internal_error(format!(
+                "could not read materialized rollout for {}: {error}",
+                thread.id()
+            ))
+        })?;
+        let path = stored
+            .rollout_path
+            .or_else(|| thread.rollout_path())
+            .ok_or_else(|| {
+                internal_error(format!(
+                    "thread {} has no materialized rollout path",
+                    thread.id()
+                ))
+            })?;
+        codex_rollout::existing_rollout_path(&path)
+            .await
+            .ok_or_else(|| {
+                internal_error(format!(
+                    "thread {} rollout does not exist at {}",
+                    thread.id(),
+                    path.display()
+                ))
+            })
     }
 
     async fn loaded_chain_root(&self, thread_id: ThreadId) -> Option<ThreadId> {
