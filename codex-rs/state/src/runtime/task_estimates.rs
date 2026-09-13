@@ -7,6 +7,8 @@ use crate::TaskEstimateMutation;
 use crate::TaskEstimateSnapshot;
 use crate::TaskEstimateStatus;
 use crate::TaskEstimateUpdateResult;
+#[cfg(test)]
+use crate::TaskEstimateOverall;
 use crate::model::datetime_to_epoch_seconds;
 use crate::model::validate_dependencies;
 use crate::model::validate_dependency_graph;
