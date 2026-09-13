@@ -121,6 +121,7 @@ impl ThreadEtaRequestProcessor {
             .iter()
             .map(mutation_from_api)
             .collect::<Result<Vec<_>, _>>()?;
+        self.ensure_root_persisted(root_thread_id).await?;
         let result = state_db
             .apply_task_estimate_mutations(root_thread_id, root_thread_id, &mutations, Utc::now())
             .await
@@ -150,6 +151,29 @@ impl ThreadEtaRequestProcessor {
             .ok_or_else(|| internal_error("sqlite state db unavailable for ETA"))
     }
 
+    async fn ensure_root_persisted(
+        &self,
+        root_thread_id: ThreadId,
+    ) -> Result<(), codex_app_server_protocol::JSONRPCErrorError> {
+        let Ok(thread) = self.thread_manager.get_thread(root_thread_id).await else {
+            return Ok(());
+        };
+        if thread.config_snapshot().await.ephemeral {
+            return Err(invalid_request("ETA root thread was not found"));
+        }
+
+        // Thread starts may stage metadata before the lazy local writer has created its rollout.
+        // ETA is durable session state, so force that existing writer through its normal
+        // persistence barrier before recording the first task update. This keeps a cold restart
+        // able to validate the root without starting a model turn.
+        thread.ensure_rollout_materialized().await;
+        thread.flush_rollout().await.map_err(|err| {
+            internal_error(format!(
+                "failed to persist ETA root thread {root_thread_id}: {err}"
+            ))
+        })
+    }
+
     async fn root_exists(
         &self,
         state_db: &StateDbHandle,
@@ -162,6 +186,11 @@ impl ThreadEtaRequestProcessor {
         {
             if !metadata.rollout_path.as_os_str().is_empty() {
                 return Ok(true);
+            }
+
+            if let Ok(thread) = self.thread_manager.get_thread(root_thread_id).await {
+                let config = thread.config_snapshot().await;
+                return Ok(!config.ephemeral && thread.rollout_path().is_some());
             }
 
             // A thread can be durably staged in SQLite before its rollout is materialized. The
