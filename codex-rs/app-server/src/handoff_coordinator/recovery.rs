@@ -14,6 +14,9 @@ use codex_protocol::protocol::Op;
 use codex_rollout::InitialHistory;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::time::{Duration, timeout};
+
+const RECOVERY_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct LoadedRecoveryNode {
     index: usize,
@@ -73,7 +76,20 @@ impl HandoffCoordinator {
             .map_err(core_error)?;
         // Drain any poller claim that crossed the gate before creating replacement sessions; all
         // subsequent pollers observe the pending bit and remain idle until recovery completes.
-        recovery_pending.wait_for_admissions().await;
+        if timeout(
+            RECOVERY_ADMISSION_TIMEOUT,
+            recovery_pending.wait_for_admissions(),
+        )
+        .await
+        .is_err()
+        {
+            journal.set_state(HandoffJournalState::NeedsAttention);
+            self.persist_journal(&journal).await?;
+            self.refresh_startup_recovery_state().await;
+            return Ok(ThreadHandoffRecoverResponse {
+                receipt: receipt_from_journal(&journal),
+            });
+        }
         journal.set_state(HandoffJournalState::Restoring);
         self.persist_journal(&journal).await?;
 
