@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-09-13/session-tmp-explicit-default#57f5bda12edd"
+  change_type: "fix"
+  scope: "codex-rs/session-tmp"
+  summary: "Enroll explicit default and custom payload roots with durable external state."
+  decision: "Resolve default-root identity canonically, allocate exact-owned hidden namespaces for markerless roots, and persist the first validated state_root location in a no-replace locator."
+  constraints:
+    - "Keep ownership, metadata, leases, and locks outside disposable payload roots."
+    - "Preserve unknown custom-root contents without adoption or cleanup."
+    - "Keep legacy recovery migration and symlink/overlap safety fail-safe."
+    - "Existing enrolled roots retain their recorded state location when configuration changes."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/session-tmp/src/lib.rs"
+    - "codex-rs/session-tmp/src/state.rs"
+    - "codex-rs/session-tmp/src/state_locator.rs"
+    - "codex-rs/session-tmp/src/migration.rs"
+    - "codex-rs/config/src/types.rs"
+    - "codex-rs/core/src/session/session.rs"
+    - "codex-rs/tui/src/chatwidget/session_tmp_command.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6-luna"
