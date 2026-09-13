@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-09-13/eta-semantic-closure#691c021a4"
+  change_type: "fix"
+  scope: "codex-rs/eta"
+  summary: "Preserve explicit group completion, immutable start baselines, and bounded ETA root validation."
+  decision: "Load a bounded terminal-child marker for unfinished groups, retain the first known estimate across repeated starts, combine inherited dependency paths by critical-path maximum, and accept app-server roots only when canonical persisted or loaded non-ephemeral threads have a rollout path."
+  constraints:
+    - "Keep ETA lifecycle explicit; idle, elapsed, and thread removal do not imply completion."
+    - "Keep dependency and grouping aggregation deterministic and bounded."
+    - "Do not allow pathless ephemeral threads to create or read ETA ledgers."
+    - "Worker worktrees remain source-only; designated build owner performs Rust validation."
+  intent_priority: "normal"
+  code_locations:
+    - "codex-rs/state/src/runtime/task_estimate_storage.rs"
+    - "codex-rs/state/src/runtime/task_estimate_math.rs"
+    - "codex-rs/state/src/runtime/task_estimates.rs"
+    - "codex-rs/state/src/runtime/task_estimates_tests.rs"
+    - "codex-rs/app-server/src/request_processors/thread_eta_processor.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6-luna"
