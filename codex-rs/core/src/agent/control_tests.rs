@@ -1213,7 +1213,7 @@ async fn send_inter_agent_communication_requeues_when_handoff_is_sealed() {
         CodexErrorDetails::InvalidRequest(_)
     ));
 
-    let (items, _, _) = thread.session.input_queue.drain_mailbox_input_items().await;
+    let (items, _) = thread.session.input_queue.drain_mailbox_input_items().await;
     assert_eq!(
         items,
         vec![crate::session::TurnInput::InterAgentCommunication(communication)]

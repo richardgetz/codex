@@ -267,6 +267,7 @@ async fn enqueue_claimed_messages(
 #[cfg(test)]
 mod tests {
     use super::enqueue_claimed_messages;
+    use super::persist_handoff_inter_agent_communication;
     use super::start_thread_inbound_message_poller;
     use crate::agent::control::AgentControl;
     use codex_protocol::AgentPath;

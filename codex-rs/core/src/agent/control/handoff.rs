@@ -435,14 +435,16 @@ mod tests {
             .expect("watcher registration");
         let guard = control.begin_handoff().expect("handoff");
         guard.wait_for_admissions().await;
-        let wait = guard.wait_for_handoff_watchers();
-        tokio::pin!(wait);
-        tokio::select! {
-            () = &mut wait => panic!("watcher should keep the final barrier open"),
-            () = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
+        {
+            let wait = guard.wait_for_handoff_watchers();
+            tokio::pin!(wait);
+            tokio::select! {
+                () = &mut wait => panic!("watcher should keep the final barrier open"),
+                () = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
+            }
+            drop(watcher);
+            wait.await;
         }
-        drop(watcher);
-        wait.await;
         drop(guard);
     }
 
@@ -453,14 +455,16 @@ mod tests {
             .begin_handoff_terminal_delivery()
             .expect("terminal delivery registration");
         let guard = control.begin_handoff().expect("handoff");
-        let wait = guard.wait_for_admissions();
-        tokio::pin!(wait);
-        tokio::select! {
-            () = &mut wait => panic!("terminal delivery should keep the barrier open"),
-            () = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
+        {
+            let wait = guard.wait_for_admissions();
+            tokio::pin!(wait);
+            tokio::select! {
+                () = &mut wait => panic!("terminal delivery should keep the barrier open"),
+                () = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
+            }
+            drop(terminal);
+            wait.await;
         }
-        drop(terminal);
-        wait.await;
         drop(guard);
     }
 
