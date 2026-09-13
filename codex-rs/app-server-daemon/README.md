@@ -41,8 +41,8 @@ codex app-server daemon bootstrap --remote-control
 
 On success, every command writes exactly one JSON object to stdout. Consumers
 should parse that JSON rather than relying on human-readable text. Lifecycle
-responses report the resolved backend, socket path, local CLI version, and
-running app-server version when applicable.
+responses report the selected launcher path, launcher version, resolved backend,
+socket path, local CLI version, and running app-server version when applicable.
 
 ## Bootstrap flow
 
@@ -53,6 +53,27 @@ curl -fsSL https://chatgpt.com/codex/install.sh | sh
 $HOME/.codex/packages/standalone/current/codex app-server daemon bootstrap --remote-control
 ```
 
+For a package-managed launcher, configure its stable executable path once. The
+daemon keeps that path (including a symlink or shim) and resolves it again on
+each start or restart, so an external upgrade is picked up without changing
+the daemon settings:
+
+```sh
+codex-rick app-server daemon bootstrap \
+  --codex-bin /opt/homebrew/bin/codex-rick
+```
+
+With no `--remote-control` flag, this configured-launcher form keeps the
+app-server on its local Unix control socket and does not start the app-server's
+remote-control websocket. It does not run the standalone installer or updater.
+Run the launcher owner's update command (for example, `agent-manager upgrade
+codex`) and then use `codex-rick app-server daemon restart` to roll the running
+app-server onto the new version. Restart uses the existing graceful shutdown
+window and never replays a turn; active work follows the normal app-server
+shutdown and resume semantics. Pass `--remote-control` only when explicitly
+requesting the app-server's existing remote-control behavior and service
+endpoint.
+
 On Windows, use a non-elevated PowerShell terminal whose host allows breakaway:
 
 ```powershell
@@ -61,21 +82,25 @@ $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.c
 & "$codexHome\packages\standalone\current\bin\codex.exe" app-server daemon bootstrap --remote-control
 ```
 
-`bootstrap` requires the standalone managed install. It records the daemon
-settings under `CODEX_HOME/app-server-daemon/`, starts app-server as a
-pidfile-backed detached process, and launches a detached updater loop.
+`bootstrap` records the daemon settings under
+`CODEX_HOME/app-server-daemon/`, starts app-server as a pidfile-backed detached
+process, and launches the detached updater loop only for the default standalone
+selection.
 
 ## Installation and update cases
 
-The daemon uses the standalone installer (`install.sh` on Unix, `install.ps1`
-on Windows) and its managed binary under `CODEX_HOME/packages/standalone/current`:
-`bin/codex` or `bin/codex.exe`, falling back to the legacy flat layout when present.
+By default, the daemon uses the standalone installer (`install.sh` on Unix,
+`install.ps1` on Windows) and its managed binary under
+`CODEX_HOME/packages/standalone/current`: `bin/codex` or `bin/codex.exe`,
+falling back to the legacy flat layout when present. A configured launcher from
+`bootstrap --codex-bin` takes precedence.
 
 | Situation | What starts | Does this daemon fetch new binaries? | Does a running app-server eventually move to a newer binary on its own? |
 | --- | --- | --- | --- |
 | Installer has run; only `start` is used | Managed binary | No | No; explicit restart is required. |
 | Installer has run; `bootstrap` is used | Managed binary and detached updater | Yes; the platform's installer runs hourly. | Yes; after a successful update, a running app-server restarts with the new binary before the updater replaces itself. |
 | Another tool updates the managed binary | Next start or restart uses it | Only with `bootstrap`, on its normal cadence. | With `bootstrap`, the next successful installer pass compares binary contents and refreshes a running app-server before the updater. |
+| Configured launcher (for example, an npm shim) | The configured launcher path | No; the launcher owner controls updates. | No; run that owner's update command, then restart the daemon. |
 
 ### Standalone installs
 
@@ -91,17 +116,32 @@ For installs created by either platform's standalone installer:
 - the updater loop is not reboot-persistent; it must be started again by
   rerunning `bootstrap` after a reboot
 
+### Configured launchers
+
+A local `bootstrap --codex-bin PATH` selection is persisted in
+`app-server-daemon/settings.json` as `managedCodexPath`. `PATH` must be an
+absolute executable path. The daemon invokes that path directly with the usual
+`app-server` arguments; it does not accept a launcher path from a remote
+client. When this setting is present, standalone updater supervision is
+intentionally disabled and `autoUpdateEnabled` is `false` in the bootstrap
+response. Unless `--remote-control` is explicitly supplied, the app-server
+uses only its local Unix control socket.
+
 ### Out-of-band updates
 
-This daemon does not watch arbitrary executable files for replacement. If some
-other tool updates the managed binary path:
+This daemon does not watch arbitrary executable files for replacement. For the
+standalone selection, if some other tool updates the managed binary path:
 
 - without `bootstrap`, a currently running app-server remains on the old
   executable image until an explicit `restart`
 - with `bootstrap`, the detached updater loop notices the changed managed
-  binary on its next successful scheduled installer pass; if
-  app-server is running, it refreshes app-server first and then refreshes itself
-  once that replacement starts successfully
+  binary on its next successful scheduled installer pass; if app-server is
+  running, it refreshes app-server first and then refreshes itself once that
+  replacement starts successfully
+
+For a configured launcher, run the launcher's normal update command and then
+restart the daemon. The persisted launcher path is reused and re-evaluated, so
+symlinks and shims can point to the newly installed version.
 
 ## Lifecycle semantics
 
@@ -129,7 +169,8 @@ or `bootstrap` does not race another in-flight lifecycle operation.
 
 The daemon stores its local state under `CODEX_HOME/app-server-daemon/`:
 
-- `settings.json` for persisted launch settings
+- `settings.json` for persisted launch settings, including an optional
+  `managedCodexPath` selected by a local bootstrap command
 - `app-server.pid` for the app-server process record
 - `app-server-updater.pid` for the pid-backed standalone updater loop
 - `daemon.lock` for daemon-wide lifecycle serialization

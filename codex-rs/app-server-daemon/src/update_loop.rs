@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::bail;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::RouteAwareClientPool;
@@ -40,16 +41,19 @@ const INSTALL_URL: &str = "https://chatgpt.com/codex/install.sh";
 const INSTALL_URL: &str = "https://chatgpt.com/codex/install.ps1";
 
 pub(crate) async fn run(http_client_factory: HttpClientFactory) -> Result<()> {
+    let daemon = Daemon::from_environment()?;
+    let settings = daemon.load_settings().await?;
+    if settings.managed_codex_path.is_some() {
+        bail!(
+            "the standalone app-server updater is disabled for a configured Codex launcher; use the launcher owner's update command, then restart the daemon"
+        );
+    }
+
     #[cfg(unix)]
     let mut terminate =
         signal(SignalKind::terminate()).context("failed to install updater shutdown handler")?;
     #[cfg(windows)]
-    let updater = {
-        let daemon = Daemon::from_environment()?;
-        crate::backend::pid_update_loop_backend(
-            daemon.backend_paths(&daemon.load_settings().await?),
-        )
-    };
+    let updater = crate::backend::pid_update_loop_backend(daemon.backend_paths(&settings));
     #[cfg(windows)]
     updater.wait_for_ownership().await?;
     #[cfg(windows)]
@@ -98,6 +102,11 @@ async fn update_once(
     running_updater_identity: &ExecutableIdentity,
     terminate: &mut Signal,
 ) -> Result<UpdateLoopControl> {
+    let daemon = Daemon::from_environment()?;
+    if daemon.load_settings().await?.managed_codex_path.is_some() {
+        return Ok(UpdateLoopControl::Stop);
+    }
+
     #[cfg(unix)]
     install_latest_standalone(http).await?;
     #[cfg(windows)]
@@ -106,7 +115,11 @@ async fn update_once(
         _ = terminate.recv() => return Ok(UpdateLoopControl::Stop),
     }
 
-    let daemon = Daemon::from_environment()?;
+    // The launcher can change while the installer is running. Re-read settings before
+    // any restart so an in-flight predecessor cannot put the standalone binary back.
+    if daemon.load_settings().await?.managed_codex_path.is_some() {
+        return Ok(UpdateLoopControl::Stop);
+    }
     let managed_codex_bin = resolved_managed_codex_bin(&daemon.managed_codex_bin).await?;
     let managed_identity = executable_identity(&managed_codex_bin).await?;
     let (restart_mode, updater_refresh_mode) =
@@ -116,10 +129,13 @@ async fn update_once(
         if terminate.recv().now_or_never().flatten().is_some() {
             return Ok(UpdateLoopControl::Stop);
         }
-        match daemon
+        let outcome = daemon
             .try_restart_if_running(restart_mode, updater_refresh_mode, &managed_codex_bin)
-            .await?
-        {
+            .await?;
+        if daemon.load_settings().await?.managed_codex_path.is_some() {
+            return Ok(UpdateLoopControl::Stop);
+        }
+        match outcome {
             RestartIfRunningOutcome::Busy => {
                 if sleep_or_terminate(RESTART_RETRY_INTERVAL, terminate).await {
                     return Ok(UpdateLoopControl::Stop);
