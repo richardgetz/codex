@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ServerLifecyclePhase": {
+      "description": "Process-local lifecycle phase for a shared app-server daemon.\n\n`Draining` means the server has begun a graceful restart and will reject new work admission while existing assistant turns drain. `Forced` means a second forceable shutdown signal arrived; the server may terminate before all work completes. Neither phase is a durable thread checkpoint.",
+      "enum": [
+        "ready",
+        "draining",
+        "forced"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "Emitted when the process lifecycle phase or draining turn count changes.",
+  "properties": {
+    "daemonInstanceId": {
+      "description": "UUID generated for this app-server process. It changes after restart.",
+      "type": "string"
+    },
+    "phase": {
+      "$ref": "#/definitions/ServerLifecyclePhase"
+    },
+    "runningAssistantTurns": {
+      "description": "Number of assistant turns currently reported as running by this process.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "transitionId": {
+      "description": "UUID shared by lifecycle updates for one graceful drain attempt. It is absent while the process is ready.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "daemonInstanceId",
+    "phase",
+    "runningAssistantTurns"
+  ],
+  "title": "ServerLifecycleUpdatedNotification",
+  "type": "object"
+}
