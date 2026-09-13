@@ -15,6 +15,7 @@ use codex_app_server_protocol::ThreadEtaUpdateResponse;
 use codex_app_server_protocol::ThreadEtaUpdatedNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::RequestId;
 use codex_features::Feature;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -102,23 +103,41 @@ async fn thread_eta_rpc_persists_terminal_history_without_starting_a_turn() -> R
     let ThreadStartResponse { thread, .. } = app.start_thread(ThreadStartParams::default()).await?;
     let thread_id = thread.id.clone();
     let unknown_thread = "00000000-0000-0000-0000-00000000dead";
-    assert!(read(&mut app, unknown_thread).await.is_err());
-    assert!(
-        update(
-            &mut app,
-            unknown_thread,
-            operation(
-                ThreadEtaAction::Create,
-                Some("orphan"),
-                Some("Orphan task"),
-                Some(1),
-                Some(1),
-                None,
-            ),
+    let unknown_read_id = app
+        .send_request(
+            "thread/eta/read",
+            Some(serde_json::to_value(ThreadEtaReadParams {
+                thread_id: unknown_thread.to_string(),
+                cursor: None,
+                limit: Some(1),
+            })?),
         )
-        .await
-        .is_err()
-    );
+        .await?;
+    let unknown_read_error = app
+        .read_stream_until_error_message(RequestId::Integer(unknown_read_id))
+        .await?;
+    assert_eq!(unknown_read_error.error.message, "ETA root thread was not found");
+
+    let unknown_update_id = app
+        .send_request(
+            "thread/eta/update",
+            Some(serde_json::to_value(ThreadEtaUpdateParams {
+                thread_id: unknown_thread.to_string(),
+                operations: vec![operation(
+                    ThreadEtaAction::Create,
+                    Some("orphan"),
+                    Some("Orphan task"),
+                    Some(1),
+                    Some(1),
+                    None,
+                )],
+            })?),
+        )
+        .await?;
+    let unknown_update_error = app
+        .read_stream_until_error_message(RequestId::Integer(unknown_update_id))
+        .await?;
+    assert_eq!(unknown_update_error.error.message, "ETA root thread was not found");
 
     let created = update(
         &mut app,
