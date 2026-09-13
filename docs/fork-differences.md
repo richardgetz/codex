@@ -112,6 +112,13 @@ after work has already started has no prediction baseline and is classified as
 unknown. Cancelled tasks remain visible as cancelled history and have unknown
 accuracy; blocked tasks remain active until an explicit terminal update.
 
+The model-facing tool accepts at most eight operations per call so its response
+remains bounded and returns every changed task summary. The public app-server
+update may batch more operations. The unfinished-task cap applies only to
+active/pending/blocked rows; completed and cancelled History does not consume
+that cap. Deleting a root removes its ETA ledger, while deleting a worker keeps
+its terminal History and marks its unfinished owned tasks blocked.
+
 The aggregate finish range follows task dependencies and parallel leaves. A
 missing, unestimated, stale, blocked, or cyclic dependency makes the affected
 aggregate unknown, and grouping parents are not double-counted with their

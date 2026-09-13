@@ -128,6 +128,42 @@ async fn task_completion_freezes_harness_elapsed_and_history() {
 }
 
 #[tokio::test]
+async fn stale_unrelated_work_keeps_update_aggregate_unknown() {
+    let (runtime, root) = runtime().await;
+    let started_at = at(1_700_000_000);
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[create("old", "Old task", Some((10, 20)))],
+            started_at,
+        )
+        .await
+        .expect("create old task");
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[transition(TaskEstimateAction::Start, "old")],
+            started_at,
+        )
+        .await
+        .expect("start old task");
+
+    let update = runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[create("new", "New task", Some((1, 2)))],
+            started_at + Duration::seconds(15 * 60 + 1),
+        )
+        .await
+        .expect("create new task");
+    assert_eq!(update.overall, TaskEstimateOverall::unknown("stale task update"));
+    runtime.close().await;
+}
+
+#[tokio::test]
 async fn grouping_parent_is_not_double_counted_and_requires_explicit_completion() {
     let (runtime, root) = runtime().await;
     let now = at(1_700_000_000);
@@ -198,6 +234,90 @@ async fn grouping_parent_is_not_double_counted_and_requires_explicit_completion(
         .await
         .expect("complete snapshot");
     assert_eq!(complete.overall.remaining_upper_seconds, Some(0));
+    runtime.close().await;
+}
+
+#[tokio::test]
+async fn grouping_dependencies_are_serialized_before_parallel_children() {
+    let (runtime, root) = runtime().await;
+    let now = at(1_700_000_000);
+    let mut group = create("group", "Group", Some((100, 100)));
+    group.depends_on_task_ids = Some(vec!["dependency".to_string()]);
+    let mut child = create("child", "Child", Some((5, 5)));
+    child.parent_task_id = Some("group".to_string());
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[
+                create("dependency", "Dependency", Some((7, 7))),
+                group,
+                child,
+                transition(TaskEstimateAction::Start, "group"),
+                transition(TaskEstimateAction::Start, "child"),
+                transition(TaskEstimateAction::Start, "dependency"),
+            ],
+            now,
+        )
+        .await
+        .expect("create and start grouped dependency tasks");
+
+    let snapshot = runtime
+        .read_task_estimate_snapshot(root, now, None, None)
+        .await
+        .expect("group dependency snapshot");
+    assert_eq!(
+        (
+            snapshot.overall.remaining_lower_seconds,
+            snapshot.overall.remaining_upper_seconds,
+            snapshot.overall.unknown_reason,
+        ),
+        (Some(12), Some(12), None),
+    );
+    runtime.close().await;
+}
+
+#[tokio::test]
+async fn grouping_dependency_on_descendant_is_unknown_instead_of_silent() {
+    let (runtime, root) = runtime().await;
+    let now = at(1_700_000_000);
+    let mut child = create("child", "Child", Some((5, 5)));
+    child.parent_task_id = Some("group".to_string());
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[
+                create("group", "Group", Some((1, 1))),
+                child,
+                transition(TaskEstimateAction::Start, "group"),
+                transition(TaskEstimateAction::Start, "child"),
+                TaskEstimateMutation {
+                    action: TaskEstimateAction::Revise,
+                    task_id: Some("group".to_string()),
+                    title: None,
+                    parent_task_id: None,
+                    depends_on_task_ids: Some(vec!["child".to_string()]),
+                    estimate: Some(TaskEstimateRange {
+                        lower_seconds: Some(1),
+                        upper_seconds: Some(1),
+                    }),
+                    reason: Some("invalid grouping dependency".to_string()),
+                },
+            ],
+            now,
+        )
+        .await
+        .expect("grouping dependency is stored for explicit unknown aggregate");
+
+    let snapshot = runtime
+        .read_task_estimate_snapshot(root, now, None, None)
+        .await
+        .expect("grouping cycle snapshot");
+    assert_eq!(
+        snapshot.overall,
+        TaskEstimateOverall::unknown("task grouping and dependency graphs contain a cycle")
+    );
     runtime.close().await;
 }
 

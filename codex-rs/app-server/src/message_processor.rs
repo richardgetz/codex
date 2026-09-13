@@ -480,7 +480,11 @@ impl MessageProcessor {
         );
         let remote_control_processor = RemoteControlRequestProcessor::new(remote_control_handle);
         let search_processor = SearchRequestProcessor::new(outgoing.clone());
-        let thread_eta_processor = ThreadEtaRequestProcessor::new(outgoing.clone(), state_db.clone());
+        let thread_eta_processor = ThreadEtaRequestProcessor::new(
+            outgoing.clone(),
+            state_db.clone(),
+            Arc::clone(&thread_manager),
+        );
         let thread_goal_processor = ThreadGoalRequestProcessor::new(
             Arc::clone(&thread_manager),
             outgoing.clone(),

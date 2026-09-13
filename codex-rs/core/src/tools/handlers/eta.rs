@@ -28,7 +28,8 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 const TOOL_NAME: &str = "update_eta";
-const MAX_OUTPUT_TASKS: usize = 64;
+const MAX_MODEL_OPERATIONS: usize = 8;
+const MAX_MODEL_OUTPUT_BYTES: usize = 10 * 1024;
 
 #[derive(Debug, Deserialize)]
 struct EtaUpdateArgs {
@@ -176,6 +177,11 @@ impl EtaHandler {
             }
         };
         let args: EtaUpdateArgs = parse_arguments(&arguments)?;
+        if args.operations.len() > MAX_MODEL_OPERATIONS {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "update_eta accepts at most {MAX_MODEL_OPERATIONS} operations per model call"
+            )));
+        }
         let Some(state_db) = session.state_db() else {
             return Err(FunctionCallError::Fatal(
                 "ETA state database is unavailable".to_string(),
@@ -214,13 +220,12 @@ impl EtaHandler {
             changed_tasks: result
                 .changed_tasks
                 .iter()
-                .take(MAX_OUTPUT_TASKS)
                 .map(|task| EtaToolTaskSummary {
                     task_id: task.task_id.clone(),
                     status: task.status,
                 })
                 .collect(),
-            omitted_task_count: result.changed_tasks.len().saturating_sub(MAX_OUTPUT_TASKS),
+            omitted_task_count: 0,
             overall: EtaToolOverallSummary {
                 finish_at: result.overall.finish_at.map(|value| value.timestamp()),
                 remaining_lower_seconds: result.overall.remaining_lower_seconds,
@@ -231,6 +236,11 @@ impl EtaHandler {
         let output = serde_json::to_string(&output).map_err(|err| {
             FunctionCallError::Fatal(format!("failed to encode ETA update result: {err}"))
         })?;
+        if output.len() > MAX_MODEL_OUTPUT_BYTES {
+            return Err(FunctionCallError::Fatal(
+                "ETA update result exceeded the model context bound".to_string(),
+            ));
+        }
         Ok(boxed_tool_output(FunctionToolOutput::from_text(
             output,
             Some(true),

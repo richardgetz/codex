@@ -7,6 +7,8 @@ use chrono::Utc;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
+const STALE_AFTER_SECONDS: i64 = 15 * 60;
+
 pub(super) fn compute_overall(tasks: &[TaskEstimate], now: DateTime<Utc>) -> TaskEstimateOverall {
     if tasks.is_empty() {
         return TaskEstimateOverall::unknown("no task estimates");
@@ -22,6 +24,13 @@ pub(super) fn compute_overall(tasks: &[TaskEstimate], now: DateTime<Utc>) -> Tas
             remaining_upper_seconds: Some(0),
             unknown_reason: None,
         };
+    }
+    if active_tasks.iter().any(|task| {
+        now.timestamp()
+            .saturating_sub(task.updated_at.timestamp())
+            > STALE_AFTER_SECONDS
+    }) {
+        return TaskEstimateOverall::unknown("stale task update");
     }
     if active_tasks
         .iter()
@@ -63,7 +72,7 @@ pub(super) fn compute_overall(tasks: &[TaskEstimate], now: DateTime<Utc>) -> Tas
     let mut lower = 0_i64;
     let mut upper = 0_i64;
     for task_id in leaves {
-        let (path_lower, path_upper) = match estimate_path(
+        let (mut path_lower, mut path_upper) = match estimate_path(
             task_id,
             tasks,
             now,
@@ -73,15 +82,126 @@ pub(super) fn compute_overall(tasks: &[TaskEstimate], now: DateTime<Utc>) -> Tas
             Ok(path) => path,
             Err(reason) => return TaskEstimateOverall::unknown(reason),
         };
+        let mut existing_dependencies = BTreeSet::new();
+        if let Err(reason) = collect_dependency_ids(
+            task_id,
+            tasks,
+            &mut existing_dependencies,
+            &mut BTreeSet::new(),
+        ) {
+            return TaskEstimateOverall::unknown(reason);
+        }
+        let inherited_dependencies = match inherited_group_dependencies(task_id, tasks) {
+            Ok(dependencies) => dependencies,
+            Err(reason) => return TaskEstimateOverall::unknown(reason),
+        };
+        for dependency_id in inherited_dependencies {
+            if existing_dependencies.contains(&dependency_id) {
+                continue;
+            }
+            let (dependency_lower, dependency_upper) = match estimate_path(
+                &dependency_id,
+                tasks,
+                now,
+                &mut memo,
+                &mut BTreeSet::new(),
+            ) {
+                Ok(path) => path,
+                Err(reason) => return TaskEstimateOverall::unknown(reason),
+            };
+            path_lower = path_lower.saturating_add(dependency_lower);
+            path_upper = path_upper.saturating_add(dependency_upper);
+        }
         lower = lower.max(path_lower);
         upper = upper.max(path_upper);
     }
+    let Some(finish_at) = now.checked_add_signed(Duration::seconds(upper)) else {
+        return TaskEstimateOverall::unknown("estimate exceeds supported ETA horizon");
+    };
     TaskEstimateOverall {
-        finish_at: Some(now + Duration::seconds(upper)),
+        finish_at: Some(finish_at),
         remaining_lower_seconds: Some(lower),
         remaining_upper_seconds: Some(upper),
         unknown_reason: None,
     }
+}
+
+fn collect_dependency_ids(
+    task_id: &str,
+    tasks: &[TaskEstimate],
+    dependencies: &mut BTreeSet<String>,
+    visiting: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    if !visiting.insert(task_id.to_string()) {
+        return Err("task dependency graph contains a cycle".to_string());
+    }
+    let task = tasks
+        .iter()
+        .find(|task| task.task_id == task_id)
+        .ok_or_else(|| format!("unknown dependency task `{task_id}`"))?;
+    for dependency_id in &task.depends_on_task_ids {
+        dependencies.insert(dependency_id.clone());
+        collect_dependency_ids(dependency_id, tasks, dependencies, visiting)?;
+    }
+    visiting.remove(task_id);
+    Ok(())
+}
+
+fn inherited_group_dependencies(
+    task_id: &str,
+    tasks: &[TaskEstimate],
+) -> Result<Vec<String>, String> {
+    let mut dependencies = BTreeSet::new();
+    let mut seen_parents = BTreeSet::new();
+    let mut parent_id = tasks
+        .iter()
+        .find(|task| task.task_id == task_id)
+        .ok_or_else(|| format!("unknown dependency task `{task_id}`"))?
+        .parent_task_id
+        .clone();
+    while let Some(current_parent_id) = parent_id {
+        if !seen_parents.insert(current_parent_id.clone()) {
+            return Err("task parent graph contains a cycle".to_string());
+        }
+        let parent = tasks
+            .iter()
+            .find(|task| task.task_id == current_parent_id)
+            .ok_or_else(|| format!("unknown parent task `{current_parent_id}`"))?;
+        if !parent.status.is_terminal() {
+            for dependency_id in &parent.depends_on_task_ids {
+                if is_parent_descendant(dependency_id, &current_parent_id, tasks)? {
+                    return Err("task grouping and dependency graphs contain a cycle".to_string());
+                }
+                dependencies.insert(dependency_id.clone());
+            }
+        }
+        parent_id = parent.parent_task_id.clone();
+    }
+    Ok(dependencies.into_iter().collect())
+}
+
+fn is_parent_descendant(
+    task_id: &str,
+    ancestor_id: &str,
+    tasks: &[TaskEstimate],
+) -> Result<bool, String> {
+    let mut current = Some(task_id.to_string());
+    let mut seen = BTreeSet::new();
+    while let Some(current_id) = current {
+        if !seen.insert(current_id.clone()) {
+            return Err("task parent graph contains a cycle".to_string());
+        }
+        if current_id == ancestor_id {
+            return Ok(true);
+        }
+        current = tasks
+            .iter()
+            .find(|task| task.task_id == current_id)
+            .ok_or_else(|| format!("unknown dependency task `{current_id}`"))?
+            .parent_task_id
+            .clone();
+    }
+    Ok(false)
 }
 
 fn estimate_path(

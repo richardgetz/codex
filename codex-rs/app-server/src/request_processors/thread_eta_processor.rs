@@ -16,6 +16,7 @@ use codex_app_server_protocol::ThreadEtaUpdateOperation;
 use codex_app_server_protocol::ThreadEtaUpdateParams;
 use codex_app_server_protocol::ThreadEtaUpdateResponse;
 use codex_app_server_protocol::ThreadEtaUpdatedNotification;
+use codex_core::ThreadManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadEtaOverallUpdatedEvent;
 use codex_protocol::protocol::ThreadEtaTaskUpdatedEvent;
@@ -40,14 +41,20 @@ const STALE_AFTER_SECONDS: i64 = 15 * 60;
 pub(crate) struct ThreadEtaRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     state_db: Option<StateDbHandle>,
+    thread_manager: Arc<ThreadManager>,
 }
 
 impl ThreadEtaRequestProcessor {
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
         state_db: Option<StateDbHandle>,
+        thread_manager: Arc<ThreadManager>,
     ) -> Self {
-        Self { outgoing, state_db }
+        Self {
+            outgoing,
+            state_db,
+            thread_manager,
+        }
     }
 
     pub(crate) async fn read(
@@ -60,6 +67,15 @@ impl ThreadEtaRequestProcessor {
             .root_thread_id(thread_id)
             .await
             .map_err(|err| internal_error(format!("failed to resolve ETA root: {err}")))?;
+        let root_exists = state_db
+            .get_thread(root_thread_id)
+            .await
+            .map_err(|err| internal_error(format!("failed to validate ETA root: {err}")))?
+            .is_some()
+            || self.thread_manager.get_thread(root_thread_id).await.is_ok();
+        if !root_exists {
+            return Err(invalid_request("ETA root thread was not found"));
+        }
         let snapshot = state_db
             .read_task_estimate_snapshot(
                 root_thread_id,
@@ -97,6 +113,15 @@ impl ThreadEtaRequestProcessor {
             return Err(invalid_request(
                 "ETA updates must target the root session thread",
             ));
+        }
+        let root_exists = state_db
+            .get_thread(root_thread_id)
+            .await
+            .map_err(|err| internal_error(format!("failed to validate ETA root: {err}")))?
+            .is_some()
+            || self.thread_manager.get_thread(root_thread_id).await.is_ok();
+        if !root_exists {
+            return Err(invalid_request("ETA root thread was not found"));
         }
         let mutations = params
             .operations

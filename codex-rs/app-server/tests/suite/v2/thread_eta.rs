@@ -101,6 +101,24 @@ async fn thread_eta_rpc_persists_terminal_history_without_starting_a_turn() -> R
         .await?;
     let ThreadStartResponse { thread, .. } = app.start_thread(ThreadStartParams::default()).await?;
     let thread_id = thread.id.clone();
+    let unknown_thread = "00000000-0000-0000-0000-00000000dead";
+    assert!(read(&mut app, unknown_thread).await.is_err());
+    assert!(
+        update(
+            &mut app,
+            unknown_thread,
+            operation(
+                ThreadEtaAction::Create,
+                Some("orphan"),
+                Some("Orphan task"),
+                Some(1),
+                Some(1),
+                None,
+            ),
+        )
+        .await
+        .is_err()
+    );
 
     let created = update(
         &mut app,

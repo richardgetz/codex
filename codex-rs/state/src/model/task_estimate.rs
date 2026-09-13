@@ -60,6 +60,11 @@ pub struct TaskEstimateRange {
     pub upper_seconds: Option<i64>,
 }
 
+// Keep aggregate finish timestamps inside chrono's supported range even when a caller supplies
+// the largest value representable by an integer. With at most 256 tasks per root, this also keeps
+// a serial dependency path well below the DateTime horizon.
+pub(crate) const MAX_ESTIMATE_SECONDS: i64 = 100_i64 * 365 * 24 * 60 * 60;
+
 impl TaskEstimateRange {
     pub fn is_known(self) -> bool {
         self.lower_seconds.is_some() && self.upper_seconds.is_some()
@@ -70,6 +75,17 @@ impl TaskEstimateRange {
             || self.upper_seconds.is_some_and(|value| value < 0)
         {
             return Err(anyhow::anyhow!("task duration estimates must not be negative"));
+        }
+        if self
+            .lower_seconds
+            .is_some_and(|value| value > MAX_ESTIMATE_SECONDS)
+            || self
+                .upper_seconds
+                .is_some_and(|value| value > MAX_ESTIMATE_SECONDS)
+        {
+            return Err(anyhow::anyhow!(
+                "task duration estimates must not exceed {MAX_ESTIMATE_SECONDS} seconds"
+            ));
         }
         if let (Some(lower), Some(upper)) = (self.lower_seconds, self.upper_seconds)
             && lower > upper

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::Utc;
 use codex_features::Feature;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::UserInput;
@@ -146,5 +147,81 @@ async fn update_eta_tool_is_registered_and_records_explicit_lifecycle() -> Resul
     assert!(completed.terminal_at.is_some());
     assert!(completed.actual_elapsed_seconds.is_some());
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn update_eta_rejects_oversized_model_batches_before_writing() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let operations = (0..9)
+        .map(|index| {
+            json!({
+                "action": "create",
+                "task_id": format!("task-{index}"),
+                "title": "Bounded task",
+                "estimate_lower_seconds": 1,
+                "estimate_upper_seconds": 2,
+            })
+        })
+        .collect::<Vec<_>>();
+    let oversized_args = json!({ "operations": operations });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("eta-oversized-response"),
+                ev_function_call("eta-oversized", "update_eta", &oversized_args.to_string()),
+                ev_completed("eta-oversized-response"),
+            ]),
+            sse(vec![
+                ev_response_created("eta-oversized-final-response"),
+                ev_assistant_message("eta-oversized-final-message", "Batch rejected"),
+                ev_completed("eta-oversized-final-response"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow sqlite");
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    test.codex
+        .start_or_steer_turn(codex_core::TurnInputRequest::user_input(vec![
+            UserInput::Text {
+                text: "Reject an oversized ETA batch.".to_string(),
+                text_elements: Vec::new(),
+            },
+        ]))
+        .await?;
+
+    loop {
+        if matches!(wait_for_event(&test.codex, |_| true).await, EventMsg::TurnComplete(_)) {
+            break;
+        }
+    }
+
+    let requests = responses.requests();
+    let output = requests
+        .iter()
+        .find_map(|request| request.function_call_output_text("eta-oversized"))
+        .expect("oversized ETA call should return a model-visible error");
+    assert!(output.contains("at most 8 operations"));
+    let state_db = test.codex.state_db().expect("state db enabled");
+    let snapshot = state_db
+        .read_task_estimate_snapshot(
+            test.session_configured.thread_id,
+            Utc::now(),
+            None,
+            None,
+        )
+        .await?;
+    assert!(snapshot.active.is_empty());
+    assert!(snapshot.history.is_empty());
     Ok(())
 }

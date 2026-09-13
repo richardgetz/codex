@@ -36,3 +36,13 @@ fn remaining_range_clamps_overdue_estimates_to_zero() {
         }
     );
 }
+
+#[test]
+fn duration_validation_rejects_values_beyond_supported_horizon() {
+    let result = TaskEstimateRange {
+        lower_seconds: Some(0),
+        upper_seconds: Some(MAX_ESTIMATE_SECONDS + 1),
+    }
+    .validate();
+    assert!(result.is_err());
+}
