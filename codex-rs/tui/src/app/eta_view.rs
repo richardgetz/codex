@@ -8,19 +8,19 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::ScrollState;
 use crate::bottom_pane::ViewCompletion;
 use crate::bottom_pane::popup_consts::MAX_POPUP_ROWS;
-use crate::bottom_pane::ScrollState;
 use crate::keymap::KeymapContext;
 use crate::keymap::KeymapContextSet;
 use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
+use codex_protocol::ThreadId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use codex_protocol::ThreadId;
 
 pub(super) const ETA_VIEW_ID: &str = "thread-eta";
 pub(super) const ETA_ACTIVE_TAB_ID: &str = "active";
@@ -238,12 +238,7 @@ impl EtaView {
             };
             for &idx in indices {
                 if seen.insert(idx) {
-                    mark_hidden(
-                        Some(tasks[idx].task_id.as_str()),
-                        children,
-                        tasks,
-                        seen,
-                    );
+                    mark_hidden(Some(tasks[idx].task_id.as_str()), children, tasks, seen);
                 }
             }
         }
@@ -272,12 +267,7 @@ impl EtaView {
                             seen,
                         );
                     } else {
-                        mark_hidden(
-                            Some(tasks[idx].task_id.as_str()),
-                            children,
-                            tasks,
-                            seen,
-                        );
+                        mark_hidden(Some(tasks[idx].task_id.as_str()), children, tasks, seen);
                     }
                 }
             }
@@ -407,7 +397,6 @@ impl EtaView {
     fn close(&mut self) {
         self.complete = Some(ViewCompletion::Cancelled);
     }
-
 }
 
 impl BottomPaneView for EtaView {

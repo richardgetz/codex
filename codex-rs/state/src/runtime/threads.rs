@@ -2141,18 +2141,16 @@ mod tests {
         assert_eq!(snapshot.history[0].status, TaskEstimateStatus::Completed);
 
         assert_eq!(runtime.delete_thread(root).await?, 1);
-        let root_task_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM eta_tasks WHERE root_thread_id = ?",
-        )
-        .bind(root.to_string())
-        .fetch_one(runtime.pool.as_ref())
-        .await?;
-        let root_ledger_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM eta_roots WHERE root_thread_id = ?",
-        )
-        .bind(root.to_string())
-        .fetch_one(runtime.pool.as_ref())
-        .await?;
+        let root_task_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM eta_tasks WHERE root_thread_id = ?")
+                .bind(root.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await?;
+        let root_ledger_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM eta_roots WHERE root_thread_id = ?")
+                .bind(root.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await?;
         assert_eq!((root_task_count, root_ledger_count), (0, 0));
         Ok(())
     }

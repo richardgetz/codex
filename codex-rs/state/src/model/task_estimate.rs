@@ -74,7 +74,9 @@ impl TaskEstimateRange {
         if self.lower_seconds.is_some_and(|value| value < 0)
             || self.upper_seconds.is_some_and(|value| value < 0)
         {
-            return Err(anyhow::anyhow!("task duration estimates must not be negative"));
+            return Err(anyhow::anyhow!(
+                "task duration estimates must not be negative"
+            ));
         }
         if self
             .lower_seconds
@@ -300,14 +302,8 @@ pub(crate) fn task_estimate_from_row(row: TaskEstimateRow) -> Result<TaskEstimat
         original_lower_seconds: row.original_lower_seconds,
         original_upper_seconds: row.original_upper_seconds,
         created_at: epoch_seconds_to_datetime(row.created_at)?,
-        started_at: row
-            .started_at
-            .map(epoch_seconds_to_datetime)
-            .transpose()?,
-        terminal_at: row
-            .terminal_at
-            .map(epoch_seconds_to_datetime)
-            .transpose()?,
+        started_at: row.started_at.map(epoch_seconds_to_datetime).transpose()?,
+        terminal_at: row.terminal_at.map(epoch_seconds_to_datetime).transpose()?,
         actual_elapsed_seconds: row.actual_elapsed_seconds,
         updated_at: epoch_seconds_to_datetime(row.updated_at)?,
         revisions: Vec::new(),
@@ -320,7 +316,9 @@ pub(crate) fn task_estimate_revision_from_row(row: &SqliteRow) -> Result<TaskEst
         upper_seconds: row.try_get("upper_seconds")?,
         reason: row.try_get("reason")?,
         updated_at: epoch_seconds_to_datetime(row.try_get("updated_at")?)?,
-        actor_thread_id: ThreadId::from_string(row.try_get::<String, _>("actor_thread_id")?.as_str())?,
+        actor_thread_id: ThreadId::from_string(
+            row.try_get::<String, _>("actor_thread_id")?.as_str(),
+        )?,
     })
 }
 
@@ -346,7 +344,9 @@ pub(crate) fn validate_task_title(title: &str) -> Result<()> {
 
 pub(crate) fn validate_task_reason(reason: Option<&str>) -> Result<()> {
     if reason.is_some_and(|reason| reason.chars().count() > 512) {
-        return Err(anyhow::anyhow!("task reason must be at most 512 characters"));
+        return Err(anyhow::anyhow!(
+            "task reason must be at most 512 characters"
+        ));
     }
     Ok(())
 }
@@ -372,7 +372,9 @@ pub(crate) fn validate_dependencies(
     for dependency in depends_on_task_ids {
         validate_task_id(dependency)?;
         if dependency == task_id || !seen.insert(dependency) {
-            return Err(anyhow::anyhow!("task dependencies must be unique and acyclic"));
+            return Err(anyhow::anyhow!(
+                "task dependencies must be unique and acyclic"
+            ));
         }
     }
     Ok(())
@@ -392,9 +394,9 @@ pub(crate) fn validate_dependency_graph(tasks: &BTreeMap<String, TaskEstimate>) 
         if !visiting.insert(task_id.to_string()) {
             return Err(anyhow::anyhow!("task dependency graph contains a cycle"));
         }
-        let task = tasks
-            .get(task_id)
-            .ok_or_else(|| anyhow::anyhow!("task dependency references unknown task `{task_id}`"))?;
+        let task = tasks.get(task_id).ok_or_else(|| {
+            anyhow::anyhow!("task dependency references unknown task `{task_id}`")
+        })?;
         for dependency in &task.depends_on_task_ids {
             visit(dependency, tasks, visiting, visited)?;
         }

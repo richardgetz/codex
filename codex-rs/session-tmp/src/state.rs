@@ -29,10 +29,10 @@ pub(super) const V2_PAYLOAD_NAMESPACE: &str = ".codex-session-tmp-v2";
 
 #[path = "state_identity.rs"]
 mod identity;
-#[path = "state_locator.rs"]
-mod locator;
 #[path = "state_legacy.rs"]
 mod legacy;
+#[path = "state_locator.rs"]
+mod locator;
 
 pub(super) use identity::canonicalize_for_identity;
 pub(super) use identity::ensure_existing_ancestors_for_runtime;
@@ -173,7 +173,10 @@ impl ControlState {
             // creating the state identity and payload namespace. This closes
             // the first-open race where two managers could each reserve a
             // different hidden namespace before either wrote root.json.
-            Some(super::migration::lock_migration_path(&state_base, &root_id)?)
+            Some(super::migration::lock_migration_path(
+                &state_base,
+                &root_id,
+            )?)
         } else {
             None
         };
@@ -208,12 +211,7 @@ impl ControlState {
         // after validating a marker, an existing identity, or the explicit
         // hidden-namespace enrollment path prevents migration discovery from
         // recording arbitrary untrusted payload roots.
-        locator::write_state_locator(
-            default_root,
-            &root_id,
-            &canonical_payload_root,
-            &state_base,
-        )?;
+        locator::write_state_locator(default_root, &root_id, &canonical_payload_root, &state_base)?;
         let payload_namespace = match existing_state {
             Some(namespace) => {
                 // A valid external identity enrolls the payload path even when its
@@ -226,11 +224,8 @@ impl ControlState {
             }
             None => {
                 identity::ensure_payload_root(payload_root)?;
-                let payload_namespace = if allow_nonempty_without_legacy_marker && !legacy_managed
-                {
-                    identity::create_fresh_payload_namespace(
-                        payload_root,
-                    )?
+                let payload_namespace = if allow_nonempty_without_legacy_marker && !legacy_managed {
+                    identity::create_fresh_payload_namespace(payload_root)?
                 } else {
                     payload_root.to_path_buf()
                 };

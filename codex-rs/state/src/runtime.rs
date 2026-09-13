@@ -51,14 +51,14 @@ mod queued_items;
 mod recovery;
 mod remote_control;
 mod rollout_migration;
+mod task_estimate_storage;
+mod task_estimates;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod thread_control;
 mod thread_inbound_messages;
 mod thread_section_order;
 mod thread_sections;
-mod task_estimate_storage;
-mod task_estimates;
 mod threads;
 
 pub use external_agent_config_imports::ExternalAgentConfigImportDetailsRecord;
@@ -69,7 +69,6 @@ pub use goals::GoalAccountingMode;
 pub use goals::GoalAccountingOutcome;
 pub use goals::GoalStore;
 pub use goals::GoalUpdate;
-pub use task_estimates::TaskEstimateStore;
 pub use memories::MemoryStore;
 pub use queued_items::SqliteQueueStore;
 pub use recovery::RuntimeDbBackup;
@@ -80,6 +79,7 @@ pub use recovery::runtime_db_path_for_corruption_error;
 pub use recovery::sqlite_error_detail_is_corruption;
 pub use recovery::sqlite_error_detail_is_lock;
 pub use remote_control::RemoteControlEnrollmentRecord;
+pub use task_estimates::TaskEstimateStore;
 pub use threads::ThreadFilterOptions;
 
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:

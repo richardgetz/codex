@@ -1,4 +1,5 @@
-use super::task_estimates::{MAX_REVISIONS_PER_TASK, MAX_TASKS_PER_ROOT};
+use super::task_estimates::MAX_REVISIONS_PER_TASK;
+use super::task_estimates::MAX_TASKS_PER_ROOT;
 use crate::TaskEstimate;
 use crate::model::TaskEstimateRow;
 use crate::model::datetime_to_epoch_seconds;
@@ -318,9 +319,7 @@ pub(super) fn history_cursor(task: &TaskEstimate) -> String {
     )
 }
 
-pub(super) fn validate_parent_graph(
-    tasks: &BTreeMap<String, TaskEstimate>,
-) -> anyhow::Result<()> {
+pub(super) fn validate_parent_graph(tasks: &BTreeMap<String, TaskEstimate>) -> anyhow::Result<()> {
     for task in tasks.values() {
         let mut current = task.parent_task_id.as_deref();
         let mut seen = BTreeSet::new();

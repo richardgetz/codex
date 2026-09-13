@@ -14,7 +14,6 @@ use codex_protocol::ThreadId;
 use crossterm::event::KeyCode;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::layout::Rect;
 
 fn task(
     task_id: &str,
@@ -56,7 +55,13 @@ fn snapshot() -> EtaSnapshot {
     let worker = ThreadId::from_string("00000000-0000-0000-0000-000000000002")
         .expect("valid worker thread")
         .to_string();
-    let mut root_task = task("root-task", &root, None, "Prepare release", EtaTaskStatus::Active);
+    let mut root_task = task(
+        "root-task",
+        &root,
+        None,
+        "Prepare release",
+        EtaTaskStatus::Active,
+    );
     root_task.depends_on_task_ids = vec!["dependency-with-unknown-duration".to_string()];
     let mut child = task(
         "child-task",

@@ -19,9 +19,7 @@ fn task(now: DateTime<Utc>, status: TaskEstimateStatus) -> TaskEstimate {
         created_at: now,
         started_at: (status != TaskEstimateStatus::Pending).then_some(now),
         terminal_at: status.is_terminal().then_some(now + Duration::seconds(15)),
-        actual_elapsed_seconds: status
-            .is_terminal()
-            .then_some(15),
+        actual_elapsed_seconds: status.is_terminal().then_some(15),
         updated_at: now,
         revisions: Vec::new(),
     }
@@ -54,14 +52,20 @@ fn api_task_exposes_remaining_estimate_and_accuracy() {
     );
 
     let cancelled = task(now, TaskEstimateStatus::Cancelled);
-    assert_eq!(api_task(&cancelled, now).accuracy, ThreadEtaAccuracy::Unknown);
+    assert_eq!(
+        api_task(&cancelled, now).accuracy,
+        ThreadEtaAccuracy::Unknown
+    );
 }
 
 #[test]
 fn api_snapshot_marks_stale_active_work_unknown() {
     let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp");
     let root = ThreadId::new();
-    let stale = task(now - Duration::seconds(STALE_AFTER_SECONDS + 1), TaskEstimateStatus::Active);
+    let stale = task(
+        now - Duration::seconds(STALE_AFTER_SECONDS + 1),
+        TaskEstimateStatus::Active,
+    );
     let snapshot = TaskEstimateSnapshot {
         root_thread_id: root,
         generated_at: now,

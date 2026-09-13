@@ -4,17 +4,17 @@ use crate::TaskEstimate;
 use crate::TaskEstimateAction;
 use crate::TaskEstimateHistoryPage;
 use crate::TaskEstimateMutation;
+#[cfg(test)]
+use crate::TaskEstimateOverall;
 use crate::TaskEstimateSnapshot;
 use crate::TaskEstimateStatus;
 use crate::TaskEstimateUpdateResult;
-#[cfg(test)]
-use crate::TaskEstimateOverall;
 use crate::model::datetime_to_epoch_seconds;
 use crate::model::validate_dependencies;
 use crate::model::validate_dependency_graph;
+use crate::model::validate_task_id;
 use crate::model::validate_task_reason;
 use crate::model::validate_task_title;
-use crate::model::validate_task_id;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::ThreadId;
@@ -119,17 +119,18 @@ impl TaskEstimateStore {
         cursor: Option<&str>,
         limit: Option<usize>,
     ) -> anyhow::Result<TaskEstimateSnapshot> {
-        let limit = limit.unwrap_or(DEFAULT_HISTORY_LIMIT).clamp(1, MAX_HISTORY_LIMIT);
+        let limit = limit
+            .unwrap_or(DEFAULT_HISTORY_LIMIT)
+            .clamp(1, MAX_HISTORY_LIMIT);
         // Keep the sequence, task rows, revisions, and aggregate on one SQLite snapshot. A
         // sequence of pool reads can otherwise observe an update half-way through the response.
         let mut tx = self.pool.begin().await?;
-        let sequence = sqlx::query_scalar::<_, i64>(
-            "SELECT sequence FROM eta_roots WHERE root_thread_id = ?",
-        )
-        .bind(root_thread_id.to_string())
-        .fetch_optional(&mut *tx)
-        .await?
-        .unwrap_or_default();
+        let sequence =
+            sqlx::query_scalar::<_, i64>("SELECT sequence FROM eta_roots WHERE root_thread_id = ?")
+                .bind(root_thread_id.to_string())
+                .fetch_optional(&mut *tx)
+                .await?
+                .unwrap_or_default();
 
         let active_rows = sqlx::query(
             r#"
@@ -147,9 +148,7 @@ ORDER BY created_at, task_id
         .await?;
         let mut active = Vec::with_capacity(active_rows.len());
         for row in active_rows {
-            active.push(
-                task_estimate_storage::task_from_row_with_revisions(&mut tx, row).await?,
-            );
+            active.push(task_estimate_storage::task_from_row_with_revisions(&mut tx, row).await?);
         }
 
         let (cursor_terminal_at, cursor_task_id) = cursor
@@ -179,9 +178,7 @@ LIMIT ?
         .await?;
         let mut history = Vec::with_capacity(history_rows.len().min(limit));
         for row in history_rows {
-            history.push(
-                task_estimate_storage::task_from_row_with_revisions(&mut tx, row).await?,
-            );
+            history.push(task_estimate_storage::task_from_row_with_revisions(&mut tx, row).await?);
         }
         let next_cursor = if history.len() > limit {
             history
@@ -194,9 +191,12 @@ LIMIT ?
         // Keep aggregate dependency resolution independent from the paginated History output.
         // Read every unfinished task plus only the terminal rows explicitly referenced by their
         // parent/dependency graph; lifetime History is intentionally not scanned here.
-        let all_tasks =
-            task_estimate_storage::load_relevant_task_map(&mut tx, root_thread_id, &BTreeSet::new())
-                .await?;
+        let all_tasks = task_estimate_storage::load_relevant_task_map(
+            &mut tx,
+            root_thread_id,
+            &BTreeSet::new(),
+        )
+        .await?;
 
         tx.commit().await?;
 
@@ -272,12 +272,11 @@ LIMIT ?
                 "task estimate actor is not part of the requested root session"
             ));
         }
-        let previous_sequence = sqlx::query_scalar::<_, i64>(
-            "SELECT sequence FROM eta_roots WHERE root_thread_id = ?",
-        )
-        .bind(root_thread_id.to_string())
-        .fetch_one(&mut *tx)
-        .await?;
+        let previous_sequence =
+            sqlx::query_scalar::<_, i64>("SELECT sequence FROM eta_roots WHERE root_thread_id = ?")
+                .bind(root_thread_id.to_string())
+                .fetch_one(&mut *tx)
+                .await?;
         let sequence = previous_sequence
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("ETA update sequence overflow"))?;
@@ -297,9 +296,12 @@ LIMIT ?
             if let Some(task_id) = changed {
                 changed_ids.insert(task_id);
             }
-            let task_map =
-                task_estimate_storage::load_relevant_task_map(&mut tx, root_thread_id, &changed_ids)
-                    .await?;
+            let task_map = task_estimate_storage::load_relevant_task_map(
+                &mut tx,
+                root_thread_id,
+                &changed_ids,
+            )
+            .await?;
             validate_dependency_graph(&task_map)?;
             task_estimate_storage::validate_parent_graph(&task_map)?;
         }
@@ -329,10 +331,7 @@ LIMIT ?
             };
             let revisions =
                 task_estimate_storage::load_revisions(&mut tx, root_thread_id, &task_id).await?;
-            changed_tasks.push(TaskEstimate {
-                revisions,
-                ..task
-            });
+            changed_tasks.push(TaskEstimate { revisions, ..task });
         }
         let overall = compute_overall(&all_tasks.values().cloned().collect::<Vec<_>>(), now);
         tx.commit().await?;
@@ -377,17 +376,15 @@ LIMIT ?
                 .bind(root_thread_id.to_string())
                 .fetch_one(&mut **tx)
                 .await?;
-                if usize::try_from(existing_count).unwrap_or(MAX_TASKS_PER_ROOT) >= MAX_TASKS_PER_ROOT
+                if usize::try_from(existing_count).unwrap_or(MAX_TASKS_PER_ROOT)
+                    >= MAX_TASKS_PER_ROOT
                 {
                     return Err(anyhow::anyhow!(
                         "a root session may contain at most {MAX_TASKS_PER_ROOT} ETA tasks"
                     ));
                 }
                 let parent_task_id = mutation.parent_task_id.as_deref();
-                let depends_on_task_ids = mutation
-                    .depends_on_task_ids
-                    .clone()
-                    .unwrap_or_default();
+                let depends_on_task_ids = mutation.depends_on_task_ids.clone().unwrap_or_default();
                 validate_dependencies(&task_id, parent_task_id, &depends_on_task_ids)?;
                 task_estimate_storage::ensure_related_tasks_exist(
                     tx,
@@ -432,7 +429,7 @@ INSERT INTO eta_tasks (
                         now,
                         actor_thread_id,
                     )
-                        .await?;
+                    .await?;
                 }
                 Ok(Some(task_id))
             }
@@ -449,8 +446,10 @@ INSERT INTO eta_tasks (
                 };
                 ensure_actor_can_mutate(&existing, root_thread_id, actor_thread_id)?;
                 if existing.status.is_terminal() {
-                    if matches!(action, TaskEstimateAction::Complete | TaskEstimateAction::Cancel)
-                        && matches_terminal_action(existing.status, action)
+                    if matches!(
+                        action,
+                        TaskEstimateAction::Complete | TaskEstimateAction::Cancel
+                    ) && matches_terminal_action(existing.status, action)
                     {
                         return Ok(None);
                     }
@@ -516,18 +515,25 @@ INSERT INTO eta_tasks (
                             existing.original_lower_seconds,
                             existing.original_upper_seconds,
                         )
-                    } else if starts_now && current_range.is_known()
-                    {
+                    } else if starts_now && current_range.is_known() {
                         (current_range.lower_seconds, current_range.upper_seconds)
                     } else {
-                        (existing.original_lower_seconds, existing.original_upper_seconds)
+                        (
+                            existing.original_lower_seconds,
+                            existing.original_upper_seconds,
+                        )
                     };
-                let terminal_at = status.is_terminal()
+                let terminal_at = status
+                    .is_terminal()
                     .then_some(existing.terminal_at.unwrap_or(now));
-                let actual_elapsed_seconds = status.is_terminal()
+                let actual_elapsed_seconds = status
+                    .is_terminal()
                     .then(|| {
-                        started_at
-                            .map(|started_at| (terminal_at.unwrap_or(now) - started_at).num_seconds().max(0))
+                        started_at.map(|started_at| {
+                            (terminal_at.unwrap_or(now) - started_at)
+                                .num_seconds()
+                                .max(0)
+                        })
                     })
                     .flatten();
                 sqlx::query(
@@ -582,14 +588,13 @@ WHERE task_id = ? AND root_thread_id = ?
                         now,
                         actor_thread_id,
                     )
-                        .await?;
+                    .await?;
                 }
                 task_estimate_storage::trim_revisions(tx, root_thread_id, task_id).await?;
                 Ok(Some(task_id.to_string()))
             }
         }
     }
-
 }
 
 impl StateRuntime {

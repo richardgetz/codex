@@ -300,9 +300,7 @@ pub(super) fn retire_source_payload(source: &ControlState) -> Result<bool, Sessi
                 // the lock directory contains only these bounded residues.
                 Err(error)
                     if error.kind() == ErrorKind::DirectoryNotEmpty
-                        && state_lock_files_are_safe(&legacy_locks) =>
-                {
-                }
+                        && state_lock_files_are_safe(&legacy_locks) => {}
                 Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => return Ok(false),
                 Err(error) if error.kind() == ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
@@ -312,9 +310,7 @@ pub(super) fn retire_source_payload(source: &ControlState) -> Result<bool, Sessi
             Ok(()) => {}
             Err(error)
                 if error.kind() == ErrorKind::DirectoryNotEmpty
-                    && payload_sessions_empty_or_locks_only(&sessions) =>
-            {
-            }
+                    && payload_sessions_empty_or_locks_only(&sessions) => {}
             Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => return Ok(false),
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
@@ -687,9 +683,7 @@ fn payload_sessions_empty_or_locks_only(path: &Path) -> bool {
         let Some(name) = child.file_name().and_then(|name| name.to_str()) else {
             return false;
         };
-        if name != ".locks"
-            || !metadata.file_type().is_dir()
-            || !state_lock_files_are_safe(&child)
+        if name != ".locks" || !metadata.file_type().is_dir() || !state_lock_files_are_safe(&child)
         {
             return false;
         }

@@ -69,27 +69,24 @@ fn concurrent_first_opens_share_one_enrolled_namespace() {
     let root = tempfile::tempdir().unwrap();
     let config = config(&root);
     let barrier = Arc::new(Barrier::new(2));
-    let handles = [
-        ("session-1", "thread-1"),
-        ("session-2", "thread-2"),
-    ]
-    .into_iter()
-    .map(|(session_id, thread_id)| {
-        let config = config.clone();
-        let barrier = Arc::clone(&barrier);
-        let home = root.path().to_path_buf();
-        std::thread::spawn(move || {
-            barrier.wait();
-            SessionTmpManager::open(
-                &config,
-                &home,
-                session_id,
-                thread_id,
-                SessionTmpOwner::RootSession,
-            )
+    let handles = [("session-1", "thread-1"), ("session-2", "thread-2")]
+        .into_iter()
+        .map(|(session_id, thread_id)| {
+            let config = config.clone();
+            let barrier = Arc::clone(&barrier);
+            let home = root.path().to_path_buf();
+            std::thread::spawn(move || {
+                barrier.wait();
+                SessionTmpManager::open(
+                    &config,
+                    &home,
+                    session_id,
+                    thread_id,
+                    SessionTmpOwner::RootSession,
+                )
+            })
         })
-    })
-    .collect::<Vec<_>>();
+        .collect::<Vec<_>>();
     let mut managers = handles
         .into_iter()
         .map(|handle| handle.join().unwrap().unwrap().unwrap())
@@ -476,9 +473,7 @@ fn recovery_marker_retires_with_a_legacy_lock_residue() {
     .unwrap()
     .unwrap();
 
-    assert!(!recovery_root
-        .join(crate::state::LEGACY_MARKER)
-        .exists());
+    assert!(!recovery_root.join(crate::state::LEGACY_MARKER).exists());
     assert!(lock_path.exists());
     assert!(recovery_root.exists());
     assert_eq!(
@@ -494,11 +489,13 @@ fn recovery_marker_retires_with_a_legacy_lock_residue() {
         .unwrap(),
         b"migrated"
     );
-    assert!(!recovery_root
-        .join(SESSIONS_DIR)
-        .join("legacy-session")
-        .join(SESSION_METADATA_FILE)
-        .exists());
+    assert!(
+        !recovery_root
+            .join(SESSIONS_DIR)
+            .join("legacy-session")
+            .join(SESSION_METADATA_FILE)
+            .exists()
+    );
     drop(manager);
 }
 
@@ -602,7 +599,7 @@ fn configured_state_root_is_stable_when_the_override_changes() {
     let second_state_root = payload_root.join("state-two");
     let config = SessionTmpConfig {
         enabled: true,
-        root: Some(payload_root.clone()),
+        root: Some(payload_root),
         state_root: Some(first_state_root.clone()),
         stale_after: Duration::from_secs(60),
     };
@@ -640,7 +637,7 @@ fn pre_locator_default_state_wins_over_a_new_override() {
     let payload_root = home.path().join("payload");
     let initial = SessionTmpConfig {
         enabled: true,
-        root: Some(payload_root.clone()),
+        root: Some(payload_root),
         state_root: None,
         stale_after: Duration::from_secs(60),
     };

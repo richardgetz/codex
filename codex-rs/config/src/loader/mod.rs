@@ -1993,10 +1993,7 @@ state_root = "~/.codex/state/session-tmp"
             .expect("session temporary state root should be present");
         let expected_state_root =
             AbsolutePathBuf::resolve_path_against_base("~/.codex/state/session-tmp", tmp.path());
-        assert_eq!(
-            state_root,
-            expected_state_root.as_path().to_string_lossy()
-        );
+        assert_eq!(state_root, expected_state_root.as_path().to_string_lossy());
         Ok(())
     }
 

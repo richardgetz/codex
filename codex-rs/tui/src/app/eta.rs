@@ -38,10 +38,13 @@ pub(super) struct EtaState {
 
 impl App {
     pub(super) fn open_eta(&mut self, app_server: &AppServerSession) {
-        let Some(root_thread_id) = self.primary_thread_id.or_else(|| self.chat_widget.thread_id())
+        let Some(root_thread_id) = self
+            .primary_thread_id
+            .or_else(|| self.chat_widget.thread_id())
         else {
-            self.chat_widget
-                .add_error_message("The ETA view is unavailable before the session starts.".to_string());
+            self.chat_widget.add_error_message(
+                "The ETA view is unavailable before the session starts.".to_string(),
+            );
             return;
         };
 
@@ -59,15 +62,14 @@ impl App {
         let selected_idx = self
             .chat_widget
             .selected_index_for_present_view(ETA_VIEW_ID);
-        self.chat_widget.show_bottom_pane_view(Box::new(
-            EtaView::new_with_state(
+        self.chat_widget
+            .show_bottom_pane_view(Box::new(EtaView::new_with_state(
                 snapshot,
                 self.keymap.list.clone(),
                 self.app_event_tx.clone(),
                 tab_id,
                 selected_idx,
-            ),
-        ));
+            )));
         self.refresh_eta(app_server, root_thread_id, None);
     }
 
@@ -134,7 +136,11 @@ impl App {
                 }
             }
             Err(error) => {
-                if self.chat_widget.active_tab_id_for_active_view(ETA_VIEW_ID).is_some() {
+                if self
+                    .chat_widget
+                    .active_tab_id_for_active_view(ETA_VIEW_ID)
+                    .is_some()
+                {
                     self.chat_widget
                         .add_error_message(format!("Failed to load ETA: {error}"));
                 }
@@ -162,9 +168,16 @@ impl App {
         snapshot.overall = overall_from_api(&notification.overall);
         for changed in &notification.changed_tasks {
             let task = task_from_api(changed.clone());
-            snapshot.active.retain(|existing| existing.task_id != task.task_id);
-            snapshot.history.retain(|existing| existing.task_id != task.task_id);
-            if matches!(task.status, EtaTaskStatus::Completed | EtaTaskStatus::Cancelled) {
+            snapshot
+                .active
+                .retain(|existing| existing.task_id != task.task_id);
+            snapshot
+                .history
+                .retain(|existing| existing.task_id != task.task_id);
+            if matches!(
+                task.status,
+                EtaTaskStatus::Completed | EtaTaskStatus::Cancelled
+            ) {
                 snapshot.history.push(task);
             } else {
                 snapshot.active.push(task);
@@ -203,7 +216,11 @@ impl App {
         let Some(snapshot) = self.eta.snapshot.clone() else {
             return;
         };
-        if self.chat_widget.active_tab_id_for_active_view(ETA_VIEW_ID).is_none() {
+        if self
+            .chat_widget
+            .active_tab_id_for_active_view(ETA_VIEW_ID)
+            .is_none()
+        {
             return;
         }
         let selected_idx = self
@@ -251,7 +268,10 @@ fn snapshot_from_api(snapshot: codex_app_server_protocol::ThreadEtaSnapshot) -> 
         .map(task_from_api)
         .collect::<Vec<_>>();
     for task in snapshot.active.into_iter().map(task_from_api) {
-        if matches!(task.status, EtaTaskStatus::Completed | EtaTaskStatus::Cancelled) {
+        if matches!(
+            task.status,
+            EtaTaskStatus::Completed | EtaTaskStatus::Cancelled
+        ) {
             history.push(task);
         } else {
             active.push(task);

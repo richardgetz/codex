@@ -80,12 +80,18 @@ async fn task_completion_freezes_harness_elapsed_and_history() {
         .read_task_estimate_snapshot(root, started_at + Duration::seconds(30), None, None)
         .await
         .expect("overdue snapshot");
-    assert_eq!(overdue.overall, TaskEstimateOverall::unknown("task `task` estimate has elapsed"));
+    assert_eq!(
+        overdue.overall,
+        TaskEstimateOverall::unknown("task `task` estimate has elapsed")
+    );
     assert_eq!(overdue.active.len(), 1);
-    assert_eq!(overdue.active[0].remaining_range(started_at + Duration::seconds(30)), TaskEstimateRange {
-        lower_seconds: Some(0),
-        upper_seconds: Some(0),
-    });
+    assert_eq!(
+        overdue.active[0].remaining_range(started_at + Duration::seconds(30)),
+        TaskEstimateRange {
+            lower_seconds: Some(0),
+            upper_seconds: Some(0),
+        }
+    );
 
     let completed_at = started_at + Duration::seconds(40);
     let completion = runtime
@@ -99,10 +105,13 @@ async fn task_completion_freezes_harness_elapsed_and_history() {
         .expect("complete task");
     assert_eq!(completion.changed_tasks.len(), 1);
     assert_eq!(completion.changed_tasks[0].actual_elapsed_seconds, Some(40));
-    assert_eq!(completion.changed_tasks[0].original_range(), TaskEstimateRange {
-        lower_seconds: Some(10),
-        upper_seconds: Some(20),
-    });
+    assert_eq!(
+        completion.changed_tasks[0].original_range(),
+        TaskEstimateRange {
+            lower_seconds: Some(10),
+            upper_seconds: Some(20),
+        }
+    );
 
     let repeated = runtime
         .apply_task_estimate_mutations(
@@ -159,7 +168,10 @@ async fn stale_unrelated_work_keeps_update_aggregate_unknown() {
         )
         .await
         .expect("create new task");
-    assert_eq!(update.overall, TaskEstimateOverall::unknown("stale task update"));
+    assert_eq!(
+        update.overall,
+        TaskEstimateOverall::unknown("stale task update")
+    );
     runtime.close().await;
 }
 
@@ -168,12 +180,7 @@ async fn repeated_start_does_not_rewrite_original_baseline() {
     let (runtime, root) = runtime().await;
     let now = at(1_700_000_000);
     runtime
-        .apply_task_estimate_mutations(
-            root,
-            root,
-            &[create("task", "Task", None)],
-            now,
-        )
+        .apply_task_estimate_mutations(root, root, &[create("task", "Task", None)], now)
         .await
         .expect("create task");
     let first_start = TaskEstimateMutation {
@@ -428,12 +435,7 @@ async fn revisions_are_bounded_and_history_is_cursor_paginated() {
     let (runtime, root) = runtime().await;
     let now = at(1_700_000_000);
     runtime
-        .apply_task_estimate_mutations(
-            root,
-            root,
-            &[create("task", "Task", Some((1, 2)))],
-            now,
-        )
+        .apply_task_estimate_mutations(root, root, &[create("task", "Task", Some((1, 2)))], now)
         .await
         .expect("create task");
     for seconds in 3..36 {
@@ -523,7 +525,10 @@ async fn worker_updates_are_root_scoped_and_owner_checked() {
         .upsert_thread_spawn_edge(root, child, DirectionalThreadSpawnEdgeStatus::Open)
         .await
         .expect("spawn edge");
-    assert_eq!(runtime.root_thread_id(child).await.expect("child root"), root);
+    assert_eq!(
+        runtime.root_thread_id(child).await.expect("child root"),
+        root
+    );
 
     let now = at(1_700_000_000);
     runtime
@@ -569,6 +574,12 @@ async fn worker_updates_are_root_scoped_and_owner_checked() {
         .set_thread_spawn_edge_status(child, DirectionalThreadSpawnEdgeStatus::Closed)
         .await
         .expect("close spawn edge");
-    assert_eq!(runtime.root_thread_id(child).await.expect("closed child root"), root);
+    assert_eq!(
+        runtime
+            .root_thread_id(child)
+            .await
+            .expect("closed child root"),
+        root
+    );
     runtime.close().await;
 }

@@ -1,6 +1,8 @@
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::outgoing_message::OutgoingMessageSender;
+use chrono::DateTime;
+use chrono::Utc;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadEtaAccuracy;
@@ -31,8 +33,6 @@ use codex_state::TaskEstimateStatus;
 use codex_state::TaskEstimateUpdateResult;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ThreadStore;
-use chrono::DateTime;
-use chrono::Utc;
 use std::sync::Arc;
 
 const DEFAULT_HISTORY_LIMIT: usize = 50;
@@ -84,8 +84,7 @@ impl ThreadEtaRequestProcessor {
                     params
                         .limit
                         .unwrap_or(DEFAULT_HISTORY_LIMIT as u32)
-                        .clamp(1, MAX_HISTORY_LIMIT as u32)
-                        as usize,
+                        .clamp(1, MAX_HISTORY_LIMIT as u32) as usize,
                 ),
             )
             .await
@@ -269,10 +268,7 @@ pub(crate) fn api_task(task: &TaskEstimate, now: DateTime<Utc>) -> ThreadEtaTask
         actual_elapsed_seconds: task.actual_elapsed_seconds,
         updated_at: task.updated_at.timestamp(),
         is_stale: !task.status.is_terminal()
-            && now
-                .timestamp()
-                .saturating_sub(task.updated_at.timestamp())
-                > STALE_AFTER_SECONDS,
+            && now.timestamp().saturating_sub(task.updated_at.timestamp()) > STALE_AFTER_SECONDS,
         accuracy: accuracy(task),
         revisions: task.revisions.iter().map(api_revision).collect(),
     }
@@ -399,11 +395,8 @@ fn api_task_from_event(task: ThreadEtaTaskUpdatedEvent) -> ThreadEtaTask {
     };
     let accuracy = match (status, task.actual_elapsed_seconds) {
         (ThreadEtaStatus::Cancelled, _) | (_, None) => ThreadEtaAccuracy::Unknown,
-        (_, Some(actual)) => match (
-            task.original_lower_seconds,
-            task.original_upper_seconds,
-        ) {
-            (Some(lower), Some(upper)) if actual < lower => ThreadEtaAccuracy::Early,
+        (_, Some(actual)) => match (task.original_lower_seconds, task.original_upper_seconds) {
+            (Some(lower), Some(_upper)) if actual < lower => ThreadEtaAccuracy::Early,
             (Some(_), Some(upper)) if actual > upper => ThreadEtaAccuracy::Late,
             (Some(_), Some(_)) => ThreadEtaAccuracy::Within,
             _ => ThreadEtaAccuracy::Unknown,
@@ -451,9 +444,7 @@ fn api_overall_from_event(overall: ThreadEtaOverallUpdatedEvent) -> ThreadEtaOve
     }
 }
 
-fn parse_thread_id(
-    value: &str,
-) -> Result<ThreadId, codex_app_server_protocol::JSONRPCErrorError> {
+fn parse_thread_id(value: &str) -> Result<ThreadId, codex_app_server_protocol::JSONRPCErrorError> {
     ThreadId::from_string(value).map_err(|err| invalid_request(format!("invalid thread id: {err}")))
 }
 

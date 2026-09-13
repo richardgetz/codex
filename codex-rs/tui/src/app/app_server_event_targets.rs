@@ -242,10 +242,10 @@ mod tests {
     use codex_app_server_protocol::McpServerStartupState;
     use codex_app_server_protocol::McpServerStatusUpdatedNotification;
     use codex_app_server_protocol::ServerNotification;
-    use codex_app_server_protocol::ThreadSettings;
-    use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
     use codex_app_server_protocol::ThreadEtaOverall;
     use codex_app_server_protocol::ThreadEtaUpdatedNotification;
+    use codex_app_server_protocol::ThreadSettings;
+    use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
     use codex_app_server_protocol::WarningNotification;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::CollaborationMode;

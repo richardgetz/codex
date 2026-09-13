@@ -3,6 +3,7 @@ use chrono::Utc;
 use codex_features::Feature;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::UserInput;
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -10,7 +11,6 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
-use core_test_support::responses::ResponsesRequest;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -119,19 +119,30 @@ async fn update_eta_tool_is_registered_and_records_explicit_lifecycle() -> Resul
         })
         .expect("update_eta should be model-visible as a function tool");
     assert_eq!(registered["name"], "update_eta");
-    assert!(registered["description"]
-        .as_str()
-        .is_some_and(|description| description.contains("Completion is explicit")));
+    assert!(
+        registered["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("Completion is explicit"))
+    );
 
-    assert_eq!(eta_call_output(&requests, "eta-create")["changed_tasks"], json!([
-        {"task_id": "compile", "status": "pending"}
-    ]));
-    assert_eq!(eta_call_output(&requests, "eta-start")["changed_tasks"], json!([
-        {"task_id": "compile", "status": "active"}
-    ]));
-    assert_eq!(eta_call_output(&requests, "eta-complete")["changed_tasks"], json!([
-        {"task_id": "compile", "status": "completed"}
-    ]));
+    assert_eq!(
+        eta_call_output(&requests, "eta-create")["changed_tasks"],
+        json!([
+            {"task_id": "compile", "status": "pending"}
+        ])
+    );
+    assert_eq!(
+        eta_call_output(&requests, "eta-start")["changed_tasks"],
+        json!([
+            {"task_id": "compile", "status": "active"}
+        ])
+    );
+    assert_eq!(
+        eta_call_output(&requests, "eta-complete")["changed_tasks"],
+        json!([
+            {"task_id": "compile", "status": "completed"}
+        ])
+    );
 
     assert_eq!(updates.len(), 3);
     assert_eq!(updates[0].sequence, 1);
@@ -201,7 +212,10 @@ async fn update_eta_rejects_oversized_model_batches_before_writing() -> Result<(
         .await?;
 
     loop {
-        if matches!(wait_for_event(&test.codex, |_| true).await, EventMsg::TurnComplete(_)) {
+        if matches!(
+            wait_for_event(&test.codex, |_| true).await,
+            EventMsg::TurnComplete(_)
+        ) {
             break;
         }
     }
@@ -214,12 +228,7 @@ async fn update_eta_rejects_oversized_model_batches_before_writing() -> Result<(
     assert!(output.contains("at most 8 operations"));
     let state_db = test.codex.state_db().expect("state db enabled");
     let snapshot = state_db
-        .read_task_estimate_snapshot(
-            test.session_configured.thread_id,
-            Utc::now(),
-            None,
-            None,
-        )
+        .read_task_estimate_snapshot(test.session_configured.thread_id, Utc::now(), None, None)
         .await?;
     assert!(snapshot.active.is_empty());
     assert!(snapshot.history.is_empty());

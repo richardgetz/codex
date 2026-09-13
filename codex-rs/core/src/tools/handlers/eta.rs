@@ -96,7 +96,9 @@ impl ToolExecutor<ToolInvocation> for EtaHandler {
             ),
             (
                 "task_id".to_string(),
-                JsonSchema::string(Some("Stable task id; omit for create to allocate one.".to_string())),
+                JsonSchema::string(Some(
+                    "Stable task id; omit for create to allocate one.".to_string(),
+                )),
             ),
             (
                 "title".to_string(),
@@ -115,15 +117,21 @@ impl ToolExecutor<ToolInvocation> for EtaHandler {
             ),
             (
                 "estimate_lower_seconds".to_string(),
-                JsonSchema::number(Some("Inclusive lower duration bound in seconds.".to_string())),
+                JsonSchema::number(Some(
+                    "Inclusive lower duration bound in seconds.".to_string(),
+                )),
             ),
             (
                 "estimate_upper_seconds".to_string(),
-                JsonSchema::number(Some("Inclusive upper duration bound in seconds.".to_string())),
+                JsonSchema::number(Some(
+                    "Inclusive upper duration bound in seconds.".to_string(),
+                )),
             ),
             (
                 "reason".to_string(),
-                JsonSchema::string(Some("Short reason for a revision or scope change.".to_string())),
+                JsonSchema::string(Some(
+                    "Short reason for a revision or scope change.".to_string(),
+                )),
             ),
         ]);
         ToolSpec::Function(ResponsesApiTool {
@@ -164,9 +172,7 @@ impl EtaHandler {
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
-            session,
-            payload,
-            ..
+            session, payload, ..
         } = invocation;
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -192,7 +198,9 @@ impl EtaHandler {
         let root_thread_id = state_db
             .root_thread_id(session_parent_thread_id.unwrap_or(actor_thread_id))
             .await
-            .map_err(|err| FunctionCallError::Fatal(format!("failed to resolve ETA root: {err}")))?;
+            .map_err(|err| {
+                FunctionCallError::Fatal(format!("failed to resolve ETA root: {err}"))
+            })?;
         let mutations = args
             .operations
             .iter()
@@ -206,7 +214,9 @@ impl EtaHandler {
                 chrono::Utc::now(),
             )
             .await
-            .map_err(|err| FunctionCallError::RespondToModel(format!("ETA update failed: {err}")))?;
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!("ETA update failed: {err}"))
+            })?;
         if !result.changed_tasks.is_empty() {
             session
                 .send_event_raw_ephemeral(Event {

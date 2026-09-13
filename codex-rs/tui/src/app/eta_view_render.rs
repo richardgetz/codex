@@ -1,5 +1,5 @@
-use super::EtaTaskStatus;
 use super::EtaTab;
+use super::EtaTaskStatus;
 use super::EtaView;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::renderable::Renderable;
@@ -83,7 +83,7 @@ impl EtaView {
             " ".repeat(ETA_COLUMN_GAP).into(),
             format!("{:<width$}", "Status", width = ETA_STATUS_WIDTH).bold(),
             " ".repeat(ETA_COLUMN_GAP).into(),
-            format!("{:<width$}", trailing, width = ETA_TIMING_WIDTH).bold(),
+            format!("{trailing:<ETA_TIMING_WIDTH$}").bold(),
         ])
     }
 
@@ -95,10 +95,9 @@ impl EtaView {
         for (display_idx, task_idx) in rows.into_iter().enumerate() {
             let task = &self.tasks()[task_idx];
             let depth = self.task_depth(task_idx);
-            let has_children = self
-                .tasks()
-                .iter()
-                .any(|candidate| candidate.parent_task_id.as_deref() == Some(task.task_id.as_str()));
+            let has_children = self.tasks().iter().any(|candidate| {
+                candidate.parent_task_id.as_deref() == Some(task.task_id.as_str())
+            });
             let marker = if has_children {
                 if self.collapsed_task_ids.contains(&task.task_id) {
                     "▸ "
@@ -111,7 +110,10 @@ impl EtaView {
             let prefix = format!("{}{}", "  ".repeat(depth), marker);
             let title = format!("{prefix}{}", task.title.trim());
             let title = fit_text(&title, title_width);
-            let agent = fit_text(&agent_label(&task.owner_thread_id, &self.snapshot.root_thread_id), agent_width);
+            let agent = fit_text(
+                &agent_label(&task.owner_thread_id, &self.snapshot.root_thread_id),
+                agent_width,
+            );
             let mut status = task.status.label().to_string();
             if self.tab == EtaTab::History && task.status != EtaTaskStatus::Cancelled {
                 status.push_str(" · ");
@@ -139,9 +141,9 @@ impl EtaView {
                 " ".repeat(ETA_COLUMN_GAP).into(),
                 Span::from(format!("{agent:<agent_width$}")),
                 " ".repeat(ETA_COLUMN_GAP).into(),
-                Span::from(format!("{status:<width$}", width = ETA_STATUS_WIDTH)),
+                Span::from(format!("{status:<ETA_STATUS_WIDTH$}")),
                 " ".repeat(ETA_COLUMN_GAP).into(),
-                Span::from(format!("{estimate:<width$}", width = ETA_TIMING_WIDTH)),
+                Span::from(format!("{estimate:<ETA_TIMING_WIDTH$}")),
             ]);
             let line = truncate_line_with_ellipsis_if_overflow(line, width);
             lines.push(if self.state.selected_idx == Some(display_idx) {
@@ -178,10 +180,7 @@ impl EtaView {
         } else {
             format_range(task.current_lower_seconds, task.current_upper_seconds)
         };
-        lines.push(detail_line(
-            "Current",
-            &current,
-        ));
+        lines.push(detail_line("Current", &current));
         lines.push(detail_line(
             "Original",
             &format_range(task.original_lower_seconds, task.original_upper_seconds),
@@ -195,7 +194,11 @@ impl EtaView {
         ));
         lines.push(detail_line("Updated", &format_timestamp(task.updated_at)));
         if task.is_stale {
-            lines.push("Snapshot is stale; waiting for a stored update.".yellow().into());
+            lines.push(
+                "Snapshot is stale; waiting for a stored update."
+                    .yellow()
+                    .into(),
+            );
         }
         if !task.depends_on_task_ids.is_empty() {
             let dependencies = task
@@ -252,16 +255,22 @@ impl Renderable for EtaView {
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
         let content_area = crate::bottom_pane::render_menu_surface(content_area, buf);
-        let inset = |rect: Rect| rect.inner(Margin::new(/*horizontal*/ 1, /*vertical*/ 0));
-        let [header_area, summary_area, tabs_area, divider_area, body_area] =
-            Layout::vertical([
-                Constraint::Length(1),
-                Constraint::Length(2),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Fill(1),
-            ])
-            .areas(content_area);
+        let inset =
+            |rect: Rect| rect.inner(Margin::new(/*horizontal*/ 1, /*vertical*/ 0));
+        let [
+            header_area,
+            summary_area,
+            tabs_area,
+            divider_area,
+            body_area,
+        ] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .areas(content_area);
         Line::from("Task estimates".bold()).render(inset(header_area), buf);
         let mut summary = vec![Line::from(vec![
             format!(
@@ -279,17 +288,24 @@ impl Renderable for EtaView {
         summary.extend(self.render_overall_lines());
         Paragraph::new(summary).render(inset(summary_area), buf);
         self.render_tabs().render(inset(tabs_area), buf);
-        Line::from("─".repeat(usize::from(content_area.width.saturating_sub(2))).dim())
-            .render(inset(divider_area), buf);
+        Line::from(
+            "─"
+                .repeat(usize::from(content_area.width.saturating_sub(2)))
+                .dim(),
+        )
+        .render(inset(divider_area), buf);
 
         let body_area = inset(body_area);
         let width = body_area.width as usize;
         let title_width = table_title_width(width);
-        let expanded_table_height = (1 + self.visible_rows() as u16)
-            .min(body_area.height.saturating_sub(1).max(1));
+        let expanded_table_height =
+            (1 + self.visible_rows() as u16).min(body_area.height.saturating_sub(1).max(1));
         let [table_area, detail_area] = if self.expanded {
-            Layout::vertical([Constraint::Length(expanded_table_height), Constraint::Fill(1)])
-                .areas(body_area)
+            Layout::vertical([
+                Constraint::Length(expanded_table_height),
+                Constraint::Fill(1),
+            ])
+            .areas(body_area)
         } else {
             Layout::vertical([Constraint::Fill(1), Constraint::Length(0)]).areas(body_area)
         };
@@ -317,10 +333,7 @@ fn detail_line(label: &str, value: &str) -> Line<'static> {
 fn table_title_width(width: usize) -> usize {
     width
         .saturating_sub(
-            ETA_AGENT_WIDTH
-                + ETA_STATUS_WIDTH
-                + ETA_TIMING_WIDTH
-                + (ETA_COLUMN_GAP * 3),
+            ETA_AGENT_WIDTH + ETA_STATUS_WIDTH + ETA_TIMING_WIDTH + (ETA_COLUMN_GAP * 3),
         )
         .max(8)
 }
@@ -341,8 +354,7 @@ fn active_remaining_label(task: &super::EtaTask, generated_at: i64) -> String {
     if elapsed < 0 {
         return "unknown".to_string();
     }
-    if let (Some(lower), Some(upper)) =
-        (task.current_lower_seconds, task.current_upper_seconds)
+    if let (Some(lower), Some(upper)) = (task.current_lower_seconds, task.current_upper_seconds)
         && (lower < 0 || upper < lower)
     {
         return "unknown".to_string();
@@ -412,7 +424,9 @@ fn agent_label(owner_thread_id: &str, root_thread_id: &str) -> String {
 fn format_range(lower: Option<i64>, upper: Option<i64>) -> String {
     match (lower, upper) {
         (Some(lower), Some(upper)) if lower == upper => format_seconds(lower),
-        (Some(lower), Some(upper)) => format!("{}–{}", format_seconds(lower), format_seconds(upper)),
+        (Some(lower), Some(upper)) => {
+            format!("{}–{}", format_seconds(lower), format_seconds(upper))
+        }
         (Some(lower), None) => format!("≥{}", format_seconds(lower)),
         (None, Some(upper)) => format!("≤{}", format_seconds(upper)),
         (None, None) => "unknown".to_string(),
@@ -450,9 +464,7 @@ fn format_finish_range(generated_at: i64, overall: &super::EtaOverall) -> String
         overall.remaining_lower_seconds,
         overall.remaining_upper_seconds,
     ) {
-        (Some(lower), Some(upper))
-            if generated_at > 0 && lower >= 0 && upper >= lower =>
-        {
+        (Some(lower), Some(upper)) if generated_at > 0 && lower >= 0 && upper >= lower => {
             let Some(lower_finish) = generated_at.checked_add(lower) else {
                 return "unknown".to_string();
             };

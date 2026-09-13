@@ -3,6 +3,7 @@ use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadEtaAccuracy;
 use codex_app_server_protocol::ThreadEtaAction;
 use codex_app_server_protocol::ThreadEtaReadParams;
@@ -15,7 +16,6 @@ use codex_app_server_protocol::ThreadEtaUpdateResponse;
 use codex_app_server_protocol::ThreadEtaUpdatedNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::RequestId;
 use codex_features::Feature;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -76,15 +76,19 @@ fn assert_terminal_history(task: &ThreadEtaTask) {
     assert_eq!(task.original_upper_seconds, Some(20));
     assert!(task.started_at.is_some());
     assert!(task.terminal_at.is_some());
-    assert!(task
-        .started_at
-        .zip(task.terminal_at)
-        .is_some_and(|(started_at, terminal_at)| started_at <= terminal_at));
+    assert!(
+        task.started_at
+            .zip(task.terminal_at)
+            .is_some_and(|(started_at, terminal_at)| started_at <= terminal_at)
+    );
     let actual = task
         .actual_elapsed_seconds
         .expect("completion should include harness elapsed seconds");
     assert!((0..=20).contains(&actual));
-    assert!(matches!(task.accuracy, ThreadEtaAccuracy::Early | ThreadEtaAccuracy::Within));
+    assert!(matches!(
+        task.accuracy,
+        ThreadEtaAccuracy::Early | ThreadEtaAccuracy::Within
+    ));
 }
 
 #[tokio::test]
@@ -116,7 +120,10 @@ async fn thread_eta_rpc_persists_terminal_history_without_starting_a_turn() -> R
     let unknown_read_error = app
         .read_stream_until_error_message(RequestId::Integer(unknown_read_id))
         .await?;
-    assert_eq!(unknown_read_error.error.message, "ETA root thread was not found");
+    assert_eq!(
+        unknown_read_error.error.message,
+        "ETA root thread was not found"
+    );
 
     let unknown_update_id = app
         .send_request(
@@ -137,7 +144,10 @@ async fn thread_eta_rpc_persists_terminal_history_without_starting_a_turn() -> R
     let unknown_update_error = app
         .read_stream_until_error_message(RequestId::Integer(unknown_update_id))
         .await?;
-    assert_eq!(unknown_update_error.error.message, "ETA root thread was not found");
+    assert_eq!(
+        unknown_update_error.error.message,
+        "ETA root thread was not found"
+    );
 
     let created = update(
         &mut app,
@@ -189,7 +199,10 @@ async fn thread_eta_rpc_persists_terminal_history_without_starting_a_turn() -> R
         ),
     )
     .await?;
-    assert_eq!(completed.changed_tasks[0].status, ThreadEtaStatus::Completed);
+    assert_eq!(
+        completed.changed_tasks[0].status,
+        ThreadEtaStatus::Completed
+    );
 
     let current = read(&mut app, &thread_id).await?;
     assert!(current.snapshot.active.is_empty());

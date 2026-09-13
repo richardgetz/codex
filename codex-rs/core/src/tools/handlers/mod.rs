@@ -1,6 +1,5 @@
 pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
-pub(crate) mod eta;
 pub(crate) mod builtin_schedule;
 pub(crate) mod builtin_scratchpad;
 pub(crate) mod builtin_scratchpad_spec;
@@ -8,6 +7,7 @@ pub(crate) mod builtin_session_tmp;
 pub(crate) mod builtin_session_tmp_spec;
 mod current_time;
 mod dynamic;
+pub(crate) mod eta;
 pub(crate) mod extension_tools;
 mod get_context_remaining;
 pub(crate) mod get_context_remaining_spec;

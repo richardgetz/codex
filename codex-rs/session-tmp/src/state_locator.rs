@@ -65,15 +65,10 @@ pub(crate) fn resolve_state_base(
             validate_state_base(&locator.state_base, canonical_payload_root)
         }
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            let default_state_base =
-                identity::canonicalize_for_identity(&default_state_base)?;
+            let default_state_base = identity::canonicalize_for_identity(&default_state_base)?;
             let default_state_root = default_state_base.join(root_id);
-            if identity::inspect_state_root(
-                &default_state_root,
-                root_id,
-                canonical_payload_root,
-            )?
-            .is_some()
+            if identity::inspect_state_root(&default_state_root, root_id, canonical_payload_root)?
+                .is_some()
             {
                 Ok(default_state_base)
             } else {
@@ -225,10 +220,7 @@ fn ensure_locator_matches(path: &Path, expected: &StateLocator) -> Result<(), Se
 /// Publish a locator without ever replacing a file that appeared concurrently.
 /// A temporary file is fully written and synced before a hard link claims the
 /// final name; `rename` would permit a late foreign writer to be overwritten.
-fn write_locator_create_new(
-    path: &Path,
-    locator: &StateLocator,
-) -> Result<(), SessionTmpError> {
+fn write_locator_create_new(path: &Path, locator: &StateLocator) -> Result<(), SessionTmpError> {
     let parent = path
         .parent()
         .ok_or_else(|| std::io::Error::new(ErrorKind::InvalidInput, "locator has no parent"))?;

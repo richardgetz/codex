@@ -26,9 +26,7 @@ pub(super) fn compute_overall(tasks: &[TaskEstimate], now: DateTime<Utc>) -> Tas
         };
     }
     if active_tasks.iter().any(|task| {
-        now.timestamp()
-            .saturating_sub(task.updated_at.timestamp())
-            > STALE_AFTER_SECONDS
+        now.timestamp().saturating_sub(task.updated_at.timestamp()) > STALE_AFTER_SECONDS
     }) {
         return TaskEstimateOverall::unknown("stale task update");
     }
@@ -72,16 +70,11 @@ pub(super) fn compute_overall(tasks: &[TaskEstimate], now: DateTime<Utc>) -> Tas
     let mut lower = 0_i64;
     let mut upper = 0_i64;
     for task_id in leaves {
-        let (mut path_lower, mut path_upper) = match estimate_path(
-            task_id,
-            tasks,
-            now,
-            &mut memo,
-            &mut BTreeSet::new(),
-        ) {
-            Ok(path) => path,
-            Err(reason) => return TaskEstimateOverall::unknown(reason),
-        };
+        let (mut path_lower, mut path_upper) =
+            match estimate_path(task_id, tasks, now, &mut memo, &mut BTreeSet::new()) {
+                Ok(path) => path,
+                Err(reason) => return TaskEstimateOverall::unknown(reason),
+            };
         let mut existing_dependencies = BTreeSet::new();
         if let Err(reason) = collect_dependency_ids(
             task_id,
@@ -101,16 +94,11 @@ pub(super) fn compute_overall(tasks: &[TaskEstimate], now: DateTime<Utc>) -> Tas
             if existing_dependencies.contains(&dependency_id) {
                 continue;
             }
-            let (dependency_lower, dependency_upper) = match estimate_path(
-                &dependency_id,
-                tasks,
-                now,
-                &mut memo,
-                &mut BTreeSet::new(),
-            ) {
-                Ok(path) => path,
-                Err(reason) => return TaskEstimateOverall::unknown(reason),
-            };
+            let (dependency_lower, dependency_upper) =
+                match estimate_path(&dependency_id, tasks, now, &mut memo, &mut BTreeSet::new()) {
+                    Ok(path) => path,
+                    Err(reason) => return TaskEstimateOverall::unknown(reason),
+                };
             inherited_lower = inherited_lower.max(dependency_lower);
             inherited_upper = inherited_upper.max(dependency_upper);
         }

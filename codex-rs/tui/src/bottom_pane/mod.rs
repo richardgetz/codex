@@ -184,8 +184,8 @@ mod textarea;
 mod unified_exec_footer;
 pub(crate) use feedback_note_view::FeedbackNoteView;
 pub(crate) use hooks_browser_view::HooksBrowserView;
-pub(crate) use selection_tabs::SelectionTab;
 pub(crate) use selection_popup_common::render_menu_surface;
+pub(crate) use selection_tabs::SelectionTab;
 
 /// How long the "press again to quit" hint stays visible.
 ///

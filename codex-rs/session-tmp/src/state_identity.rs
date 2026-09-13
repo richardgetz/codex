@@ -336,12 +336,10 @@ pub(crate) fn external_identity_present(
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error.into()),
     }
-    Ok(inspect_state_root(
-        &state_root,
-        &root_id,
-        &canonical_payload_root,
+    Ok(
+        inspect_state_root(&state_root, &root_id, &canonical_payload_root)
+            .is_ok_and(|namespace| namespace.is_some()),
     )
-    .is_ok_and(|namespace| namespace.is_some()))
 }
 
 pub(crate) fn ensure_existing_ancestors_for_runtime(path: &Path) -> Result<(), SessionTmpError> {
