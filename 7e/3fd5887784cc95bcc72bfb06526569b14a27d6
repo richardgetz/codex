@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-13/eta-error-test#7e3fd5887"
+  change_type: "test"
+  scope: "codex-rs/eta"
+  summary: "Exercise JSON-RPC error responses for unknown ETA roots."
+  decision: "Use TestAppServer raw request and error-stream helpers for negative thread/eta read and update assertions, because typed request helpers intentionally deserialize only successful responses."
+  constraints:
+    - "Keep the public API behavior unchanged; assert the existing invalid-request message."
+    - "Do not start a model turn or introduce sleeps beyond the existing bounded read timeout."
+    - "Worker worktrees remain source-only; designated build owner performs Rust validation."
+  intent_priority: "normal"
+  code_locations:
+    - "codex-rs/app-server/tests/suite/v2/thread_eta.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6-luna"
