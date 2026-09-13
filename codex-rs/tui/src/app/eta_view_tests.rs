@@ -34,6 +34,7 @@ fn task(
         current_upper_seconds: Some(120),
         original_lower_seconds: Some(90),
         original_upper_seconds: Some(180),
+        started_at: Some(1_700_000_000),
         actual_elapsed_seconds: None,
         updated_at: 1_700_000_020,
         is_stale: false,
@@ -103,6 +104,11 @@ fn snapshot() -> EtaSnapshot {
 
 fn known_finish_snapshot() -> EtaSnapshot {
     let mut snapshot = snapshot();
+    for task in &mut snapshot.active {
+        task.status = EtaTaskStatus::Active;
+        task.is_stale = false;
+        task.depends_on_task_ids.clear();
+    }
     snapshot.overall = EtaOverall {
         finish_at: Some(snapshot.generated_at + 120),
         remaining_lower_seconds: Some(60),
@@ -150,6 +156,34 @@ fn overall_finish_range_uses_fixed_snapshot_time_in_utc() {
         AppEventSender::new(tx),
     );
     insta::assert_snapshot!("eta_finish_range_utc", render(&view, 96, 24));
+}
+
+#[test]
+fn active_remaining_uses_snapshot_anchor_and_started_at() {
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let view = EtaView::new(
+        known_finish_snapshot(),
+        RuntimeKeymap::defaults().list,
+        AppEventSender::new(tx),
+    );
+    let rendered = render(&view, 96, 24);
+    let root_row = rendered
+        .lines()
+        .find(|line| line.contains("Prepare release"))
+        .expect("root task row");
+    assert!(root_row.contains("30s–1m"));
+    assert!(!root_row.contains("1m–2m"));
+}
+
+#[test]
+fn normal_width_keeps_timing_column_visible() {
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let view = EtaView::new(
+        known_finish_snapshot(),
+        RuntimeKeymap::defaults().list,
+        AppEventSender::new(tx),
+    );
+    insta::assert_snapshot!("eta_columns_at_80", render(&view, 80, 24));
 }
 
 #[test]
