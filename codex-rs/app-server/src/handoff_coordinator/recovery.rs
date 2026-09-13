@@ -1,4 +1,4 @@
-use super::{HandoffCoordinator, ordered_indices, receipt_from_journal};
+use super::{HandoffCoordinator, core_error, ordered_indices, receipt_from_journal};
 use crate::error_code::invalid_params;
 use codex_app_server_protocol::{
     JSONRPCErrorError, ThreadHandoffRecoverParams, ThreadHandoffRecoverResponse,
@@ -63,6 +63,14 @@ impl HandoffCoordinator {
             });
         }
 
+        // Keep replacement sessions' durable inbound pollers fenced until every node has been
+        // loaded, its process-local pause restored, and its exact saved turn admitted. The Core
+        // guard is manager-wide so sessions created below share one recovery boundary; dropping
+        // it on any failure leaves the replacement fail-closed for an explicit retry.
+        let recovery_pending = self
+            .thread_manager
+            .begin_recovery_pending()
+            .map_err(core_error)?;
         journal.set_state(HandoffJournalState::Restoring);
         self.persist_journal(&journal).await?;
 
@@ -107,6 +115,9 @@ impl HandoffCoordinator {
             HandoffJournalState::NeedsAttention
         });
         self.persist_journal(&journal).await?;
+        if complete {
+            recovery_pending.complete();
+        }
         self.refresh_startup_recovery_state().await;
         Ok(ThreadHandoffRecoverResponse {
             receipt: receipt_from_journal(&journal),
