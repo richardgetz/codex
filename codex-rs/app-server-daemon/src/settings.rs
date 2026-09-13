@@ -31,7 +31,7 @@ impl DaemonSettings {
             }
         };
 
-        let settings = serde_json::from_str(&contents)
+        let settings: Self = serde_json::from_str(&contents)
             .with_context(|| format!("failed to parse daemon settings {}", path.display()))?;
         settings.validate()?;
         Ok(settings)

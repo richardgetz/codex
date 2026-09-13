@@ -662,7 +662,7 @@ impl Daemon {
             remote_control_enabled: options.remote_control_enabled,
             managed_codex_path: options
                 .managed_codex_path
-                .or(previous_settings.managed_codex_path),
+                .or(previous_settings.managed_codex_path.clone()),
         };
         settings.validate()?;
         let managed_codex_bin = self.configured_managed_codex_bin(&settings);
