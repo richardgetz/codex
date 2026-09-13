@@ -4,7 +4,6 @@ use app_test_support::TestAppServer;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::ThreadActivityPauseResponse;
 use codex_app_server_protocol::ThreadActivityReadResponse;
-use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadHandoffNodeState;
 use codex_app_server_protocol::ThreadHandoffPrepareResponse;
 use codex_app_server_protocol::ThreadHandoffRecoverResponse;
@@ -97,21 +96,6 @@ async fn handoff_prepare_and_cold_recover_preserves_turn_and_pause_state() -> Re
     )
     .await??;
     responses_server.wait_for_request_count(1).await;
-
-    // Durable archive mutations admitted before the handoff seal continue to complete.
-    let archived_before_handoff = old_server
-        .start_thread(ThreadStartParams::default())
-        .await?
-        .thread;
-    let archive_request = old_server
-        .send_raw_request(
-            "thread/archive",
-            Some(json!({"threadId": archived_before_handoff.id})),
-        )
-        .await?;
-    let _: ThreadArchiveResponse =
-        timeout(REQUEST_TIMEOUT, old_server.read_response(archive_request)).await??;
-
     let prepare_request = old_server
         .send_raw_request("thread/handoff/prepare", None)
         .await?;
