@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-13/eta-storage-split#da6456b18"
+  change_type: "refactor"
+  scope: "codex-rs/eta"
+  summary: "Split SQL and task-loading helpers into a private ETA storage module."
+  decision: "Keep TaskEstimateStore public behavior and test ownership unchanged while moving cohesive persistence helpers into a sibling module so runtime/task_estimates.rs remains maintainable."
+  constraints:
+    - "Mechanical source movement only; preserve query behavior and API contracts."
+    - "Do not add scheduler, inference, or new persistence semantics."
+    - "Keep worker worktrees source-only; Rust validation remains with the designated build owner."
+  intent_priority: "normal"
+  code_locations:
+    - "codex-rs/state/src/runtime.rs"
+    - "codex-rs/state/src/runtime/task_estimates.rs"
+    - "codex-rs/state/src/runtime/task_estimate_storage.rs"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6-luna"
