@@ -18,6 +18,7 @@ use crate::extensions::thread_extensions;
 use crate::external_agent_migration::ExternalAgentConfigRequestProcessor;
 use crate::external_agent_migration::ExternalAgentConfigRequestProcessorArgs;
 use crate::fs_watch::FsWatchManager;
+use crate::handoff_coordinator::HandoffCoordinator;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -138,6 +139,7 @@ fn reject_removed_permission_profile(request: &JSONRPCRequest) -> Result<(), JSO
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
+    handoff_coordinator: HandoffCoordinator,
     models_refresh_worker: ModelsRefreshWorker,
     turn_cost_worker: Option<TurnCostWorker>,
     skills_watcher: Arc<SkillsWatcher>,
@@ -373,6 +375,12 @@ impl MessageProcessor {
             }
         });
         let models_manager = thread_manager.get_models_manager();
+        let handoff_coordinator = HandoffCoordinator::new(
+            Arc::clone(&thread_manager),
+            Arc::clone(&config),
+            config_manager.codex_home().to_path_buf(),
+            env!("CARGO_PKG_VERSION").to_string(),
+        );
         let models_refresh_worker =
             crate::models_refresh_worker::spawn(&models_manager, config.http_client_factory());
         let turn_cost_worker =
@@ -575,6 +583,7 @@ impl MessageProcessor {
 
         Self {
             outgoing,
+            handoff_coordinator,
             models_refresh_worker,
             turn_cost_worker,
             skills_watcher,
@@ -1202,6 +1211,21 @@ impl MessageProcessor {
                     )
                     .await
             }
+            ClientRequest::ThreadHandoffPrepare { params, .. } => self
+                .handoff_coordinator
+                .prepare(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadHandoffStatus { params, .. } => self
+                .handoff_coordinator
+                .status(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadHandoffRecover { params, .. } => self
+                .handoff_coordinator
+                .recover(params)
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::ThreadFork { params, .. } => {
                 self.thread_processor
                     .thread_fork(

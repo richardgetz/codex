@@ -117,6 +117,7 @@ mod external_auth;
 mod filters;
 mod fs_watch;
 mod fuzzy_file_search;
+mod handoff_coordinator;
 mod image_url;
 pub mod in_process;
 mod mcp_refresh;

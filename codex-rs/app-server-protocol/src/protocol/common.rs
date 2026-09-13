@@ -569,6 +569,24 @@ client_request_definitions! {
         serialization: thread_or_path(params.thread_id, params.path),
         response: v2::ThreadResumeResponse,
     },
+    #[experimental("thread/handoff/prepare")]
+    ThreadHandoffPrepare => "thread/handoff/prepare" {
+        params: #[serde(default)] v2::ThreadHandoffPrepareParams,
+        serialization: global("handoff"),
+        response: v2::ThreadHandoffPrepareResponse,
+    },
+    #[experimental("thread/handoff/status")]
+    ThreadHandoffStatus => "thread/handoff/status" {
+        params: v2::ThreadHandoffStatusParams,
+        serialization: global_shared_read("handoff"),
+        response: v2::ThreadHandoffStatusResponse,
+    },
+    #[experimental("thread/handoff/recover")]
+    ThreadHandoffRecover => "thread/handoff/recover" {
+        params: v2::ThreadHandoffRecoverParams,
+        serialization: global("handoff"),
+        response: v2::ThreadHandoffRecoverResponse,
+    },
     ThreadFork => "thread/fork" {
         params: v2::ThreadForkParams,
         inspect_params: true,
