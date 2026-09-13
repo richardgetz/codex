@@ -159,11 +159,9 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
         }
     })
     .await??;
-    // The parent continuation and child model request race after spawn. Keep both queued streams
-    // gated so either assignment remains unfinished; the child start is the only post-spawn
-    // request guaranteed before the parent is interrupted, so do not wait for a third POST.
-    timeout(REQUEST_TIMEOUT, responses_server.wait_for_request_count(2)).await?;
-
+    // The child turn-start notification is emitted when the scheduler admits the child, before
+    // its Responses API request. Use this public lifecycle event as the barrier; the two queued
+    // streams remain gated so any later model request stays unfinished regardless of queue order.
     let child_turn = timeout(REQUEST_TIMEOUT, async {
         loop {
             let started: TurnStartedNotification =
