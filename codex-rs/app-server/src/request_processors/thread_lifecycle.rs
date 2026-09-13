@@ -410,7 +410,7 @@ pub(super) async fn ensure_listener_task_running(
                         }
                         pending_thread_unloads.insert(conversation_id);
                     }
-                    unload_thread_without_subscribers(
+                    if unload_thread_without_subscribers(
                         thread_manager.clone(),
                         outgoing_for_task.clone(),
                         pending_thread_unloads.clone(),
@@ -419,8 +419,12 @@ pub(super) async fn ensure_listener_task_running(
                         conversation_id,
                         conversation.clone(),
                     )
-                    .await;
-                    break;
+                    .await
+                    {
+                        break;
+                    }
+                    unloading_state.note_thread_activity_observed();
+                    continue;
                 }
             }
         }
@@ -450,7 +454,25 @@ pub(super) async fn unload_thread_without_subscribers(
     thread_watch_manager: ThreadWatchManager,
     thread_id: ThreadId,
     thread: Arc<CodexThread>,
-) {
+) -> bool {
+    let manager_handoff_admission = match thread_manager.begin_handoff_admission() {
+        Ok(admission) => admission,
+        Err(error) => {
+            pending_thread_unloads.lock().await.remove(&thread_id);
+            warn!("thread {thread_id} handoff is draining; keeping idle thread loaded: {error}");
+            return false;
+        }
+    };
+    let thread_handoff_admission = match thread.begin_handoff_admission() {
+        Ok(admission) => admission,
+        Err(error) => {
+            drop(manager_handoff_admission);
+            pending_thread_unloads.lock().await.remove(&thread_id);
+            warn!("thread {thread_id} handoff is draining; keeping idle thread loaded: {error}");
+            return false;
+        }
+    };
+
     info!("thread {thread_id} has no subscribers and is idle; shutting down");
 
     // Any pending app-server -> client requests for this thread can no longer be
@@ -461,6 +483,8 @@ pub(super) async fn unload_thread_without_subscribers(
     thread_state_manager.remove_thread_state(thread_id).await;
 
     tokio::spawn(async move {
+        let _manager_handoff_admission = manager_handoff_admission;
+        let _thread_handoff_admission = thread_handoff_admission;
         match wait_for_thread_shutdown(&thread).await {
             ThreadShutdownResult::Complete => {
                 // A delayed unload can finish after thread/revert replaces this runtime under
@@ -495,6 +519,7 @@ pub(super) async fn unload_thread_without_subscribers(
             }
         }
     });
+    true
 }
 
 #[allow(clippy::too_many_arguments)]

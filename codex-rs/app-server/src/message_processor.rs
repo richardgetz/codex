@@ -956,12 +956,26 @@ impl MessageProcessor {
         );
 
         let event_stream_ready = match &codex_request {
-            ClientRequest::McpServerEventStreamStart { params, .. } => Some(
-                session
-                    .mcp_event_streams
-                    .start(connection_id, params.clone(), self.mcp_processor.clone())
-                    .await?,
-            ),
+            ClientRequest::McpServerEventStreamStart { params, .. } => {
+                // Stream startup intentionally precedes the serialization queue so the caller
+                // can await activation. Retain manager admission in the stream task for its full
+                // lifetime so this bypass cannot race a process-wide handoff seal.
+                let manager_handoff_admission = self
+                    .mcp_processor
+                    .begin_handoff_admission()
+                    .map_err(|error| invalid_request(error.to_string()))?;
+                Some(
+                    session
+                        .mcp_event_streams
+                        .start(
+                            connection_id,
+                            params.clone(),
+                            self.mcp_processor.clone(),
+                            manager_handoff_admission,
+                        )
+                        .await?,
+                )
+            }
             _ => None,
         };
         let serialization_scope = codex_request.serialization_scope();

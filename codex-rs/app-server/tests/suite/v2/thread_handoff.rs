@@ -1,8 +1,10 @@
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::ThreadActivityPauseResponse;
 use codex_app_server_protocol::ThreadActivityReadResponse;
+use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadHandoffNodeState;
 use codex_app_server_protocol::ThreadHandoffPrepareResponse;
 use codex_app_server_protocol::ThreadHandoffRecoverResponse;
@@ -95,12 +97,41 @@ async fn handoff_prepare_and_cold_recover_preserves_turn_and_pause_state() -> Re
     .await??;
     responses_server.wait_for_request_count(1).await;
 
+    // Durable archive mutations admitted before the handoff seal continue to complete.
+    let archived_before_handoff = old_server
+        .start_thread(ThreadStartParams::default())
+        .await?
+        .thread;
+    let archive_request = old_server
+        .send_raw_request(
+            "thread/archive",
+            Some(json!({"threadId": archived_before_handoff.id})),
+        )
+        .await?;
+    let _: ThreadArchiveResponse =
+        timeout(REQUEST_TIMEOUT, old_server.read_response(archive_request)).await??;
+
     let prepare_request = old_server
         .send_raw_request("thread/handoff/prepare", None)
         .await?;
+    drop(release_running_turn);
     let prepared: ThreadHandoffPrepareResponse =
         timeout(REQUEST_TIMEOUT, old_server.read_response(prepare_request)).await??;
     assert_eq!(prepared.receipt.state, ThreadHandoffState::Suspended);
+
+    // A successful prepare retains the manager/root fences in the coordinator's active map. The
+    // archive request now has a deterministic post-seal rejection before any store mutation.
+    let fenced_archive_request = old_server
+        .send_raw_request("thread/archive", Some(json!({"threadId": paused_idle.id})))
+        .await?;
+    let fenced_archive_error: JSONRPCError = timeout(
+        REQUEST_TIMEOUT,
+        old_server.read_response(fenced_archive_request),
+    )
+    .await??;
+    assert_eq!(fenced_archive_error.error.code, -32600);
+    assert!(fenced_archive_error.error.message.contains("handoff"));
+
     let prepared_running = prepared
         .receipt
         .nodes
@@ -119,7 +150,6 @@ async fn handoff_prepare_and_cold_recover_preserves_turn_and_pause_state() -> Re
     assert_eq!(prepared_paused.state, ThreadHandoffNodeState::NotActive);
     assert_eq!(prepared_paused.turn_id, None);
 
-    drop(release_running_turn);
     timeout(REQUEST_TIMEOUT, old_server.shutdown_gracefully()).await??;
 
     let mut replacement = TestAppServer::builder()

@@ -49,6 +49,7 @@ impl McpEventStreams {
         connection_id: ConnectionId,
         params: McpServerEventStreamStartParams,
         processor: McpRequestProcessor,
+        manager_handoff_admission: codex_core::ThreadManagerHandoffAdmissionGuard,
     ) -> Result<McpEventStreamReady, JSONRPCErrorError> {
         if params.server != CODEX_APPS_MCP_SERVER_NAME {
             return Err(invalid_request(
@@ -76,7 +77,11 @@ impl McpEventStreams {
                     data: None,
                 });
             }
+            // The manager admission is acquired by MessageProcessor before this startup
+            // path bypasses the request serialization queue and remains held by the task until
+            // the long-lived stream exits.
             let task = tokio::spawn(async move {
+                let _manager_handoff_admission = manager_handoff_admission;
                 let mut auth_changes =
                     McpEventStreamAuthChanges::new(Arc::clone(&processor.auth_manager));
                 let opened = tokio::select! {
@@ -95,6 +100,13 @@ impl McpEventStreams {
                             )));
                         }
                         let (_, thread) = processor.load_thread(&params.thread_id).await?;
+                        let thread_handoff_admission = thread
+                            .begin_handoff_admission()
+                            .map_err(|error| {
+                                invalid_request(format!(
+                                    "MCP event subscription cannot start during handoff: {error}"
+                                ))
+                            })?;
                         let stream = thread
                             .start_mcp_event_stream(
                                 &params.name,
@@ -118,6 +130,7 @@ impl McpEventStreams {
                             thread,
                             stream,
                             auth_changes,
+                            thread_handoff_admission,
                             ready_tx,
                         )
                         .await;
@@ -187,6 +200,7 @@ async fn forward_events(
     thread: Arc<CodexThread>,
     mut stream: McpEventStream,
     mut auth_changes: McpEventStreamAuthChanges,
+    _thread_handoff_admission: codex_core::HandoffAdmissionGuard,
     ready: oneshot::Sender<Result<(), JSONRPCErrorError>>,
 ) {
     let mut ready = Some(ready);

@@ -33,7 +33,7 @@ impl HandoffCoordinator {
         {
             manager_guard.abort();
             return Err(internal_error(
-                "timed out waiting for thread-manager handoff admissions",
+                "timed out waiting for thread-manager handoff admissions; an active app-server operation may still be draining",
             ));
         }
 
@@ -68,7 +68,7 @@ impl HandoffCoordinator {
                 drop(tree_guards);
                 manager_guard.abort();
                 return Err(internal_error(format!(
-                    "timed out waiting for handoff admissions for root {root_id}",
+                    "timed out waiting for handoff admissions for root {root_id}; an active app-server operation may still be draining",
                 )));
             }
         }
