@@ -1,0 +1,16 @@
+intent:
+  id: eta-direct-tool-test
+  change_type: test
+  scope: core/tests/suite/eta.rs
+  summary: Assert ETA registration using the Responses API's direct function shape.
+  decision: Keep the production ETA registry unchanged and align the integration assertion with regular Responses serialization.
+  constraints:
+    - Do not alter runtime tool exposure or handler behavior.
+    - Preserve existing lifecycle and event assertions.
+  intent_priority: normal
+  code_locations:
+    - codex-rs/core/tests/suite/eta.rs
+  requested_by: root
+  recorded_by: codex
+  agent: /root/temp_state_impl
+  model: gpt-5
