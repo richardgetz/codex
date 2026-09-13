@@ -10,6 +10,7 @@ use codex_app_server_protocol::JSONRPCMessage;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -106,12 +107,44 @@ impl ApplyAttemptReceipt {
         let contents =
             serde_json::to_vec_pretty(self).context("failed to serialize apply receipt")?;
         let temporary = path.with_extension("json.tmp");
-        fs::write(&temporary, contents)
+        let mut temporary_file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&temporary)
+            .await
+            .with_context(|| format!("failed to open apply receipt {}", temporary.display()))?;
+        temporary_file
+            .write_all(&contents)
             .await
             .with_context(|| format!("failed to write apply receipt {}", temporary.display()))?;
+        temporary_file
+            .sync_all()
+            .await
+            .with_context(|| format!("failed to sync apply receipt {}", temporary.display()))?;
+        drop(temporary_file);
         fs::rename(&temporary, path)
             .await
-            .with_context(|| format!("failed to publish apply receipt {}", path.display()))
+            .with_context(|| format!("failed to publish apply receipt {}", path.display()))?;
+
+        // The receipt is the only durable link to the coordinator handoff ID
+        // after the old backend is stopped. Flush the containing directory so
+        // a crash after the rename cannot lose that link.
+        #[cfg(unix)]
+        if let Some(parent) = path.parent() {
+            fs::File::open(parent)
+                .await
+                .with_context(|| {
+                    format!("failed to open apply receipt directory {}", parent.display())
+                })?
+                .sync_all()
+                .await
+                .with_context(|| {
+                    format!("failed to sync apply receipt directory {}", parent.display())
+                })?;
+        }
+
+        Ok(())
     }
 
     pub(crate) fn is_resolved(&self) -> bool {
