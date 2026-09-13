@@ -1188,7 +1188,7 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 #[tokio::test]
 async fn send_inter_agent_communication_requeues_when_handoff_is_sealed() {
     let harness = AgentControlHarness::new().await;
-    let (thread_id, thread) = harness.start_thread().await;
+    let (thread_id, _thread) = harness.start_thread().await;
     let communication = InterAgentCommunication::new(
         AgentPath::root(),
         AgentPath::try_from("/root/worker").expect("agent path"),
@@ -1196,7 +1196,9 @@ async fn send_inter_agent_communication_requeues_when_handoff_is_sealed() {
         "retain this result".to_string(),
         /*trigger_turn*/ false,
     );
-    let _handoff = thread.begin_handoff().expect("seal handoff");
+    // Seal the same root control used to submit the completion. The thread's control is a
+    // per-tree handle, while the harness control is the sender for this direct-delivery test.
+    let _handoff = harness.control.begin_handoff().expect("seal handoff");
 
     let error = harness
         .control
@@ -1213,11 +1215,27 @@ async fn send_inter_agent_communication_requeues_when_handoff_is_sealed() {
         CodexErrorDetails::InvalidRequest(_)
     ));
 
-    let (items, _) = thread.session.input_queue.drain_mailbox_input_items().await;
-    assert_eq!(
-        items,
-        vec![crate::session::TurnInput::InterAgentCommunication(communication)]
-    );
+    let state_db = harness
+        .state_db
+        .as_ref()
+        .expect("test harness should have a state database");
+    let messages = state_db
+        .claim_pending_thread_inbound_messages(thread_id, /*limit*/ 1)
+        .await
+        .expect("sealed communication should remain durably pending");
+    let message = messages
+        .first()
+        .expect("sealed communication should have a durable envelope");
+    let payload: serde_json::Value =
+        serde_json::from_str(&message.payload_json).expect("durable envelope should be JSON");
+    assert_eq!(payload["type"], "interAgentCommunication");
+    assert_eq!(payload["schemaVersion"], 1);
+    assert_eq!(payload["teamLeadCompletion"], false);
+    let persisted_communication: InterAgentCommunication = serde_json::from_value(
+        payload["communication"].clone(),
+    )
+    .expect("durable envelope should preserve the communication");
+    assert_eq!(persisted_communication, communication);
 }
 
 #[tokio::test]
