@@ -851,7 +851,8 @@ impl AgentControl {
                 notification_source,
                 child_reference,
                 agent_metadata.agent_path.clone(),
-            );
+            )
+            .await;
         }
 
         Ok(LiveAgent {
@@ -1211,6 +1212,10 @@ impl AgentControl {
         thread_id: ThreadId,
         session_source: SessionSource,
     ) -> CodexResult<ThreadId> {
+        // Keep the root admission permit through descendant loading and completion-watcher setup;
+        // otherwise a coordinator could close watcher registration between the parent load and
+        // the detached watcher task being attached.
+        let _admission = self.begin_handoff_admission()?;
         let root_depth = thread_spawn_depth(&session_source).unwrap_or(0);
         let (resumed_thread_id, resumed_multi_agent_version) = Box::pin(
             self.resume_single_agent_from_rollout(config.clone(), thread_id, session_source),
@@ -1378,7 +1383,8 @@ impl AgentControl {
                 Some(notification_source.clone()),
                 child_reference,
                 agent_metadata.agent_path.clone(),
-            );
+            )
+            .await;
         }
         self.persist_thread_spawn_edge_for_source(
             resumed_thread.thread.as_ref(),

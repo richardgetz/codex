@@ -14,8 +14,15 @@ use codex_protocol::error::Result as CodexResult;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use tokio::sync::Notify;
+
+const HANDOFF_DELIVERY_REGISTRATION_CLOSED: u64 = 1 << 63;
+const HANDOFF_DELIVERY_COUNT_MASK: u64 = u32::MAX as u64;
+const HANDOFF_WATCHER_COUNT_SHIFT: u32 = 32;
+const HANDOFF_WATCHER_COUNT_INCREMENT: u64 = 1 << HANDOFF_WATCHER_COUNT_SHIFT;
+const HANDOFF_WATCHER_COUNT_MASK: u64 = ((1u64 << 31) - 1) << HANDOFF_WATCHER_COUNT_SHIFT;
 
 /// RAII owner of the root-tree handoff admission fence.
 ///
@@ -26,31 +33,149 @@ use tokio::sync::Notify;
 pub struct HandoffGuard {
     sealed: Arc<AtomicBool>,
     in_flight: Arc<AtomicU32>,
+    delivery_state: Arc<AtomicU64>,
+    delivery_failed: Arc<AtomicBool>,
+    inbound_unsupported: Arc<AtomicBool>,
     notify: Arc<Notify>,
 }
 
 impl Drop for HandoffGuard {
     fn drop(&mut self) {
+        // An aborted handoff leaves any process-local fallback mailbox available to the old
+        // runtime. A subsequent attempt starts with fresh failure state.
+        self.delivery_failed.store(false, Ordering::Release);
+        self.inbound_unsupported.store(false, Ordering::Release);
+        self.delivery_state.fetch_and(
+            !HANDOFF_DELIVERY_REGISTRATION_CLOSED,
+            Ordering::Release,
+        );
         self.sealed.store(false, Ordering::Release);
+        self.notify.notify_waiters();
     }
 }
 
 impl HandoffGuard {
-    /// Wait until admissions that crossed the fence before sealing have completed.
+    /// Wait until admissions that crossed the fence before sealing have completed, then close
+    /// delivery registration and drain terminal callbacks that were already registered.
     ///
-    /// New admissions fail immediately after the handoff seals the
-    /// tree. Existing admissions are allowed to reach their normal submission boundary
-    /// before the coordinator snapshots and suspends nodes.
+    /// The registration close is part of the same atomic state as the delivery counters. A
+    /// completion watcher that races this boundary either holds a counted obligation or is
+    /// rejected and must use its durable replacement path; it cannot become an untracked old
+    /// mailbox write after this method returns.
     pub async fn wait_for_admissions(&self) {
         loop {
             let notified = self.notify.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
             if self.in_flight.load(Ordering::Acquire) == 0 {
+                break;
+            }
+            notified.await;
+        }
+
+        self.close_delivery_registration();
+        self.wait_for_delivery_count().await;
+    }
+
+    /// Wait for detached completion watchers after active sessions have been suspended.
+    ///
+    /// A coordinator must call this after child-first suspension and before publishing a
+    /// transferable receipt. Watcher registrations are separate from short terminal delivery
+    /// windows so this method does not wait for an ordinary worker's original model task before it
+    /// is suspended.
+    pub async fn wait_for_handoff_watchers(&self) {
+        self.close_delivery_registration();
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let state = self.delivery_state.load(Ordering::Acquire);
+            if delivery_count(state) == 0 && watcher_count(state) == 0 {
                 return;
             }
             notified.await;
         }
+    }
+
+    fn close_delivery_registration(&self) {
+        self.delivery_state
+            .fetch_or(HANDOFF_DELIVERY_REGISTRATION_CLOSED, Ordering::AcqRel);
+    }
+
+    async fn wait_for_delivery_count(&self) {
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if delivery_count(self.delivery_state.load(Ordering::Acquire)) == 0 {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+fn delivery_count(state: u64) -> u64 {
+    state & HANDOFF_DELIVERY_COUNT_MASK
+}
+
+fn watcher_count(state: u64) -> u64 {
+    (state & HANDOFF_WATCHER_COUNT_MASK) >> HANDOFF_WATCHER_COUNT_SHIFT
+}
+
+fn try_register(state: &AtomicU64, increment: u64, count_mask: u64) -> bool {
+    let mut current = state.load(Ordering::Acquire);
+    loop {
+        if current & HANDOFF_DELIVERY_REGISTRATION_CLOSED != 0
+            || current & count_mask == count_mask
+        {
+            return false;
+        }
+        let Some(next) = current.checked_add(increment) else {
+            return false;
+        };
+        match state.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+/// RAII permit for one terminal completion delivery.
+///
+/// Completion watchers acquire this short-lived permit only after a child reaches a terminal
+/// status. It keeps the coordinator's final handoff barrier ordered through the durable write (or
+/// the explicitly failed fallback) without waiting for the worker's entire lifetime.
+#[derive(Debug)]
+pub(crate) struct HandoffDeliveryGuard {
+    delivery_state: Arc<AtomicU64>,
+    notify: Arc<Notify>,
+}
+
+impl Drop for HandoffDeliveryGuard {
+    fn drop(&mut self) {
+        self.delivery_state.fetch_sub(1, Ordering::AcqRel);
+        self.notify.notify_waiters();
+    }
+}
+
+/// RAII permit for one detached completion watcher.
+///
+/// The permit is acquired while the spawn admission is still held and lives until the watcher has
+/// either persisted or delivered its terminal result. Handoff drains these permits after active
+/// nodes are suspended, which closes the race where a watcher starts after the short delivery
+/// barrier but before the old runtime exits.
+#[derive(Debug)]
+pub(crate) struct HandoffCompletionWatcherGuard {
+    delivery_state: Arc<AtomicU64>,
+    notify: Arc<Notify>,
+}
+
+impl Drop for HandoffCompletionWatcherGuard {
+    fn drop(&mut self) {
+        self.delivery_state
+            .fetch_sub(HANDOFF_WATCHER_COUNT_INCREMENT, Ordering::AcqRel);
+        self.notify.notify_waiters();
     }
 }
 
@@ -86,8 +211,68 @@ impl AgentControl {
         Ok(HandoffGuard {
             sealed: Arc::clone(&self.handoff_admission_sealed),
             in_flight: Arc::clone(&self.handoff_admission_in_flight),
+            delivery_state: Arc::clone(&self.handoff_delivery_state),
+            delivery_failed: Arc::clone(&self.handoff_delivery_failed),
+            inbound_unsupported: Arc::clone(&self.handoff_inbound_unsupported),
             notify: Arc::clone(&self.handoff_admission_notify),
         })
+    }
+
+    /// Register a terminal completion callback while it is being transferred or retained.
+    ///
+    /// Registration is rejected after the coordinator closes the delivery boundary. Callers that
+    /// receive `None` must use the durable manager-owned state database path and mark the handoff
+    /// unsafe if that write fails; they must not enqueue an old-runtime-only fallback as success.
+    pub(crate) fn begin_handoff_delivery(&self) -> Option<HandoffDeliveryGuard> {
+        try_register(
+            &self.handoff_delivery_state,
+            1,
+            HANDOFF_DELIVERY_COUNT_MASK,
+        )
+        .then(|| HandoffDeliveryGuard {
+            delivery_state: Arc::clone(&self.handoff_delivery_state),
+            notify: Arc::clone(&self.handoff_admission_notify),
+        })
+    }
+
+    /// Register a detached V1 completion watcher before its task is spawned.
+    ///
+    /// Spawn callers hold a normal admission permit through this call, so the coordinator first
+    /// drains all such callers and then atomically closes watcher registration. A `None` result is
+    /// a fail-closed setup error; the caller must not start an untracked watcher during handoff.
+    pub(crate) fn begin_handoff_completion_watcher(
+        &self,
+    ) -> Option<HandoffCompletionWatcherGuard> {
+        try_register(
+            &self.handoff_delivery_state,
+            HANDOFF_WATCHER_COUNT_INCREMENT,
+            HANDOFF_WATCHER_COUNT_MASK,
+        )
+        .then(|| HandoffCompletionWatcherGuard {
+            delivery_state: Arc::clone(&self.handoff_delivery_state),
+            notify: Arc::clone(&self.handoff_admission_notify),
+        })
+    }
+
+    /// Mark a completion as unsafe for replacement because durable persistence failed.
+    pub(crate) fn mark_handoff_delivery_failed(&self) {
+        self.handoff_delivery_failed.store(true, Ordering::Release);
+        self.handoff_admission_notify.notify_waiters();
+    }
+
+    pub(crate) fn handoff_delivery_failed(&self) -> bool {
+        self.handoff_delivery_failed.load(Ordering::Acquire)
+    }
+
+    /// Mark a durable inbound payload for a compatible replacement instead of consuming it.
+    pub(crate) fn mark_handoff_inbound_unsupported(&self) {
+        self.handoff_inbound_unsupported
+            .store(true, Ordering::Release);
+        self.handoff_admission_notify.notify_waiters();
+    }
+
+    pub(crate) fn handoff_inbound_unsupported(&self) -> bool {
+        self.handoff_inbound_unsupported.load(Ordering::Acquire)
     }
 
     /// Admit one operation that is already at its final turn/spawn boundary.
@@ -155,6 +340,37 @@ mod tests {
         assert!(!waiter.is_finished());
         drop(admission);
         waiter.await.expect("waiter");
+    }
+
+    #[tokio::test]
+    async fn delivery_registration_closes_after_admission_drain() {
+        let control = AgentControl::default();
+        let admission = control.begin_handoff_admission().expect("admission");
+        let guard = control.begin_handoff().expect("handoff");
+        drop(admission);
+        guard.wait_for_admissions().await;
+        assert!(control.begin_handoff_delivery().is_none());
+        assert!(control.begin_handoff_completion_watcher().is_none());
+        drop(guard);
+    }
+
+    #[tokio::test]
+    async fn watcher_wait_is_separate_from_admission_drain() {
+        let control = AgentControl::default();
+        let watcher = control
+            .begin_handoff_completion_watcher()
+            .expect("watcher registration");
+        let guard = control.begin_handoff().expect("handoff");
+        guard.wait_for_admissions().await;
+        let wait = guard.wait_for_handoff_watchers();
+        tokio::pin!(wait);
+        tokio::select! {
+            () = &mut wait => panic!("watcher should keep the final barrier open"),
+            () = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
+        }
+        drop(watcher);
+        wait.await;
+        drop(guard);
     }
 
     #[test]

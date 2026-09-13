@@ -82,6 +82,12 @@ impl Session {
         if self.input_queue.has_pending_mailbox_items().await {
             preflight.blockers.push(HandoffBlocker::PendingMailbox);
         }
+        if self.services.agent_control.handoff_delivery_failed() {
+            preflight.blockers.push(HandoffBlocker::Persistence);
+        }
+        if self.services.agent_control.handoff_inbound_unsupported() {
+            preflight.blockers.push(HandoffBlocker::VersionMismatch);
+        }
         if self.pending_handoff_dispatches() > 0 {
             preflight.blockers.push(HandoffBlocker::PendingDispatch);
         }

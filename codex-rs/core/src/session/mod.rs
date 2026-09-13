@@ -317,6 +317,7 @@ enum LeadIdleRearm {
     AfterTeamEnable,
 }
 use self::thread_inbound_messages::start_thread_inbound_message_poller;
+pub(crate) use self::thread_inbound_messages::persist_handoff_inter_agent_communication;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
 use self::turn::agent_message_text;

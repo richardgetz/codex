@@ -1956,6 +1956,17 @@ impl ThreadManagerState {
         self.handoff.sealed()
     }
 
+    /// Return the manager's durable state database even when a target thread is not loaded.
+    ///
+    /// Completion watchers can outlive a cold or evicted target. Resolving the database from the
+    /// manager-owned local store keeps their handoff fallback independent of the loaded-thread map.
+    pub(crate) async fn state_db(&self) -> Option<StateDbHandle> {
+        let Some(store) = self.thread_store.as_any().downcast_ref::<LocalThreadStore>() else {
+            return None;
+        };
+        store.state_db().await
+    }
+
     pub(crate) fn agent_graph_store(&self) -> Option<Arc<dyn AgentGraphStore>> {
         self.agent_graph_store.clone()
     }

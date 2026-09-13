@@ -1667,12 +1667,22 @@ fn handoff_requires_session_exit(
 
 async fn reject_handoff_submission(sess: &Arc<Session>, sub: Submission, err: CodexErr) {
     let message = err.to_string();
-    let inbound_message_id = matches!(&sub.op, Op::UserInput { .. }).then(|| sub.id.clone());
+    let inbound_message_id = matches!(
+        &sub.op,
+        Op::UserInput { .. }
+            | Op::InterAgentCommunication { .. }
+            | Op::TeamLeadCompletion { .. }
+    )
+    .then(|| sub.id.clone());
+    let mut inbound_message_requeued = false;
     if let Some(message_id) = inbound_message_id
         && let Some(state_db) = sess.state_db()
     {
-        if let Err(unclaim_error) = state_db.unclaim_thread_inbound_message(&message_id).await {
-            warn!(%message_id, %unclaim_error, "failed to return rejected inbound message to queue");
+        match state_db.unclaim_thread_inbound_message(&message_id).await {
+            Ok(requeued) => inbound_message_requeued = requeued,
+            Err(unclaim_error) => {
+                warn!(%message_id, %unclaim_error, "failed to return rejected inbound message to queue");
+            }
         }
     }
     match sub.op {
@@ -1685,12 +1695,20 @@ async fn reject_handoff_submission(sess: &Arc<Session>, sub: Submission, err: Co
             });
         }
         Op::InterAgentCommunication { communication, start_options } => {
-            sess.input_queue.enqueue_mailbox_communication(communication, start_options).await;
-            debug!(submission_id = %sub.id, "retained inter-agent message during handoff");
+            if inbound_message_requeued {
+                debug!(submission_id = %sub.id, "returned durable inter-agent message to inbound queue during handoff");
+            } else {
+                sess.input_queue.enqueue_mailbox_communication(communication, start_options).await;
+                debug!(submission_id = %sub.id, "retained inter-agent message during handoff");
+            }
         }
         Op::TeamLeadCompletion { communication, start_options } => {
-            sess.input_queue.enqueue_team_lead_mailbox_communication(communication, start_options).await;
-            debug!(submission_id = %sub.id, "retained Team Lead completion during handoff");
+            if inbound_message_requeued {
+                debug!(submission_id = %sub.id, "returned durable Team Lead completion to inbound queue during handoff");
+            } else {
+                sess.input_queue.enqueue_team_lead_mailbox_communication(communication, start_options).await;
+                debug!(submission_id = %sub.id, "retained Team Lead completion during handoff");
+            }
         }
         _ => {
             sess.send_event_raw_ephemeral(Event {

@@ -257,6 +257,7 @@ release or merge rules.
   - A manager-wide admission fence closes new roots/descendant loads while each selected root tree is preflighted and drained.
   - Durable per-node handoff receipts preserve original unfinished turn IDs and manual pause state for exact recovery; process-local approvals, callbacks, pending input, and external operations are classified as `NeedsAttention` instead of replayed.
   - Unsupported or persistence-failed nodes keep the old runtime owner alive, while successful replacement restores parent-first behind the existing pause gate.
+  - Sealed inter-agent and legacy completion callbacks persist idempotent state-database envelopes through the manager-owned store even when targets are cold; the replacement poller reconstructs them without synthetic user prompts or tool replay, while incompatible rows remain pending for a compatible runtime.
 - Session-scoped cooperative activity pause:
   - `/pause` and `/continue` pause or release the current Lead tree, including
     loaded direct and nested ThreadSpawn Workers; a viewed Worker resolves to
@@ -721,6 +722,7 @@ release or merge rules.
   and fresh-lease sessions, preserves unsafe state, and rejects an ambiguous
   age-plus-force form.
 - Verify manager-wide Codex handoff admission seals every root/descendant creation path before graph snapshot, persists prepared and per-node receipts durably, preserves exact turn IDs and manual pauses, blocks unsafe callbacks/tools/external operations without replay, and leaves the old runtime active with visible `NeedsAttention` state on any partial or persistence failure.
+  Verify late inter-agent and legacy completion callbacks use the manager-owned durable database even for cold targets, survive replacement, and requeue cleanly when a sealed submission reaches the session loop; incompatible envelopes remain pending with visible version attention and bounded retry.
 - Verify `[team]` rejects enabled configurations without both complete profiles,
   remains disabled by default, and `/team` state survives resume/fork without
   mutating global config. Verify Lead routing, Worker routing for all delegated
