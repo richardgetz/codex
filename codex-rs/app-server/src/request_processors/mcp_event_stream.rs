@@ -118,11 +118,11 @@ impl McpEventStreams {
                                 "failed to start MCP event stream for '{}': {error:#}",
                                 params.server
                             )))?;
-                        Ok((stream, thread))
+                        Ok((stream, thread, thread_handoff_admission))
                     } => result,
                 };
                 match opened {
-                    Ok((stream, thread)) => {
+                    Ok((stream, thread, thread_handoff_admission)) => {
                         forward_events(
                             connection_id,
                             &params,

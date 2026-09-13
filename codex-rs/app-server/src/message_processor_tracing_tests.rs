@@ -1,7 +1,7 @@
 use super::ConnectionSessionState;
 use super::MessageProcessor;
 use super::MessageProcessorArgs;
-use super::server_lifecycle::ServerLifecycle;
+use crate::server_lifecycle::ServerLifecycle;
 use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
 use crate::outgoing_message::ConnectionId;
