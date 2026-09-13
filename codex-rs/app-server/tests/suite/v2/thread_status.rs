@@ -12,6 +12,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
+use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -62,6 +63,7 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
 
     let mut saw_active_running = false;
     let mut saw_idle_after_turn = false;
+    let mut saw_turn_completed = false;
     let deadline = tokio::time::Instant::now() + DEFAULT_READ_TIMEOUT;
     while tokio::time::Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -70,6 +72,16 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
             _ => break,
         };
         match message {
+            JSONRPCMessage::Notification(JSONRPCNotification {
+                method,
+                params: Some(params),
+                ..
+            }) if method == "turn/completed" => {
+                let notification: TurnCompletedNotification = serde_json::from_value(params)?;
+                if notification.thread_id == thread.id {
+                    saw_turn_completed = true;
+                }
+            }
             JSONRPCMessage::Notification(JSONRPCNotification {
                 method,
                 params: Some(params),
@@ -103,7 +115,7 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
             _ => {}
         }
 
-        if saw_active_running && saw_idle_after_turn {
+        if saw_active_running && saw_idle_after_turn && saw_turn_completed {
             break;
         }
     }
@@ -116,11 +128,7 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
         saw_idle_after_turn,
         "expected idle status after turn completion in thread/status/changed notifications"
     );
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
+    assert!(saw_turn_completed, "expected turn/completed notification");
 
     Ok(())
 }
