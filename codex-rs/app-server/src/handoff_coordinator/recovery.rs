@@ -315,26 +315,39 @@ impl HandoffCoordinator {
         if thread_is_loaded && !matches!(node.state, HandoffNodeState::Suspended) {
             return loaded_thread.ok_or(HandoffBlocker::Persistence);
         }
-        let multi_agent_version = if let Some(thread) = loaded_thread.as_ref() {
-            thread.multi_agent_version()
+        let multi_agent_version = if let Some(version) =
+            loaded_thread.as_ref().and_then(|thread| thread.multi_agent_version())
+        {
+            Some(version)
         } else {
             let rollout_path = node
                 .rollout_path
                 .as_deref()
                 .filter(|path| !path.is_empty())
                 .ok_or(HandoffBlocker::Persistence)?;
-            codex_core::RolloutRecorder::get_rollout_history_with_options(
+            let initial_history = codex_core::RolloutRecorder::get_rollout_history_with_options(
                 &PathBuf::from(rollout_path),
                 self.config.resume_load_options(),
             )
             .await
-            .map_err(|_| HandoffBlocker::Persistence)?
-            .get_multi_agent_version()
+            .map_err(|_| HandoffBlocker::Persistence)?;
+            initial_history.get_multi_agent_version().or_else(|| {
+                matches!(
+                    &initial_history,
+                    InitialHistory::Resumed(_) | InitialHistory::Forked(_)
+                )
+                .then_some(MultiAgentVersion::V1)
+            })
         };
         // A partial old-runtime attempt can leave a closed Suspended thread in the manager map.
         // Remove that stale handle so the normal rollout/parent loader creates a live owner.
         if thread_is_loaded {
             self.thread_manager.remove_thread(&thread_id).await;
+        }
+        if node.parent_thread_id.is_some() && multi_agent_version.is_none() {
+            // A parent-linked node without persisted version metadata cannot be safely routed:
+            // guessing V1 or V2 could detach it from its parent control state.
+            return Err(HandoffBlocker::ParentUnavailable);
         }
         if node.parent_thread_id.is_some() && multi_agent_version == Some(MultiAgentVersion::V2) {
             self.thread_manager

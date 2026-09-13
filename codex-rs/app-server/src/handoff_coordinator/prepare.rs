@@ -453,6 +453,16 @@ impl HandoffCoordinator {
                 let source = thread.session_source();
                 let preflight = thread.handoff_preflight().await;
                 let mut blockers = preflight.blockers;
+                // A parent-linked node with no persisted version cannot be routed safely during
+                // replacement. Detect it while the old owner is still fenced, before suspension.
+                if source.parent_thread_id().is_some()
+                    && thread.multi_agent_version().is_none()
+                    && !blockers
+                        .iter()
+                        .any(|blocker| matches!(blocker, HandoffBlocker::ParentUnavailable))
+                {
+                    blockers.push(HandoffBlocker::ParentUnavailable);
+                }
                 // The manager gate makes this loaded subtree snapshot stable; loaded descendants
                 // are represented as their own nodes and drained child-first below; cold descendants remain in the
                 // graph store for a later parent-aware load.
