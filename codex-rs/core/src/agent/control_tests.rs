@@ -1248,8 +1248,8 @@ async fn send_inter_agent_communication_requeues_when_handoff_is_sealed() {
     let payload: serde_json::Value =
         serde_json::from_str(&message.payload_json).expect("durable envelope should be JSON");
     assert_eq!(payload["type"], "interAgentCommunication");
-    assert_eq!(payload["schemaVersion"], 1);
-    assert_eq!(payload["teamLeadCompletion"], false);
+    assert_eq!(payload["schema_version"], 1);
+    assert_eq!(payload["team_lead_completion"], false);
     let persisted_communication: InterAgentCommunication = serde_json::from_value(
         payload["communication"].clone(),
     )
