@@ -15,10 +15,19 @@ use crate::apply_receipt::HandoffRpcError;
 use crate::apply_receipt::HandoffReceipt;
 use crate::Daemon;
 use crate::client;
+use crate::settings::DaemonSettings;
 
 const PREPARE_METHOD: &str = "thread/handoff/prepare";
 const STATUS_METHOD: &str = "thread/handoff/status";
 const RECOVER_METHOD: &str = "thread/handoff/recover";
+
+fn ensure_apply_launcher(settings: &DaemonSettings) -> Result<()> {
+    anyhow::ensure!(
+        settings.managed_codex_path.is_some(),
+        "app-server daemon apply/recover requires an explicitly configured Codex launcher (bootstrap --codex-bin PATH); standalone updates remain owned by the standalone updater"
+    );
+    Ok(())
+}
 
 impl Daemon {
     pub(crate) async fn apply(&self) -> Result<ApplyOutput> {
@@ -52,6 +61,7 @@ impl Daemon {
         }
 
         let settings = self.load_settings().await?;
+        ensure_apply_launcher(&settings)?;
         let managed_codex_bin = self.configured_managed_codex_bin(&settings);
         if managed_codex_bin != attempt.managed_codex_path {
             return self
@@ -138,6 +148,7 @@ impl Daemon {
 
     async fn apply_fresh(&self) -> Result<ApplyOutput> {
         let settings = self.load_settings().await?;
+        ensure_apply_launcher(&settings)?;
         let managed_codex_bin = self.configured_managed_codex_bin(&settings);
         self.ensure_managed_codex_bin(managed_codex_bin)?;
         let Some(backend) = self.running_backend_instance(&settings).await? else {
@@ -326,3 +337,8 @@ impl Daemon {
         ))
     }
 }
+
+
+#[cfg(test)]
+#[path = "apply_tests.rs"]
+mod tests;

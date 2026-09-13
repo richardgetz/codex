@@ -29,9 +29,10 @@ release or merge rules.
   disabling the standalone updater for that selection; custom bootstrap stays on
   the local Unix socket unless existing remote-control behavior is explicitly
   requested.
-- App-server daemon apply/recover checkpoints every loaded root before
-  replacing the selected local launcher, requires a fully suspended receipt,
-  restores exact turn ids, and persists unresolved failures for explicit
+- App-server daemon apply/recover are gated to an explicitly configured local
+  launcher (the standalone updater remains on its existing lifecycle), then
+  checkpoint every loaded root before replacement, require a fully suspended
+  receipt, restore exact turn ids, and persist unresolved failures for explicit
   recovery without enabling remote control.
 - macOS Seatbelt GPU/Metal base-policy allowances preserve focused IOKit,
   service, and sysctl access for sandboxed MPS/MLX/PyTorch workloads with
@@ -671,6 +672,8 @@ release or merge rules.
 - Verify the fork distribution/release contract (`@rickgetz/codex`,
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
   Apple Silicon releases) and migration-number policy remain intact.
+- Verify daemon apply/recover remain restricted to explicitly configured launchers;
+  standalone updater lifecycle and automatic updates remain unchanged.
 - Verify app-server daemon `bootstrap --codex-bin` accepts only an absolute
   local launcher path, persists the selected path for start/restart, reports its
   actual path/version, keeps custom bootstrap local unless `--remote-control` is

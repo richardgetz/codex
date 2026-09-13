@@ -148,6 +148,12 @@ symlinks and shims can point to the newly installed version.
 
 ### Safe installed-version apply
 
+`apply` and `recover` currently require an explicitly configured launcher from
+`bootstrap --codex-bin PATH`. They reject the default standalone selection before
+preparing or stopping anything, because its detached updater can be installing at
+the same time. Standalone lifecycle and updater behavior remain available through
+`start`, `restart`, and the existing bootstrap flow.
+
 apply is the daemon-wide update button for a locally installed launcher. It asks
 the app-server coordinator to checkpoint every loaded root and child tree. The
 daemon stops only after the coordinator returns a suspended receipt in which
