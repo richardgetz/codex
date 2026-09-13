@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::bail;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::RouteAwareClientPool;
@@ -40,16 +41,21 @@ const INSTALL_URL: &str = "https://chatgpt.com/codex/install.sh";
 const INSTALL_URL: &str = "https://chatgpt.com/codex/install.ps1";
 
 pub(crate) async fn run(http_client_factory: HttpClientFactory) -> Result<()> {
+    let daemon = Daemon::from_environment()?;
+    let settings = daemon.load_settings().await?;
+    if settings.managed_codex_path.is_some() {
+        bail!(
+            "the standalone app-server updater is disabled for a configured Codex launcher; use the launcher owner's update command, then restart the daemon"
+        );
+    }
+
     #[cfg(unix)]
     let mut terminate =
         signal(SignalKind::terminate()).context("failed to install updater shutdown handler")?;
     #[cfg(windows)]
-    let updater = {
-        let daemon = Daemon::from_environment()?;
-        crate::backend::pid_update_loop_backend(
-            daemon.backend_paths(&daemon.load_settings().await?),
-        )
-    };
+    let updater = crate::backend::pid_update_loop_backend(
+        daemon.backend_paths(&settings),
+    );
     #[cfg(windows)]
     updater.wait_for_ownership().await?;
     #[cfg(windows)]

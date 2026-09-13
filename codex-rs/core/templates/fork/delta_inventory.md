@@ -24,6 +24,11 @@ release or merge rules.
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
   tags, stable-triggered releases, Apple Silicon lane, and migration-number
   policy remain fork-owned (see the release and migration docs).
+- App-server daemon supports a locally configured `--codex-bin` launcher,
+  preserving a stable `codex-rick` npm shim across agent-manager upgrades while
+  disabling the standalone updater for that selection; custom bootstrap stays on
+  the local Unix socket unless existing remote-control behavior is explicitly
+  requested.
 - macOS Seatbelt GPU/Metal base-policy allowances preserve focused IOKit,
   service, and sysctl access for sandboxed MPS/MLX/PyTorch workloads with
   deny-wildcard regression coverage.
@@ -647,6 +652,11 @@ release or merge rules.
 - Verify the fork distribution/release contract (`@rickgetz/codex`,
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
   Apple Silicon releases) and migration-number policy remain intact.
+- Verify app-server daemon `bootstrap --codex-bin` accepts only an absolute
+  local launcher path, persists the selected path for start/restart, reports its
+  actual path/version, keeps custom bootstrap local unless `--remote-control` is
+  explicit, and does not start the standalone updater for configured npm
+  launchers.
 - Verify the macOS Seatbelt GPU/Metal base-policy allowances and focused
   regression tests survive upstream policy changes without wildcard access.
 - Verify `enable_mcp_approvals` remains a Rick-owned toggle and fork-only

@@ -837,6 +837,14 @@ struct AppServerBootstrapCommand {
     /// Launch the managed app-server with remote control enabled.
     #[arg(long = "remote-control")]
     remote_control: bool,
+
+    /// Optional absolute path to a locally selected Codex launcher.
+    #[arg(
+        long = "codex-bin",
+        value_name = "PATH",
+        value_parser = parse_absolute_launcher_path
+    )]
+    managed_codex_path: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -882,6 +890,15 @@ struct StdioToUdsCommand {
 fn parse_socket_path(raw: &str) -> Result<AbsolutePathBuf, String> {
     AbsolutePathBuf::relative_to_current_dir(raw)
         .map_err(|err| format!("failed to resolve socket path `{raw}`: {err}"))
+}
+
+fn parse_absolute_launcher_path(raw: &str) -> Result<AbsolutePathBuf, String> {
+    if !std::path::Path::new(raw).is_absolute() {
+        return Err(format!("Codex launcher path must be absolute: {raw}"));
+    }
+
+    AbsolutePathBuf::from_absolute_path_checked(raw)
+        .map_err(|err| format!("failed to resolve Codex launcher path `{raw}`: {err}"))
 }
 
 /// Handle the app exit and print the results. Optionally run the update action.
@@ -1399,6 +1416,9 @@ async fn cli_main(
                         let output =
                             codex_app_server_daemon::bootstrap(AppServerBootstrapOptions {
                                 remote_control_enabled: bootstrap_cli.remote_control,
+                                managed_codex_path: bootstrap_cli
+                                    .managed_codex_path
+                                    .map(PathBuf::from),
                             })
                             .await?;
                         println!("{}", serde_json::to_string(&output)?);
@@ -5052,7 +5072,8 @@ mod tests {
             .subcommand,
             Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
                 subcommand: AppServerDaemonSubcommand::Bootstrap(AppServerBootstrapCommand {
-                    remote_control: true
+                    remote_control: true,
+                    managed_codex_path: None,
                 })
             }))
         ));
@@ -5098,6 +5119,52 @@ mod tests {
                 subcommand: AppServerDaemonSubcommand::Version
             }))
         ));
+    }
+
+    #[test]
+    fn app_server_daemon_bootstrap_accepts_configured_codex_launcher() {
+        let launcher = if cfg!(windows) {
+            r"C:\Program Files\Codex\codex.exe"
+        } else {
+            "/opt/homebrew/bin/codex-rick"
+        };
+        let app_server = app_server_from_args(
+            [
+                "codex",
+                "app-server",
+                "daemon",
+                "bootstrap",
+                "--codex-bin",
+                launcher,
+            ]
+            .as_ref(),
+        );
+        let Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+            subcommand: AppServerDaemonSubcommand::Bootstrap(bootstrap),
+        })) = app_server.subcommand
+        else {
+            panic!("expected daemon bootstrap");
+        };
+        assert_eq!(
+            bootstrap.managed_codex_path,
+            Some(
+                AbsolutePathBuf::from_absolute_path(launcher).expect("absolute launcher path")
+            )
+        );
+    }
+
+    #[test]
+    fn app_server_daemon_bootstrap_rejects_relative_codex_launcher() {
+        let error = MultitoolCli::try_parse_from([
+            "codex",
+            "app-server",
+            "daemon",
+            "bootstrap",
+            "--codex-bin",
+            "codex-rick",
+        ])
+        .expect_err("relative launcher path should be rejected");
+        assert!(error.to_string().contains("must be absolute"));
     }
 
     #[test]
