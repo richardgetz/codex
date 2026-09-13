@@ -4274,6 +4274,77 @@
       ],
       "type": "object"
     },
+    "ThreadEtaAction": {
+      "description": "Mutation operation accepted by `thread/eta/update` and the model-facing ETA tool.",
+      "enum": [
+        "create",
+        "start",
+        "revise",
+        "block",
+        "complete",
+        "cancel"
+      ],
+      "type": "string"
+    },
+    "ThreadEtaUpdateOperation": {
+      "description": "One requested ETA mutation. Fields omitted for an action are left unchanged; `create` requires a title and may omit an estimate to record an explicit unknown.",
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/ThreadEtaAction"
+        },
+        "dependsOnTaskIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "estimateLowerSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "estimateUpperSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "parentTaskId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "taskId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
     "ThreadExecPolicyParams": {
       "properties": {
         "rulesets": {

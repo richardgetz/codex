@@ -16257,6 +16257,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/eta/updated"
+              ],
+              "title": "Thread/eta/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadEtaUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/eta/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/queue/changed"
               ],
               "title": "Thread/queue/changedNotificationMethod",
@@ -19150,6 +19170,366 @@
         "environmentId",
         "runtimeWorkspaceRoots"
       ],
+      "type": "object"
+    },
+    "ThreadEtaAccuracy": {
+      "description": "Accuracy classification against a task's immutable original estimate.",
+      "enum": [
+        "early",
+        "within",
+        "late",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ThreadEtaAction": {
+      "description": "Mutation operation accepted by `thread/eta/update` and the model-facing ETA tool.",
+      "enum": [
+        "create",
+        "start",
+        "revise",
+        "block",
+        "complete",
+        "cancel"
+      ],
+      "type": "string"
+    },
+    "ThreadEtaOverall": {
+      "description": "Aggregate remaining work for the selected root session.",
+      "properties": {
+        "finishAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "remainingLowerSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "remainingUpperSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "unknownReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ThreadEtaRevision": {
+      "description": "One bounded estimate revision retained for a task.",
+      "properties": {
+        "actorThreadId": {
+          "type": "string"
+        },
+        "lowerSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "upperSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "actorThreadId",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "ThreadEtaSnapshot": {
+      "description": "Read-only root-scoped ETA projection returned by `thread/eta/read`.",
+      "properties": {
+        "active": {
+          "items": {
+            "$ref": "#/definitions/ThreadEtaTask"
+          },
+          "type": "array"
+        },
+        "generatedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "history": {
+          "items": {
+            "$ref": "#/definitions/ThreadEtaTask"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "overall": {
+          "$ref": "#/definitions/ThreadEtaOverall"
+        },
+        "rootThreadId": {
+          "type": "string"
+        },
+        "sequence": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "active",
+        "generatedAt",
+        "history",
+        "overall",
+        "rootThreadId",
+        "sequence"
+      ],
+      "type": "object"
+    },
+    "ThreadEtaStatus": {
+      "description": "Lifecycle state for a task tracked by the ETA store.",
+      "enum": [
+        "pending",
+        "active",
+        "blocked",
+        "completed",
+        "cancelled",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ThreadEtaTask": {
+      "description": "A task in the root session's active tree or bounded history page.",
+      "properties": {
+        "accuracy": {
+          "$ref": "#/definitions/ThreadEtaAccuracy"
+        },
+        "actualElapsedSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "currentLowerSeconds": {
+          "description": "Remaining duration range for active work; terminal rows retain their last range.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "currentUpperSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "dependsOnTaskIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "isStale": {
+          "type": "boolean"
+        },
+        "originalLowerSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "originalUpperSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "ownerThreadId": {
+          "type": "string"
+        },
+        "parentTaskId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revisions": {
+          "items": {
+            "$ref": "#/definitions/ThreadEtaRevision"
+          },
+          "type": "array"
+        },
+        "rootThreadId": {
+          "type": "string"
+        },
+        "startedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/ThreadEtaStatus"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "terminalAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "accuracy",
+        "createdAt",
+        "dependsOnTaskIds",
+        "isStale",
+        "ownerThreadId",
+        "revisions",
+        "rootThreadId",
+        "status",
+        "taskId",
+        "title",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "ThreadEtaUpdateOperation": {
+      "description": "One requested ETA mutation. Fields omitted for an action are left unchanged; `create` requires a title and may omit an estimate to record an explicit unknown.",
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/ThreadEtaAction"
+        },
+        "dependsOnTaskIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "estimateLowerSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "estimateUpperSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "parentTaskId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "taskId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "ThreadEtaUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Event-driven update emitted after a task mutation. Clients should refresh the read projection only when this sequence is newer than their local snapshot.",
+      "properties": {
+        "changedTasks": {
+          "items": {
+            "$ref": "#/definitions/ThreadEtaTask"
+          },
+          "type": "array"
+        },
+        "generatedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "overall": {
+          "$ref": "#/definitions/ThreadEtaOverall"
+        },
+        "rootThreadId": {
+          "type": "string"
+        },
+        "sequence": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "changedTasks",
+        "generatedAt",
+        "overall",
+        "rootThreadId",
+        "sequence"
+      ],
+      "title": "ThreadEtaUpdatedNotification",
       "type": "object"
     },
     "ThreadExecPolicyParams": {

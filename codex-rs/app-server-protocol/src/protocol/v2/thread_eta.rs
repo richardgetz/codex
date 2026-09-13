@@ -133,19 +133,12 @@ pub struct ThreadEtaReadResponse {
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct ThreadEtaUpdateOperation {
     pub action: ThreadEtaAction,
-    #[ts(optional = nullable)]
     pub task_id: Option<String>,
-    #[ts(optional = nullable)]
     pub title: Option<String>,
-    #[ts(optional = nullable)]
     pub parent_task_id: Option<String>,
-    #[ts(optional = nullable)]
     pub depends_on_task_ids: Option<Vec<String>>,
-    #[ts(optional = nullable)]
     pub estimate_lower_seconds: Option<i64>,
-    #[ts(optional = nullable)]
     pub estimate_upper_seconds: Option<i64>,
-    #[ts(optional = nullable)]
     pub reason: Option<String>,
 }
 
