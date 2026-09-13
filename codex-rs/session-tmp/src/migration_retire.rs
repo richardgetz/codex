@@ -293,6 +293,16 @@ pub(super) fn retire_source_payload(source: &ControlState) -> Result<bool, Sessi
             }
             match fs::remove_dir(&legacy_locks) {
                 Ok(()) => {}
+                // Keep validated lock pathnames in place. An older process
+                // may already hold or await the same inode; unlinking it
+                // would split the lock domain when a later manager creates a
+                // replacement pathname. Marker retirement is still safe once
+                // the lock directory contains only these bounded residues.
+                Err(error)
+                    if error.kind() == ErrorKind::DirectoryNotEmpty
+                        && state_lock_files_are_safe(&legacy_locks) =>
+                {
+                }
                 Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => return Ok(false),
                 Err(error) if error.kind() == ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
@@ -300,6 +310,11 @@ pub(super) fn retire_source_payload(source: &ControlState) -> Result<bool, Sessi
         }
         match fs::remove_dir(&sessions) {
             Ok(()) => {}
+            Err(error)
+                if error.kind() == ErrorKind::DirectoryNotEmpty
+                    && payload_sessions_empty_or_locks_only(&sessions) =>
+            {
+            }
             Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => return Ok(false),
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
@@ -672,7 +687,10 @@ fn payload_sessions_empty_or_locks_only(path: &Path) -> bool {
         let Some(name) = child.file_name().and_then(|name| name.to_str()) else {
             return false;
         };
-        if name != ".locks" || !metadata.file_type().is_dir() || !directory_empty(&child) {
+        if name != ".locks"
+            || !metadata.file_type().is_dir()
+            || !state_lock_files_are_safe(&child)
+        {
             return false;
         }
     }

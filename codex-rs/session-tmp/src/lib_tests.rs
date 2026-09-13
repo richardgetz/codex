@@ -456,6 +456,53 @@ fn recovery_root_is_merged_into_a_hidden_default_namespace() {
 }
 
 #[test]
+fn recovery_marker_retires_with_a_legacy_lock_residue() {
+    let home = tempfile::tempdir().unwrap();
+    let (normal_root, recovery_root) = setup_recovery_fixture(&home);
+    let lock_path = recovery_root
+        .join(SESSIONS_DIR)
+        .join(".locks")
+        .join("legacy-session.lock");
+    fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+    fs::write(&lock_path, b"").unwrap();
+
+    let manager = SessionTmpManager::open(
+        &default_config(),
+        home.path(),
+        "new-session",
+        "new-thread",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(!recovery_root
+        .join(crate::state::LEGACY_MARKER)
+        .exists());
+    assert!(lock_path.exists());
+    assert!(recovery_root.exists());
+    assert_eq!(
+        fs::read(
+            normal_root
+                .join(crate::state::V2_PAYLOAD_NAMESPACE)
+                .join(SESSIONS_DIR)
+                .join("legacy-session")
+                .join(AGENTS_DIR)
+                .join("legacy-thread")
+                .join("artifact.txt")
+        )
+        .unwrap(),
+        b"migrated"
+    );
+    assert!(!recovery_root
+        .join(SESSIONS_DIR)
+        .join("legacy-session")
+        .join(SESSION_METADATA_FILE)
+        .exists());
+    drop(manager);
+}
+
+#[test]
 fn explicit_default_root_is_treated_like_unset_for_recovery() {
     let home = tempfile::tempdir().unwrap();
     let (normal_root, recovery_root) = setup_recovery_fixture(&home);
