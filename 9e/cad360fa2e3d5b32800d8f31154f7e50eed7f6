@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-13/mcp-thread-manager-attachments#9ecad360f"
+  change_type: fix
+  scope: mcp-server
+  summary: Keep the MCP server compatible with the expanded ThreadManager constructor.
+  decision: Pass the core inline attachment store when constructing the MCP server thread manager.
+  constraints:
+    - Preserve MCP server behavior and existing thread storage configuration.
+    - Use the same attachment-store default as other ThreadManager consumers.
+    - Keep the compatibility change limited to the constructor call site.
+  intent_priority: must
+  code_locations:
+    - codex-rs/mcp-server/src/message_processor.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
