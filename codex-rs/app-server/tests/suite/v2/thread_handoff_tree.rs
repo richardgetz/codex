@@ -1,8 +1,8 @@
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
+use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
-use codex_app_server_protocol::SubAgentActivityKind;
 use codex_app_server_protocol::ThreadActivityPauseResponse;
 use codex_app_server_protocol::ThreadActivityReadResponse;
 use codex_app_server_protocol::ThreadHandoffNodeState;
@@ -146,15 +146,16 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
         loop {
             let completed: ItemCompletedNotification =
                 old_server.read_notification("item/completed").await?;
-            if let ThreadItem::SubAgentActivity {
+            if let ThreadItem::CollabAgentToolCall {
                 id,
-                kind: SubAgentActivityKind::Started,
-                agent_thread_id,
+                status: CollabAgentToolCallStatus::Completed,
+                receiver_thread_ids,
                 ..
             } = completed.item
                 && id == SPAWN_CALL_ID
+                && let Some(child_thread_id) = receiver_thread_ids.into_iter().next()
             {
-                return Ok::<String, anyhow::Error>(agent_thread_id);
+                return Ok::<String, anyhow::Error>(child_thread_id);
             }
         }
     })
