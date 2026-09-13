@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-13/eta-state-test-import#fb12c0a5a"
+  change_type: "fix"
+  scope: "state-eta"
+  summary: "Keep the aggregate type available to task-estimate tests after helper extraction."
+  decision: "Retain TaskEstimateOverall as a test-only import so existing aggregate assertions compile without a production unused import."
+  constraints:
+    - "No runtime behavior changes."
+    - "Keep the helper extraction boundaries intact."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/state/src/runtime/task_estimates.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
