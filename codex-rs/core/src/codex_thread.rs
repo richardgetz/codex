@@ -921,15 +921,13 @@ impl CodexThread {
     }
 
     /// Records a context fragment without creating a new user turn boundary.
-    pub(crate) async fn inject_fragment_without_turn(&self, fragment: impl ContextualUserFragment) {
-        // Completion fragments mutate rollout/history without creating a turn. Keep them behind
-        // the same admission fence as ordinary submissions so a handoff cannot close the writer
-        // while this process-local notification is being appended.
-        let Ok(_handoff_admission) = self.session.services.agent_control.begin_handoff_admission()
-        else {
-            tracing::debug!(thread_id = %self.session.thread_id, "dropping completion fragment during handoff");
-            return;
-        };
+    pub(crate) async fn inject_fragment_without_turn(
+        &self,
+        fragment: impl ContextualUserFragment,
+        _handoff_admission: &crate::agent::control::HandoffAdmissionGuard,
+    ) {
+        // The caller owns the admission across the fragment and any paired wake. Taking a new
+        // permit here would race a sealed handoff and silently drop an already-admitted result.
         let item = ContextualUserFragment::into(fragment);
         self.session
             .inject_no_new_turn(vec![item], /*current_turn_context*/ None)

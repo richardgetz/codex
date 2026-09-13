@@ -201,6 +201,15 @@ async fn suspend_turn_and_shutdown_with_scope(
     // Announce thread shutdown only after its writer closes so a replacement worker
     // cannot write the same thread concurrently.
     handlers::emit_thread_stop_lifecycle(session.as_ref()).await;
+    if scope != SuspensionScope::Root {
+        // The normal shutdown event closes the session, but this turn remains resumable.
+        // Mark it before delivery so a detached V1 watcher cannot turn this lifecycle signal
+        // into a synthetic Worker completion for the replacement daemon.
+        session
+            .services
+            .agent_control
+            .mark_handoff_suspended(session.thread_id);
+    }
     session
         .deliver_event_raw(Event {
             id: submission_id,

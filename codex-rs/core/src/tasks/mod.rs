@@ -918,7 +918,34 @@ impl Session {
         let mut active_turn_to_clear = None;
         let mut turn_context = None;
         let mut should_restart_pending_work = false;
-        if let Some(mut active_turn) = self.take_active_turn(&reason).await {
+        let (active_turn, _handoff_terminal_delivery) = {
+            let mut active = self.active_turn.lock().await;
+            let has_task = active
+                .as_ref()
+                .and_then(|active_turn| active_turn.task.as_ref())
+                .is_some();
+            if has_task
+                && matches!(
+                    reason,
+                    TurnAbortReason::Interrupted | TurnAbortReason::BudgetLimited
+                )
+            {
+                self.mark_interrupted();
+            }
+            let handoff_terminal_delivery = if has_task {
+                self.services.agent_control.begin_handoff_terminal_delivery()
+            } else {
+                None
+            };
+            if has_task && handoff_terminal_delivery.is_none() {
+                // A sealed handoff owns the active task until the coordinator can classify it;
+                // do not remove it and emit an untracked terminal callback after registration has
+                // closed. The failed-delivery bit makes the coordinator publish NeedsAttention.
+                return;
+            }
+            (active.take(), handoff_terminal_delivery)
+        };
+        if let Some(mut active_turn) = active_turn {
             let task = active_turn.task.take();
             aborted_turn = task.is_some();
             turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
@@ -954,22 +981,31 @@ impl Session {
         turn_id: &str,
         reason: TurnAbortReason,
     ) -> bool {
-        let active_turn = {
+        // Claim a terminal delivery obligation while removing the matching task. A sealed
+        // handoff keeps ownership of the task so it cannot emit an untracked callback.
+        let (active_turn, _handoff_terminal_delivery) = {
             let mut active = self.active_turn.lock().await;
-            if active
+            let matches_turn = active
                 .as_ref()
                 .and_then(|active_turn| active_turn.task.as_ref())
-                .is_some_and(|task| task.turn_context.sub_id == turn_id)
-            {
+                .is_some_and(|task| task.turn_context.sub_id == turn_id);
+            if !matches_turn {
+                (None, None)
+            } else {
                 if matches!(
                     reason,
                     TurnAbortReason::Interrupted | TurnAbortReason::BudgetLimited
                 ) {
                     self.mark_interrupted();
                 }
-                active.take()
-            } else {
-                None
+                let handoff_terminal_delivery = self
+                    .services
+                    .agent_control
+                    .begin_handoff_terminal_delivery();
+                if handoff_terminal_delivery.is_none() {
+                    return false;
+                }
+                (active.take(), handoff_terminal_delivery)
             }
         };
         let Some(mut active_turn) = active_turn else {
@@ -1007,6 +1043,24 @@ impl Session {
         turn_context: Arc<TurnContext>,
         task_result: SessionTaskResult,
     ) {
+        // Register before claiming the task. Handoff may otherwise observe an idle session
+        // after this method removes `active_turn.task` while the terminal callback is still
+        // able to write the parent mailbox.
+        let handoff_terminal_delivery = {
+            let active = self.active_turn.lock().await;
+            active
+                .as_ref()
+                .and_then(|active_turn| active_turn.task.as_ref())
+                .filter(|task| Arc::ptr_eq(&task.turn_context, &turn_context))
+                .and_then(|_| self.services.agent_control.begin_handoff_terminal_delivery())
+        };
+        if handoff_terminal_delivery.is_none()
+            && self.services.agent_control.handoff_admission_sealed()
+        {
+            // The sealed owner keeps the task for the coordinator to classify instead of emitting
+            // a terminal callback after delivery registration has closed.
+            return;
+        }
         // A replaced task can finish after its successor is installed. Claim the task while
         // checking its identity so stale completion cannot report against or remove the successor.
         let turn_state = {
@@ -1300,19 +1354,6 @@ impl Session {
         }
     }
 
-    async fn take_active_turn(&self, reason: &TurnAbortReason) -> Option<ActiveTurn> {
-        let mut active = self.active_turn.lock().await;
-        if matches!(
-            reason,
-            TurnAbortReason::Interrupted | TurnAbortReason::BudgetLimited
-        ) && active
-            .as_ref()
-            .is_some_and(|active_turn| active_turn.task.is_some())
-        {
-            self.mark_interrupted();
-        }
-        active.take()
-    }
 
     pub(crate) async fn close_unified_exec_processes(&self) {
         self.services

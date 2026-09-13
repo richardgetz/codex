@@ -4093,6 +4093,58 @@ async fn memory_subagent_completion_does_not_notify_parent() {
 }
 
 #[tokio::test]
+async fn completion_watcher_ignores_handoff_shutdown() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let (child_thread_id, child_thread) = harness.start_thread().await;
+
+    harness.control.maybe_start_completion_watcher(
+        child_thread_id,
+        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: Some("explorer".to_string()),
+        })),
+        child_thread_id.to_string(),
+        /*child_agent_path*/ None,
+    ).await;
+    harness.control.mark_handoff_suspended(child_thread_id);
+    send_agent_event(&child_thread, EventMsg::ShutdownComplete).await;
+
+    sleep(Duration::from_millis(100)).await;
+
+    assert!(!has_subagent_notification(
+        parent_thread.session.clone_history().await.raw_items(),
+    ));
+    assert!(!harness.control.take_handoff_suspended(child_thread_id));
+}
+
+#[tokio::test]
+async fn completion_watcher_forwards_natural_shutdown() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let (child_thread_id, child_thread) = harness.start_thread().await;
+
+    harness.control.maybe_start_completion_watcher(
+        child_thread_id,
+        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: Some("explorer".to_string()),
+        })),
+        child_thread_id.to_string(),
+        /*child_agent_path*/ None,
+    ).await;
+    send_agent_event(&child_thread, EventMsg::ShutdownComplete).await;
+
+    assert!(wait_for_subagent_notification(&parent_thread).await);
+}
+
+#[tokio::test]
 async fn completion_watcher_notifies_parent_when_child_is_missing() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;

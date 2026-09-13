@@ -554,7 +554,7 @@ pub async fn inter_agent_communication(
     communication: InterAgentCommunication,
     start_options: codex_protocol::turn_input::TurnStartOptions,
 ) {
-    inter_agent_communication_inner(sess, sub_id, communication, start_options, false).await;
+    inter_agent_communication_inner(sess, sub_id, communication, start_options, false, None).await;
 }
 
 async fn inter_agent_communication_inner(
@@ -563,6 +563,7 @@ async fn inter_agent_communication_inner(
     communication: InterAgentCommunication,
     start_options: codex_protocol::turn_input::TurnStartOptions,
     team_lead_trigger: bool,
+    handoff_admission: Option<crate::agent::control::HandoffAdmissionGuard>,
 ) {
     let trigger_turn = communication.trigger_turn;
     let is_team_lead = sess.is_team_lead().await;
@@ -633,6 +634,7 @@ async fn inter_agent_communication_inner(
     }
     if trigger_turn || sess.has_outstanding_durable_sleep() {
         drop(team_lead_turn_admission);
+        drop(handoff_admission);
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
             .await;
     }
@@ -1665,6 +1667,39 @@ fn handoff_requires_session_exit(
     )
 }
 
+async fn persist_rejected_inter_agent_communication(
+    sess: &Arc<Session>,
+    communication: &InterAgentCommunication,
+    start_options: &codex_protocol::turn_input::TurnStartOptions,
+    team_lead_completion: bool,
+) -> bool {
+    let Some(state_db) = sess.state_db() else {
+        sess.services.agent_control.mark_handoff_delivery_failed();
+        warn!(thread_id = %sess.thread_id(), "state database unavailable for rejected inter-agent handoff");
+        return false;
+    };
+    match crate::session::persist_handoff_inter_agent_communication(
+        &state_db,
+        sess.thread_id(),
+        None,
+        communication,
+        start_options,
+        team_lead_completion,
+    )
+    .await
+    {
+        Ok(message_id) => {
+            debug!(thread_id = %sess.thread_id(), %message_id, "persisted rejected inter-agent handoff");
+            true
+        }
+        Err(error) => {
+            sess.services.agent_control.mark_handoff_delivery_failed();
+            warn!(thread_id = %sess.thread_id(), %error, "failed to persist rejected inter-agent handoff");
+            false
+        }
+    }
+}
+
 async fn reject_handoff_submission(sess: &Arc<Session>, sub: Submission, err: CodexErr) {
     let message = err.to_string();
     let inbound_message_id = matches!(
@@ -1681,6 +1716,7 @@ async fn reject_handoff_submission(sess: &Arc<Session>, sub: Submission, err: Co
         match state_db.unclaim_thread_inbound_message(&message_id).await {
             Ok(requeued) => inbound_message_requeued = requeued,
             Err(unclaim_error) => {
+                sess.services.agent_control.mark_handoff_delivery_failed();
                 warn!(%message_id, %unclaim_error, "failed to return rejected inbound message to queue");
             }
         }
@@ -1695,19 +1731,39 @@ async fn reject_handoff_submission(sess: &Arc<Session>, sub: Submission, err: Co
             });
         }
         Op::InterAgentCommunication { communication, start_options } => {
-            if inbound_message_requeued {
-                debug!(submission_id = %sub.id, "returned durable inter-agent message to inbound queue during handoff");
+            if inbound_message_requeued
+                || persist_rejected_inter_agent_communication(
+                    sess,
+                    &communication,
+                    &start_options,
+                    false,
+                )
+                .await
+            {
+                debug!(submission_id = %sub.id, "retained rejected inter-agent message durably during handoff");
             } else {
-                sess.input_queue.enqueue_mailbox_communication(communication, start_options).await;
-                debug!(submission_id = %sub.id, "retained inter-agent message during handoff");
+                sess.input_queue
+                    .enqueue_mailbox_communication(communication, start_options)
+                    .await;
+                debug!(submission_id = %sub.id, "retained inter-agent message in old mailbox after durable fallback failure");
             }
         }
         Op::TeamLeadCompletion { communication, start_options } => {
-            if inbound_message_requeued {
-                debug!(submission_id = %sub.id, "returned durable Team Lead completion to inbound queue during handoff");
+            if inbound_message_requeued
+                || persist_rejected_inter_agent_communication(
+                    sess,
+                    &communication,
+                    &start_options,
+                    true,
+                )
+                .await
+            {
+                debug!(submission_id = %sub.id, "retained rejected Team Lead completion durably during handoff");
             } else {
-                sess.input_queue.enqueue_team_lead_mailbox_communication(communication, start_options).await;
-                debug!(submission_id = %sub.id, "retained Team Lead completion during handoff");
+                sess.input_queue
+                    .enqueue_team_lead_mailbox_communication(communication, start_options)
+                    .await;
+                debug!(submission_id = %sub.id, "retained Team Lead completion in old mailbox after durable fallback failure");
             }
         }
         _ => {
@@ -1734,7 +1790,7 @@ pub(super) async fn submission_loop(
             debug!(?sub, "Submission");
         }
         let dispatch_span = submission_dispatch_span(&sub);
-        let _handoff_admission = if sub.op.requires_handoff_admission() {
+        let mut handoff_admission = if sub.op.requires_handoff_admission() {
             match sess.services.agent_control.begin_handoff_admission() {
                 Ok(admission) => Some(admission),
                 Err(err) => {
@@ -1896,8 +1952,15 @@ pub(super) async fn submission_loop(
                     communication,
                     start_options,
                 } => {
-                    inter_agent_communication(&sess, sub.id.clone(), communication, start_options)
-                        .await;
+                    inter_agent_communication_inner(
+                        &sess,
+                        sub.id.clone(),
+                        communication,
+                        start_options,
+                        false,
+                        handoff_admission.take(),
+                    )
+                    .await;
                     false
                 }
                 Op::TeamLeadCompletion {
@@ -1910,6 +1973,7 @@ pub(super) async fn submission_loop(
                         communication,
                         start_options,
                         true,
+                        handoff_admission.take(),
                     )
                     .await;
                     false

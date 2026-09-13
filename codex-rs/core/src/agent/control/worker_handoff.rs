@@ -1,6 +1,7 @@
 //! Actionable handoff routing for Workers that have reached a dependency-free wait.
 
 use super::AgentControl;
+use super::HandoffAdmissionGuard;
 use crate::TurnStartOptions;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
@@ -20,6 +21,7 @@ impl AgentControl {
         &self,
         child_thread_id: ThreadId,
         child_source: &SessionSource,
+        handoff_admission: HandoffAdmissionGuard,
     ) -> CodexResult<()> {
         let Some(parent_thread_id) = child_source.parent_thread_id() else {
             return Ok(());
@@ -38,7 +40,8 @@ impl AgentControl {
         let message = dependency_free_wait_handoff_message(child_source);
 
         if parent_role == Some(TeamRole::Lead) {
-            parent_thread.session.enqueue_lead_wakeup(&message).await;
+            parent_thread.session.enqueue_lead_wakeup_with_admission(&message).await;
+            drop(handoff_admission);
             parent_thread
                 .session
                 .maybe_start_turn_for_pending_work()
@@ -62,14 +65,58 @@ impl AgentControl {
             message,
             true,
         );
-        self.send_inter_agent_communication(
-            parent_thread_id,
-            communication,
-            AgentCommunicationContext::new(AgentCommunicationKind::Message, child_thread_id),
-            TurnStartOptions::default(),
-        )
-        .await
-        .map(|_| ())
+        let fallback_communication = communication.clone();
+        let fallback_start_options = TurnStartOptions::default();
+        let result = self
+            .send_inter_agent_communication(
+                parent_thread_id,
+                communication,
+                AgentCommunicationContext::new(AgentCommunicationKind::Message, child_thread_id),
+                fallback_start_options.clone(),
+            )
+            .await;
+        match result {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                let persisted = match state.state_db().await {
+                    Some(state_db) => crate::session::persist_handoff_inter_agent_communication(
+                        &state_db,
+                        parent_thread_id,
+                        Some(child_thread_id),
+                        &fallback_communication,
+                        &fallback_start_options,
+                        false,
+                    )
+                    .await
+                    .is_ok(),
+                    None => false,
+                };
+                if persisted {
+                    return Ok(());
+                }
+                if self.handoff_admission_sealed() {
+                    self.mark_handoff_delivery_failed();
+                }
+                if let Ok(parent_thread) = state.get_thread(parent_thread_id).await {
+                    parent_thread
+                        .session
+                        .input_queue
+                        .enqueue_mailbox_communication(
+                            fallback_communication,
+                            fallback_start_options,
+                        )
+                        .await;
+                    drop(handoff_admission);
+                    parent_thread
+                        .session
+                        .maybe_start_turn_for_pending_work()
+                        .await;
+                } else if self.handoff_admission_sealed() {
+                    self.mark_handoff_delivery_failed();
+                }
+                Err(error)
+            }
+        }
     }
 }
 

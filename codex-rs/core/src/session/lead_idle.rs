@@ -353,6 +353,15 @@ impl Session {
         let Ok(_handoff_admission) = self.services.agent_control.begin_handoff_admission() else {
             return;
         };
+        self.enqueue_lead_wakeup_with_admission(message).await;
+    }
+
+    /// Enqueues a Lead wake while the caller already owns the root handoff admission.
+    ///
+    /// Child-to-Lead wait handoffs use this seam after claiming their own admission permit. It must
+    /// not reacquire the permit: a coordinator may seal the tree while that permit is in flight,
+    /// and rejecting the nested acquisition would strand the one-shot wait claim.
+    pub(crate) async fn enqueue_lead_wakeup_with_admission(&self, message: &str) {
         // Keep the summary and wake in the same admission boundary as Team Off cleanup. V1
         // completion notifications call this helper directly, so the marker cannot be inferred
         // by the outer inter-agent handler.

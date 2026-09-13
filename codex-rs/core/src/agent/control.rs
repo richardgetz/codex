@@ -66,6 +66,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
@@ -184,6 +185,13 @@ pub(crate) struct AgentControl {
     pub(crate) handoff_delivery_failed: Arc<AtomicBool>,
     /// Set when a durable inbound payload is incompatible or malformed.
     pub(crate) handoff_inbound_unsupported: Arc<AtomicBool>,
+    /// Child threads whose active turn was deliberately stopped for handoff.
+    ///
+    /// Handoff uses the normal `ShutdownComplete` event to close a session after its writer is
+    /// durable. Detached V1 completion watchers also treat that event as a terminal Worker
+    /// result, so the marker lets them retire the watcher without manufacturing a completion
+    /// message for a turn that is expected to resume under the same turn ID.
+    pub(crate) handoff_suspended_threads: Arc<StdMutex<HashSet<ThreadId>>>,
     /// Wakes the handoff coordinator after an admission or completion delivery finishes.
     pub(crate) handoff_admission_notify: Arc<Notify>,
     /// Serializes manual pause publication with child startup reconciliation.
@@ -234,6 +242,7 @@ impl AgentControl {
             handoff_delivery_state: Arc::new(AtomicU64::new(0)),
             handoff_delivery_failed: Arc::new(AtomicBool::new(false)),
             handoff_inbound_unsupported: Arc::new(AtomicBool::new(false)),
+            handoff_suspended_threads: Arc::new(StdMutex::new(HashSet::new())),
             handoff_admission_notify: Arc::new(Notify::new()),
             root_activity_pause_update: Arc::new(Mutex::new(())),
             root_activity_pause_propagation: Arc::new(Mutex::new(())),
@@ -353,7 +362,7 @@ impl AgentControl {
         let _admission = match self.begin_handoff_admission() {
             Ok(admission) => admission,
             Err(err) => {
-                let _handoff_delivery = self.begin_handoff_delivery();
+                let _handoff_delivery = self.begin_handoff_terminal_delivery();
                 let state = self.upgrade().ok();
                 let state_db = if let Some(state) = state.as_ref() {
                     if let Some(state_db) = state.state_db().await {
@@ -1108,6 +1117,16 @@ impl AgentControl {
                 return;
             }
 
+            // Handoff suspension emits `ShutdownComplete` to close the session after its
+            // writer is durable. That status is not a completed Worker result: consume the
+            // per-thread marker and retire this watcher without waking or replaying the parent.
+            // A natural shutdown has no marker and follows the normal delivery path below.
+            if control.take_handoff_suspended(child_thread_id)
+                && matches!(status, AgentStatus::Shutdown)
+            {
+                return;
+            }
+
             // Register only the terminal delivery window. The coordinator waits for this short
             // obligation without waiting for the worker's entire lifetime.
             let _handoff_delivery = control.begin_handoff_delivery();
@@ -1216,7 +1235,7 @@ impl AgentControl {
                 // The legacy completion path mutates the parent's rollout before waking its
                 // Lead. Keep that fragment, cancellation, and wake as one admitted handoff
                 // operation so a sealing coordinator cannot close the writer between them.
-                let Ok(_handoff_admission) = parent_thread
+                let Ok(handoff_admission) = parent_thread
                     .session
                     .services
                     .agent_control
@@ -1234,25 +1253,31 @@ impl AgentControl {
                     return;
                 };
                 parent_thread
-                    .inject_fragment_without_turn(SubagentNotification::new(
-                        child_reference.as_str(),
-                        status.clone(),
-                    ))
+                    .inject_fragment_without_turn(
+                        SubagentNotification::new(
+                            child_reference.as_str(),
+                            status.clone(),
+                        ),
+                        &handoff_admission,
+                    )
                     .await;
                 parent_thread.session.cancel_lead_oversight().await;
                 parent_thread
                     .session
-                    .enqueue_lead_wakeup(&format!(
-                        "Worker {child_reference} completed with status {status:?}; review the result."
-                    ))
+                    .enqueue_lead_wakeup_with_admission(
+                        &format!(
+                            "Worker {child_reference} completed with status {status:?}; review the result."
+                        ),
+                    )
                     .await;
+                drop(handoff_admission);
                 parent_thread
                     .session
                     .maybe_start_turn_for_pending_work()
                     .await;
                 return;
             }
-            let Ok(_handoff_admission) = parent_thread
+            let Ok(handoff_admission) = parent_thread
                 .session
                 .services
                 .agent_control
@@ -1270,10 +1295,13 @@ impl AgentControl {
                 return;
             };
             parent_thread
-                .inject_fragment_without_turn(SubagentNotification::new(
-                    child_reference.as_str(),
-                    status,
-                ))
+                .inject_fragment_without_turn(
+                    SubagentNotification::new(
+                        child_reference.as_str(),
+                        status,
+                    ),
+                    &handoff_admission,
+                )
                 .await;
         });
     }

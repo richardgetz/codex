@@ -3137,6 +3137,18 @@ impl Session {
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
+        // Terminal child callbacks can outlive the active task after it is detached. Count the
+        // whole event-to-parent-delivery window so handoff cannot publish a receipt while a
+        // direct V2 completion is still deciding whether to persist or enqueue its result.
+        let _handoff_terminal_delivery = if matches!(
+            &legacy_source,
+            EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
+        ) {
+            let delivery = self.services.agent_control.begin_handoff_terminal_delivery();
+            delivery
+        } else {
+            None
+        };
         if let EventMsg::Error(error) = &legacy_source
             && error
                 .codex_error_info

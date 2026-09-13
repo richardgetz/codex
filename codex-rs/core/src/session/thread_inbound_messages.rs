@@ -157,7 +157,15 @@ async fn enqueue_claimed_messages(
     for (index, message) in messages.iter().enumerate() {
         if agent_control.handoff_admission_sealed() {
             for pending in &messages[index..] {
-                let _ = state_db.unclaim_thread_inbound_message(&pending.id).await;
+                if let Err(error) = state_db.unclaim_thread_inbound_message(&pending.id).await {
+                    agent_control.mark_handoff_delivery_failed();
+                    warn!(
+                        %thread_id,
+                        message_id = %pending.id,
+                        %error,
+                        "failed to return sealed inbound message to pending queue"
+                    );
+                }
             }
             break;
         }
@@ -227,7 +235,15 @@ async fn enqueue_claimed_messages(
         };
         if tx_sub.send(submission).await.is_err() {
             for pending in &messages[index..] {
-                let _ = state_db.unclaim_thread_inbound_message(&pending.id).await;
+                if let Err(error) = state_db.unclaim_thread_inbound_message(&pending.id).await {
+                    agent_control.mark_handoff_delivery_failed();
+                    warn!(
+                        %thread_id,
+                        message_id = %pending.id,
+                        %error,
+                        "failed to return inbound message after submission channel closed"
+                    );
+                }
             }
             return false;
         }

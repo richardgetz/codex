@@ -104,6 +104,13 @@ impl Session {
         if cancellation_token.is_cancelled() {
             return false;
         }
+
+        // Keep the durable claim and parent enqueue inside one handoff admission. A coordinator
+        // waits for this short operation before closing the old runtime, so a sealed handoff cannot
+        // strand the one-shot latch in a process-local task.
+        let Ok(handoff_admission) = self.services.agent_control.begin_handoff_admission() else {
+            return false;
+        };
         if !self
             .input_queue
             .claim_dependency_free_wait_handoff(sub_id)
@@ -111,15 +118,11 @@ impl Session {
         {
             return false;
         }
-
-        // The wait future may be dropped as soon as the ordinary wait signal wins. Keep the
-        // claim and the parent enqueue together by handing the actual async delivery to a task
-        // after the claim; a cancellation edge cannot consume the latch and strand the parent.
         let agent_control = self.services.agent_control.clone();
         let child_thread_id = self.thread_id;
         tokio::spawn(async move {
             if let Err(err) = agent_control
-                .notify_parent_of_dependency_free_wait(child_thread_id, &session_source)
+                .notify_parent_of_dependency_free_wait(child_thread_id, &session_source, handoff_admission)
                 .await
             {
                 tracing::warn!(

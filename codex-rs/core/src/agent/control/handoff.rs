@@ -9,9 +9,12 @@
 //! turn behind its already-applied manual pause gate.
 
 use super::AgentControl;
+use codex_protocol::ThreadId;
+use std::collections::HashSet;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
@@ -37,6 +40,7 @@ pub struct HandoffGuard {
     delivery_failed: Arc<AtomicBool>,
     inbound_unsupported: Arc<AtomicBool>,
     notify: Arc<Notify>,
+    suspended_threads: Arc<StdMutex<HashSet<ThreadId>>>,
 }
 
 impl Drop for HandoffGuard {
@@ -45,6 +49,13 @@ impl Drop for HandoffGuard {
         // runtime. A subsequent attempt starts with fresh failure state.
         self.delivery_failed.store(false, Ordering::Release);
         self.inbound_unsupported.store(false, Ordering::Release);
+        let delivery_state = self.delivery_state.load(Ordering::Acquire);
+        if delivery_count(delivery_state) == 0 && watcher_count(delivery_state) == 0 {
+            self.suspended_threads
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clear();
+        }
         self.delivery_state.fetch_and(
             !HANDOFF_DELIVERY_REGISTRATION_CLOSED,
             Ordering::Release,
@@ -91,6 +102,10 @@ impl HandoffGuard {
             notified.as_mut().enable();
             let state = self.delivery_state.load(Ordering::Acquire);
             if delivery_count(state) == 0 && watcher_count(state) == 0 {
+                self.suspended_threads
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clear();
                 return;
             }
             notified.await;
@@ -214,6 +229,7 @@ impl AgentControl {
             delivery_state: Arc::clone(&self.handoff_delivery_state),
             delivery_failed: Arc::clone(&self.handoff_delivery_failed),
             inbound_unsupported: Arc::clone(&self.handoff_inbound_unsupported),
+            suspended_threads: Arc::clone(&self.handoff_suspended_threads),
             notify: Arc::clone(&self.handoff_admission_notify),
         })
     }
@@ -233,6 +249,25 @@ impl AgentControl {
             delivery_state: Arc::clone(&self.handoff_delivery_state),
             notify: Arc::clone(&self.handoff_admission_notify),
         })
+    }
+
+    /// Register a terminal abort/completion before a handoff can close delivery registration.
+    ///
+    /// A callback that reaches this method after the close boundary is already unsafe to
+    /// transfer from the old runtime, so it marks the shared handoff failed closed instead of
+    /// returning an untracked obligation.
+    pub(crate) fn begin_handoff_terminal_delivery(&self) -> Option<HandoffDeliveryGuard> {
+        let delivery = self.begin_handoff_delivery();
+        if delivery.is_none()
+            && self.handoff_admission_sealed()
+            && delivery_count(self.handoff_delivery_state.load(Ordering::Acquire)) == 0
+        {
+            // An already-counted terminal callback may still be inside send_event after
+            // registration closes. It remains covered by its outer guard, so do not turn this
+            // nested observation into a false handoff failure. A zero count is genuinely late.
+            self.mark_handoff_delivery_failed();
+        }
+        delivery
     }
 
     /// Register a detached V1 completion watcher before its task is spawned.
@@ -262,6 +297,26 @@ impl AgentControl {
 
     pub(crate) fn handoff_delivery_failed(&self) -> bool {
         self.handoff_delivery_failed.load(Ordering::Acquire)
+    }
+
+    /// Mark a child whose active turn was intentionally stopped by handoff.
+    ///
+    /// The marker is consumed by the detached completion watcher when it observes the resulting
+    /// `Shutdown` status. It is deliberately keyed by thread rather than globally: a sibling that
+    /// completes naturally during the same handoff must still deliver its terminal result.
+    pub(crate) fn mark_handoff_suspended(&self, thread_id: ThreadId) {
+        self.handoff_suspended_threads
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(thread_id);
+    }
+
+    /// Consume the marker for a child whose shutdown status reached its watcher.
+    pub(crate) fn take_handoff_suspended(&self, thread_id: ThreadId) -> bool {
+        self.handoff_suspended_threads
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&thread_id)
     }
 
     /// Mark a durable inbound payload for a compatible replacement instead of consuming it.
@@ -312,6 +367,7 @@ impl AgentControl {
 mod tests {
     use super::AgentControl;
     use super::HandoffGuard;
+    use codex_protocol::ThreadId;
     use codex_protocol::error::CodexErrorDetails;
 
     #[test]
@@ -371,6 +427,44 @@ mod tests {
         drop(watcher);
         wait.await;
         drop(guard);
+    }
+
+    #[tokio::test]
+    async fn terminal_delivery_guard_keeps_handoff_barrier_open() {
+        let control = AgentControl::default();
+        let terminal = control
+            .begin_handoff_terminal_delivery()
+            .expect("terminal delivery registration");
+        let guard = control.begin_handoff().expect("handoff");
+        let wait = guard.wait_for_admissions();
+        tokio::pin!(wait);
+        tokio::select! {
+            () = &mut wait => panic!("terminal delivery should keep the barrier open"),
+            () = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
+        }
+        drop(terminal);
+        wait.await;
+        drop(guard);
+    }
+
+    #[tokio::test]
+    async fn late_terminal_delivery_marks_handoff_failed() {
+        let control = AgentControl::default();
+        let guard = control.begin_handoff().expect("handoff");
+        guard.wait_for_admissions().await;
+        assert!(control.begin_handoff_terminal_delivery().is_none());
+        assert!(control.handoff_delivery_failed());
+        drop(guard);
+    }
+
+    #[test]
+    fn dropping_guard_clears_suspension_markers() {
+        let control = AgentControl::default();
+        let thread_id = ThreadId::new();
+        let guard = control.begin_handoff().expect("handoff");
+        control.mark_handoff_suspended(thread_id);
+        drop(guard);
+        assert!(!control.take_handoff_suspended(thread_id));
     }
 
     #[test]
